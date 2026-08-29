@@ -631,8 +631,8 @@ def _register_routes(app: FastAPI) -> None:
         templates=templates,
         get_session=_get_session,
         verify_csrf=_verify_plugin_csrf,
-        render_settings_page=lambda request, session: templates.TemplateResponse(
-            request, "settings/settings.html", _settings_context(request, session)
+        render_settings_page=lambda request, session, **overrides: templates.TemplateResponse(
+            request, "settings/settings.html", _settings_context(request, session, **overrides)
         ),
     )
     built_routers: list[APIRouter] = []

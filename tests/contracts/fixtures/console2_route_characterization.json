@@ -1042,5 +1042,29 @@
     ],
     "onboarding",
     true
+  ],
+  [
+    "/synthdetect/report/{run_id}",
+    [
+      "GET"
+    ],
+    "exempt",
+    false
+  ],
+  [
+    "/synthdetect/score/{run_id}",
+    [
+      "POST"
+    ],
+    "exempt",
+    false
+  ],
+  [
+    "/synthdetect/settings",
+    [
+      "POST"
+    ],
+    "exempt",
+    false
   ]
 ]

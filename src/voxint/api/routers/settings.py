@@ -1776,6 +1776,10 @@ def _settings_context(
     # — the four non-secret fields only, never the key); otherwise the stored raw
     # tri-state / override values.
     wr_submitted: dict[str, str] | None = overrides.pop("web_research_submitted", None)
+    # Synthdetect section (#145): two tri-state toggles (enabled + autogenerate).
+    synthdetect_submitted: dict[str, str] | None = overrides.pop(
+        "synthdetect_submitted", None
+    )
     wr_base_value, wr_base_default = str_flag_form_field(row, settings, "web_search_base_url")
     wr_domains_value, wr_domains_default = str_flag_form_field(
         row, settings, "source_authority_domains"
@@ -1866,6 +1870,23 @@ def _settings_context(
             LANGUAGE_NAMES.items(), key=lambda item: item[1]
         ),
         "translation_errors": [],
+        # Synthdetect (#145): two tri-state toggles (enabled + autogenerate).
+        # Submitted choice on re-render, else the stored raw state.
+        "synthdetect_enabled_state": (
+            synthdetect_submitted.get("synthdetect_enabled", "inherit")
+            if synthdetect_submitted is not None
+            else feature_flag_state(row, "synthdetect_enabled")
+        ),
+        "synthdetect_autogenerate_state": (
+            synthdetect_submitted.get("synthdetect_autogenerate", "inherit")
+            if synthdetect_submitted is not None
+            else feature_flag_state(row, "synthdetect_autogenerate")
+        ),
+        "synthdetect_enabled_env_default": bool(settings.synthdetect_enabled),
+        "synthdetect_autogenerate_env_default": bool(
+            settings.synthdetect_autogenerate
+        ),
+        "synthdetect_errors": [],
         # Sources & research (issue #76): the two web-research toggles (raw
         # tri-state, or submitted choice on re-render), the endpoint override +
         # env placeholder, the credential status (present + source, never the

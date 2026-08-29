@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Voxint — synthdetect report {{ run.id.hex[:8] }}{% endblock %}
+{% block body %}
+<div class="container">
+<h1>Synthetic speech detection report</h1>
+<p class="muted"><a href="/runs/{{ run.id }}">← Back to run {{ run.id.hex[:8] }}</a></p>
+
+{% if synthdetect_job is none %}
+  <p>No synthdetect job found for this run.</p>
+{% elif synthdetect_job.status != "succeeded" %}
+  <p>Scoring {{ synthdetect_job.status }}{% if synthdetect_job.error %}: {{ synthdetect_job.error }}{% endif %}</p>
+{% else %}
+
+<section>
+<h2>Summary</h2>
+<table class="key-value">
+  <tr><th>Scored turns</th><td>{{ synthdetect_job.scored_turns }} of {{ synthdetect_job.total_turns }}</td></tr>
+  {% if synthdetect_job.skipped_turns %}
+  <tr><th>Skipped turns</th><td>{{ synthdetect_job.skipped_turns }}</td></tr>
+  {% endif %}
+  {% if synthdetect_job.mean_risk is not none %}
+  <tr>
+    <th>Mean risk</th>
+    <td><span class="risk-chip {% if synthdetect_job.mean_risk < 0.1 %}risk-low{% elif synthdetect_job.mean_risk < 0.5 %}risk-medium{% else %}risk-high{% endif %}">{{ "%.1f"|format(synthdetect_job.mean_risk * 100) }}%</span></td>
+  </tr>
+  <tr>
+    <th>Max risk</th>
+    <td><span class="risk-chip {% if synthdetect_job.max_risk < 0.1 %}risk-low{% elif synthdetect_job.max_risk < 0.5 %}risk-medium{% else %}risk-high{% endif %}">{{ "%.1f"|format(synthdetect_job.max_risk * 100) }}%</span></td>
+  </tr>
+  {% endif %}
+  <tr><th>Calibration policy</th><td><code>{{ synthdetect_job.calibration_policy_id }}</code></td></tr>
+  <tr><th>Inference space</th><td><code>{{ synthdetect_job.inference_space }}</code></td></tr>
+</table>
+</section>
+
+{% if skipped_count > 0 %}
+<section>
+<h2>Skipped turns</h2>
+<p class="muted">Skipped turns were not scored. An unscored turn is not the same
+   as a clean turn; the model had insufficient audio to make a determination.</p>
+</section>
+{% endif %}
+
+{% if high_risk_scores %}
+<section>
+<h2>Highest-risk turns</h2>
+<p class="muted">Turns with the highest calibrated risk scores, descending. Scores
+   are calibrated risk values specific to this model and calibration policy, not
+   portable probabilities.</p>
+<div class="table-wrapper">
+<table>
+  <thead>
+    <tr>
+      <th>Turn</th>
+      <th>Speaker</th>
+      <th>Start</th>
+      <th>End</th>
+      <th>Risk</th>
+      <th>Windows</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for score in high_risk_scores %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{{ score.speaker_label or "—" }}</td>
+      <td>{{ "%.1f"|format(score.start_seconds) }}s</td>
+      <td>{{ "%.1f"|format(score.end_seconds) }}s</td>
+      <td><span class="risk-chip {% if score.calibrated_score < 0.1 %}risk-low{% elif score.calibrated_score < 0.5 %}risk-medium{% else %}risk-high{% endif %}">{{ "%.1f"|format(score.calibrated_score * 100) }}%</span></td>
+      <td>{{ score.window_count }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+</section>
+{% endif %}
+
+<section>
+<h2>All scored turns</h2>
+<div class="table-wrapper">
+<table>
+  <thead>
+    <tr>
+      <th>Speaker</th>
+      <th>Start</th>
+      <th>End</th>
+      <th>Risk</th>
+      <th>Raw logit</th>
+      <th>Windows</th>
+      <th>Skip reason</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for score in all_scores %}
+    <tr>
+      <td>{{ score.speaker_label or "—" }}</td>
+      <td>{{ "%.1f"|format(score.start_seconds) }}s</td>
+      <td>{{ "%.1f"|format(score.end_seconds) }}s</td>
+      <td>{% if score.calibrated_score is not none %}<span class="risk-chip {% if score.calibrated_score < 0.1 %}risk-low{% elif score.calibrated_score < 0.5 %}risk-medium{% else %}risk-high{% endif %}">{{ "%.1f"|format(score.calibrated_score * 100) }}%</span>{% else %}—{% endif %}</td>
+      <td>{% if score.raw_logit is not none %}{{ "%.3f"|format(score.raw_logit) }}{% else %}—{% endif %}</td>
+      <td>{{ score.window_count }}</td>
+      <td>{{ score.skip_reason or "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+</section>
+
+<section>
+<h2>Known limitations</h2>
+<ul>
+  <li><strong>Flow-matching TTS evasion</strong> (<a href="https://github.com/bengizmo/voxint/issues/252">#252</a>):
+    Flow-matching text-to-speech systems (Chatterbox, F5-TTS) produce audio that
+    this model frequently scores as bona fide. A low risk score does not rule out
+    synthetic speech from these generators.</li>
+  <li><strong>Channel confounds</strong> (<a href="https://github.com/bengizmo/voxint/issues/253">#253</a>):
+    Bona fide speech recorded over low-quality channels (VoIP, telephony,
+    heavy compression) can produce elevated false-positive rates. Scores are most
+    reliable on clean, studio-quality or near-field recordings.</li>
+  <li><strong>Calibration scope</strong>: Scores are calibrated risk values
+    produced by the <code>{{ synthdetect_job.calibration_policy_id }}</code>
+    policy on the <code>{{ synthdetect_job.inference_space }}</code> model.
+    They are not portable probabilities and should not be compared across
+    different models or calibration policies.</li>
+</ul>
+</section>
+
+{% endif %}
+</div>
+{% endblock %}

@@ -115,10 +115,22 @@ def test_plugin_template_dirs_skips_plugin_without_templates(tmp_path: Path) -> 
     assert _plugin_template_dirs(reg) == {}
 
 
+def _reset_core_template_loader() -> None:
+    """Reset the captured core loader so the next _configure_template_loader
+    call re-captures from the current templates.env.loader. Needed when a
+    prior test or app setup has already installed a ChoiceLoader (e.g. for
+    a builtin plugin with templates)."""
+    import voxint.api.routers.deps as _deps_mod
+
+    _deps_mod._CORE_TEMPLATE_LOADER = None
+
+
 def test_configure_template_loader_installs_and_restores(tmp_path: Path) -> None:
     tdir = tmp_path / "t"
     tdir.mkdir()
     (tdir / "hello.html").write_text("PLUGIN-TEMPLATE-MARKER")
+    _reset_core_template_loader()
+    _configure_template_loader({})
     original = templates.env.loader
     try:
         _configure_template_loader({"myplug": str(tdir)})
@@ -135,6 +147,8 @@ def test_configure_template_loader_installs_and_restores(tmp_path: Path) -> None
 
 
 def test_configure_template_loader_is_idempotent(tmp_path: Path) -> None:
+    _reset_core_template_loader()
+    _configure_template_loader({})
     original = templates.env.loader
     _configure_template_loader({})
     _configure_template_loader({})

@@ -41,6 +41,7 @@ from voxint.api.csrf import (
     CSRF_CANCEL,
     CSRF_FETCH,
     CSRF_NOTES,
+    CSRF_PLUGIN,
     CSRF_REQUEUE,
     CSRF_RUN_ARCHIVE,
     CSRF_RUN_MEDIA_DELETE,
@@ -173,6 +174,7 @@ from voxint.media.serving import RangeNotSatisfiableError, parse_range
 from voxint.media.source_metadata import RAW_URL_KEYS
 from voxint.pipeline.stages.context import StageDataError, normalized_audio_path
 from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
+from voxint.plugins.registry import PluginRegistry
 from voxint.speakers.roster import searchable_speakers
 from voxint.tutorial.steps import TutorialPage
 
@@ -870,7 +872,7 @@ def build_run_detail_context(
     transcript_available = bool(
         session.scalar(select(exists().where(TranscriptSegment.pipeline_run_id == run_id)))
     )
-    return {
+    context: dict[str, Any] = {
         "request": request,
         "run": run,
         "stage_runs": stage_runs,
@@ -959,7 +961,16 @@ def build_run_detail_context(
         # fragments, ordered by (slot, order), rendered by the panel loop
         # in run_detail.html. Empty registry => () => nothing rendered.
         "plugin_run_detail_panels": request.app.state.plugins.run_detail_panels(),
+        # Plugin CSRF token (issue #138): shared by every plugin's mutating
+        # route on the run-detail page (score buttons, etc.).
+        "csrf_plugin": mint_csrf_token(request.app.state.csrf_secret, CSRF_PLUGIN),
     }
+    # Plugin run-detail context (#145): each active plugin contributes its own
+    # template variables. Empty registry => no iterations => context unchanged.
+    registry: PluginRegistry = request.app.state.plugins
+    for plugin in registry.plugins:
+        context.update(plugin.run_detail_context(run_id, session, settings))
+    return context
 
 
 @core_router.get("/runs/{run_id}", name="run_detail")
