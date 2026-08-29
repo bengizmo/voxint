@@ -54,6 +54,24 @@
     ]
   ],
   [
+    "/login",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/login",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/logout",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/static/htmx.min.js",
     [
       "GET"

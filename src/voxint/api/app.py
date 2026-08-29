@@ -37,6 +37,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from voxint import __version__
 from voxint.api.routers.activity import router as activity_router
+from voxint.api.routers.auth_pages import router as auth_router
 from voxint.api.routers.deps import (
     _APP_ASSET_MEDIA_TYPES,
     _APP_ASSETS_DIR,
@@ -446,6 +447,12 @@ def create_app(
         from voxint.api.csrf import load_or_create_csrf_secret
 
         app.state.csrf_secret = load_or_create_csrf_secret(resolved.media_root)
+    if resolved.voxint_multi_user:
+        from voxint.api.csrf import load_or_create_session_secret
+
+        app.state.session_secret = load_or_create_session_secret(resolved.media_root)
+    else:
+        app.state.session_secret = None
     # Lazy: building the engine at import time would make `/healthz` (and any
     # DB-less test import) depend on a reachable database.
     app.state.session_factory = session_factory
@@ -514,6 +521,7 @@ def _register_routes(app: FastAPI) -> None:
     # ---- First-run setup wizard (issue #3): moved to routers/settings.py
     # (setup_router, registered on `app` so the onboarding gate exempts it).
     app.include_router(setup_router)
+    app.include_router(auth_router)
 
     # ---- Home (Console 2.0 P1, #152): the landing page at /. Registered
     # first among the console families so the root route sits early in the

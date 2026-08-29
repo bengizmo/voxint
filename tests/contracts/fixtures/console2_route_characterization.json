@@ -80,6 +80,30 @@
     true
   ],
   [
+    "/login",
+    [
+      "GET"
+    ],
+    "exempt",
+    false
+  ],
+  [
+    "/login",
+    [
+      "POST"
+    ],
+    "exempt",
+    false
+  ],
+  [
+    "/logout",
+    [
+      "POST"
+    ],
+    "exempt",
+    false
+  ],
+  [
     "/media",
     [
       "GET"

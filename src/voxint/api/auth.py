@@ -1,38 +1,102 @@
-"""Single-operator HTTP Basic auth for the review UI.
+"""Authentication for the review UI: single-operator Basic or multi-user sessions.
 
-Identity comes exclusively from verified credentials — never from a header or
-form field a client could set. Every route except ``/healthz`` (including
-htmx fragments and media) hangs off this dependency. Comparison is
-constant-time on both fields regardless of which one mismatches.
+Single-operator mode (default): HTTP Basic against env credentials, exactly as
+before. Multi-user mode (``VOXINT_MULTI_USER=true``): DB-backed opaque session
+cookies with a login form. The mode branch lives in ``_resolve_identity()`` in
+``deps.py``; this module provides the pure helpers both paths share.
 """
 
+import hashlib
 import secrets
-from typing import Annotated
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
-from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
 from voxint.config import Settings
+from voxint.db.models import AuthSession, User
 
-_basic = HTTPBasic(realm="voxint-review")
+SESSION_COOKIE = "voxint_session"
 
 
-def require_operator(
-    request: Request,
-    credentials: Annotated[HTTPBasicCredentials, Depends(_basic)],
-) -> str:
-    """Authenticated operator name, or a 401 challenge."""
-    settings: Settings = request.app.state.settings
+@dataclass(frozen=True, slots=True)
+class AuthContext:
+    user_id: uuid.UUID | None
+    username: str
+    role: str
+
+
+def verify_basic_credentials(settings: Settings, username: str, password: str) -> bool:
     user_ok = secrets.compare_digest(
-        credentials.username.encode(), settings.voxint_user.encode()
+        username.encode(), settings.voxint_user.encode()
     )
     password_ok = secrets.compare_digest(
-        credentials.password.encode(), settings.voxint_password.encode()
+        password.encode(), settings.voxint_password.encode()
     )
-    if not (user_ok and password_ok):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid credentials",
-            headers={"WWW-Authenticate": 'Basic realm="voxint-review"'},
+    return user_ok and password_ok
+
+
+def new_session_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def hash_session_token(token: str) -> bytes:
+    return hashlib.sha256(token.encode("ascii")).digest()
+
+
+def create_session(
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    token: str,
+    ttl_seconds: int,
+) -> AuthSession:
+    now = datetime.now(UTC)
+    row = AuthSession(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        token_hash=hash_session_token(token),
+        created_at=now,
+        expires_at=now + timedelta(seconds=ttl_seconds),
+    )
+    db.add(row)
+    return row
+
+
+def load_session_user(
+    db: Session,
+    token: str,
+) -> User | None:
+    token_hash = hash_session_token(token)
+    now = datetime.now(UTC)
+    row = db.execute(
+        select(AuthSession)
+        .where(
+            AuthSession.token_hash == token_hash,
+            AuthSession.expires_at > now,
         )
-    return credentials.username
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    user = db.get(User, row.user_id)
+    if user is None or user.disabled_at is not None:
+        return None
+    return user
+
+
+def delete_session(db: Session, token: str) -> None:
+    db.execute(
+        delete(AuthSession).where(
+            AuthSession.token_hash == hash_session_token(token)
+        )
+    )
+
+
+def cleanup_expired_sessions(db: Session) -> int:
+    now = datetime.now(UTC)
+    result = db.execute(
+        delete(AuthSession).where(AuthSession.expires_at <= now)
+    )
+    return result.rowcount  # type: ignore[return-value]

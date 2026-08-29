@@ -60,6 +60,24 @@
     ]
   ],
   [
+    "/login",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/login",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/logout",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/media",
     [
       "GET"

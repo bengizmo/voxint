@@ -29,7 +29,7 @@ def _request_with(
     if activity_routed is not None:
         state.activity_routed = activity_routed
     app = SimpleNamespace(state=state)
-    return cast(Request, SimpleNamespace(app=app))
+    return cast(Request, SimpleNamespace(app=app, state=SimpleNamespace()))
 
 
 def test_console_area_flags_default_off() -> None:
@@ -53,6 +53,8 @@ def test_shell_context_requires_flag_and_route() -> None:
             "jobs_enabled": False,
             "media_enabled": False,
             "activity_enabled": False,
+            "multi_user": False,
+            "current_user": None,
         }
     }
     # Flag on, no /projects route registered yet (today's reality): stays dark.
@@ -64,6 +66,8 @@ def test_shell_context_requires_flag_and_route() -> None:
             "jobs_enabled": False,
             "media_enabled": False,
             "activity_enabled": False,
+            "multi_user": False,
+            "current_user": None,
         }
     }
     # A stale app with no stamp at all fails closed too.
@@ -73,6 +77,8 @@ def test_shell_context_requires_flag_and_route() -> None:
             "jobs_enabled": False,
             "media_enabled": False,
             "activity_enabled": False,
+            "multi_user": False,
+            "current_user": None,
         }
     }
     assert _shell_template_context(
@@ -83,6 +89,8 @@ def test_shell_context_requires_flag_and_route() -> None:
             "jobs_enabled": False,
             "media_enabled": False,
             "activity_enabled": False,
+            "multi_user": False,
+            "current_user": None,
         }
     }
 

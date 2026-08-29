@@ -88,6 +88,8 @@ class Settings(BaseSettings):
     api_port: int = 8080
     voxint_user: str = "admin"
     voxint_password: str = "change-me"
+    voxint_multi_user: bool = False
+    voxint_session_ttl_seconds: int = Field(default=7 * 24 * 3600, ge=3600)
     # Secret keying the stateless CSRF token on the mutation forms. Independent
     # of voxint_password ON PURPOSE: a human-memorable password would turn every
     # rendered token into a fast offline password-verification oracle. Empty
@@ -733,11 +735,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _no_default_credentials_off_loopback(self) -> "Settings":
-        # Loopback + default credentials is a fine dev setup; exposing the
-        # review UI beyond loopback with the shipped (or an empty) password is
-        # not — refuse at startup rather than serve an effectively
-        # unauthenticated console. `voxint serve` and the container entrypoint
-        # bind from these settings, so this check sees the real bind address.
+        if self.voxint_multi_user:
+            return self
         if self.api_host not in ("127.0.0.1", "::1", "localhost") and (
             self.voxint_password in ("change-me", "")
         ):
