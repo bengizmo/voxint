@@ -127,7 +127,7 @@ time) and the post lane at a small concurrency of its own, so the GPU no
 longer idles while a previous run's LLM enhancement is in flight. See
 [operations.md](operations.md) for the override recipe.
 
-## Data model (alembic revisions 0001–0046)
+## Data model (alembic revisions 0001–0051)
 
 | Table | Role |
 |---|---|
@@ -144,7 +144,9 @@ longer idles while a previous run's LLM enhancement is in flight. See
 | `speaker_embeddings` | `vector(192)` + `embedding_space` tag; enrollment rows carry provenance (source run, label, and a unique link to the human decision that created them) |
 | `speaker_assignments` | **machine proposals** (method, confidence, grounded flag; `llm_hint` rows carry `proposed_name`, method-shape CHECKs keep the two shapes disjoint) |
 | `match_candidates` | **observational match-decision evidence**, one row per diarization label (revision 0032, issue #113): the matcher's decision (accepted \| rejected \| ineligible), top candidate, and the cosine / margin / vote-agreement / eligibility behind it, kept even for the near-misses that yield no proposal. Diagnostic only, it feeds no attribution; it is the raw material the offline harness scores (epic #112). Rewritten wholesale each `enhance_match` run beside the proposals |
-| `adjudication_decisions` | **immutable human ledger** (insert-only, idempotency key) |
+| `adjudication_decisions` | **immutable human ledger** (insert-only, idempotency key). Revision **0051** adds a nullable `user_id` FK to `users` with asymmetric CHECK constraints: `NOT NULL` when `multi_user_at_write` is true, `NULL` otherwise, so the column records attribution without breaking single-operator rows |
+| `users` | operator accounts (revision 0051): `username` (UNIQUE, lowercase-only), Argon2id `password_hash`, `role` (`admin` or `reviewer`), `disabled_at` (soft-disable), `created_at`. The first user created is forced to admin |
+| `auth_sessions` | session tokens (revision 0051): sha256 `token_hash`, `user_id` FK, `created_at`, `expires_at`. Revoked on disable, role change, or password change |
 | `enrichment_producer_runs` | one row per **completed** enrichment-producer invocation (revision 0010): producer key + version, XOR target scope (speaker \| run \| run+label), declared `covered_fields`, monotonic per-scope `generation` (allocated under an advisory lock; supersession compares generations, never wall clock), derived `outcome` (`'none'` = "we looked and found nothing", reviewable information), bounded schema-versioned `config` snapshot, idempotency key |
 | `enrichment_candidates` | **immutable machine-derived claims** (revision 0010): suggestions *about* identity, never identity. Claim field/value, producer-local score + components. No stored review state; effective state is derived (decision > supersession stamp > proposed). A trigger blocks DELETE and every UPDATE except the write-once `superseded_by_producer_run_id` stamp |
 | `enrichment_candidate_evidence` | 1:many field-level provenance per claim (revision 0010): a `media_source_metadata` column/`raw.` key, a transcript segment (+ timestamp), or a fetched URL, so one claim can cite several sources together; append-only (trigger) |
@@ -745,10 +747,20 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   (above) and surfaced separately in the console as "corrected by domain pack"
   (#83); an operator edit *supersedes* that marker for the segment. See
   [domain-packs.md](domain-packs.md).
-- **Auth**: single-operator HTTP Basic (constant-time compare) on every route
-  but `/healthz`, fragments and media included; operator identity comes only
-  from credentials. Startup refuses to bind off-loopback with the default
-  password.
+- **Auth**: dual-mode, controlled by `VOXINT_MULTI_USER`. In single-operator
+  mode (the default): HTTP Basic (constant-time compare) on every route but
+  `/healthz`, fragments and media included; operator identity comes only from
+  credentials. In multi-user mode: Argon2id password hashing (`argon2-cffi`),
+  session cookies (`voxint_session`, sha256-hashed tokens in `auth_sessions`),
+  login/logout pages with per-action CSRF tokens, and two roles (`admin`,
+  `reviewer`). The `_resolve_identity` dependency in `deps.py` branches once;
+  downstream code uses `CurrentUserDep` (the resolved `AuthContext`) and
+  `OperatorDep` (the username string) regardless of mode. `AdminDep` gates
+  the settings page. Adjudication routes pass `user_id` through to
+  `record_decision`, `apply_merge`, and `enroll_new_speaker` so the immutable
+  ledger carries per-user attribution. See
+  [operations.md](operations.md#multi-user-authentication) for setup.
+  Startup refuses to bind off-loopback with the default password.
 - **Response headers**: one shared middleware seam (`_apply_security_headers`)
   stamps a deliberately minimal set on every response, and re-applies it on an
   unhandled 500. `Referrer-Policy: no-referrer` on every response (the review

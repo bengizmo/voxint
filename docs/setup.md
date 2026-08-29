@@ -305,6 +305,10 @@ you finish it, which is expected. Continue with the
 [first-run walkthrough](onboarding.md), which covers the wizard and the guided
 tutorial.
 
+> If multiple people will review transcripts on this instance, see
+> [Multi-user authentication](operations.md#multi-user-authentication) in
+> the operations guide.
+
 Something not working? See
 [Settings & troubleshooting](how-to/settings-and-troubleshooting.md) and the
 troubleshooting notes in [onboarding.md](onboarding.md#troubleshooting).
