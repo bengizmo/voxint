@@ -42,6 +42,7 @@ from voxint.api.transcript_view import (
 )
 from voxint.config import Settings
 from voxint.db.models import PipelineRun, RunStatus
+from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import active_speakers
 
 router = APIRouter(
@@ -117,7 +118,7 @@ def media_detail_page(
             island_props["annotations"] = annotations_payload["annotations"]
             island_props["annotationTags"] = annotations_payload["tags"]
             island_props["annotationLimits"] = _annotation_limits()
-            states = label_states(session, run_id)
+            states = label_states(session, run_id, gates=gates_from_settings(settings))
             island_props["labelStates"] = [
                 {
                     "label": s.label,
@@ -131,6 +132,13 @@ def media_detail_page(
                     "cosineSpeakerName": s.cosine_speaker_name,
                     "cosineGrounded": s.cosine_grounded,
                     "llmHintName": s.llm_hint_name,
+                    "band": s.band.value if s.band else None,
+                    "bandReason": s.band_reason,
+                    "candidatePromptAllowed": s.candidate_prompt_allowed,
+                    "matchDecision": s.match_decision,
+                    "matchReason": s.match_reason,
+                    "matchMargin": s.match_margin,
+                    "matchEligibleSeconds": s.match_eligible_seconds,
                 }
                 for s in states
             ]

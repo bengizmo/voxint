@@ -15,6 +15,13 @@ export interface LabelStateShape {
   cosineSpeakerName: string | null;
   cosineGrounded: boolean;
   llmHintName: string | null;
+  band: string | null;
+  bandReason: string | null;
+  candidatePromptAllowed: boolean;
+  matchDecision: string | null;
+  matchReason: string | null;
+  matchMargin: number | null;
+  matchEligibleSeconds: number;
 }
 
 interface SpeakerRailProps {

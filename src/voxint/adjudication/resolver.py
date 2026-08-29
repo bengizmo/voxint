@@ -41,6 +41,7 @@ from voxint.db.models import (
     AssignmentMethod,
     Decision,
     DiarizationTurn,
+    MatchCandidate,
     MediaItem,
     MediaSourceMetadata,
     PipelineRun,
@@ -49,6 +50,8 @@ from voxint.db.models import (
     Speaker,
     SpeakerAssignment,
 )
+from voxint.speakers.matching import MatchingGates
+from voxint.speakers.policy import BandResult, MatchBand, band_for
 from voxint.speakers.roster import canonicalize, merge_map
 
 # A run-id the correlated SQL predicates accept: either a literal UUID (single
@@ -265,6 +268,15 @@ class LabelState:
     cosine_grounded: bool
     llm_hint_name: str | None
     effective_decision: AdjudicationDecision | None
+    # Policy band (#114): which confidence tier this label falls in.
+    band: "MatchBand | None" = None
+    band_reason: str | None = None
+    candidate_prompt_allowed: bool = True
+    # Raw match evidence from match_candidates (#114/#115).
+    match_decision: str | None = None
+    match_reason: str | None = None
+    match_margin: float | None = None
+    match_eligible_seconds: float = 0.0
 
 
 def effective_decisions(
@@ -453,8 +465,18 @@ def _active_overrides(
     return result
 
 
-def label_states(session: Session, run_id: uuid.UUID) -> list[LabelState]:
-    """Resolve every diarization label of a run, in label order."""
+def label_states(
+    session: Session,
+    run_id: uuid.UUID,
+    gates: MatchingGates | None = None,
+) -> list[LabelState]:
+    """Resolve every diarization label of a run, in label order.
+
+    When *gates* is provided, each label is classified into a
+    :class:`~voxint.speakers.policy.MatchBand` (auto-attribute / review /
+    abstain) using the recorded ``match_candidates`` evidence. The band is
+    ``None`` for human-decided labels.
+    """
     turn_stats = session.execute(
         select(
             DiarizationTurn.label,
@@ -481,6 +503,18 @@ def label_states(session: Session, run_id: uuid.UUID) -> list[LabelState]:
         if p.method == AssignmentMethod.LLM_HINT.value
     }
     decisions = effective_decisions(session, run_id)
+
+    # Match evidence (#114): one row per label with the full matcher decision.
+    mc_rows = (
+        session.execute(
+            select(MatchCandidate).where(MatchCandidate.pipeline_run_id == run_id)
+        )
+        .scalars()
+        .all()
+    )
+    mc_by_label: dict[str, MatchCandidate] = {
+        mc.diarization_label: mc for mc in mc_rows
+    }
 
     # Merged speakers canonicalize at read time: an old ledger assign(B) renders
     # as B's merge target. The ledger row itself (effective_decision) stays the
@@ -532,6 +566,38 @@ def label_states(session: Session, run_id: uuid.UUID) -> list[LabelState]:
             resolution = Resolution.UNRESOLVED
 
         cosine_speaker_id = canonical(cosine.speaker_id) if cosine else None
+
+        # Policy band (#114): classify evidence into auto/review/abstain.
+        mc = mc_by_label.get(label)
+        br: BandResult | None = None
+        if gates is not None:
+            if resolution in (
+                Resolution.HUMAN_ASSIGN,
+                Resolution.HUMAN_EXCLUDE,
+                Resolution.HUMAN_UNKNOWN,
+            ):
+                pass  # human-decided: band stays None
+            elif resolution in (Resolution.GROUNDED_COSINE, Resolution.AUTO_ENROLL):
+                br = BandResult(
+                    band=MatchBand.AUTO_ATTRIBUTE,
+                    reason="Strong enough to trust on its own.",
+                    candidate_speaker_id=speaker_id,
+                    candidate_prompt_allowed=True,
+                )
+            else:
+                br = band_for(
+                    decision=mc.decision if mc else None,
+                    reason=mc.reason if mc else None,
+                    similarity=mc.similarity if mc else None,
+                    margin=mc.margin if mc else None,
+                    vote_agreement=mc.vote_agreement if mc else None,
+                    eligible_turns=mc.eligible_turns if mc else 0,
+                    eligible_seconds=mc.eligible_seconds if mc else 0.0,
+                    roster_size=mc.roster_size if mc else None,
+                    top_speaker_id=mc.top_speaker_id if mc else None,
+                    gates=gates,
+                )
+
         states.append(
             LabelState(
                 label=label,
@@ -548,6 +614,13 @@ def label_states(session: Session, run_id: uuid.UUID) -> list[LabelState]:
                 cosine_grounded=bool(cosine.grounded) if cosine else False,
                 llm_hint_name=hint.proposed_name if hint else None,
                 effective_decision=decision,
+                band=br.band if br else None,
+                band_reason=br.reason if br else None,
+                candidate_prompt_allowed=br.candidate_prompt_allowed if br else True,
+                match_decision=mc.decision if mc else None,
+                match_reason=mc.reason if mc else None,
+                match_margin=mc.margin if mc else None,
+                match_eligible_seconds=mc.eligible_seconds if mc else 0.0,
             )
         )
     return states

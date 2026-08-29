@@ -238,7 +238,7 @@ def _workbench_context(
     token: uuid.UUID | None,
 ) -> dict[str, Any]:
     settings: Settings = request.app.state.settings
-    states = label_states(session, run.id)
+    states = label_states(session, run.id, gates=gates_from_settings(settings))
     # Assignable identities only — merged and archived speakers are curated out
     # of the roster and must not attract new decisions.
     speakers = active_speakers(session)
@@ -539,6 +539,13 @@ def _label_state_shape(s: LabelState) -> dict[str, Any]:
         "cosineSpeakerName": s.cosine_speaker_name,
         "cosineGrounded": s.cosine_grounded,
         "llmHintName": s.llm_hint_name,
+        "band": s.band.value if s.band else None,
+        "bandReason": s.band_reason,
+        "candidatePromptAllowed": s.candidate_prompt_allowed,
+        "matchDecision": s.match_decision,
+        "matchReason": s.match_reason,
+        "matchMargin": s.match_margin,
+        "matchEligibleSeconds": s.match_eligible_seconds,
     }
 
 
@@ -552,7 +559,8 @@ def _labels_response(
     form POST gets a redirect back to the workbench, JSON accept gets the
     updated label states for the editor island."""
     if "application/json" in request.headers.get("accept", ""):
-        states = label_states(session, run.id)
+        settings: Settings = request.app.state.settings
+        states = label_states(session, run.id, gates=gates_from_settings(settings))
         return JSONResponse([_label_state_shape(s) for s in states])
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(

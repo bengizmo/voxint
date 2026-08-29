@@ -117,42 +117,106 @@ def evidence_for(
     return out
 
 
-def _margin_passes(evidence: TierEvidence, minimum: float) -> bool:
-    if evidence.margin is not None:
-        return evidence.margin >= minimum
-    # NULL margin = one-speaker roster = infinite margin; anything else NULL
-    # is malformed and must not pass.
-    return evidence.roster_size == 1
+def margin_clears(
+    margin: float | None, roster_size: int | None, minimum: float
+) -> bool:
+    """True when the margin gate passes.
+
+    NULL margin = one-speaker roster = infinite margin (passes iff
+    ``roster_size == 1``). Shared by :func:`grade` and
+    :func:`~voxint.speakers.policy.band_for` so the two can never disagree.
+    """
+    if margin is not None:
+        return margin >= minimum
+    return roster_size == 1
+
+
+def _evidence_available(
+    similarity: float | None,
+    margin: float | None,
+    vote_agreement: float | None,
+    roster_size: int | None,
+) -> bool:
+    """True when the numeric evidence is present and interpretable."""
+    if similarity is None or vote_agreement is None:
+        return False
+    return not (margin is None and roster_size != 1)
+
+
+def passes_grounded(
+    similarity: float | None,
+    margin: float | None,
+    vote_agreement: float | None,
+    eligible_turns: int,
+    eligible_seconds: float,
+    roster_size: int | None,
+    gates: MatchingGates,
+) -> bool:
+    """True when evidence clears the grounded (auto-attribute) gate.
+
+    Returns False both when the gate fails and when the evidence is missing.
+    Shared by :func:`grade` and :func:`~voxint.speakers.policy.band_for`.
+    """
+    if not _evidence_available(similarity, margin, vote_agreement, roster_size):
+        return False
+    assert similarity is not None and vote_agreement is not None  # narrowing
+    return (
+        similarity >= gates.grounded_min_cosine
+        and margin_clears(margin, roster_size, gates.grounded_min_margin)
+        and vote_agreement >= gates.grounded_min_vote_agreement
+        and eligible_turns >= gates.grounded_min_turns
+        and eligible_seconds >= gates.grounded_min_seconds
+    )
+
+
+def passes_accept(
+    similarity: float | None,
+    margin: float | None,
+    vote_agreement: float | None,
+    eligible_turns: int,
+    eligible_seconds: float,
+    roster_size: int | None,
+    gates: MatchingGates,
+) -> bool:
+    """True when evidence clears the accept (proposal) gate.
+
+    Returns False both when the gate fails and when the evidence is missing.
+    Shared by :func:`grade` and :func:`~voxint.speakers.policy.band_for`.
+    """
+    if not _evidence_available(similarity, margin, vote_agreement, roster_size):
+        return False
+    assert similarity is not None and vote_agreement is not None  # narrowing
+    return (
+        similarity >= gates.min_cosine
+        and margin_clears(margin, roster_size, gates.min_margin)
+        and vote_agreement >= gates.min_vote_agreement
+        and eligible_turns >= gates.min_turns
+        and eligible_seconds >= gates.min_seconds
+    )
 
 
 def grade(evidence: TierEvidence, gates: MatchingGates) -> MatchTier | None:
     """One appearance's grade, ``None`` when its numbers are unavailable."""
     if not evidence.available:
         return None
-    if evidence.similarity is None or evidence.vote_agreement is None:
-        return None
-    if evidence.margin is None and evidence.roster_size != 1:
-        # A NULL margin is only meaningful as "one-speaker roster = infinite";
-        # any other NULL numeric is malformed data — unavailable, never a
-        # confident-sounding "weak" (#159 review).
-        return None
-    grounded = (
-        evidence.similarity >= gates.grounded_min_cosine
-        and _margin_passes(evidence, gates.grounded_min_margin)
-        and evidence.vote_agreement >= gates.grounded_min_vote_agreement
-        and evidence.eligible_turns >= gates.grounded_min_turns
-        and evidence.eligible_seconds >= gates.grounded_min_seconds
+    fields = (
+        evidence.similarity,
+        evidence.margin,
+        evidence.vote_agreement,
+        evidence.eligible_turns,
+        evidence.eligible_seconds,
+        evidence.roster_size,
     )
-    if grounded:
+    if passes_grounded(*fields, gates):
         return MatchTier.STRONG
-    accept = (
-        evidence.similarity >= gates.min_cosine
-        and _margin_passes(evidence, gates.min_margin)
-        and evidence.vote_agreement >= gates.min_vote_agreement
-        and evidence.eligible_turns >= gates.min_turns
-        and evidence.eligible_seconds >= gates.min_seconds
-    )
-    return MatchTier.MODERATE if accept else MatchTier.WEAK
+    if passes_accept(*fields, gates):
+        return MatchTier.MODERATE
+    if not _evidence_available(
+        evidence.similarity, evidence.margin, evidence.vote_agreement,
+        evidence.roster_size,
+    ):
+        return None
+    return MatchTier.WEAK
 
 
 def tier_for(
