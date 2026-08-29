@@ -6,6 +6,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+
+## [0.29.0] - 2026-08-29
+
 ### Changed
 - **Speakers overview and profiles activated** (#159). The new speakers overview
   (aggregation numbers, named/unnamed grouping, tier chips, verified badges) and

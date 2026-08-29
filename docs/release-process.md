@@ -14,6 +14,7 @@ the image workflow only runs on GitHub (`release.yml` is guarded by
 | `ghcr.io/bengizmo/voxint-{whisper,pyannote,titanet}:X.Y.Z-cpu` (multi-arch amd64+arm64) | GHCR | `release.yml` `build-multiarch` → `merge-multiarch` |
 | `ghcr.io/bengizmo/voxint-whisper:X.Y.Z-rocm` (AMD GPU, amd64, build-only in CI; see Gate R) | GHCR | `release.yml` `publish-whisper-rocm` |
 | `ghcr.io/bengizmo/voxint-llm:X.Y.Z` (optional bundled LLM, amd64, build-only; issue #67) | GHCR | `release.yml` `publish-llm` |
+| `ghcr.io/bengizmo/voxint-synthdetect:X.Y.Z` (optional synthdetect, amd64, build-only; issue #143) | GHCR | `release.yml` `publish-synthdetect` |
 | `voxint X.Y.Z` sdist + wheel | PyPI | manual `uv build` + `uv publish` (not in CI) |
 | Release notes | GitHub Releases | manual `gh release create` |
 
@@ -86,6 +87,32 @@ together (a contract test pins the ARG to provenance).
 
 For a local build, stage the GGUF under `services/llama-cpp/models/` (fetch the
 same pinned revision from Hugging Face, or use a maintainer-staged copy); the
+Dockerfile's `sha256sum -c` gate rejects any mismatch.
+
+### The synthdetect model weights (issue #143)
+
+The optional synthdetect service (`ghcr.io/bengizmo/voxint-synthdetect`,
+`compose.plugin-synthdetect.yaml`, `services/synthdetect/`) bakes two model
+weights: a fine-tuned AASIST checkpoint and the XLS-R 300M SSL base. The AASIST
+checkpoint (~1.2 GB) is a vendored GitHub asset on the standing
+**`synthdetect-weights-v1`** release, sha256-pinned in
+`services/synthdetect/provenance.json`. The XLS-R base (~3.6 GB) exceeds
+GitHub's 2 GiB release-asset limit, so the build fetches it from its upstream
+source (`https://dl.fbaipublicfiles.com/fairseq/wav2vec/xlsr2_300m.pt`) and
+verifies its sha256 against provenance. Both weights are baked, so end users
+pull the image with no external network access (`HF_HUB_OFFLINE=1`). The
+Dockerfile re-verifies both shas at build time.
+
+The `publish-synthdetect` job in `release.yml` runs on a version tag:
+`gh release download` the AASIST checkpoint + `curl` the XLS-R base, verify
+both against provenance, build + push
+`ghcr.io/bengizmo/voxint-synthdetect:X.Y.Z` (+ floating `X.Y`), amd64 only.
+It is BUILD-ONLY (no parity gate; GPU needed for real inference) and has no
+`-cpu`/`-rocm` split (CUDA-only service). A weights refresh publishes a new
+asset release (`synthdetect-weights-v2`, ...) and bumps
+`SYNTHDETECT_WEIGHTS_RELEASE` in `release.yml`.
+
+For a local build, stage the weights under `services/synthdetect/weights/`; the
 Dockerfile's `sha256sum -c` gate rejects any mismatch.
 
 ### Release gates wired into the workflow
@@ -322,10 +349,10 @@ model assets) voids it for the gate it feeds.
 3. **Tag**: `git tag -a vX.Y.Z -m "Voxint vX.Y.Z" && git push github vX.Y.Z`
    (push the tag to the private origin too). The tag must point at the release
    commit so images are built from exactly what the compose files pin.
-4. **Watch `release.yml`** (3 CUDA matrix jobs + 1 rocm build + 2 parity
-   runs + 8 per-arch multi-arch builds + 2 per-arch smokes + 4 merges;
-   smoke runs BEFORE merge, on digests; whisper builds are the slow ones,
-   25–45 min each).
+4. **Watch `release.yml`** (3 CUDA matrix jobs + 1 rocm build + 1 synthdetect
+   build + 2 parity runs + 8 per-arch multi-arch builds + 2 per-arch smokes +
+   4 merges; smoke runs BEFORE merge, on digests; whisper builds are the slow
+   ones, 25–45 min each).
    `fail-fast` is off, so one failed matrix entry leaves the others published.
    A failure in `docker/metadata-action` *before* the build step has been
    transient GitHub infrastructure: re-run failed jobs
@@ -333,8 +360,7 @@ model assets) voids it for the gate it feeds.
    version's `run rerun` has no `--failed` flag).
 5. **Verify anonymous pull** of all published images, with no login: app
    (both arches), three CUDA, three `-cpu` (both arches), whisper `-rocm`,
-   and `voxint-llm` (nine images total; `publish-llm` runs on every version
-   tag, so the bundled-LLM image is part of every release's checklist).
+   `voxint-llm`, and `voxint-synthdetect` (ten images total).
    The packages inherit public visibility from the repo via the
    `org.opencontainers.image.source` label, but confirm it: fetch each
    manifest with an anonymous GHCR token and expect 200. Optionally

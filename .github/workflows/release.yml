@@ -44,6 +44,7 @@ env:
   TITANET_ONNX_RELEASE: titanet-onnx-v1
   PYANNOTE_MODELS_RELEASE: pyannote-models-v1
   MINILM_ONNX_RELEASE: minilm-onnx-v1
+  SYNTHDETECT_WEIGHTS_RELEASE: synthdetect-weights-v1
 
 jobs:
   # CUDA images — byte-identical build steps to previous releases; amd64-only.
@@ -219,6 +220,79 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=voxint-llm
           cache-to: type=gha,scope=voxint-llm,mode=max
+
+  # Synthdetect GPU service — w2v2-AASIST synthetic speech detection.
+  # amd64-only, build-only in CI (GPU needed for real inference).
+  # AASIST checkpoint from the standing synthdetect-weights-v1 release;
+  # XLS-R 300M base from the upstream Facebook distribution (3.6 GB, exceeds
+  # GitHub's 2 GiB release-asset limit).
+  publish-synthdetect:
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Fetch synthdetect weights
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p services/synthdetect/weights
+
+          # AASIST fine-tuned checkpoint from the standing GitHub release asset.
+          gh release download "$SYNTHDETECT_WEIGHTS_RELEASE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'finetuned_aasist.pth' \
+            --dir services/synthdetect/weights
+
+          # XLS-R 300M base from upstream (too large for a GitHub release asset).
+          curl -fSL --retry 3 --retry-delay 5 \
+            "https://dl.fbaipublicfiles.com/fairseq/wav2vec/xlsr2_300m.pt" \
+            -o services/synthdetect/weights/xlsr2_300m.pt
+
+          # Verify both against provenance.json.
+          python3 - <<'PYEOF'
+          import hashlib, json, sys
+          prov = json.load(open("services/synthdetect/provenance.json"))["weights"]
+          checks = {
+              "services/synthdetect/weights/finetuned_aasist.pth": prov["aasist_checkpoint"]["sha256"],
+              "services/synthdetect/weights/xlsr2_300m.pt": prov["xlsr_ssl_base"]["sha256"],
+          }
+          for path, expected in checks.items():
+              digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
+              if digest != expected:
+                  print(f"FAIL {path}: {digest} != {expected}", file=sys.stderr)
+                  sys.exit(1)
+              print(f"OK   {path}")
+          PYEOF
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/voxint-synthdetect
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: services/synthdetect
+          file: services/synthdetect/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=voxint-synthdetect
+          cache-to: type=gha,scope=voxint-synthdetect,mode=max
 
   # Strict titanet ONNX parity on both arches. Blocks every multi-arch build:
   # shipping a -cpu titanet whose engine drifted from the CUDA embedding space
