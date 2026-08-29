@@ -1469,6 +1469,7 @@ def decide_name_candidate(
     run_id: uuid.UUID,
     candidate_id: uuid.UUID,
     request: Request,
+    identity: CurrentUserDep,
     operator: OperatorDep,
     session: SessionDep,
     token: Annotated[uuid.UUID, Form()],
@@ -1507,6 +1508,7 @@ def decide_name_candidate(
             decision=decision,
             operator=operator,
             idempotency_key=nonce,
+            user_id=identity.user_id,
         )
     except StaleCandidateError as exc:
         raise HTTPException(

@@ -173,6 +173,7 @@ def record_profile_decision(
     operator: str,
     idempotency_key: str,
     note: str | None = None,
+    user_id: uuid.UUID | None = None,
 ) -> ProfileReviewDecision:
     """Append a profile-review verdict; identical replays return the existing row."""
     if not operator.strip() or len(operator) > MAX_OPERATOR_CHARS:
@@ -235,6 +236,7 @@ def record_profile_decision(
             candidate_id=candidate_id,
             decision=decision.value,
             operator=operator,
+            user_id=user_id,
             note=note,
             idempotency_key=idempotency_key,
         )

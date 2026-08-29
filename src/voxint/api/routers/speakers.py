@@ -32,6 +32,7 @@ from voxint.api.csrf import (
     mint_csrf_token,
 )
 from voxint.api.routers.deps import (
+    CurrentUserDep,
     OperatorDep,
     SessionDep,
     _require_csrf,
@@ -597,6 +598,7 @@ def decide_profile_candidate(
     speaker_id: uuid.UUID,
     candidate_id: uuid.UUID,
     request: Request,
+    identity: CurrentUserDep,
     operator: OperatorDep,
     session: SessionDep,
     nonce: Annotated[str, Form(min_length=8, max_length=64)],
@@ -639,6 +641,7 @@ def decide_profile_candidate(
             decision=decision,
             operator=operator,
             idempotency_key=nonce,
+            user_id=identity.user_id,
         )
     except StaleCandidateError as exc:
         raise HTTPException(
