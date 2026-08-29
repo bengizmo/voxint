@@ -1504,16 +1504,69 @@ A = 4.28, B = -11.42; Brier score 0.0066.
 
 Pre-registration for the Chatterbox improvement effort (GitHub #252). This
 section is binding: no training may begin until every artifact hash, baseline
-value, and gate threshold below is committed. Protocol version 1.1
-(2026-08-29: two-sample acceptance probe band, pinned Brier population,
-explicit paired-delta percentile). Designed via 4-model consult (codex,
-deepseek-v4-pro, grok-4.5, kimi-k3).
+value, and gate threshold below is committed. Protocol version 1.2
+(v1.1, 2026-08-29: two-sample acceptance probe band, pinned Brier population,
+explicit paired-delta percentile; v1.2, 2026-08-29: AMI speaker identity
+repair and re-baselining rule, domain-matched bonafide comparison
+populations). Designed via 4-model consult (codex, deepseek-v4-pro, grok-4.5,
+kimi-k3); the v1.2 repair design was independently reviewed.
 
 > ⚠ Values marked `[TBD]` must be filled by re-scoring the frozen M2
 > checkpoint with the grouped-bootstrap evaluator before any Phase 1 training.
-> If grouped bootstrap shifts any M2 baseline by more than 1pp from the
-> provisional values in this section, update the corresponding limits and note
-> the change.
+> The provisional M2 numbers in this section were measured on the
+> pre-repair (contaminated) eval split; the v1.2 re-baselining rule below
+> governs how they are replaced. If re-scoring shifts any M2 baseline,
+> the gate limit keeps its pre-registered formula (baseline plus its fixed
+> margin) and only the M2 input changes; note every change.
+
+#### v1.2 amendment: AMI speaker identity repair (2026-08-29)
+
+The corpus tooling namespaced AMI speakers per meeting, but AMI's annotation
+metadata assigns corpus-global person keys and one person attends several
+meetings. Five of the 19 canonical AMI persons in the composite corpus
+therefore straddled splits (three calibration/eval, two calibration/holdout),
+covering 63% of AMI clips and roughly 80% of the AMI eval clips. Because M2
+fine-tunes on the calibration split, the affected eval clips were scored by a
+model trained on those voices. The pre-repair M2 eval numbers on AMI strata
+are optimistic and are not valid gate baselines.
+
+The repair migrates the existing composite manifest: audio bytes, clip ids,
+and provenance are unchanged, and only speaker identities and split
+assignments are rewritten.
+
+- AMI speaker ids are canonicalized to the person key; synthetic-clone
+  variants keep their generator suffix on the canonical base. VoxConverse ids
+  stay recording-scoped (their labels are genuinely recording-local).
+- A canonical person whose clips agree on one split keeps it. A person
+  touching calibration in any meeting moves wholly to calibration: M2 already
+  trained on that voice, so it can never again serve as clean eval or holdout
+  material for M2-baseline comparisons. A person straddling only eval and
+  holdout moves wholly to holdout.
+- There is deliberately no fresh hash-rank re-assignment. Re-ranking could
+  move other M2-trained calibration voices into eval, recreating the leakage
+  elsewhere. The repaired eval is therefore a leakage-free interim cohort;
+  the challenge partition remains the unbiased cohort for ship decisions.
+- The pre-repair manifest is archived beside the repaired one, and the repair
+  tool emits a JSON audit (per-person actions, before/after counts, input and
+  output hashes). The repaired manifest hash becomes the binding one in the
+  frozen-artifacts table.
+- Split assignment for all future corpora (the challenge partition included)
+  uses canonical person identity from the start, and challenge speaker
+  freshness is defined against canonical identity.
+
+Re-baselining rule (ordering is binding): first freeze the repaired manifest
+and its audit; then re-score the frozen M2 checkpoint on the repaired splits
+to fill every `[TBD]` and replace the provisional baselines; then freeze the
+updated gate matrix. Only after the gate matrix is frozen may any candidate
+model be scored on the repaired eval. Gate limits keep their pre-registered
+margins (for example, per-generator non-regression stays baseline plus
+2.00pp); only the measured M2 inputs change. The pre-repair baselines remain
+in this document's history as invalid, with this amendment as the reason.
+
+The repaired AMI eval cohort is small (about 690 clips) until the challenge
+partition lands; per-generator EER confidence intervals on AMI strata must be
+read accordingly, and the effective component counts reported beside every
+number are the honest sample-size signal.
 
 #### Scope and precedence
 
@@ -1573,7 +1626,11 @@ before any Phase 1 training.
 Monotonic Platt scaling preserves rank order and does not change EER.
 
 **Per-generator EER.** For each synthetic generator g, compute EER against
-the frozen bonafide comparison population on the target partition. Use the
+the frozen bonafide comparison population on the target partition. The
+comparison population is domain-matched (v1.2): core TTS and unseen FM
+generators score against in-domain bonafide (AMI and VoxConverse); the
+ASVspoof DF anchor scores against ASVspoof bonafide clips. The two bonafide
+pools are never mixed in one EER. Use the
 existing linear-interpolation EER implementation (FPR/FNR crossing via
 `eer_from_roc`). Report: EER point estimate, bootstrap 95% CI, effective
 group count, clip count.
