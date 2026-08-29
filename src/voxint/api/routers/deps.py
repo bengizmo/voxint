@@ -40,7 +40,7 @@ from voxint.api.auth import (
     load_session_user,
     verify_basic_credentials,
 )
-from voxint.api.csrf import CSRF_PLUGIN, verify_csrf_token
+from voxint.api.csrf import CSRF_LOGOUT, CSRF_PLUGIN, mint_csrf_token, verify_csrf_token
 from voxint.api.languages import language_label
 from voxint.api.presentation import (
     format_age,
@@ -397,6 +397,11 @@ def _shell_template_context(request: Request) -> dict[str, Any]:
             ),
             "multi_user": settings.voxint_multi_user,
             "current_user": getattr(request.state, "current_user", None),
+            "csrf_logout_token": (
+                mint_csrf_token(request.app.state.csrf_secret, CSRF_LOGOUT)
+                if settings.voxint_multi_user
+                else ""
+            ),
         }
     }
 

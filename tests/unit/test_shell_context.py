@@ -18,8 +18,9 @@ def _request_with(
     jobs_routed: bool | None = None,
     media_routed: bool | None = None,
     activity_routed: bool | None = None,
+    csrf_secret: str = "test-secret",
 ) -> Request:
-    state = SimpleNamespace(settings=settings)
+    state = SimpleNamespace(settings=settings, csrf_secret=csrf_secret)
     if projects_routed is not None:
         state.projects_routed = projects_routed
     if jobs_routed is not None:
@@ -55,6 +56,7 @@ def test_shell_context_requires_flag_and_route() -> None:
             "activity_enabled": False,
             "multi_user": False,
             "current_user": None,
+            "csrf_logout_token": "",
         }
     }
     # Flag on, no /projects route registered yet (today's reality): stays dark.
@@ -68,6 +70,7 @@ def test_shell_context_requires_flag_and_route() -> None:
             "activity_enabled": False,
             "multi_user": False,
             "current_user": None,
+            "csrf_logout_token": "",
         }
     }
     # A stale app with no stamp at all fails closed too.
@@ -79,6 +82,7 @@ def test_shell_context_requires_flag_and_route() -> None:
             "activity_enabled": False,
             "multi_user": False,
             "current_user": None,
+            "csrf_logout_token": "",
         }
     }
     assert _shell_template_context(
@@ -91,6 +95,7 @@ def test_shell_context_requires_flag_and_route() -> None:
             "activity_enabled": False,
             "multi_user": False,
             "current_user": None,
+            "csrf_logout_token": "",
         }
     }
 
@@ -179,6 +184,20 @@ def test_shell_context_activity_requires_jobs_discovery() -> None:
         ]
         is False
     )
+
+
+def test_shell_context_multi_user_csrf_logout_token() -> None:
+    """When multi-user is enabled the shell mints a non-empty CSRF logout token."""
+    settings = Settings(
+        database_url="postgresql+psycopg://x/x", voxint_multi_user=True
+    )
+    ctx = _shell_template_context(
+        _request_with(settings, jobs_routed=True, media_routed=True)
+    )
+    token = ctx["shell"]["csrf_logout_token"]
+    assert isinstance(token, str)
+    assert len(token) > 0
+    assert token.count(".") == 2
 
 
 def test_shell_processor_is_registered() -> None:
