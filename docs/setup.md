@@ -150,7 +150,9 @@ weights are lean; budget for decoding headroom on top:
 
 The pipeline stages run **one at a time**, but each service holds its model
 resident for the whole session, so the budget is the *sum of resident weights
-plus one stage's decode spike*, not all peaks at once.
+plus one stage's decode spike*, not all peaks at once. Enabling both synthdetect
+and a GPU-offloaded bundled LLM on one card usually needs **16 GB+**; on a
+12 GB card, prefer CPU LLM mode or a second GPU.
 
 **Compatible consumer cards** (NVIDIA):
 
@@ -266,7 +268,7 @@ score a recording that was processed before you enabled it, open that recording'
 detail page and click the **Score** button.
 
 The scores appear on each recording's detail page as a risk chip (low, medium, or
-high). A standalone report page collects all scored recordings in one view.
+high). Each recording's report page shows all its scored turns in one view.
 
 > ⚠ The detector has known blind spots: some AI voice generators (notably
 > Chatterbox) partially evade it, and certain recording conditions can shift

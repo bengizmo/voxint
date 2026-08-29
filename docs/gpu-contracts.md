@@ -1509,7 +1509,7 @@ overlay.
 | Property | Value |
 |---|---|
 | **Image** | `ghcr.io/bengizmo/voxint-synthdetect:{tag}` |
-| **Port** | 8025 (internal) |
+| **Port** | 8025 (compose publishes `127.0.0.1:8025` for local debug; app traffic uses service DNS) |
 | **Health endpoint** | `GET /healthz` |
 | **GPU** | 1x NVIDIA GPU (tested on RTX 3060 12 GB, SM 8.6) |
 | **Restart policy** | `unless-stopped` |
@@ -1518,8 +1518,9 @@ overlay.
 
 Environment variables (set in `.env`, passed through the overlay):
 
-- `SYNTHDETECT_ENABLED` (default `false`): master switch. When false, the
-  plugin is dormant and the service is not queried.
+- `SYNTHDETECT_ENABLED` (default `false`): master switch. When false, no new
+  scoring jobs are created (manual or automatic). Jobs already queued before
+  the flag was cleared may still complete.
 - `SYNTHDETECT_AUTOGENERATE` (default `false`): when true, completed pipeline
   runs are automatically scored without operator action.
 - `SYNTHDETECT_URL` (default `http://localhost:8025`): the overlay overrides

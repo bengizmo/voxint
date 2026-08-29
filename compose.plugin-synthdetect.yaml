@@ -30,6 +30,8 @@ services:
     restart: unless-stopped
     environment:
       MEDIA_ROOT: /data/media
+      VOXINT_TELEMETRY_ENABLED: ${VOXINT_TELEMETRY_ENABLED:-1}
+      VOXINT_TELEMETRY_INTERVAL_SECONDS: ${VOXINT_TELEMETRY_INTERVAL_SECONDS:-5}
     volumes:
       - ${MEDIA_ROOT:-./media}:/data/media:ro
     ports:
