@@ -129,6 +129,10 @@ You don't need any of this to use Voxint, but if you're curious or evaluating it
 - **Held to measured gates.** The models are pinned and their outputs are held to
   measured-equivalence gates, so an upgrade can't quietly change results. See
   [docs/gpu-contracts.md](docs/gpu-contracts.md).
+- **Optional multi-user mode.** By default a single admin password protects the
+  console. Turn on `VOXINT_MULTI_USER` and each reviewer gets their own login,
+  with decisions attributed to the person who made them. See
+  [docs/operations.md](docs/operations.md#multi-user-authentication).
 
 ## For developers
 
