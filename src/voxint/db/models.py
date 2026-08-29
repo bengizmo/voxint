@@ -34,6 +34,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     SmallInteger,
     Text,
     UniqueConstraint,
@@ -93,6 +94,11 @@ class OperationFileStatus(enum.StrEnum):
     DONE = "done"
     MISSING = "missing"
     FAILED = "failed"
+
+
+class UserRole(enum.StrEnum):
+    ADMIN = "admin"
+    REVIEWER = "reviewer"
 
 
 class NotifiableEvent(enum.StrEnum):
@@ -247,6 +253,55 @@ class ProfileDecision(enum.StrEnum):
 
 def _enum_values(e: type[enum.StrEnum]) -> str:
     return ", ".join(f"'{m.value}'" for m in e)
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            f"role IN ({_enum_values(UserRole)})", name="users_role_check"
+        ),
+        CheckConstraint(
+            "length(btrim(username)) > 0", name="users_username_nonempty_check"
+        ),
+        CheckConstraint(
+            "username ~ '^[a-z0-9][a-z0-9_.-]{0,63}$'",
+            name="users_username_format_check",
+        ),
+        CheckConstraint(
+            "position(':' in username) = 0", name="users_username_no_colon_check"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    username: Mapped[str] = mapped_column(Text, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(Text, default=UserRole.REVIEWER.value)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    __table_args__ = (
+        CheckConstraint("expires_at > created_at", name="auth_sessions_expiry_check"),
+        Index("ix_auth_sessions_expires_at", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[bytes] = mapped_column(LargeBinary, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class Project(Base):
@@ -1144,6 +1199,14 @@ class AdjudicationDecision(Base):
             "created_at",
             "id",
         ),
+        CheckConstraint(
+            "user_id IS NULL OR operator NOT LIKE 'system:%'",
+            name="adjudication_decisions_user_not_system_check",
+        ),
+        CheckConstraint(
+            "operator NOT LIKE 'system:%' OR user_id IS NULL",
+            name="adjudication_decisions_system_not_user_check",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -1167,6 +1230,9 @@ class AdjudicationDecision(Base):
     start_word_index: Mapped[int | None] = mapped_column(nullable=True)
     end_word_index: Mapped[int | None] = mapped_column(nullable=True)
     operator: Mapped[str] = mapped_column(Text)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     idempotency_key: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
