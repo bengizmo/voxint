@@ -1999,7 +1999,7 @@ class TestCpuImageProvenance:
 
         image_bearing = {
             "compose.yaml", "compose.gpu.yaml", "compose.cpu.yaml", "compose.rocm.yaml",
-            "compose.llm.yaml",
+            "compose.llm.yaml", "compose.plugin-synthdetect.yaml",
         }
         pins: dict[str, set[str]] = {}
         seen = set()
@@ -2062,6 +2062,7 @@ class TestCpuImageProvenance:
             "compose.metal.yaml",
             "compose.ytdlp-egress.yaml",
             "compose.llm.yaml",
+            "compose.plugin-synthdetect.yaml",
         ):
             services = yaml.safe_load((REPO_ROOT / name).read_text())["services"]
             for svc_name, svc in services.items():

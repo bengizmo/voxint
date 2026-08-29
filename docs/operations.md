@@ -1317,6 +1317,51 @@ recommended: uncomment the `-ngl 99` + device-reservation block in
 `compose.llm.yaml`. The pinned serving profile and provenance are in
 [gpu-contracts.md](gpu-contracts.md).
 
+### Synthetic-speech detection plugin (issue #145; optional)
+
+The synthdetect plugin scores recordings for AI-generated speech using a
+fine-tuned w2v2-AASIST classifier with Platt-calibrated risk scores. It runs as
+a standalone GPU service deployed via `compose.plugin-synthdetect.yaml`. Layer it
+on top of a GPU stack:
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yaml \
+               -f compose.plugin-synthdetect.yaml up -d
+```
+
+Enable it in **Settings → Synthetic-speech detection** (or
+`SYNTHDETECT_ENABLED=true`). With `SYNTHDETECT_AUTOGENERATE=true`, completed
+pipeline runs are scored automatically; otherwise, use the **Score** button on a
+run's detail page.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SYNTHDETECT_ENABLED` | `false` | Master switch. When false, the plugin is dormant. |
+| `SYNTHDETECT_AUTOGENERATE` | `false` | Auto-score completed runs. |
+| `SYNTHDETECT_URL` | `http://localhost:8025` | Service URL (the overlay overrides to `http://synthdetect:8025`). |
+| `SYNTHDETECT_HTTP_TIMEOUT_SECONDS` | `120` | HTTP timeout for scoring requests. |
+
+The service requires 1x NVIDIA GPU (tested on RTX 3060 12 GB). Weights are baked
+into the image (no download at startup). When the service is not running or the
+plugin is disabled, the pipeline completes normally; recordings are not scored.
+
+The run detail page shows a risk chip (low/medium/high) and the raw logit. A
+standalone report page collects all scored recordings. Known limitations
+(Chatterbox evasion #252, VoxConverse channel confound #253) are disclosed on
+the report page and documented in
+[gpu-contracts.md](gpu-contracts.md#synthetic-speech-detection-synthdetect).
+
+Building from source:
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yaml \
+               -f compose.plugin-synthdetect.yaml \
+               -f compose.plugin-synthdetect.build.yaml \
+               build synthdetect
+```
+
+Weights must be staged before building; see `services/synthdetect/Dockerfile`.
+
 ### Run-level assets (issue #41; off by default)
 
 The run detail page can carry three machine-generated assets: a **summary**,

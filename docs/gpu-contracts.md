@@ -1500,6 +1500,37 @@ Threshold recalibration after Chatterbox fine-tuning (seed 0, dev partition):
 EER threshold 2.66, dev BF FPR 1.1%, holdout BF FPR 0.86%. Platt parameters:
 A = 4.28, B = -11.42; Brier score 0.0066.
 
+### Service contract
+
+The synthdetect model service runs as a standalone FastAPI container
+(`voxint-synthdetect`), deployed via the `compose.plugin-synthdetect.yaml`
+overlay.
+
+| Property | Value |
+|---|---|
+| **Image** | `ghcr.io/bengizmo/voxint-synthdetect:{tag}` |
+| **Port** | 8025 (internal) |
+| **Health endpoint** | `GET /healthz` |
+| **GPU** | 1x NVIDIA GPU (tested on RTX 3060 12 GB, SM 8.6) |
+| **Restart policy** | `unless-stopped` |
+| **Weights** | Baked into the image at build time (sha-verified; not downloaded at startup) |
+| **Media volume** | `MEDIA_ROOT` shared read-only with api/worker |
+
+Environment variables (set in `.env`, passed through the overlay):
+
+- `SYNTHDETECT_ENABLED` (default `false`): master switch. When false, the
+  plugin is dormant and the service is not queried.
+- `SYNTHDETECT_AUTOGENERATE` (default `false`): when true, completed pipeline
+  runs are automatically scored without operator action.
+- `SYNTHDETECT_URL` (default `http://localhost:8025`): the overlay overrides
+  this to the compose service DNS name (`http://synthdetect:8025`).
+- `SYNTHDETECT_HTTP_TIMEOUT_SECONDS` (default `120`): HTTP timeout for
+  scoring requests to the service.
+
+The service is optional. When it is not running or the plugin is disabled,
+submissions complete normally; they are not scored. The pipeline is never
+blocked by synthdetect availability.
+
 ## Contract tests
 
 `tests/contracts/` validates (CPU-only, no model deps) that:
