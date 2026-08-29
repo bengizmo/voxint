@@ -2,19 +2,15 @@
    legacy_runs/run_detail.html (/runs/{id}) and jobs/job_detail.html
    (/jobs/{id}) so the two surfaces never drift. Every form posts to the
    existing /runs/{id}/... action endpoints — the Jobs page reuses the legacy
-   mutation surface rather than minting /jobs/{id}/... aliases. #}
-<p><a href="/runs">← runs</a></p>
-<h1>Run <code>{{ run.id.hex[:8] }}</code></h1>
-{% if sidecar_title %}
-{# The sidecar title (issue #104) is operator intent, shown as the run's
-   display name; the raw path below stays visible as ground truth. #}
-<p class="media-title">{{ sidecar_title }}</p>
-{% endif %}
-<p class="muted"><code>{{ run.media_item.source_path }}</code></p>
+   mutation surface rather than minting /jobs/{id}/... aliases.
+
+   The page heading and primary navigation (Audio / Transcript / Review) live
+   in the wrapper templates' command-bar blocks, not in this partial. #}
+<p class="oc-muted"><code>{{ run.media_item.source_path }}</code></p>
 {% if provenance %}
 {# URL runs only: the acquisition source, shown as a bare host — never the raw
    source_url, whose query could carry a signed token. #}
-<p class="muted">Source: <code>{{ provenance }}</code></p>
+<p class="oc-muted">Source: <code>{{ provenance }}</code></p>
 {% endif %}
 
 {# Gate on the live status too: a bookmarked/refreshed ?enqueue=deferred URL
@@ -54,13 +50,13 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
   <input type="hidden" name="revision" value="{{ run.revision }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_requeue }}">
   <button type="submit">Requeue</button>
-  <span class="muted">Retries the failed stage (<code>{{ run.current_stage or "—" }}</code>).</span>
+  <span class="oc-muted">Retries the failed stage (<code>{{ run.current_stage or "—" }}</code>).</span>
 </form>
 {% if run.current_stage in ("transcribe", "diarize_embed") %}
 {# Static guidance only — no live probe on this page (a health check here would
    add model-service latency to every failed-run view and flap with service
    health; the setup wizard's SERVICES step owns live reachability). #}
-<p class="muted">This stage needs the model services (ASR / diarizer / embedder).
+<p class="oc-muted">This stage needs the model services (ASR / diarizer / embedder).
 If they aren't running, start a compute tier —
 <code>docker compose -f compose.yaml -f compose.gpu.yaml up -d</code> (NVIDIA GPU) or
 <code>docker compose -f compose.yaml -f compose.cpu.yaml up -d</code> (no GPU) —
@@ -76,7 +72,7 @@ pipeline.</p>
   <input type="hidden" name="revision" value="{{ run.revision }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_cancel }}">
   <button type="submit">Cancel run</button>
-  <span class="muted">
+  <span class="oc-muted">
     {% if run.status == "running" %}
       Stops the run. The stage now running (<code>{{ run.current_stage or "—" }}</code>)
       finishes first — cancel is cooperative, not an immediate kill — then no further
@@ -88,18 +84,15 @@ pipeline.</p>
 </form>
 {% endif %}
 
-<p>
-  {% if audio_available %}<a href="/media/{{ run.id }}">Audio</a>{% endif %}
-  {% if transcript_available %}<a href="/runs/{{ run.id }}/transcript">Transcript</a>{% endif %}
-  {% if run.status == "completed" %}<a href="/review/{{ run.id }}" class="btn-primary">Review</a>{% endif %}
+<p class="oc-muted">
   <a href="/runs/{{ run.id }}/export.json">Complete run archive (JSON)</a>
-  {% if transcript_available %}<span class="muted">(transcript &amp; subtitle exports are on the
-    <a href="/runs/{{ run.id }}/transcript">Transcript</a> page)</span>{% endif %}
+  {% if transcript_available %} · transcript &amp; subtitle exports are on the
+    <a href="/runs/{{ run.id }}/transcript">Transcript</a> page{% endif %}
   {% if media_reclaimed_at %}
-    <span class="muted">Media reclaimed on {{ media_reclaimed_at.strftime("%Y-%m-%d") }}
-      (transcript and decisions kept; re-run from source to restore audio).</span>
+    · Media reclaimed on {{ media_reclaimed_at.strftime("%Y-%m-%d") }}
+      (transcript and decisions kept; re-run from source to restore audio).
   {% elif not audio_available and not transcript_available %}
-    <span class="muted">No audio or transcript yet.</span>
+    · No audio or transcript yet.
   {% endif %}
 </p>
 
@@ -112,13 +105,13 @@ pipeline.</p>
 <form method="post" action="/runs/{{ run.id }}/unarchive" class="unarchive action-row">
   <input type="hidden" name="csrf_token" value="{{ csrf_run_unarchive }}">
   <button type="submit">Un-archive run</button>
-  <span class="muted">Restores this run to the runs list and review queue.</span>
+  <span class="oc-muted">Restores this run to the runs list and review queue.</span>
 </form>
 {% else %}
 <form method="post" action="/runs/{{ run.id }}/archive" class="archive action-row">
   <input type="hidden" name="csrf_token" value="{{ csrf_run_archive }}">
   <button type="submit">Archive run</button>
-  <span class="muted">Hides this run from the runs list and review queue. Keeps
+  <span class="oc-muted">Hides this run from the runs list and review queue. Keeps
     all its data; reversible.</span>
 </form>
 {% endif %}
@@ -126,7 +119,7 @@ pipeline.</p>
       onsubmit="return confirm('Delete the derived audio files for this run? This frees disk and cannot be undone. The original source recording is kept.')">
   <input type="hidden" name="csrf_token" value="{{ csrf_run_media_delete }}">
   <button type="submit" class="danger">Delete derived audio files</button>
-  <span class="muted">Frees disk by removing this run's preprocessed and chunked
+  <span class="oc-muted">Frees disk by removing this run's preprocessed and chunked
     audio. <strong>Irreversible</strong>; the original source recording is kept.</span>
 </form>
 </section>
@@ -157,7 +150,7 @@ pipeline.</p>
   {% if source_metadata.duration_seconds %}
   <dt>Claimed duration</dt>
   <dd>{{ "%d:%02d" | format(source_metadata.duration_seconds // 60, source_metadata.duration_seconds % 60) }}
-      <span class="muted">(source-reported, not measured)</span></dd>
+      <span class="oc-muted">(source-reported, not measured)</span></dd>
   {% endif %}
   {% if source_metadata.tags %}<dt>Tags</dt><dd>{{ source_metadata.tags | join(", ") }}</dd>{% endif %}
   {% if source_metadata.canonical_url %}
@@ -165,13 +158,13 @@ pipeline.</p>
   {% endif %}
   {% if source_metadata.extractor %}
   <dt>Extractor</dt>
-  <dd><code>{{ source_metadata.extractor }}</code>{% if source_metadata.extractor_version %} <span class="muted">(yt-dlp {{ source_metadata.extractor_version }})</span>{% endif %}</dd>
+  <dd><code>{{ source_metadata.extractor }}</code>{% if source_metadata.extractor_version %} <span class="oc-muted">(yt-dlp {{ source_metadata.extractor_version }})</span>{% endif %}</dd>
   {% endif %}
 </dl>
 {% if source_metadata.description %}
 <details>
   <summary>Description</summary>
-  <p class="muted">{{ source_metadata.description }}</p>
+  <p class="oc-muted">{{ source_metadata.description }}</p>
 </details>
 {% endif %}
 </section>
@@ -193,15 +186,15 @@ pipeline.</p>
 
 <section class="card">
 <h2>Pipeline models</h2>
-<p class="muted">The model each stage saw just before it ran. This is observed
+<p class="oc-muted">The model each stage saw just before it ran. This is observed
 immediately before the attempt, not read back from the output, so it records
 which model answered rather than proving the exact build.</p>
 {% for stage in model_provenance %}
 <div class="model-stage">
   <h3>{{ stage.label }}{% if stage.recorded and stage.attempt and stage.attempt > 1 %}
-    <span class="muted">(from attempt {{ stage.attempt }})</span>{% endif %}</h3>
+    <span class="oc-muted">(from attempt {{ stage.attempt }})</span>{% endif %}</h3>
   {% if not stage.recorded %}
-  <p class="muted">Not recorded. This run finished before model provenance was
+  <p class="oc-muted">Not recorded. This run finished before model provenance was
   added, no attempt of this stage completed, or the latest completed attempt
   did not record it.</p>
   {% else %}
@@ -210,13 +203,13 @@ which model answered rather than proving the exact build.</p>
     <dt>{{ role.label }}</dt>
     {% if role.reachable %}
     <dd>
-      {% if role.model %}<code>{{ role.model }}</code>{% else %}<span class="muted">no model name reported</span>{% endif %}
-      {% if role.engine %} <span class="muted">engine <code>{{ role.engine }}</code></span>{% endif %}
-      {% if role.revision %}<br><span class="muted">revision <code>{{ role.revision }}</code></span>{% endif %}
-      {% if role.decode_config_hash %}<br><span class="muted">decode config <code>{{ role.decode_config_hash[:12] }}</code></span>{% endif %}
+      {% if role.model %}<code>{{ role.model }}</code>{% else %}<span class="oc-muted">no model name reported</span>{% endif %}
+      {% if role.engine %} <span class="oc-muted">engine <code>{{ role.engine }}</code></span>{% endif %}
+      {% if role.revision %}<br><span class="oc-muted">revision <code>{{ role.revision }}</code></span>{% endif %}
+      {% if role.decode_config_hash %}<br><span class="oc-muted">decode config <code>{{ role.decode_config_hash[:12] }}</code></span>{% endif %}
     </dd>
     {% else %}
-    <dd><span class="muted">Not observed{% if role.detail %} ({{ role.detail }} when the stage ran){% endif %}.</span></dd>
+    <dd><span class="oc-muted">Not observed{% if role.detail %} ({{ role.detail }} when the stage ran){% endif %}.</span></dd>
     {% endif %}
     {% endfor %}
   </dl>
@@ -230,13 +223,13 @@ which model answered rather than proving the exact build.</p>
    means the run had no vocabulary or predates this record. #}
 <section class="card">
 <h2>Glossary applied</h2>
-<p class="muted">The vocabulary hint transcription saw for this run, the terms from
+<p class="oc-muted">The vocabulary hint transcription saw for this run, the terms from
 your glossary and the run's domain pack. It records what the model was told to expect,
 not that every term was spelled this way.</p>
 {% if run.initial_prompt %}
 <p><code>{{ run.initial_prompt }}</code></p>
 {% else %}
-<p class="muted">Not recorded. This run has not been transcribed yet, had no
+<p class="oc-muted">Not recorded. This run has not been transcribed yet, had no
 vocabulary, or it finished before Voxint began recording the applied glossary.</p>
 {% endif %}
 </section>
@@ -250,17 +243,17 @@ vocabulary, or it finished before Voxint began recording the applied glossary.</
 {% if run.detected_language %}
 <p><strong>{{ language_label(run.detected_language) }}</strong></p>
 {% if run.detected_language_probability is not none %}
-<p class="muted">Whisper language-detection score:
+<p class="oc-muted">Whisper language-detection score:
 {{ "%.2f" | format(run.detected_language_probability) }}.
 This is the model's own score for its language guess, not a measure of
 transcript accuracy. It reflects the whole recording as one language; a
 recording that mixes languages still gets a single detected language. Short or
 mostly silent recordings can produce low or arbitrary detections.</p>
 {% else %}
-<p class="muted">No detection score was recorded for this run.</p>
+<p class="oc-muted">No detection score was recorded for this run.</p>
 {% endif %}
 {% else %}
-<p class="muted">Not recorded. This run has not been transcribed yet, or it
+<p class="oc-muted">Not recorded. This run has not been transcribed yet, or it
 finished before Voxint began recording the detected language.</p>
 {% endif %}
 </section>
@@ -268,31 +261,25 @@ finished before Voxint began recording the detected language.</p>
 <section class="card">
 <h2>Stage ledger</h2>
 {% if not stage_runs %}
-<p class="muted">No stage attempts recorded yet.</p>
+<p class="oc-muted">No stage attempts recorded yet.</p>
 {% else %}
-<div class="table-wrap" role="region" aria-label="Stage ledger" tabindex="0">
-<table>
-  <thead>
-    <tr>
-      <th scope="col">Stage</th><th scope="col">Attempt</th><th scope="col">Status</th><th scope="col">Worker</th>
-      <th scope="col">Started</th><th scope="col">Finished</th><th scope="col">Lease expires</th><th scope="col">Error</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for s in stage_runs %}
-    <tr>
-      <td>{{ s.stage }}</td>
-      <td>{{ s.attempt }}</td>
-      <td><span class="pill {{ s.status }}">{{ s.status }}</span></td>
-      <td>{{ s.worker_id or "—" }}</td>
-      <td>{{ s.started_at.strftime("%Y-%m-%d %H:%M:%S") if s.started_at else "—" }}</td>
-      <td>{{ s.finished_at.strftime("%Y-%m-%d %H:%M:%S") if s.finished_at else "—" }}</td>
-      <td>{{ s.lease_expires_at.strftime("%Y-%m-%d %H:%M:%S") if s.lease_expires_at else "—" }}</td>
-      <td>{% if s.error %}<span class="error">{{ s.error }}</span>{% else %}—{% endif %}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div class="grid-table" style="grid-template-columns: auto auto auto auto auto auto auto 1fr;" role="region" aria-label="Stage ledger">
+  <div class="gt-header">
+    <span>STAGE</span><span>ATTEMPT</span><span>STATUS</span><span>WORKER</span>
+    <span>STARTED</span><span>FINISHED</span><span>LEASE EXPIRES</span><span>ERROR</span>
+  </div>
+  {% for s in stage_runs %}
+  <div class="gt-row">
+    <span>{{ s.stage }}</span>
+    <span>{{ s.attempt }}</span>
+    <span><span class="pill {{ s.status }}">{{ s.status }}</span></span>
+    <span>{{ s.worker_id or "—" }}</span>
+    <span>{{ s.started_at.strftime("%Y-%m-%d %H:%M:%S") if s.started_at else "—" }}</span>
+    <span>{{ s.finished_at.strftime("%Y-%m-%d %H:%M:%S") if s.finished_at else "—" }}</span>
+    <span>{{ s.lease_expires_at.strftime("%Y-%m-%d %H:%M:%S") if s.lease_expires_at else "—" }}</span>
+    <span>{% if s.error %}<span class="error">{{ s.error }}</span>{% else %}—{% endif %}</span>
+  </div>
+  {% endfor %}
 </div>
 {% endif %}
 </section>

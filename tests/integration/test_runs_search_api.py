@@ -604,7 +604,8 @@ class TestRoute:
         page = client.get("/runs").text
         # Column header + labeled value, and the facet dropdown offers only
         # languages some run carries.
-        assert '<th scope="col">Language</th>' in page
+        # V3 grid-table: column headers are uppercase in gt-header spans.
+        assert "LANGUAGE" in page
         assert "Spanish (es)" in page
         assert '<option value="es"' in page
 
@@ -643,8 +644,10 @@ class TestRoute:
                 segments=[(None, "colspan probe text", None)],
             )
         page = client.get("/runs", params={"q": "probe"}).text
-        assert 'colspan="6"' in page
-        assert 'colspan="5"' not in page
+        # V3 grid-table: snippet rows span all columns via grid-column on the
+        # child span, not a colspan attribute.
+        assert "grid-column: 1 / -1" in page
+        assert "probe" in page
 
     def test_facet_dropdown_lists_archived_marked_and_hides_tombstones(
         self, client: TestClient, session_factory: sessionmaker[Session]
