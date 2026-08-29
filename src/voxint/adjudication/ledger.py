@@ -87,6 +87,7 @@ def record_decision(
     transcript_segment_id: uuid.UUID | None = None,
     start_word_index: int | None = None,
     end_word_index: int | None = None,
+    user_id: uuid.UUID | None = None,
 ) -> AdjudicationDecision:
     """Append a ruling; replaying an identical request returns the existing row.
 
@@ -141,6 +142,7 @@ def record_decision(
             decision=decision.value,
             speaker_id=speaker_id,
             operator=operator,
+            user_id=user_id,
             idempotency_key=idempotency_key,
             transcript_segment_id=transcript_segment_id,
             start_word_index=start_word_index,

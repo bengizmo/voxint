@@ -60,6 +60,7 @@ def enroll_new_speaker(
     operator: str,
     idempotency_key: str,
     gates: MatchingGates,
+    user_id: uuid.UUID | None = None,
 ) -> EnrollmentResult:
     """Create a named speaker from a run's label and rule it assigned.
 
@@ -149,6 +150,7 @@ def enroll_new_speaker(
         operator=operator,
         idempotency_key=idempotency_key,
         speaker_id=speaker.id,
+        user_id=user_id,
     )
     session.add(
         SpeakerEmbedding(

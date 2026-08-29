@@ -41,6 +41,7 @@ from voxint.api.routers import deps
 from voxint.api.routers.deps import (
     OperatorDep,
     SessionDep,
+    _require_admin,
     _require_csrf,
     require_onboarded,
     templates,
@@ -122,7 +123,7 @@ from voxint.tutorial.seed import seed_tutorial_run
 logger = logging.getLogger(__name__)
 
 setup_router = APIRouter()
-router = APIRouter(dependencies=[Depends(require_onboarded)])
+router = APIRouter(dependencies=[Depends(require_onboarded), Depends(_require_admin)])
 
 # Bounded, non-secret operator guidance for a failed UI-triggered tutorial seed
 # (issue #75). At most two messages: a storage failure vs. broken/missing bundled
