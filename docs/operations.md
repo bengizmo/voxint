@@ -228,9 +228,9 @@ The default GPU overlay is tuned for headroom, not for the smallest card. On a
 host with one modest GPU (for example a single 12 GB consumer card shared by
 whisper, pyannote, titanet, and any co-resident LLM or synthdetect service), the
 stock settings can exhaust VRAM. The synthdetect plugin
-(`compose.plugin-synthdetect.yaml`) adds ~1.5--2 GB of resident weights; on a
-12 GB card already running the transcription suite plus a GPU-offloaded bundled
-LLM, enabling synthdetect will likely OOM. Budget:
+(`compose.plugin-synthdetect.yaml`) adds roughly 1.5 to 2 GB of resident
+weights; on a 12 GB card already running the transcription suite plus a
+GPU-offloaded bundled LLM, enabling synthdetect will likely OOM. Budget:
 [setup.md](setup.md#3-choose-your-compute-tier). The first out-of-memory error can poison that service's CUDA
 context, so every request after it fails with a cascade of
 `CUDA error: out of memory` and then `invalid device ordinal` until the service
