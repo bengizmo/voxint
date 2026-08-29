@@ -363,3 +363,99 @@ class TestScoreButton:
             data={"csrf_token": csrf},
         )
         assert resp.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Admin gate on mutation routes (issue #305).
+# --------------------------------------------------------------------------- #
+class TestAdminGate:
+    """Non-admin users must get 403 on synthdetect mutation routes."""
+
+    def _multiuser_client(
+        self,
+        session_factory: sessionmaker[Session],
+        role: str = "reviewer",
+    ) -> TestClient:
+        from voxint.api.auth import SESSION_COOKIE, create_session, new_session_token
+        from voxint.users import UserRole, create_user
+
+        settings = Settings(
+            _env_file=None,  # type: ignore[call-arg]
+            voxint_multi_user=True,
+            database_url="postgresql+psycopg://x/x",
+            csrf_secret=CSRF_SECRET,
+            synthdetect_enabled=True,
+            synthdetect_autogenerate=False,
+            synthdetect_url="http://localhost:19999",
+        )
+        app = create_app(settings=settings, session_factory=session_factory)
+        seed_onboarded(session_factory)
+
+        with session_factory() as session:
+            admin = create_user(
+                session, username="admin", password="adminpass", role=UserRole.ADMIN
+            )
+            session.commit()
+            if role == "reviewer":
+                user = create_user(
+                    session,
+                    username="viewer",
+                    password="viewerpass",
+                    role=UserRole.REVIEWER,
+                )
+                session.commit()
+                user_id = user.id
+            else:
+                user_id = admin.id
+
+            token = new_session_token()
+            create_session(session, user_id=user_id, token=token, ttl_seconds=3600)
+            session.commit()
+
+        client = TestClient(app, cookies={SESSION_COOKIE: token})
+        return client
+
+    def test_reviewer_cannot_post_settings(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        client = self._multiuser_client(session_factory, role="reviewer")
+        csrf = mint_csrf_token(CSRF_SECRET, CSRF_SETTINGS)
+        resp = client.post(
+            "/synthdetect/settings",
+            data={
+                "synthdetect_enabled": "on",
+                "synthdetect_autogenerate": "inherit",
+                "csrf_token": csrf,
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+
+    def test_reviewer_cannot_post_score(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        run_id = _seed_completed_run(session_factory)
+        client = self._multiuser_client(session_factory, role="reviewer")
+        csrf = mint_csrf_token(CSRF_SECRET, CSRF_PLUGIN)
+        resp = client.post(
+            f"/synthdetect/score/{run_id}",
+            data={"csrf_token": csrf},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+
+    def test_admin_can_post_settings(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        client = self._multiuser_client(session_factory, role="admin")
+        csrf = mint_csrf_token(CSRF_SECRET, CSRF_SETTINGS)
+        resp = client.post(
+            "/synthdetect/settings",
+            data={
+                "synthdetect_enabled": "on",
+                "synthdetect_autogenerate": "inherit",
+                "csrf_token": csrf,
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
