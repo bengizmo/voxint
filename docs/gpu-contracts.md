@@ -1500,6 +1500,255 @@ Threshold recalibration after Chatterbox fine-tuning (seed 0, dev partition):
 EER threshold 2.66, dev BF FPR 1.1%, holdout BF FPR 0.86%. Platt parameters:
 A = 4.28, B = -11.42; Brier score 0.0066.
 
+### M3 eval protocol (#252)
+
+Pre-registration for the Chatterbox improvement effort (GitHub #252). This
+section is binding: no training may begin until every artifact hash, baseline
+value, and gate threshold below is committed. Protocol version 1.0. Designed
+via 4-model consult (codex, deepseek-v4-pro, grok-4.5, kimi-k3).
+
+> ⚠ Values marked `[TBD]` must be filled by re-scoring the frozen M2
+> checkpoint with the grouped-bootstrap evaluator before any Phase 1 training.
+> If grouped bootstrap shifts any M2 baseline by more than 1pp from the
+> provisional values in this section, update the corresponding limits and note
+> the change.
+
+#### Scope and precedence
+
+This protocol governs all model candidates trained under #252 (Phases 1
+through 4 of the approved plan). It takes precedence over experiment notes,
+ad-hoc analysis, and verbal agreements. Amendments may tighten gates or add
+metrics but never loosen or remove them. Every amendment is timestamped,
+version-bumped, and committed before the relevant training results are
+unblinded.
+
+#### Frozen artifacts
+
+The following artifacts must be hashed and committed before Phase 1 training.
+
+| Artifact | Role | Hash / version | Permitted use |
+|---|---|---|---|
+| M2 checkpoint (`finetuned_aasist.pth`) | Reference model | `[TBD: sha256]` | Baseline scoring only |
+| XLS-R 300M (`xlsr2_300m.pt`) | Frozen frontend | `[TBD: sha256]` | Feature extraction; shared across all candidates |
+| Selection seed | Partition assignment | `voxint-synthdetect-144` | Immutable; shared with bootstrap seeding |
+| Evaluator revision | Metric computation | `[TBD: commit hash]` | Locked after golden-test validation |
+| ffmpeg version | Codec pipeline | `[TBD: version string]` | Locked for all codec materialization |
+| Calibration manifest | Platt fitting | `[TBD: manifest hash]` | Calibration split only; no model selection |
+| Eval manifest | Iteration gates | `[TBD: manifest hash]` | Phase gates; every touch logged |
+| Holdout manifest | Phase-exit confirmation | `[TBD: manifest hash]` | At most 1 touch per phase |
+| Challenge manifest | Ship decision | `[TBD: manifest hash]` | See Challenge procedure below |
+
+Codec recipes (deterministic, reproducible via the existing degradation
+executor):
+
+| Name | Codec | Bitrate | Mode | Notes |
+|---|---|---|---|---|
+| `clean` | None | n/a | n/a | Original waveform |
+| `mp3-cbr48-v1` | MP3 | 48 kbps | CBR | `[TBD: exact ffmpeg flags]` |
+| `opus-voip-cbr16-f20-v1` | Opus | 16 kbps | VoIP, 20 ms frames | `[TBD: exact ffmpeg flags]` |
+| `aac-lc-cbr48-v1` | AAC-LC | 48 kbps | CBR | `[TBD: exact ffmpeg flags]` |
+
+#### Partitions and access budget
+
+Four speaker-disjoint partitions. A speaker's clips never straddle two
+partitions. Assignment uses SHA-256 hash-rank with `SELECTION_SEED`.
+
+| Partition | Role | Access rule |
+|---|---|---|
+| **Calibration** | Fit Platt A, B; derive operating thresholds (5% FPR, 1% FPR) | No model selection. Thresholds frozen per seed before eval scoring. |
+| **Eval** | Iteration feedback and phase gates | Every touch logged. Semi-public by design. |
+| **Holdout** | Phase-exit confirmation | At most 1 touch per phase. Not for model selection. |
+| **Challenge** | Binding ship decision | Opened once per phase after all choices frozen. See Challenge procedure. |
+
+The challenge partition is a new 4th split created for this protocol. It is
+not carved from the existing eval set. Speaker-disjoint and prompt-disjoint
+from all other partitions and from all training data. Created and hash-frozen
+before any Phase 1 training.
+
+#### Metrics
+
+**Score polarity.** Higher raw score always means more likely synthetic.
+Monotonic Platt scaling preserves rank order and does not change EER.
+
+**Per-generator EER.** For each synthetic generator g, compute EER against
+the frozen bonafide comparison population on the target partition. Use the
+existing linear-interpolation EER implementation (FPR/FNR crossing via
+`eer_from_roc`). Report: EER point estimate, bootstrap 95% CI, effective
+group count, clip count.
+
+**Macro-average EER.** Equal-weight average of per-generator EERs across the
+core generators (Chatterbox, Piper, ElevenLabs, Google TTS). ASVspoof DF is
+an anchor reported separately; it is not included in the macro average.
+Unseen FM generators (Matcha-TTS, F5-TTS) are also reported separately.
+
+**TPR@5%FPR (primary operating metric).** On the calibration split, select
+the lowest threshold satisfying grouped, weighted bonafide FPR at most 5%.
+Freeze that threshold per seed. Apply it unchanged to eval, holdout, and
+challenge. Report: target FPR, threshold, realized FPR, TPR, effective
+bonafide group count, bootstrap CI. Per-generator TPR at the frozen threshold
+is also reported.
+
+**TPR@1%FPR (diagnostic).** Same procedure at 1% FPR. Not a binding gate. If
+calibration has fewer than 1,000 independent bonafide clusters, label this
+metric as underpowered in the report.
+
+**Codec-stratified EER.** For each codec c, compare synthetic codec-c
+descendants with bonafide codec-c descendants. Clean is its own stratum. All
+descendants of one parent remain one effective group. Minimum 50 parent groups
+per stratum to report; strata below this threshold are marked "underpowered"
+and excluded from the guard rail.
+
+**Out-of-sample Platt Brier score.** Fit Platt A and B on the calibration
+split using one effective observation per parent/speaker group. Compute Brier
+on the eval split with identical weighting. Require A > 0 (higher score must
+mean more synthetic). The M2 baseline Brier of 0.0066 was computed in-sample;
+the out-of-sample M2 value must be measured before the gate limit is final.
+
+**Paired delta.** For M2-vs-candidate comparisons, use the same bootstrap
+cluster draws for both models and report the distribution of the EER
+difference. Phase promotion requires the paired-delta CI to exclude zero in
+the improving direction.
+
+#### Bootstrap procedure
+
+Connected-component resampling, 1,000 replicates, 95% percentile CI.
+
+1. Build connected components from shared speaker identity and
+   `partition_group_id`. A component includes every clean and codec-degraded
+   descendant and all paired bonafide/synthetic items.
+2. Resample components with replacement within each partition. Do not mix
+   partitions in one replicate.
+3. Within each replicate, retain generator and corpus strata composition.
+4. Compute the target metric per replicate.
+5. Report percentile CI using numpy `method="linear"` for cross-version
+   stability.
+6. For paired comparisons (M2 vs candidate), use the same component draws for
+   both models in each replicate.
+
+Thresholds (Platt parameters, operating-point thresholds) are calibration
+artifacts. They are not refitted inside eval/holdout/challenge bootstrap
+replicates.
+
+Bootstrap seed:
+`SHA-256(SELECTION_SEED || metric-schema-version || model-seed || cohort-hash || metric-context)`.
+
+#### Binding gate matrix
+
+**Non-regression gates (worst-of-3-seeds):**
+
+| Phase | Cohort | Metric | M2 baseline | Limit | Consequence |
+|---|---|---|---|---|---|
+| All | Eval | Piper EER | 8.04% | ≤10.04% | Blocks ship |
+| All | Eval | ElevenLabs EER | 11.20% | ≤13.20% | Blocks ship |
+| All | Eval | Google TTS EER | 10.28% | ≤12.28% | Blocks ship |
+| All | Eval | ASVspoof DF EER | `[TBD]` | ≤`[TBD]`+4.00pp | Blocks ship |
+| All | Eval (AMI) | BF FPR at 5%-FPR OP | `[TBD]` | ≤5.00% | Blocks ship |
+| All | Eval (VoxConverse) | BF FPR at 5%-FPR OP | `[TBD]` | ≤10.00% | Blocks ship |
+| All | Eval | Out-of-sample Brier | `[TBD]` | ≤`[TBD]`+0.0100 | Blocks ship |
+| P1 | Eval | Unseen FM (Matcha) EER | `[TBD]` | Report only | Diagnostic |
+| P2+ | Eval | Unseen FM (Matcha) EER | `[TBD]` | ≤25.00% AND gap ≤10pp | Blocks ship |
+| P2+ | Eval | Codec guard rail | n/a | No codec EER > min(2x pooled, pooled+10pp) | Blocks ship |
+
+Unseen FM gap condition: for each seed s,
+`Matcha_EER_s - Chatterbox_EER_s ≤ 10pp`. The maximum gap across seeds must
+satisfy this condition.
+
+The codec guard rail requires minimum 50 parent groups per stratum. Strata
+below this threshold are excluded from the guard rail but still reported.
+
+**Ship gates (median-of-3-seeds):**
+
+| Phase | Cohort | Metric | Limit | Notes |
+|---|---|---|---|---|
+| P1 (interim) | Eval | Chatterbox EER | ≤18.00% | Plus ≥5pp absolute gain over M2 |
+| P2 (primary) | Eval AND challenge | Chatterbox EER | ≤15.00% | Must pass on each cohort independently |
+| P3 (stretch) | Eval AND challenge | Chatterbox EER | ≤10.00% | Aspirational; not a blocker for lower-tier ships |
+
+All ship gates also require: every non-regression gate passes AND the
+paired-delta bootstrap CI for Chatterbox EER (candidate vs M2) excludes zero
+in the improving direction.
+
+#### Seed discipline and instability veto
+
+Three seeds per training configuration: seeds 0, 1, and 2.
+
+- **Non-regression gates**: evaluated on the worst (maximum) value across
+  seeds.
+- **Ship gates**: evaluated on the median value across seeds.
+- **Reporting**: all three seed values, median, and worst are always reported.
+
+**Instability veto.** If `worst - median > 5pp` on Chatterbox EER (the
+primary endpoint), the run is INVALID regardless of individual gate outcomes.
+Pre-specified remediation: train 2 additional seeds (3 and 4) under the same
+frozen configuration, then re-evaluate all gates as worst-of-5
+(non-regression) and median-of-5 (ship). If instability persists at 5 seeds,
+the configuration fails the phase.
+
+**Checkpoint selection.** Fixed rule per phase, committed before training:
+select the checkpoint at the epoch with the lowest Chatterbox EER on the
+calibration split. This rule does not vary per seed.
+
+#### Exclusion criteria
+
+- **Minimum clip duration**: 1.0 second after silence trimming. Clips below
+  this are excluded before scoring; the exclusion count is reported.
+- **Failed decodes**: codec materialization failures are logged and the parent
+  group is excluded from that codec stratum (not from clean). If more than 5%
+  of parent groups fail any single codec, the recipe is invalid.
+- **NaN or infinite scores**: any clip producing a NaN or infinite raw score
+  makes the entire seed's evaluation INVALID.
+- **Score polarity**: if Platt slope A is not positive after calibration
+  fitting, the seed is INVALID.
+
+#### Challenge procedure
+
+1. **Assembly.** Create the challenge partition from Chatterbox clips whose
+   speakers and prompts do not appear in calibration, eval, holdout, or
+   training data. Include matched bonafide speakers from AMI and VoxConverse,
+   also speaker-disjoint from all other partitions. Target: at least 100
+   Chatterbox speakers, 5 to 10 clips each. Final count determined by
+   empirical power pilot before freezing.
+
+2. **Acceptance probe.** Before hash-freezing, score the challenge partition
+   with the frozen M2 model. Verify: M2 challenge Chatterbox EER falls within
+   the bootstrap 95% CI of M2's existing eval Chatterbox EER (25.90%). If it
+   does not, the partition is confounded; investigate and reconstruct.
+
+3. **Freezing.** Hash the challenge manifest (speaker IDs, clip IDs, codec
+   variants, bonafide pairings). Expose only: manifest hash, total counts,
+   and acceptance-probe pass/fail. Withhold individual scores and per-stratum
+   outcomes.
+
+4. **Opening.** Score the challenge once per phase, after architecture,
+   augmentation policy, stopping rule, three training seeds, checkpoint
+   selection, and calibration procedure are all frozen for that phase. No
+   parameter may be changed between opening and verdict.
+
+5. **After opening.** Report all metrics per seed. If the ship gate fails, the
+   phase fails. Training may continue to the next phase, but the failed
+   result is recorded and the same challenge partition is reused (with
+   Bonferroni adjustment if consulted more than once for the same phase).
+
+6. **Budget.** One unblinding per phase. A second use of the same challenge
+   partition for the same phase requires halving the effective alpha
+   (equivalent to requiring the upper 97.5% CI to pass instead of 95%).
+
+#### Verdict definitions
+
+- **PASS**: every non-regression gate passes (worst-of-3) AND the applicable
+  ship gate passes (median-of-3) AND the paired-delta CI excludes zero in the
+  improving direction AND no instability veto fires.
+- **FAIL**: any binding gate does not pass after all pre-specified remediation
+  is exhausted.
+- **INVALID**: instability veto fired, NaN or infinite scores, Platt slope not
+  positive, or underpowered partition. An invalid run is not a pass or a fail;
+  it must be remediated before a verdict.
+
+All gate comparisons use unrounded values. 18.004% does not pass a ≤18.00%
+gate. Report all seed values, all metrics, all strata, and all exclusion
+counts whether the run passes or fails. A gate outcome is reported as
+computed and never retroactively reclassified.
+
 ### Service contract
 
 The synthdetect model service runs as a standalone FastAPI container
