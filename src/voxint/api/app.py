@@ -68,7 +68,7 @@ from voxint.api.routers.legacy_runs import (
 )
 from voxint.api.routers.media import router as media_router
 from voxint.api.routers.projects import router as projects_router
-from voxint.api.routers.settings import _settings_context, setup_router
+from voxint.api.routers.settings import _settings_context, _settings_page_template, setup_router
 from voxint.api.routers.settings import router as settings_router
 from voxint.api.routers.speakers import router as speakers_router
 from voxint.config import Settings, get_settings
@@ -632,7 +632,9 @@ def _register_routes(app: FastAPI) -> None:
         get_session=_get_session,
         verify_csrf=_verify_plugin_csrf,
         render_settings_page=lambda request, session, **overrides: templates.TemplateResponse(
-            request, "settings/settings.html", _settings_context(request, session, **overrides)
+            request,
+            _settings_page_template(request),
+            _settings_context(request, session, **overrides),
         ),
     )
     built_routers: list[APIRouter] = []

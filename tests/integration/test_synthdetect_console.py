@@ -177,7 +177,7 @@ class TestSettingsSection:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert resp.headers["location"] == "/settings"
+        assert resp.headers["location"] == "/settings#synthdetect"
 
     def test_settings_post_rejects_autogenerate_without_enabled(
         self, session_factory: sessionmaker[Session]

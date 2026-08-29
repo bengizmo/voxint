@@ -1,5 +1,12 @@
-"""Synthdetect plugin routes: report page, manual score, settings POST (#145)."""
+"""Synthdetect plugin routes: report page, manual score, settings POST (#145).
 
+No ``from __future__ import annotations`` here: the route handlers are defined
+inside the ``build_synthdetect_router`` closure, and FastAPI's dependency
+resolution requires eagerly-evaluated annotations to see ``Depends()`` calls.
+Deferred (string) annotations break this — do not re-add the future import.
+"""
+
+import logging
 import uuid
 from typing import Annotated
 
@@ -14,10 +21,13 @@ from voxint.config import Settings
 from voxint.db.models import (
     DiarizationTurn,
     PipelineRun,
+    RunStatus,
     SynthdetectJob,
     SynthdetectScore,
 )
 from voxint.plugins.deps import PluginRouteDeps
+
+logger = logging.getLogger(__name__)
 
 _FEATURE_FLAG_CHOICES = ("on", "off", "inherit")
 
@@ -60,8 +70,8 @@ def build_synthdetect_router(deps: PluginRouteDeps) -> APIRouter:
             for score, turn in scores_with_turns:
                 row = {
                     "speaker_label": score.speaker_label,
-                    "start_seconds": turn.start_seconds if turn else 0.0,
-                    "end_seconds": turn.end_seconds if turn else 0.0,
+                    "start_seconds": turn.start_seconds if turn else None,
+                    "end_seconds": turn.end_seconds if turn else None,
                     "calibrated_score": score.calibrated_score,
                     "raw_logit": score.raw_logit,
                     "window_count": score.window_count,
@@ -107,6 +117,14 @@ def build_synthdetect_router(deps: PluginRouteDeps) -> APIRouter:
         run = session.get(PipelineRun, run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
+        if run.status != RunStatus.COMPLETED.value:
+            raise HTTPException(
+                status_code=409, detail="Run is not completed"
+            )
+        if run.archived_at is not None:
+            raise HTTPException(
+                status_code=409, detail="Run is archived"
+            )
 
         settings: Settings = request.app.state.settings
         row = get_app_settings(session)
@@ -125,12 +143,21 @@ def build_synthdetect_router(deps: PluginRouteDeps) -> APIRouter:
         session.commit()
 
         if job is not None:
+            from celery.exceptions import OperationalError
+
             from voxint.plugins.synthdetect import TASK_NAME
             from voxint.worker.app import app as celery_app
 
-            celery_app.send_task(
-                TASK_NAME, args=(str(job.id),), ignore_result=True
-            )
+            try:
+                celery_app.send_task(
+                    TASK_NAME, args=(str(job.id),), ignore_result=True
+                )
+            except OperationalError:
+                logger.warning(
+                    "broker unavailable — synthdetect job %s stays QUEUED",
+                    job.id,
+                    exc_info=True,
+                )
 
         return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
@@ -192,6 +219,6 @@ def build_synthdetect_router(deps: PluginRouteDeps) -> APIRouter:
         for name, value in candidates.items():
             setattr(row, name, value)
         session.commit()
-        return RedirectResponse("/settings", status_code=303)
+        return RedirectResponse("/settings#synthdetect", status_code=303)
 
     return router

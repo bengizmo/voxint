@@ -44,6 +44,22 @@ class SynthdetectPlugin(VoxintPlugin):
 
         return resolve_effective_synthdetect_enabled(row, settings)
 
+    def invariant_errors(
+        self, row: AppSettings | None, settings: Settings
+    ) -> list[str]:
+        from voxint.app_settings import (
+            resolve_effective_synthdetect_autogenerate,
+            resolve_effective_synthdetect_enabled,
+        )
+
+        if resolve_effective_synthdetect_autogenerate(
+            row, settings
+        ) and not resolve_effective_synthdetect_enabled(row, settings):
+            return [
+                "synthdetect_autogenerate requires synthdetect_enabled=true"
+            ]
+        return []
+
     def settings_section(self) -> SettingsSection:
         return SettingsSection(
             section_id="synthdetect",

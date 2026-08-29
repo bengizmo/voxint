@@ -64,8 +64,8 @@
     <tr>
       <td>{{ loop.index }}</td>
       <td>{{ score.speaker_label or "—" }}</td>
-      <td>{{ "%.1f"|format(score.start_seconds) }}s</td>
-      <td>{{ "%.1f"|format(score.end_seconds) }}s</td>
+      <td>{% if score.start_seconds is not none %}{{ "%.1f"|format(score.start_seconds) }}s{% else %}—{% endif %}</td>
+      <td>{% if score.end_seconds is not none %}{{ "%.1f"|format(score.end_seconds) }}s{% else %}—{% endif %}</td>
       <td><span class="risk-chip {% if score.calibrated_score < 0.1 %}risk-low{% elif score.calibrated_score < 0.5 %}risk-medium{% else %}risk-high{% endif %}">{{ "%.1f"|format(score.calibrated_score * 100) }}%</span></td>
       <td>{{ score.window_count }}</td>
     </tr>
@@ -95,8 +95,8 @@
     {% for score in all_scores %}
     <tr>
       <td>{{ score.speaker_label or "—" }}</td>
-      <td>{{ "%.1f"|format(score.start_seconds) }}s</td>
-      <td>{{ "%.1f"|format(score.end_seconds) }}s</td>
+      <td>{% if score.start_seconds is not none %}{{ "%.1f"|format(score.start_seconds) }}s{% else %}—{% endif %}</td>
+      <td>{% if score.end_seconds is not none %}{{ "%.1f"|format(score.end_seconds) }}s{% else %}—{% endif %}</td>
       <td>{% if score.calibrated_score is not none %}<span class="risk-chip {% if score.calibrated_score < 0.1 %}risk-low{% elif score.calibrated_score < 0.5 %}risk-medium{% else %}risk-high{% endif %}">{{ "%.1f"|format(score.calibrated_score * 100) }}%</span>{% else %}—{% endif %}</td>
       <td>{% if score.raw_logit is not none %}{{ "%.3f"|format(score.raw_logit) }}{% else %}—{% endif %}</td>
       <td>{{ score.window_count }}</td>
