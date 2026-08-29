@@ -7,6 +7,7 @@ and ``setup_router``. When ``voxint_multi_user`` is false, both routes return
 """
 
 from typing import Annotated, Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -44,7 +45,16 @@ def _login_context(
 
 
 def _validate_next(next_url: str | None) -> str:
-    if not next_url or not next_url.startswith("/") or next_url.startswith("//"):
+    if not next_url:
+        return "/"
+    if not next_url.startswith("/"):
+        return "/"
+    if next_url.startswith("//") or next_url.startswith("/\\"):
+        return "/"
+    if "\\" in next_url or any(ord(c) < 0x20 for c in next_url):
+        return "/"
+    parsed = urlparse(next_url)
+    if parsed.scheme or parsed.netloc:
         return "/"
     return next_url
 

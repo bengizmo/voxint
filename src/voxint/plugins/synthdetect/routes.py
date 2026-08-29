@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from voxint.api.csrf import CSRF_PLUGIN, CSRF_SETTINGS, verify_csrf_token
+from voxint.api.routers.deps import AdminDep
 from voxint.app_settings import get_app_settings, get_or_create
 from voxint.config import Settings
 from voxint.db.models import (
@@ -106,6 +107,7 @@ def build_synthdetect_router(deps: PluginRouteDeps) -> APIRouter:
     def synthdetect_score(
         run_id: uuid.UUID,
         request: Request,
+        admin: AdminDep,
         csrf_token: Annotated[str | None, Form()] = None,
         session: Session = Depends(deps.get_session),  # noqa: B008
     ) -> Response:
@@ -164,6 +166,7 @@ def build_synthdetect_router(deps: PluginRouteDeps) -> APIRouter:
     @router.post("/synthdetect/settings")
     def synthdetect_settings(
         request: Request,
+        admin: AdminDep,
         synthdetect_enabled: Annotated[str, Form()] = "inherit",
         synthdetect_autogenerate: Annotated[str, Form()] = "inherit",
         csrf_token: Annotated[str | None, Form()] = None,
