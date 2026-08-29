@@ -281,6 +281,79 @@ overlay, and the hardware baseline. Precedence runs lowest to highest:
 `compose.yaml`, the tier overlay (`compose.gpu.yaml`), `compose.hardware.yaml`,
 then `compose.override.yaml`.
 
+For overrides that are purely local to one host (GPU device IDs, port remaps to
+avoid conflicts with other services on the same box), a gitignored
+`compose.local.yaml` keeps deployment-specific details out of version control.
+Add it to your `.gitignore` and append it to your `-f` chain after the other
+overlays so it wins last.
+
+#### Multi-GPU hosts
+
+The GPU overlay (`compose.gpu.yaml`) requests one GPU per model service with
+`count: 1` and lets the Docker NVIDIA runtime pick which card. On a host with
+several GPUs, the runtime may assign a card that is already under memory
+pressure from other workloads.
+
+Pin all three model services to a specific card by overriding the `devices`
+list with `device_ids`. Compose v2.24+ supports the `!override` tag to replace
+a sequence instead of appending to it:
+
+```yaml
+# compose.local.yaml (gitignored)
+services:
+  whisper:
+    deploy:
+      resources:
+        reservations:
+          devices: !override
+            - driver: nvidia
+              device_ids: ["2"]
+              capabilities: [gpu]
+  pyannote:
+    deploy:
+      resources:
+        reservations:
+          devices: !override
+            - driver: nvidia
+              device_ids: ["2"]
+              capabilities: [gpu]
+  titanet:
+    deploy:
+      resources:
+        reservations:
+          devices: !override
+            - driver: nvidia
+              device_ids: ["2"]
+              capabilities: [gpu]
+```
+
+`device_ids` takes GPU indices (from `nvidia-smi`) or full UUIDs. Without the
+`!override` tag, Compose appends to the existing `devices` list, producing two
+reservation entries and unpredictable assignment.
+
+#### Port conflicts with other services
+
+The GPU overlay publishes each model service on `127.0.0.1` for local debug
+access (`:8021` titanet, `:8022` whisper, `:8024` pyannote). If another service
+on the host already occupies one of those ports, Compose fails with "port is
+already allocated" and the container stays in `Created` state.
+
+The model services communicate over the Docker network by service name, so the
+host port binding is optional. Remap it in a local override:
+
+```yaml
+# compose.local.yaml (gitignored)
+services:
+  pyannote:
+    ports: !override
+      - "127.0.0.1:18024:8024"
+  titanet:
+    ports: !override
+      - "127.0.0.1:18021:8021"
+```
+
+GPU pins and port remaps can share the same `compose.local.yaml`.
+
 To watch the pressure these settings fight, run `voxint doctor` or read a
 service's `/healthz`: both surface live per-GPU VRAM used against total,
 temperature, and throttle state (see "Metrics & monitoring"). A card sitting
@@ -444,6 +517,7 @@ docker compose exec api voxint export <run-id> --format srt   # export a transcr
 docker compose exec api voxint doctor                    # read-only preflight for every dependency
 docker compose exec api voxint stats                     # aggregate health/throughput (--since, --json)
 docker compose exec api voxint watch <run-id>            # follow a run until it stops (--interval, --timeout)
+docker compose exec api voxint speakers auto-enroll-backfill --dry-run  # preview auto-enrollment on existing runs
 ```
 
 `submit` records the media item, creates a run, and enqueues it for the
@@ -1335,6 +1409,41 @@ alike, which skips the thinking phase. It is off by default because a BYO or
 OpenAI endpoint rejects the unknown field, so enable it only when both endpoints
 honor it (vLLM does). If a heavy job times out against a reasoning model, prefer
 this over raising the timeout.
+
+## Auto-enrollment
+
+When a pipeline run completes and its diarization labels have no matching
+enrolled speaker, auto-enrollment creates unnamed speaker profiles ("Voice 1",
+"Voice 2", ...) and resolves those labels automatically. Labels that match an
+existing enrolled speaker are assigned to that speaker. Labels that do not meet
+the grounding-tier quality gates (minimum turns, duration, cosine similarity,
+margin, vote agreement) are skipped and left for manual review.
+
+Auto-enrollment is on by default (`AUTO_ENROLL=true` in `.env`). Set
+`AUTO_ENROLL=false` to disable it and leave all labels for human adjudication.
+Auto-enrolled speakers appear in the roster's "Unnamed voices" section with
+sequential display names. They carry full embeddings and participate in
+cross-run matching the same way manually enrolled speakers do.
+
+Adjudication decisions from auto-enrollment use `Decision.AUTO_ENROLL` and
+`Resolution.AUTO_ENROLL`, keeping them distinct from human rulings in the
+ledger.
+
+### Backfill
+
+Existing completed runs with unresolved labels can be retroactively processed:
+
+```bash
+docker compose exec api voxint speakers auto-enroll-backfill --dry-run   # preview: rolls back all changes
+docker compose exec api voxint speakers auto-enroll-backfill --limit 10  # process at most 10 runs
+docker compose exec api voxint speakers auto-enroll-backfill             # process all eligible runs
+docker compose exec api voxint speakers auto-enroll-backfill --run-id <uuid>  # single run
+```
+
+`--dry-run` runs the full enrollment logic inside a transaction and rolls back,
+printing per-run counts (created, matched, skipped) without persisting anything.
+The backfill processes runs oldest-first and is safe to interrupt: each run
+commits independently.
 
 ## Adjudication workflow
 
