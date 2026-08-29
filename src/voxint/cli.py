@@ -1702,6 +1702,225 @@ def _benchmark_compare(args: argparse.Namespace) -> int:
         engine.dispose()
 
 
+def _read_confirmed_password() -> str | None:
+    """Read and confirm a password without exposing it in process arguments."""
+    import getpass
+
+    password = getpass.getpass("Password: ")
+    confirmation = getpass.getpass("Confirm password: ")
+    if password != confirmation:
+        print("error: passwords do not match")
+        return None
+    return password
+
+
+def _user_create(args: argparse.Namespace) -> int:
+    from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
+    from voxint.db.models import UserRole
+    from voxint.db.session import build_session_factory, session_scope
+    from voxint.users import create_user
+
+    password = _read_confirmed_password()
+    if password is None:
+        return 1
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    factory = build_session_factory(engine)
+    try:
+        try:
+            with session_scope(factory) as session:
+                user = create_user(
+                    session,
+                    username=args.username,
+                    password=password,
+                    role=UserRole(args.role),
+                )
+                username, role = user.username, user.role
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 1
+        except IntegrityError:
+            print(f"error: user {args.username!r} already exists")
+            return 1
+        except SQLAlchemyError:
+            print("error: database operation failed")
+            return 2
+        print(f"created user {username} ({role})")
+        return 0
+    finally:
+        engine.dispose()
+
+
+def _user_list(args: argparse.Namespace) -> int:
+    del args
+    from sqlalchemy import select
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from voxint.db.models import User
+    from voxint.db.session import build_session_factory, session_scope
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    factory = build_session_factory(engine)
+    try:
+        try:
+            with session_scope(factory) as session:
+                users = session.scalars(select(User).order_by(User.username)).all()
+                rows = [
+                    (
+                        user.username,
+                        user.role,
+                        "yes" if user.disabled_at is not None else "no",
+                        user.created_at.isoformat(),
+                    )
+                    for user in users
+                ]
+        except SQLAlchemyError:
+            print("error: database operation failed")
+            return 2
+
+        table = [("USERNAME", "ROLE", "DISABLED", "CREATED_AT"), *rows]
+        widths = [max(len(row[index]) for row in table) for index in range(4)]
+        for row in table:
+            print("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)))
+        return 0
+    finally:
+        engine.dispose()
+
+
+def _user_delete(args: argparse.Namespace) -> int:
+    from datetime import UTC, datetime
+
+    from sqlalchemy import delete, func, select
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from voxint.db.models import AuthSession, User, UserRole
+    from voxint.db.session import build_session_factory, session_scope
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    factory = build_session_factory(engine)
+    try:
+        try:
+            with session_scope(factory) as session:
+                user = session.scalar(select(User).where(User.username == args.username))
+                if user is None:
+                    print(f"error: user {args.username!r} not found")
+                    return 1
+                if user.role == UserRole.ADMIN.value and user.disabled_at is None:
+                    active_admins = session.scalar(
+                        select(func.count())
+                        .select_from(User)
+                        .where(
+                            User.role == UserRole.ADMIN.value,
+                            User.disabled_at.is_(None),
+                        )
+                    )
+                    if active_admins == 1:
+                        print("error: cannot disable the last active admin")
+                        return 1
+                user.disabled_at = datetime.now(UTC)
+                session.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
+        except SQLAlchemyError:
+            print("error: database operation failed")
+            return 2
+        print(f"disabled user {args.username} and revoked all sessions")
+        return 0
+    finally:
+        engine.dispose()
+
+
+def _user_set_role(args: argparse.Namespace) -> int:
+    from sqlalchemy import delete, func, select
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from voxint.db.models import AuthSession, User, UserRole
+    from voxint.db.session import build_session_factory, session_scope
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    factory = build_session_factory(engine)
+    try:
+        try:
+            with session_scope(factory) as session:
+                user = session.scalar(select(User).where(User.username == args.username))
+                if user is None:
+                    print(f"error: user {args.username!r} not found")
+                    return 1
+                new_role = UserRole(args.role)
+                if (
+                    user.role == UserRole.ADMIN.value
+                    and new_role is UserRole.REVIEWER
+                    and user.disabled_at is None
+                ):
+                    active_admins = session.scalar(
+                        select(func.count())
+                        .select_from(User)
+                        .where(
+                            User.role == UserRole.ADMIN.value,
+                            User.disabled_at.is_(None),
+                        )
+                    )
+                    if active_admins == 1:
+                        print("error: cannot downgrade the last active admin")
+                        return 1
+                if user.role != new_role.value:
+                    user.role = new_role.value
+                    session.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
+        except SQLAlchemyError:
+            print("error: database operation failed")
+            return 2
+        print(f"set user {args.username} role to {args.role}")
+        return 0
+    finally:
+        engine.dispose()
+
+
+def _user_set_password(args: argparse.Namespace) -> int:
+    from sqlalchemy import delete, select
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from voxint.db.models import AuthSession, User
+    from voxint.db.session import build_session_factory, session_scope
+    from voxint.users import hash_password
+
+    password = _read_confirmed_password()
+    if password is None:
+        return 1
+    try:
+        password_hash = hash_password(password)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    factory = build_session_factory(engine)
+    try:
+        try:
+            with session_scope(factory) as session:
+                user = session.scalar(select(User).where(User.username == args.username))
+                if user is None:
+                    print(f"error: user {args.username!r} not found")
+                    return 1
+                user.password_hash = password_hash
+                session.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
+        except SQLAlchemyError:
+            print("error: database operation failed")
+            return 2
+        print(f"updated password for user {args.username} and revoked all sessions")
+        return 0
+    finally:
+        engine.dispose()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="voxint", description="Voxint audio pipeline")
     parser.add_argument("--version", action="version", version=f"voxint {__version__}")
@@ -2010,6 +2229,25 @@ def build_parser() -> argparse.ArgumentParser:
         disabled = parse_disabled_ids(os.environ.get("VOXINT_PLUGINS_DISABLED", ""))
     for plugin in load_registry(BUILTIN, disabled_ids=disabled).plugins:
         plugin.add_cli_commands(sub)
+
+    user_p = sub.add_parser("user", help="user account management (multi-user mode)")
+    user_sub = user_p.add_subparsers(dest="user_command", required=True)
+    create_user_p = user_sub.add_parser("create", help="create a new user account")
+    create_user_p.add_argument("username")
+    create_user_p.add_argument("--role", choices=["admin", "reviewer"], default="reviewer")
+    create_user_p.set_defaults(fn=_user_create)
+    list_users_p = user_sub.add_parser("list", help="list user accounts")
+    list_users_p.set_defaults(fn=_user_list)
+    delete_user_p = user_sub.add_parser("delete", help="disable a user account")
+    delete_user_p.add_argument("username")
+    delete_user_p.set_defaults(fn=_user_delete)
+    set_role_p = user_sub.add_parser("set-role", help="change a user's role")
+    set_role_p.add_argument("username")
+    set_role_p.add_argument("role", choices=["admin", "reviewer"])
+    set_role_p.set_defaults(fn=_user_set_role)
+    set_password_p = user_sub.add_parser("set-password", help="change a user's password")
+    set_password_p.add_argument("username")
+    set_password_p.set_defaults(fn=_user_set_password)
 
     return parser
 

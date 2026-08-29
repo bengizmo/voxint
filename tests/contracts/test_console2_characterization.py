@@ -35,8 +35,7 @@ from fastapi.routing import APIRoute
 
 from tests.contracts.conftest import REPO_ROOT
 from voxint.api.app import create_app
-from voxint.api.auth import require_operator
-from voxint.api.routers.deps import require_onboarded
+from voxint.api.routers.deps import _resolve_identity, require_onboarded
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
@@ -128,7 +127,7 @@ def console_route_records(app: FastAPI) -> list[RouteRecord]:
         methods = sorted(m for m in r.methods if m != "HEAD")
         calls = list(_walk_calls(r.dependant))
         gate = "onboarding" if any(c is require_onboarded for c in calls) else "exempt"
-        auth = any(c is require_operator for c in calls)
+        auth = any(c is _resolve_identity for c in calls)
         records.append(RouteRecord(r.path, methods, gate, auth))
     return sorted(records)
 
@@ -309,28 +308,28 @@ def _synthetic_app(kind: Literal["verified", "field_only", "none"]) -> FastAPI:
 
     from fastapi import Depends, Form
 
-    from voxint.api.auth import require_operator
-
     def _require_csrf(*_a: object) -> None:  # stand-in for the real verifier name
         return None
+
+    def _mock_auth() -> str:
+        return "admin"
 
     app = FastAPI()
 
     if kind == "verified":
 
-        @app.post("/thing", dependencies=[Depends(require_operator)])
+        @app.post("/thing", dependencies=[Depends(_mock_auth)])
         def _mutate(csrf_token: Annotated[str, Form()]) -> dict[str, str]:
             _require_csrf(csrf_token)
             return {"ok": csrf_token}
     elif kind == "field_only":
-        # Accepts the field but never verifies it: the exact false positive a
-        # field-presence check misses.
-        @app.post("/thing", dependencies=[Depends(require_operator)])
+
+        @app.post("/thing", dependencies=[Depends(_mock_auth)])
         def _mutate_unverified(csrf_token: Annotated[str, Form()]) -> dict[str, str]:
             return {"ok": csrf_token}
     else:
 
-        @app.post("/thing", dependencies=[Depends(require_operator)])
+        @app.post("/thing", dependencies=[Depends(_mock_auth)])
         def _mutate_none(payload: Annotated[str, Form()]) -> dict[str, str]:
             return {"ok": payload}
 

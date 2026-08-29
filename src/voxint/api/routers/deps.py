@@ -34,8 +34,13 @@ from fastapi.templating import Jinja2Templates
 from jinja2 import BaseLoader, ChoiceLoader, FileSystemLoader, PrefixLoader
 from sqlalchemy.orm import Session
 
-from voxint.api.auth import require_operator
-from voxint.api.csrf import CSRF_PLUGIN, verify_csrf_token
+from voxint.api.auth import (
+    SESSION_COOKIE,
+    AuthContext,
+    load_session_user,
+    verify_basic_credentials,
+)
+from voxint.api.csrf import CSRF_LOGOUT, CSRF_PLUGIN, mint_csrf_token, verify_csrf_token
 from voxint.api.languages import language_label
 from voxint.api.presentation import (
     format_age,
@@ -163,7 +168,80 @@ def _get_media_gate(request: Request) -> MediaGate:
 
 
 SessionDep = Annotated[Session, Depends(_get_session)]
-OperatorDep = Annotated[str, Depends(require_operator)]
+
+
+def _resolve_identity(request: Request, session: SessionDep) -> AuthContext:
+    """Resolve the authenticated principal — dual-mode: Basic or session cookie."""
+    settings: Settings = request.app.state.settings
+
+    if settings.voxint_multi_user:
+        token = request.cookies.get(SESSION_COOKIE)
+        if token:
+            user = load_session_user(session, token)
+            if user is not None:
+                ctx = AuthContext(
+                    user_id=user.id, username=user.username, role=user.role
+                )
+                request.state.current_user = ctx
+                return ctx
+        if request.headers.get("HX-Request"):
+            raise HTTPException(status_code=204, headers={"HX-Redirect": "/login"})
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept:
+            from urllib.parse import quote
+
+            next_url = quote(str(request.url.path), safe="/")
+            raise HTTPException(
+                status_code=303, headers={"Location": f"/login?next={next_url}"}
+            )
+        raise HTTPException(status_code=401, detail="authentication required")
+
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("basic "):
+        raise HTTPException(
+            status_code=401,
+            detail="invalid credentials",
+            headers={"WWW-Authenticate": 'Basic realm="voxint-review"'},
+        )
+    import base64
+
+    try:
+        decoded = base64.b64decode(auth[6:]).decode("utf-8")
+        username, password = decoded.split(":", 1)
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="invalid credentials",
+            headers={"WWW-Authenticate": 'Basic realm="voxint-review"'},
+        ) from None
+    if not verify_basic_credentials(settings, username, password):
+        raise HTTPException(
+            status_code=401,
+            detail="invalid credentials",
+            headers={"WWW-Authenticate": 'Basic realm="voxint-review"'},
+        )
+    ctx = AuthContext(user_id=None, username=username, role="admin")
+    request.state.current_user = ctx
+    return ctx
+
+
+CurrentUserDep = Annotated[AuthContext, Depends(_resolve_identity)]
+
+
+def _operator_name(identity: CurrentUserDep) -> str:
+    return identity.username
+
+
+OperatorDep = Annotated[str, Depends(_operator_name)]
+
+
+def _require_admin(identity: CurrentUserDep) -> AuthContext:
+    if identity.role != "admin":
+        raise HTTPException(status_code=403, detail="admin role required")
+    return identity
+
+
+AdminDep = Annotated[AuthContext, Depends(_require_admin)]
 
 
 def require_onboarded(
@@ -316,6 +394,13 @@ def _shell_template_context(request: Request) -> dict[str, Any]:
                 and getattr(request.app.state, "activity_routed", False)
                 and settings.console_jobs_enabled
                 and getattr(request.app.state, "jobs_routed", False)
+            ),
+            "multi_user": settings.voxint_multi_user,
+            "current_user": getattr(request.state, "current_user", None),
+            "csrf_logout_token": (
+                mint_csrf_token(request.app.state.csrf_secret, CSRF_LOGOUT)
+                if settings.voxint_multi_user
+                else ""
             ),
         }
     }

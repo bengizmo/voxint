@@ -45,6 +45,8 @@ EXEMPT_PATHS = {
     "/setup/vocabulary",
     "/setup/llm",
     "/setup/finish",
+    "/login",
+    "/logout",
 }
 
 # Plugin routes gated by the `gated_plugins` APIRouter wrapper (app.py #138).

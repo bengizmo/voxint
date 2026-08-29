@@ -1497,8 +1497,9 @@ commits independently.
 ## Adjudication workflow
 
 The review console is served by the API at `http://127.0.0.1:8080/` (or your
-`API_PORT` override; basic auth, `VOXINT_USER`/`VOXINT_PASSWORD`, a single
-reviewer credential). On a **fresh install** the onboarding gate redirects every
+`API_PORT` override). Authentication is HTTP Basic (`VOXINT_USER`/`VOXINT_PASSWORD`)
+in single-operator mode, or session-based login in multi-user mode (see
+"Multi-user authentication" below). On a **fresh install** the onboarding gate redirects every
 authenticated page to the first-run setup wizard (`/setup`) until setup is
 finished, so `/review` below becomes reachable only after onboarding completes
 (see [onboarding.md](onboarding.md)):
@@ -1518,18 +1519,99 @@ finished, so `/review` below becomes reachable only after onboarding completes
    the speaker-attributed transcript (`/review/{run_id}/export.{txt,md,srt,vtt,
    json,rttm}`, or `voxint export`; see "Exporting transcripts" above).
 
+## Multi-user authentication
+
+By default Voxint uses a single shared credential (`VOXINT_USER` /
+`VOXINT_PASSWORD`, HTTP Basic). Multi-user mode adds individual accounts with
+password-based sessions and per-user attribution on adjudication decisions.
+
+### Enabling multi-user mode
+
+Set `VOXINT_MULTI_USER=true` in your `.env` (or environment) and restart.
+The first user you create is automatically promoted to `admin`.
+
+```bash
+# Create the admin account (prompts for password interactively):
+voxint user create alice --role admin
+
+# Create a reviewer account:
+voxint user create bob
+```
+
+When multi-user mode is on, the shared `VOXINT_USER`/`VOXINT_PASSWORD`
+credential is ignored. Authentication switches from HTTP Basic to a login
+form (`/login`) with opaque session cookies.
+
+### User management CLI
+
+All commands run under `voxint user`:
+
+| Command | Description |
+|---|---|
+| `voxint user create <username> [--role admin\|reviewer]` | Create a user. Prompts for password via `getpass` (never a CLI argument). Default role is `reviewer`. |
+| `voxint user list` | List all accounts with role and status. |
+| `voxint user set-role <username> <admin\|reviewer>` | Change a user's role. Revokes all active sessions. |
+| `voxint user set-password <username>` | Reset a user's password. Revokes all active sessions. |
+| `voxint user delete <username>` | Soft-disable a user (sets `disabled_at`). Revokes all active sessions. The last admin cannot be deleted. |
+
+Usernames are lowercase-only. The colon character (`:`) is reserved and
+rejected. Passwords are hashed with Argon2id.
+
+### Roles
+
+| Role | Console access | Settings page |
+|---|---|---|
+| `admin` | Full | Yes |
+| `reviewer` | Full | No (403) |
+
+Both roles can claim runs, make decisions, enroll speakers, and export
+transcripts. The Settings page (`/settings`) is restricted to admins.
+
+The CLI user-management commands (`voxint user create`, `set-role`, etc.) are
+not role-gated: anyone with host shell and database access can run them.
+
+### Sessions
+
+Sessions are server-side, stored in the `auth_sessions` table. The session
+cookie (`voxint_session`) is `HttpOnly`, `SameSite=Lax`, and `Secure` when
+the request arrives over HTTPS (or behind a TLS-terminating proxy that sets
+`X-Forwarded-Proto: https`).
+
+Session lifetime is controlled by `VOXINT_SESSION_TTL_SECONDS` (default:
+604800, one week). Expired sessions are cleaned up on login. Disabling a
+user, changing their role, or resetting their password revokes all of that
+user's active sessions immediately.
+
+### Attribution
+
+In multi-user mode, every adjudication decision (label rulings, segment
+overrides, merges, enrollments) records the acting user's ID alongside the
+operator string. The `operator` field continues to hold the username as a
+display string; `user_id` is the durable FK to the `users` table. In
+single-operator mode `user_id` is `NULL` and `operator` carries the
+`VOXINT_USER` value, preserving backward compatibility.
+
+### Reverting to single-operator mode
+
+Set `VOXINT_MULTI_USER=false` (or remove the variable) and restart.
+Authentication falls back to the shared credential. The `users` and
+`auth_sessions` tables remain in the database but are not consulted.
+Existing adjudication decisions retain their `user_id` attribution.
+
 ## HTTP endpoints
 
-Every route but `/healthz` sits behind HTTP Basic; the core mutation forms
-(`POST /submit`, `/fetch`, `/runs/{id}/requeue`, `POST /review/{id}/claim`, and
-the wizard/settings forms with their own `CSRF_SETUP` / `CSRF_SETTINGS` tokens)
-additionally require a CSRF token (see above), and the remaining review-workbench
-mutations are gated by their per-run claim token.
+Every route but `/healthz` and `/login` sits behind authentication: HTTP Basic
+in single-operator mode, or session cookies in multi-user mode (see "Multi-user
+authentication" above). The core mutation forms (`POST /submit`, `/fetch`,
+`/runs/{id}/requeue`, `POST /review/{id}/claim`, and the wizard/settings forms
+with their own `CSRF_SETUP` / `CSRF_SETTINGS` tokens) additionally require a
+CSRF token (see above), and the remaining review-workbench mutations are gated
+by their per-run claim token.
 
 | Route | Purpose |
 |---|---|
 | `GET /healthz` | Liveness (no DB access; schema readiness is the migrate gate's job) |
-| `GET /metrics` | Prometheus text exposition (aggregate DB gauges plus `voxint_gpu_*` / `voxint_service_admission_*` hardware gauges; authenticated, scrape with `basic_auth`) |
+| `GET /metrics` | Prometheus text exposition (aggregate DB gauges plus `voxint_gpu_*` / `voxint_service_admission_*` hardware gauges; authenticated, scrape with `basic_auth` in single-operator mode; in multi-user mode the shared credential is inactive, so metrics scraping requires a session cookie or a reverse-proxy allowlist) |
 | `GET /` | Home: needs-attention cards (continue review, unidentified voices, failed runs), quick actions, windowed activity counts (`?window=hour|day|week|all`), recent activity |
 | `GET /dashboard` | Permanent 303 redirect to `/` (the dashboard folded into Home) |
 | `GET /resources` | Permanent 303 redirect to `/settings/status` (the hardware view folded into Settings) |
@@ -1548,6 +1630,7 @@ mutations are gated by their per-run claim token.
 | `GET /review/{run_id}/export.rttm` | Diarization RTTM (raw labels, run-UUID file id) |
 | `GET /media/{id}/editor` | Media detail page: run selection (latest completed by default, `?run=` override), claim-token verification (stale/absent = read-only), transcript with speaker palette and verified-progress counter, run chooser, media metadata rail (#156) |
 | `GET /media/{run_id}` | Gated media serving (Range-aware) for the workbench player |
+| `GET /login` · `POST /login` · `POST /logout` | Multi-user session auth (login form, session create, session destroy); returns 404 when `VOXINT_MULTI_USER` is false |
 | `GET /setup` · `POST /setup/{media,scan,vocabulary,llm,finish}` | First-run setup wizard; held by the onboarding gate until finished (own `CSRF_SETUP` token) |
 | `GET /settings` | Post-onboarding settings hub: edit features / media folders / corrections / LLM / sources, re-run the wizard, start/replay/complete the tutorial, and reach the read-only sub-pages below |
 | `GET /settings/status` | Status and health: install kind, live component health (Postgres / Redis / model services), and the live hardware snapshot (absorbs the old `/resources`; answers an `HX-Request` poll with just the hardware fragment, 15s auto-refresh) |

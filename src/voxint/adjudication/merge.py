@@ -225,6 +225,7 @@ def apply_merge(
     target_speaker_id: uuid.UUID | None = None,
     target_name: str | None = None,
     expected: dict[str, uuid.UUID | None],
+    user_id: uuid.UUID | None = None,
 ) -> MergeResult:
     """Rule that ``labels`` are one speaker in this run, atomically.
 
@@ -314,6 +315,7 @@ def apply_merge(
                 operator=operator,
                 idempotency_key=_child_key(nonce, clean, primary),
                 gates=gates,
+                user_id=user_id,
             )
         except EnrollmentError as exc:
             raise MergeError(str(exc)) from exc
@@ -332,6 +334,7 @@ def apply_merge(
             operator=operator,
             idempotency_key=_child_key(nonce, clean, label),
             speaker_id=survivor.id,
+            user_id=user_id,
         )
         decision_ids[label] = row.id
 

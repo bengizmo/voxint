@@ -62,6 +62,8 @@ _CSRF_FUTURE_SKEW_SECONDS = 60
 # Stable per-route action strings. A form mints its token under one of these and
 # the matching POST route verifies under the same one, so a token is not
 # interchangeable between mutation forms.
+CSRF_LOGIN = "login"
+CSRF_LOGOUT = "logout"
 CSRF_SUBMIT = "submit"
 CSRF_FETCH = "fetch"
 CSRF_REQUEUE = "requeue"
@@ -181,11 +183,12 @@ CSRF_MEDIA_EMPTY_TRASH = "media-empty-trash"
 
 
 _CSRF_SECRET_FILENAME = ".csrf_secret"
+_SESSION_SECRET_FILENAME = ".session_secret"
 
 
-def load_or_create_csrf_secret(media_root: Path) -> str:
-    """Load a persistent CSRF secret from the data directory, generating one
-    on first run.
+def load_or_create_secret(media_root: Path, filename: str) -> str:
+    """Load a persistent secret from the data directory, generating one on
+    first run.
 
     Publication is atomic: the secret is written to a PID-specific temp file,
     then hard-linked to the canonical path. ``os.link()`` fails with EEXIST if
@@ -193,7 +196,7 @@ def load_or_create_csrf_secret(media_root: Path) -> str:
     other process reads the winner's fully-written secret. The operator can
     rotate by deleting the file and restarting.
     """
-    secret_path = media_root / _CSRF_SECRET_FILENAME
+    secret_path = media_root / filename
 
     try:
         content = secret_path.read_text().strip()
@@ -241,6 +244,14 @@ def load_or_create_csrf_secret(media_root: Path) -> str:
         pass
 
     return candidate
+
+
+def load_or_create_csrf_secret(media_root: Path) -> str:
+    return load_or_create_secret(media_root, _CSRF_SECRET_FILENAME)
+
+
+def load_or_create_session_secret(media_root: Path) -> str:
+    return load_or_create_secret(media_root, _SESSION_SECRET_FILENAME)
 
 
 def _sign(secret: str, action: str, nonce: str, ts: int) -> str:
