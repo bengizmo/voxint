@@ -107,6 +107,7 @@ def test_flag_on_runs_page_still_serves_legacy_upload(
     client = _client(session_factory, tmp_path, media_enabled=True)
     runs = client.get("/runs")
     assert runs.status_code == 200
-    assert 'id="add-media"' in runs.text
-    # The sidebar on /runs now points Media at the operable library.
+    # V3: when media is enabled, the command bar links to /media directly
+    # instead of rendering an inline add-media section.
     assert 'href="/media"' in runs.text
+    assert 'action="/submit"' not in runs.text

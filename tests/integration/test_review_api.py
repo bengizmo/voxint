@@ -260,13 +260,9 @@ def test_queue_renders_operator_ergonomics(
 
     body = client.get("/review").text
     assert str(run_id) in body
-    # Task-first vocabulary pass (issue #117): the page is titled "Review" (matching
-    # the nav), not the internal term "Adjudication queue". The queue *table* keeps
-    # its structural aria-label "Review queue" (asserted below) — the H1 rename is
-    # display copy only.
-    assert "<h1>Review</h1>" in body
+    # V3 Ops Console: page title is in the command bar breadcrumb, not an <h1>.
+    assert "review /" in body
     assert "Adjudication queue" not in body
-    assert "confirm who is speaking" in body
     # Friendly label leads; the raw path stays as muted ground truth beneath.
     assert 'class="media-title"' in body
     # No probed duration on this upload → the honest em-dash, not "0:00".
@@ -286,15 +282,16 @@ def test_queue_renders_operator_ergonomics(
     # comes from aria-label alone — pin it so it can't silently drift from the
     # visible count on a future edit.
     assert 'aria-label="1 of 2 voices resolved"' in body
-    # Responsive + a11y (issue #64): the wide queue table scrolls inside a
-    # keyboard-reachable, labelled region, with scoped column headers.
-    assert 'class="table-wrap" role="region" aria-label="Review queue" tabindex="0"' in body
-    assert '<th scope="col">Media</th>' in body
+    # V3 grid-table: the queue renders as a CSS-grid data view with an
+    # aria-labelled region. Column headers are in .gt-header spans.
+    assert 'class="grid-table"' in body
+    assert 'aria-label="Review queue"' in body
+    assert "MEDIA" in body
     # The otherwise-empty action column header carries a visually-hidden label so
     # it isn't an unnamed column for assistive tech (locks the one novel a11y bit).
-    assert '<th scope="col"><span class="visually-hidden">Action</span></th>' in body
-    # #93: the per-row Review action is the one teal primary of the row.
-    assert 'class="primary">Review</button>' in body
+    assert 'class="visually-hidden">Action</span>' in body
+    # The per-row Review action uses the V3 command-bar button style.
+    assert 'class="cb-btn cb-btn-primary">Review</button>' in body
     # Sort control offers the actionability option; default stays oldest.
     assert "Most voices to resolve" in body
     sorted_body = client.get("/review", params={"sort": "unresolved"}).text

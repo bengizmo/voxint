@@ -1,179 +1,189 @@
 {% extends "base.html" %}
 {% block title %}Voxint — runs{% endblock %}
-{% block body %}
-<h1>Runs{% if show_archived %} <span class="muted">· archived</span>{% endif %}</h1>
-<p class="muted">
-  {% if show_archived %}
-    Archived runs — hidden from the default listing and the review queue.
-    <a href="{{ archived_toggle_url }}">← back to active runs</a>
-  {% else %}
-    Execution history, newest first. Review state applies to completed runs.
-    <a href="{{ archived_toggle_url }}">View archived runs</a>
-  {% endif %}
-</p>
 
+{% block cb_breadcrumb %}runs /{% if show_archived %} <span class="oc-muted">archived</span>{% endif %}{% endblock %}
+{% block cb_summary %}
+{%- if show_archived -%}
+  Archived runs. <a href="{{ archived_toggle_url }}">Back to active</a>
+{%- else -%}
+  Newest first. <a href="{{ archived_toggle_url }}">View archived</a>
+{%- endif -%}
+{% endblock %}
+{% block cb_actions %}
+{% if shell.media_enabled %}
+<a class="cb-btn cb-btn-primary" href="/media">+ Add media</a>
+{% else %}
+<a class="cb-btn cb-btn-primary" href="#add-media">+ Add media</a>
+{% endif %}
+{% endblock %}
+
+{% block body %}
 {# Add-media affordance (issue #117 Phase C): a named section the dashboard "Add
    audio" task card links to (/runs#add-media). Both ways in live here — an upload
    and, when enabled, a URL fetch — so elevating one never demotes the other. #}
-<section id="add-media" class="add-media">
-<h2>Add media</h2>
-{% if shell.media_enabled %}
-<p>New submissions live in the <a href="/media">Media</a> library.
-Upload files and fetch URLs from there.</p>
-{% else %}
-<form method="post" action="/submit" enctype="multipart/form-data" class="upload">
-  <input type="hidden" name="submission_id" value="{{ submission_id }}">
-  <input type="hidden" name="csrf_token" value="{{ csrf_submit }}">
-  <label>Upload media
-    <input type="file" name="file" required>
-  </label>
-  <button type="submit" class="primary">Submit for transcription</button>
-</form>
+{% if not shell.media_enabled %}
+<section id="add-media" class="oc-section">
+  <h2 class="oc-section-title">ADD MEDIA</h2>
+  <form method="post" action="/submit" enctype="multipart/form-data" class="upload">
+    <input type="hidden" name="submission_id" value="{{ submission_id }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_submit }}">
+    <label>Upload media
+      <input type="file" name="file" required>
+    </label>
+    <button type="submit" class="primary">Submit for transcription</button>
+  </form>
 
-{% if ytdlp_enabled %}
-<form method="post" action="/fetch" class="upload">
-  {# Independent submission id from the upload form's, so the two never collide
-     on a shared source_path; a double-submit of this form stays idempotent. #}
-  <input type="hidden" name="submission_id" value="{{ fetch_submission_id }}">
-  <input type="hidden" name="csrf_token" value="{{ csrf_fetch }}">
-  <label>Fetch from URL
-    <input type="url" name="url" placeholder="https://…" required>
-  </label>
-  <button type="submit">Fetch &amp; transcribe</button>
-</form>
-{# Passive, honest notice — NOT a status badge (the app can't prove every private
-   destination is blocked). See docs/operations.md "URL ingestion & egress security". #}
-<p class="muted">Fetching a URL lets the downloader contact other sites, including
-ones a link redirects to. If you fetch links you don't fully trust, run the
-restricted URL-download overlay (<code>compose.ytdlp-egress.yaml</code>) — see the
-operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
-{% else %}
-<p class="muted">URL ingestion is disabled.</p>
-{% endif %}
-{% endif %}
+  {% if ytdlp_enabled %}
+  <form method="post" action="/fetch" class="upload">
+    {# Independent submission id from the upload form's, so the two never collide
+       on a shared source_path; a double-submit of this form stays idempotent. #}
+    <input type="hidden" name="submission_id" value="{{ fetch_submission_id }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_fetch }}">
+    <label>Fetch from URL
+      <input type="url" name="url" placeholder="https://…" required>
+    </label>
+    <button type="submit">Fetch &amp; transcribe</button>
+  </form>
+  {# Passive, honest notice — NOT a status badge (the app can't prove every private
+     destination is blocked). See docs/operations.md "URL ingestion & egress security". #}
+  <p class="oc-muted">Fetching a URL lets the downloader contact other sites, including
+  ones a link redirects to. If you fetch links you don't fully trust, run the
+  restricted URL-download overlay (<code>compose.ytdlp-egress.yaml</code>) — see the
+  operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
+  {% else %}
+  <p class="oc-muted">URL ingestion is disabled.</p>
+  {% endif %}
 </section>
+{% endif %}
 
-{# Search-mode toggle (issue #121): the exact keyword browse (this page) versus the
-   ranked semantic "Meaning" search. The current query term carries across both tabs
-   so switching modes never loses the operator's words. #}
-<nav class="top tab-strip" aria-label="Search mode">
-  <a href="/runs{% if filters.q %}?q={{ filters.q|urlencode }}{% endif %}" aria-current="page">Exact</a>
-  <a href="/search{% if filters.q %}?q={{ filters.q|urlencode }}{% endif %}">Meaning</a>
-</nav>
+<section class="oc-section" aria-label="Runs">
+  <h2 class="oc-section-title">RUNS</h2>
 
-<form method="get" action="/runs" class="filters">
-  {# Preserve the archived view across a filter submit (issue #5). #}
-  {% if show_archived %}<input type="hidden" name="archived" value="1">{% endif %}
-  <label>Status
-    <select name="status">
-      <option value="">all</option>
-      {% for s in statuses %}
-      <option value="{{ s.value }}"{% if status == s %} selected{% endif %}>{{ s.value }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Review
-    <select name="review">
-      <option value="">all</option>
-      {% for r in reviews %}
-      <option value="{{ r.value }}"{% if review == r %} selected{% endif %}>{{ r.value }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Transcript
-    <input type="search" name="q" value="{{ filters.q or "" }}"
-           placeholder='words, "a phrase", -excluded, this OR that'>
-  </label>
-  <label>Speaker
-    <select name="speaker">
-      <option value="">all</option>
-      {% for sp in facet_speakers %}
-      <option value="{{ sp.id }}"{% if filters.speaker_id == sp.id %} selected{% endif %}>
-        {{- sp.display_name }}{% if sp.deleted_at %} (archived){% endif -%}
-      </option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Source
-    <input type="text" name="source" value="{{ filters.source or "" }}" placeholder="path contains…">
-  </label>
-  {# Detected language (issue #124): the code whisper stamped on each run, so a
-     label like "Spanish (es)". Options are only languages some run carries. #}
-  <label>Detected language
-    <select name="language">
-      <option value="">all</option>
-      {% for lang in facet_languages %}
-      <option value="{{ lang.code }}"{% if filters.language == lang.code %} selected{% endif %}>{{ lang.label }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>From (UTC)
-    <input type="date" name="created_from"
-           value="{{ filters.created_from.isoformat() if filters.created_from else "" }}">
-  </label>
-  <label>To (UTC)
-    <input type="date" name="created_to"
-           value="{{ filters.created_to.isoformat() if filters.created_to else "" }}">
-  </label>
-  <button type="submit">Filter</button>
-</form>
+  {# Search-mode toggle (issue #121): the exact keyword browse (this page) versus the
+     ranked semantic "Meaning" search. The current query term carries across both tabs
+     so switching modes never loses the operator's words. #}
+  <nav class="filter-tabs" aria-label="Search mode">
+    <a href="/runs{% if filters.q %}?q={{ filters.q|urlencode }}{% endif %}" aria-current="page">Exact</a>
+    <a href="/search{% if filters.q %}?q={{ filters.q|urlencode }}{% endif %}">Meaning</a>
+  </nav>
 
-{% if not page.items %}
-<p>No runs match these filters{% if filters.q %} and search{% endif %}.</p>
-{% else %}
-<div class="table-wrap" role="region" aria-label="Runs" tabindex="0">
-<table>
-  <thead>
-    <tr><th scope="col">Run</th><th scope="col">Status</th><th scope="col">Review</th><th scope="col">Media</th><th scope="col">Language</th><th scope="col">Created</th></tr>
-  </thead>
-  <tbody>
+  <form method="get" action="/runs" class="filters">
+    {# Preserve the archived view across a filter submit (issue #5). #}
+    {% if show_archived %}<input type="hidden" name="archived" value="1">{% endif %}
+    <label>Status
+      <select name="status">
+        <option value="">all</option>
+        {% for s in statuses %}
+        <option value="{{ s.value }}"{% if status == s %} selected{% endif %}>{{ s.value }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Review
+      <select name="review">
+        <option value="">all</option>
+        {% for r in reviews %}
+        <option value="{{ r.value }}"{% if review == r %} selected{% endif %}>{{ r.value }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Transcript
+      <input type="search" name="q" value="{{ filters.q or "" }}"
+             placeholder='words, "a phrase", -excluded, this OR that'>
+    </label>
+    <label>Speaker
+      <select name="speaker">
+        <option value="">all</option>
+        {% for sp in facet_speakers %}
+        <option value="{{ sp.id }}"{% if filters.speaker_id == sp.id %} selected{% endif %}>
+          {{- sp.display_name }}{% if sp.deleted_at %} (archived){% endif -%}
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Source
+      <input type="text" name="source" value="{{ filters.source or "" }}" placeholder="path contains…">
+    </label>
+    {# Detected language (issue #124): the code whisper stamped on each run, so a
+       label like "Spanish (es)". Options are only languages some run carries. #}
+    <label>Detected language
+      <select name="language">
+        <option value="">all</option>
+        {% for lang in facet_languages %}
+        <option value="{{ lang.code }}"{% if filters.language == lang.code %} selected{% endif %}>{{ lang.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>From (UTC)
+      <input type="date" name="created_from"
+             value="{{ filters.created_from.isoformat() if filters.created_from else "" }}">
+    </label>
+    <label>To (UTC)
+      <input type="date" name="created_to"
+             value="{{ filters.created_to.isoformat() if filters.created_to else "" }}">
+    </label>
+    <button type="submit">Filter</button>
+  </form>
+
+  {% if not page.items %}
+  <p class="oc-muted">No runs match these filters{% if filters.q %} and search{% endif %}.</p>
+  {% else %}
+  <div class="grid-table" style="grid-template-columns: auto auto auto 1fr auto auto;" role="region" aria-label="Runs">
+    <div class="gt-header">
+      <span>RUN</span>
+      <span>STATUS</span>
+      <span>REVIEW</span>
+      <span>MEDIA</span>
+      <span>LANGUAGE</span>
+      <span>CREATED</span>
+    </div>
     {% for it in page.items %}
-    <tr>
+    <div class="gt-row">
       {# The friendly title in the Media column carries identity; the run id is a
          uuid with no friendlier form, so it stays a small muted "open" link with
          the short hex available on hover (issue #56). #}
-      <td><a href="/runs/{{ it.run_id }}" title="run {{ it.run_id }}"
-             class="muted">open <code>{{ it.run_id.hex[:8] }}</code></a></td>
+      <span><a href="/runs/{{ it.run_id }}" title="run {{ it.run_id }}"
+               class="oc-muted">open <code>{{ it.run_id.hex[:8] }}</code></a></span>
       {# Humanized LABEL only — the pill's CSS class stays the raw enum so it
          keeps its colour (same display-only invariant as the dashboard). #}
-      <td><span class="pill {{ it.status }}">{{ humanize_status(it.status) }}</span>
-        {% if it.archived %}<span class="pill skipped">archived</span>{% endif %}</td>
-      <td>
+      <span>
+        <span class="pill {{ it.status }}">{{ humanize_status(it.status) }}</span>
+        {% if it.archived %}<span class="pill skipped">archived</span>{% endif %}
+      </span>
+      <span>
         {% if it.status == "completed" %}
           {% if it.label_count == 0 %}<span class="pill muted">no speakers</span>
           {% elif it.unresolved_count > 0 %}<span class="pill unresolved">needs ruling ({{ it.unresolved_count }})</span>
           {% else %}<span class="pill human">resolved</span>{% endif %}
-        {% else %}<span class="muted">—</span>{% endif %}
+        {% else %}<span class="oc-muted">—</span>{% endif %}
         {% if it.claim_live %}<span class="pill grounded">claimed{% if it.claimed_by %} · {{ it.claimed_by }}{% endif %}</span>{% endif %}
-      </td>
-      <td>
+      </span>
+      <span>
         {# Friendly label: acquisition-metadata title (issue #36) else a cleaned
            filename; the raw path stays muted beneath as ground truth (issue #56). #}
         <span class="media-title" title="{{ it.source_path }}">{{ friendly_media_label(it.title, it.source_path) }}</span>
-        <br><code class="muted">{{ it.source_path }}</code>
-      </td>
+        <br><code class="oc-muted" style="font-size:var(--t-sm)">{{ it.source_path }}</code>
+      </span>
       {# Whisper's detected language (issue #124); "—" = not recorded (a run not
          yet transcribed, or one that predates the stamp). #}
-      <td>{% if it.language %}{{ language_label(it.language) }}{% else %}<span class="muted">—</span>{% endif %}</td>
-      <td><span title="{{ it.created_at.strftime("%Y-%m-%d %H:%M UTC") }}">{{ format_age(it.created_at, now=now) }}</span></td>
-    </tr>
+      <span>{% if it.language %}{{ language_label(it.language) }}{% else %}<span class="oc-muted">—</span>{% endif %}</span>
+      <span><span title="{{ it.created_at.strftime("%Y-%m-%d %H:%M UTC") }}">{{ format_age(it.created_at, now=now) }}</span></span>
+    </div>
     {% if it.snippet %}
-    <tr class="snippet">
+    <div class="gt-row">
       {# snippet.html is server-escaped with only our <mark> injected — see
          runs_query._render_headline; transcript text itself is never trusted. #}
-      <td colspan="6" class="muted">
+      <span class="oc-muted" style="grid-column: 1 / -1; padding: 0 var(--space-3) var(--space-2);">
         ⏱ {{ "%d:%02d" | format(it.snippet.start_seconds // 60, it.snippet.start_seconds % 60) }}
         — {{ it.snippet.html }}
-      </td>
-    </tr>
+      </span>
+    </div>
     {% endif %}
     {% endfor %}
-  </tbody>
-</table>
-</div>
-{% endif %}
+  </div>
+  {% endif %}
 
-{% if next_url %}
-<p><a href="{{ next_url }}">Older →</a></p>
-{% endif %}
+  {% if next_url %}
+  <p><a href="{{ next_url }}" class="oc-muted">Older →</a></p>
+  {% endif %}
+</section>
 {% endblock %}

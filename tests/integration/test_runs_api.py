@@ -378,7 +378,7 @@ def test_route_older_link_advances(
     assert first.status_code == 200
     assert "Older →" in first.text
     # The "Older" anchor, not the nav links; unescape &amp; back to & for the request.
-    match = re.search(r'href="([^"]+)">Older', first.text)
+    match = re.search(r'href="([^"]+)"[^>]*>Older', first.text)
     assert match is not None
     href = html.unescape(match.group(1))
     assert href.startswith("/runs?cursor=")
@@ -463,10 +463,11 @@ def test_run_detail_shows_stage_ledger(
     # detected language) legitimately contain these stage words in prose.
     ledger = body[body.index("Stage ledger") :]
     assert ledger.index("prepare") < ledger.index("transcribe")
-    # Responsive + a11y (issue #64): the 8-column ledger — the widest table in
-    # the app — scrolls inside its own keyboard-reachable, labelled region.
-    assert 'class="table-wrap" role="region" aria-label="Stage ledger" tabindex="0"' in body
-    assert '<th scope="col">Stage</th>' in body
+    # V3 grid-table: the stage ledger renders as a CSS-grid data view with an
+    # aria-labelled region.
+    assert 'class="grid-table"' in body
+    assert 'aria-label="Stage ledger"' in body
+    assert "STAGE" in body
     # Status is never colour-only on the detail page: the run-status pill and each
     # stage-status pill carry their state word as text inside the span.
     assert 'class="pill completed">completed</span>' in body
@@ -542,10 +543,11 @@ def test_runs_list_links_to_detail(
         run_id = make_run(session, labels=["S0"], grounded=["S0"])
     body = client.get("/runs").text
     assert f'href="/runs/{run_id}"' in body
-    # Responsive + a11y (issue #64): the runs table scrolls inside a labelled,
-    # keyboard-reachable region, with scoped column headers.
-    assert 'class="table-wrap" role="region" aria-label="Runs" tabindex="0"' in body
-    assert '<th scope="col">Run</th>' in body
+    # V3 grid-table: the runs list renders as a CSS-grid data view with an
+    # aria-labelled region.
+    assert 'class="grid-table"' in body
+    assert 'aria-label="Runs"' in body
+    assert "RUN" in body
     # Status is never colour-only here either: the humanized label sits inside the
     # status pill span (the run is COMPLETED by default).
     assert 'class="pill completed">Completed</span>' in body
@@ -1149,7 +1151,8 @@ def test_runs_add_media_section_wraps_upload_and_url_fetch(client: TestClient) -
     # The anchor the dashboard task card points at (/runs#add-media).
     assert 'id="add-media"' in body
     section = _add_media_section(body)
-    assert "<h2>Add media</h2>" in section
+    # V3: section title is uppercase with oc-section-title class.
+    assert "ADD MEDIA" in section
     # Both affordances live inside the section: the upload form...
     assert 'action="/submit"' in section
     # ...and, with URL ingestion enabled (the default), the fetch form.

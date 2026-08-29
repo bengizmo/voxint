@@ -1,5 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Voxint — run {{ run.id.hex[:8] }}{% endblock %}
+
+{% block cb_breadcrumb %}runs / <strong>{{ run.id.hex[:8] }}</strong>{% endblock %}
+{% block cb_summary %}
+{%- if sidecar_title %}{{ sidecar_title }}{% endif -%}
+{% endblock %}
+{% block cb_actions %}
+{% if audio_available %}<a class="cb-btn cb-btn-secondary" href="/media/{{ run.id }}">Audio</a>{% endif %}
+{% if transcript_available %}<a class="cb-btn cb-btn-secondary" href="/runs/{{ run.id }}/transcript">Transcript</a>{% endif %}
+{% if run.status == "completed" %}<a class="cb-btn cb-btn-primary" href="/review/{{ run.id }}">Review</a>{% endif %}
+{% endblock %}
+
 {% block body %}
 {% include "legacy_runs/_run_detail_body.html" %}
 {% endblock %}
