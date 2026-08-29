@@ -798,5 +798,23 @@
     [
       "POST"
     ]
+  ],
+  [
+    "/synthdetect/report/{run_id}",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/synthdetect/score/{run_id}",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/synthdetect/settings",
+    [
+      "POST"
+    ]
   ]
 ]

@@ -30,6 +30,7 @@ import {
   REVIEW_KEY,
   SAVE_EDIT_LABEL,
 } from "./keymap";
+import { type LabelStateShape, SpeakerRail } from "./SpeakerRail";
 import {
   type Segment,
   type SplitWord,
@@ -54,6 +55,7 @@ export interface MediaEditorProps {
   annotationLimits?: AnnotationLimits;
   tagCsrf?: string | null;
   clipCsrf?: string | null;
+  labelStates?: LabelStateShape[];
 }
 
 
@@ -74,6 +76,7 @@ export function MediaEditor({
   annotationLimits = FALLBACK_ANNOTATION_LIMITS,
   tagCsrf = null,
   clipCsrf = null,
+  labelStates: initialLabelStates = [],
 }: MediaEditorProps): React.JSX.Element {
   const [segments, setSegments] = useState<Segment[]>(initialSegments);
   const [progress, setProgress] = useState(initialProgress);
@@ -769,14 +772,15 @@ export function MediaEditor({
             {annotationPanel}
           </div>
 
-          <div className="lib-rail">
-            <div className="card">
-              <h3>Speakers</h3>
-              <p className="text-sm text-muted">
-                Speaker rail ships in a later slice.
-              </p>
-            </div>
-          </div>
+          <SpeakerRail
+            runId={runId}
+            reviewToken={reviewToken}
+            writable={writable}
+            labelStates={initialLabelStates}
+            speakers={speakers}
+            onClaimLost={() => setClaimLost(true)}
+            onLabelsChanged={() => {}}
+          />
         </div>
 
         <KeymapHelp

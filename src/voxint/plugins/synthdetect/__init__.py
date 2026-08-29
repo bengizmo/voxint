@@ -3,15 +3,27 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, ClassVar
+import uuid
+from typing import TYPE_CHECKING, Any, ClassVar
 
-from voxint.plugins.base import JobLaneSpec, PluginManifest, RunCompletedEvent, VoxintPlugin
+from voxint.plugins.base import (
+    JobLaneSpec,
+    PanelContribution,
+    PluginManifest,
+    RunCompletedEvent,
+    SettingsSection,
+    VoxintPlugin,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from fastapi import APIRouter
+    from sqlalchemy.orm import Session
+
     from voxint.config import Settings
     from voxint.db.models import AppSettings
+    from voxint.plugins.deps import PluginRouteDeps
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +43,67 @@ class SynthdetectPlugin(VoxintPlugin):
         from voxint.app_settings import resolve_effective_synthdetect_enabled
 
         return resolve_effective_synthdetect_enabled(row, settings)
+
+    def invariant_errors(
+        self, row: AppSettings | None, settings: Settings
+    ) -> list[str]:
+        from voxint.app_settings import (
+            resolve_effective_synthdetect_autogenerate,
+            resolve_effective_synthdetect_enabled,
+        )
+
+        if resolve_effective_synthdetect_autogenerate(
+            row, settings
+        ) and not resolve_effective_synthdetect_enabled(row, settings):
+            return [
+                "synthdetect_autogenerate requires synthdetect_enabled=true"
+            ]
+        return []
+
+    def settings_section(self) -> SettingsSection:
+        return SettingsSection(
+            section_id="synthdetect",
+            title="Synthetic speech detection",
+            template="synthdetect/settings.html",
+            order=200,
+        )
+
+    def run_detail_panels(self) -> Sequence[PanelContribution]:
+        return [
+            PanelContribution(
+                slot="run-detail-end",
+                template="synthdetect/panel.html",
+                order=200,
+            ),
+        ]
+
+    def run_detail_context(
+        self,
+        run_id: uuid.UUID,
+        session: Session,
+        settings: Settings,
+    ) -> dict[str, Any]:
+        from sqlalchemy import select
+
+        from voxint.app_settings import get_app_settings
+        from voxint.db.models import SynthdetectJob
+
+        row = get_app_settings(session)
+        job = session.execute(
+            select(SynthdetectJob)
+            .where(SynthdetectJob.pipeline_run_id == run_id)
+            .order_by(SynthdetectJob.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        return {
+            "synthdetect_job": job,
+            "synthdetect_plugin_enabled": self.enabled(row, settings),
+        }
+
+    def build_router(self, deps: PluginRouteDeps) -> APIRouter:
+        from voxint.plugins.synthdetect.routes import build_synthdetect_router
+
+        return build_synthdetect_router(deps)
 
     def task_modules(self) -> Sequence[str]:
         return ["voxint.plugins.synthdetect.tasks"]

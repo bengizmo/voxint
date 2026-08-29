@@ -6,6 +6,9 @@
 # Installer-generated, per-host GPU sizing (issue #96); regenerated on install.
 compose.hardware.yaml
 
+# Per-host deployment overrides (port remaps, GPU pins, etc.)
+compose.local.yaml
+
 # Python
 __pycache__/
 *.py[cod]

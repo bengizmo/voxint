@@ -92,6 +92,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   link to their individual profile pages.
 - **Project detail: "+ add speaker" and "+ link folder" links** (#247).
   Navigation links in the sidebar section headers.
+- **Synthetic-speech detection plugin** (#145, epic #143). Opt-in audio
+  deepfake detection using a fine-tuned w2v2-AASIST classifier with
+  Platt-calibrated risk scores. Ships as a plugin with four pieces: a
+  standalone GPU inference service (`voxint-synthdetect`, compose overlay
+  `compose.plugin-synthdetect.yaml`), a plugin backend (DB tables, Celery
+  task, Platt calibration, job lifecycle), console integration (tri-state
+  settings toggles, run-detail score panel with all job states and risk
+  chips, standalone report page with known-limitations disclosure), and
+  manual scoring for existing runs. Enable via Settings or
+  `SYNTHDETECT_ENABLED=true`. Known limitations: Chatterbox evasion (#252,
+  25.90% EER after M2 fine-tuning) and VoxConverse channel confound (#253).
 
 ### Changed
 - **Synthdetect eval tooling extracted to private repo.** 46 files (21k lines)

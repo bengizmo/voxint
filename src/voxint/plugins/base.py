@@ -30,7 +30,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 if TYPE_CHECKING:
     import argparse
@@ -230,6 +230,19 @@ class VoxintPlugin:
     def run_detail_panels(self) -> Sequence[PanelContribution]:
         """Fragments this plugin contributes to ``run_detail.html`` slots."""
         return ()
+
+    def run_detail_context(
+        self,
+        run_id: uuid.UUID,
+        session: Session,
+        settings: Settings,
+    ) -> dict[str, Any]:
+        """Extra template variables for the run-detail page.
+
+        Called once per active plugin in ``build_run_detail_context``. Keys
+        should be plugin-prefixed to avoid collisions. Empty dict by default.
+        """
+        return {}
 
     def build_router(self, deps: PluginRouteDeps) -> APIRouter | None:
         """The plugin's routes, mounted on the ``protected`` router (no forced

@@ -1,0 +1,51 @@
+# Voxint synthdetect plugin: OPT-IN overlay for synthetic-speech detection.
+# Layer it on top of a GPU-capable stack:
+#   docker compose -f compose.yaml -f compose.gpu.yaml \
+#                  -f compose.plugin-synthdetect.yaml up -d
+#
+# Ships a standalone w2v2-AASIST GPU inference service. Enable the plugin in
+# Settings → Synthetic-speech detection, or set SYNTHDETECT_ENABLED=true in .env.
+# Details: docs/setup.md § "Optional: synthetic-speech detection".
+services:
+  # Point BOTH app processes at the synthdetect service. The api needs the URL
+  # for the manual "Score" button (POST from the request context); the worker
+  # needs it for the autogenerate Celery task.
+  api:
+    environment:
+      SYNTHDETECT_URL: http://synthdetect:8025
+      SYNTHDETECT_ENABLED: ${SYNTHDETECT_ENABLED:-false}
+      SYNTHDETECT_AUTOGENERATE: ${SYNTHDETECT_AUTOGENERATE:-false}
+      SYNTHDETECT_HTTP_TIMEOUT_SECONDS: ${SYNTHDETECT_HTTP_TIMEOUT_SECONDS:-120}
+
+  worker:
+    environment:
+      SYNTHDETECT_URL: http://synthdetect:8025
+      SYNTHDETECT_ENABLED: ${SYNTHDETECT_ENABLED:-false}
+      SYNTHDETECT_AUTOGENERATE: ${SYNTHDETECT_AUTOGENERATE:-false}
+      SYNTHDETECT_HTTP_TIMEOUT_SECONDS: ${SYNTHDETECT_HTTP_TIMEOUT_SECONDS:-120}
+
+  synthdetect:
+    image: ghcr.io/bengizmo/voxint-synthdetect:${VOXINT_IMAGE_TAG:-0.29.0}
+    pull_policy: missing
+    restart: unless-stopped
+    environment:
+      MEDIA_ROOT: /data/media
+      VOXINT_TELEMETRY_ENABLED: ${VOXINT_TELEMETRY_ENABLED:-1}
+      VOXINT_TELEMETRY_INTERVAL_SECONDS: ${VOXINT_TELEMETRY_INTERVAL_SECONDS:-5}
+    volumes:
+      - ${MEDIA_ROOT:-./media}:/data/media:ro
+    ports:
+      - "127.0.0.1:8025:8025"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8025/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

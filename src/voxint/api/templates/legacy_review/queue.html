@@ -1,59 +1,61 @@
 {% extends "base.html" %}
 {% block title %}Voxint — review{% endblock %}
+
+{% block cb_breadcrumb %}review /{% endblock %}
+{% block cb_summary %}
+{%- if entries %}{{ entries|length }} recording{{ "s" if entries|length != 1 else "" }} waiting{% else %}queue clear{% endif -%}
+{% endblock %}
+
 {% block body %}
-<h1>Review</h1>
-<p class="muted">Recordings that finished and still need you to confirm who is speaking. Signed in as {{ operator }}.</p>
 {% if not entries %}
-<p>Nothing to review right now. Every finished recording either had its speakers confirmed by you or matched confidently by Voxint.</p>
+<p class="oc-muted">Nothing to review right now. Every finished recording either had its speakers confirmed by you or matched confidently by Voxint.</p>
 {% else %}
-{# Sort control — mirrors the runs.html filter idiom, but the queue has no other
-   query state to preserve, so these are plain links. Default stays "oldest"
-   (FIFO fairness + guided-tutorial continuity). #}
-<p class="sort-control muted">
-  Sort:
-  <a href="/review"{% if sort == "oldest" %} aria-current="true"{% endif %}>Oldest first</a> ·
-  <a href="/review?sort=unresolved"{% if sort == "unresolved" %} aria-current="true"{% endif %}>Most voices to resolve</a>
-</p>
-<div class="table-wrap" role="region" aria-label="Review queue" tabindex="0">
-<table>
-  <thead>
-    <tr><th scope="col">Media</th><th scope="col">Duration</th><th scope="col">Age</th><th scope="col">Progress</th><th scope="col">Claimed by</th><th scope="col"><span class="visually-hidden">Action</span></th></tr>
-  </thead>
-  <tbody>
+<section class="oc-section">
+  <h2 class="oc-section-title">RECORDINGS TO REVIEW</h2>
+  <p class="sort-control oc-muted">
+    Sort:
+    <a href="/review"{% if sort == "oldest" %} aria-current="true"{% endif %}>Oldest first</a> ·
+    <a href="/review?sort=unresolved"{% if sort == "unresolved" %} aria-current="true"{% endif %}>Most voices to resolve</a>
+  </p>
+  <div class="grid-table" style="grid-template-columns: 1fr auto auto 10rem auto auto;" role="region" aria-label="Review queue">
+    <div class="gt-header">
+      <span>MEDIA</span>
+      <span>DURATION</span>
+      <span>AGE</span>
+      <span>PROGRESS</span>
+      <span>CLAIMED BY</span>
+      <span><span class="visually-hidden">Action</span></span>
+    </div>
     {% for e in entries %}
     {% set resolved = e.total_labels - e.unresolved_labels %}
-    <tr>
-      <td>
+    <div class="gt-row{% if e.unresolved_labels > 0 %} is-needs-human{% endif %}">
+      <span>
         <span class="media-title" title="{{ e.source_path }}">{{ friendly_media_label(e.title, e.source_path) }}</span>
-        <br><code class="muted">{{ e.source_path }}</code>
-      </td>
-      <td>{{ format_duration(e.duration_seconds) }}</td>
-      <td>
+        <br><code class="oc-muted" style="font-size:var(--t-sm)">{{ e.source_path }}</code>
+      </span>
+      <span>{{ format_duration(e.duration_seconds) }}</span>
+      <span>
         {% if e.created_at %}<span title="{{ e.created_at.strftime("%Y-%m-%d %H:%M UTC") }}">{{ format_age(e.created_at, now=now) }}</span>
-        {% else %}<span class="muted">—</span>{% endif %}
-      </td>
-      <td>
-        {# Fills toward done: resolved-of-total, so fuller = closer to finished.
-           The adjacent count text is the primary signal; the slim bar reuses the
-           review-journey .progress-track and is aria-hidden (#93). #}
+        {% else %}<span class="oc-muted">—</span>{% endif %}
+      </span>
+      <div>
         <div class="progress" role="progressbar"
              aria-valuenow="{{ resolved }}" aria-valuemin="0" aria-valuemax="{{ e.total_labels }}"
              aria-label="{{ resolved }} of {{ e.total_labels }} voices resolved">
           <span class="progress-track" aria-hidden="true"><span style="width: {{ ((100 * resolved / e.total_labels) | round(1)) if e.total_labels else 0 }}%"></span></span>
           <span class="progress-label">{{ resolved }} of {{ e.total_labels }} resolved</span>
         </div>
-      </td>
-      <td>{{ e.claimed_by or "—" }}</td>
-      <td>
+      </div>
+      <span>{{ e.claimed_by or "—" }}</span>
+      <div>
         <form method="post" action="/review/{{ e.run_id }}/claim">
           <input type="hidden" name="csrf_token" value="{{ csrf_claim }}">
-          <button type="submit" class="primary">Review</button>
+          <button type="submit" class="cb-btn cb-btn-primary">Review</button>
         </form>
-      </td>
-    </tr>
+      </div>
+    </div>
     {% endfor %}
-  </tbody>
-</table>
-</div>
+  </div>
+</section>
 {% endif %}
 {% endblock %}

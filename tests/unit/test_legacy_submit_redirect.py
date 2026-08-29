@@ -114,7 +114,8 @@ class TestRunsTemplateBanner:
         client = _client(media_enabled=True)
         resp = client.get("/runs")
         assert resp.status_code == 200
-        assert "New submissions live in the" in resp.text
+        # V3: when media library is enabled, the command bar links directly
+        # to /media instead of showing an inline banner.
         assert 'href="/media"' in resp.text
         assert 'action="/submit"' not in resp.text
 

@@ -130,7 +130,8 @@ def test_job_detail_renders_run_sections(
     run_id = _make_run(session_factory, status=RunStatus.FAILED)
     resp = client_flag_off.get(f"/jobs/{run_id}")
     assert resp.status_code == 200
-    assert f"Run <code>{run_id.hex[:8]}</code>" in resp.text
+    # V3: run id is in the command bar breadcrumb, not an <h1>.
+    assert f"<strong>{run_id.hex[:8]}</strong>" in resp.text
     # The requeue form (rendered for a FAILED run) posts to the legacy endpoint.
     assert f'action="/runs/{run_id}/requeue"' in resp.text
 

@@ -69,6 +69,13 @@ DOMAIN_PACK_PATH=/data/voxint/packs/newsroom
 DOMAIN_PACKS_DIR=/data/voxint/packs      # packs/newsroom, packs/podcast, packs/lectures, ...
 ```
 
+These paths must resolve **inside the container**. The compose stack mounts
+`MEDIA_ROOT` but does not mount an arbitrary `DOMAIN_PACK_PATH`. If the path
+exists on the host but not in the container, submissions fail with "no domain
+pack manifest at ...". Either volume-mount the packs directory in your compose
+override, or place the packs under `MEDIA_ROOT` where the existing mount
+reaches them.
+
 ## Selecting a pack for a run
 
 When a run is created, its pack is resolved once with this precedence:
