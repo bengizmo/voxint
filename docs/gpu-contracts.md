@@ -1504,8 +1504,10 @@ A = 4.28, B = -11.42; Brier score 0.0066.
 
 Pre-registration for the Chatterbox improvement effort (GitHub #252). This
 section is binding: no training may begin until every artifact hash, baseline
-value, and gate threshold below is committed. Protocol version 1.0. Designed
-via 4-model consult (codex, deepseek-v4-pro, grok-4.5, kimi-k3).
+value, and gate threshold below is committed. Protocol version 1.1
+(2026-08-29: two-sample acceptance probe band, pinned Brier population,
+explicit paired-delta percentile). Designed via 4-model consult (codex,
+deepseek-v4-pro, grok-4.5, kimi-k3).
 
 > ⚠ Values marked `[TBD]` must be filled by re-scoring the frozen M2
 > checkpoint with the grouped-bootstrap evaluator before any Phase 1 training.
@@ -1528,8 +1530,8 @@ The following artifacts must be hashed and committed before Phase 1 training.
 
 | Artifact | Role | Hash / version | Permitted use |
 |---|---|---|---|
-| M2 checkpoint (`finetuned_aasist.pth`) | Reference model | `[TBD: sha256]` | Baseline scoring only |
-| XLS-R 300M (`xlsr2_300m.pt`) | Frozen frontend | `[TBD: sha256]` | Feature extraction; shared across all candidates |
+| M2 checkpoint (`finetuned_aasist.pth`) | Reference model | `e178446b640b8e9f9cf6dd359428b2243f49e24e613e1ae952cd706216b8111e` | Baseline scoring only |
+| XLS-R 300M (`xlsr2_300m.pt`) | Frozen frontend | `b08927597f2c9eb2ebd7dcc3ac78ee4b5f6021cbac4b3a6c5a9deec445d80ed9` | Feature extraction; shared across all candidates |
 | Selection seed | Partition assignment | `voxint-synthdetect-144` | Immutable; shared with bootstrap seeding |
 | Evaluator revision | Metric computation | `[TBD: commit hash]` | Locked after golden-test validation |
 | ffmpeg version | Codec pipeline | `[TBD: version string]` | Locked for all codec materialization |
@@ -1544,9 +1546,9 @@ executor):
 | Name | Codec | Bitrate | Mode | Notes |
 |---|---|---|---|---|
 | `clean` | None | n/a | n/a | Original waveform |
-| `mp3-cbr48-v1` | MP3 | 48 kbps | CBR | `[TBD: exact ffmpeg flags]` |
-| `opus-voip-cbr16-f20-v1` | Opus | 16 kbps | VoIP, 20 ms frames | `[TBD: exact ffmpeg flags]` |
-| `aac-lc-cbr48-v1` | AAC-LC | 48 kbps | CBR | `[TBD: exact ffmpeg flags]` |
+| `mp3-cbr48-v1` | MP3 | 48 kbps | CBR | `-c:a libmp3lame -b:a 48k -ar 16000 -ac 1` |
+| `opus-voip-cbr16-f20-v1` | Opus | 16 kbps | VoIP, 20 ms frames | `-c:a libopus -b:a 16k -vbr off -application voip -frame_duration 20 -ar 16000 -ac 1` |
+| `aac-lc-cbr48-v1` | AAC-LC | 48 kbps | CBR | `-c:a aac -b:a 48k -profile:a aac_low -ar 16000 -ac 1` |
 
 #### Partitions and access budget
 
@@ -1600,14 +1602,21 @@ and excluded from the guard rail.
 
 **Out-of-sample Platt Brier score.** Fit Platt A and B on the calibration
 split using one effective observation per parent/speaker group. Compute Brier
-on the eval split with identical weighting. Require A > 0 (higher score must
-mean more synthetic). The M2 baseline Brier of 0.0066 was computed in-sample;
-the out-of-sample M2 value must be measured before the gate limit is final.
+on the eval split with identical weighting. The binding Brier population is
+fixed to the four core generators (Chatterbox, Piper, ElevenLabs, Google TTS)
+and in-domain bonafide from AMI and VoxConverse. Exclude ASVspoof DF anchor
+clips. Do not expand this population when later phases add generators. Report
+full-eval Brier, including unseen FM generators and anchors, as a diagnostic.
+Require A > 0 (higher score must mean more synthetic). The M2 baseline Brier
+of 0.0066 was computed in-sample; the out-of-sample M2 value must be measured
+before the gate limit is final.
 
-**Paired delta.** For M2-vs-candidate comparisons, use the same bootstrap
-cluster draws for both models and report the distribution of the EER
-difference. Phase promotion requires the paired-delta CI to exclude zero in
-the improving direction.
+**Paired delta.** For M2-vs-candidate comparisons, define
+`delta = EER_candidate - EER_M2` and use identical bootstrap component draws
+for both models. The gate passes iff `quantile(delta, 0.95) < 0`. A second
+opening under the access budget uses `quantile(delta, 0.975) < 0`. Neutralize
+`model-seed` in the bootstrap-seed derivation for paired comparisons so both
+models draw identical component streams. Report the paired-delta distribution.
 
 #### Bootstrap procedure
 
@@ -1705,14 +1714,22 @@ calibration split. This rule does not vary per seed.
 1. **Assembly.** Create the challenge partition from Chatterbox clips whose
    speakers and prompts do not appear in calibration, eval, holdout, or
    training data. Include matched bonafide speakers from AMI and VoxConverse,
-   also speaker-disjoint from all other partitions. Target: at least 100
-   Chatterbox speakers, 5 to 10 clips each. Final count determined by
-   empirical power pilot before freezing.
+   also speaker-disjoint from all other partitions. Target: 130 Chatterbox
+   speakers (~90 AMI, ~40 VoxConverse, mirroring the eval source mix), 6
+   clips each. Select speakers via SHA-256 hash-rank with `SELECTION_SEED`
+   and context `"challenge-speakers-v1"`. Keep at least 40 AMI speakers as
+   reconstruction reserve. Final count confirmed by empirical power pilot
+   before freezing.
 
 2. **Acceptance probe.** Before hash-freezing, score the challenge partition
-   with the frozen M2 model. Verify: M2 challenge Chatterbox EER falls within
-   the bootstrap 95% CI of M2's existing eval Chatterbox EER (25.90%). If it
-   does not, the partition is confounded; investigate and reconstruct.
+   with the frozen M2 model. Let `E_challenge` and `E_eval` be M2 Chatterbox
+   EER on challenge and eval, with `SE_challenge` and `SE_eval` estimated from
+   each partition's own grouped bootstrap. Accept iff
+   `|E_challenge - E_eval| <= 1.96 * sqrt(SE_challenge^2 + SE_eval^2)`;
+   otherwise investigate confounding and reconstruct the partition. The
+   probe's detection floor is approximately 8 to 10 percentage points. Run
+   separate AMI and VoxConverse diagnostics alongside the pooled probe to
+   detect subtler corpus-specific shifts.
 
 3. **Freezing.** Hash the challenge manifest (speaker IDs, clip IDs, codec
    variants, bonafide pairings). Expose only: manifest hash, total counts,
@@ -1736,8 +1753,8 @@ calibration split. This rule does not vary per seed.
 #### Verdict definitions
 
 - **PASS**: every non-regression gate passes (worst-of-3) AND the applicable
-  ship gate passes (median-of-3) AND the paired-delta CI excludes zero in the
-  improving direction AND no instability veto fires.
+  ship gate passes (median-of-3) AND `quantile(delta, 0.95) < 0` for the
+  paired Chatterbox EER delta AND no instability veto fires.
 - **FAIL**: any binding gate does not pass after all pre-specified remediation
   is exhausted.
 - **INVALID**: instability veto fired, NaN or infinite scores, Platt slope not
