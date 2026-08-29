@@ -74,12 +74,15 @@ def _payload_matches(
     decision: ProfileDecision,
     operator: str,
     note: str | None,
+    user_id: uuid.UUID | None,
 ) -> bool:
     return (
         row.candidate_id == candidate_id
         and row.decision == decision.value
         and row.operator == operator
         and row.note == note
+        # Pre-0052 rows have user_id=NULL; treat as wildcard for backward compat.
+        and (row.user_id is None or row.user_id == user_id)
     )
 
 
@@ -173,6 +176,7 @@ def record_profile_decision(
     operator: str,
     idempotency_key: str,
     note: str | None = None,
+    user_id: uuid.UUID | None = None,
 ) -> ProfileReviewDecision:
     """Append a profile-review verdict; identical replays return the existing row."""
     if not operator.strip() or len(operator) > MAX_OPERATOR_CHARS:
@@ -235,6 +239,7 @@ def record_profile_decision(
             candidate_id=candidate_id,
             decision=decision.value,
             operator=operator,
+            user_id=user_id,
             note=note,
             idempotency_key=idempotency_key,
         )
@@ -273,7 +278,7 @@ def record_profile_decision(
                     session, canonical_speaker, candidate, operator, replay=False
                 )
             return row
-    if _payload_matches(existing, candidate_id, decision, operator, note):
+    if _payload_matches(existing, candidate_id, decision, operator, note, user_id):
         # Replay repair: a prior accept whose materialization was lost (crash
         # between decision and profile write, or a decision recorded by a
         # pre-0041 binary) is filled in — but never over a LATER act.

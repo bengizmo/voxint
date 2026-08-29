@@ -1327,11 +1327,13 @@
         {% endif %}
       </nav>
       <div class="rail-bottom">
-        {# Settings entry + system health dot #}
+        {# Settings entry + system health dot — hidden for non-admin in multi-user mode #}
+        {% if not shell.multi_user or (shell.current_user and shell.current_user.role == "admin") %}
         <a class="rail-link" href="/settings"{% if active_nav == "settings" %} aria-current="page"{% endif %} aria-label="Settings">
           <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><path d="M9 6.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zm0 1.5a1 1 0 110 2 1 1 0 010-2z"/><path d="M7.8 2l-.3 1.5c-.4.2-.7.4-1 .6L5 3.6l-1.2 2 1.2 1c0 .3-.1.6-.1.9s0 .6.1.9l-1.2 1 1.2 2 1.5-.5c.3.3.6.5 1 .6L7.8 13h2.4l.3-1.5c.4-.2.7-.4 1-.6l1.5.5 1.2-2-1.2-1c0-.3.1-.6.1-.9s0-.6-.1-.9l1.2-1-1.2-2-1.5.5c-.3-.3-.6-.5-1-.6L10.2 2H7.8z"/></svg>
           <span class="rail-tip">Settings</span>
         </a>
+        {% endif %}
         {% if shell.multi_user and shell.current_user %}
         <div class="rail-user">
           <span class="rail-username" title="{{ shell.current_user.username }}">{{ shell.current_user.username }}</span>

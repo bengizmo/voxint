@@ -1689,12 +1689,19 @@ class ProfileReviewDecision(Base):
             "note IS NULL OR char_length(note) <= 2000",
             name="profile_review_decisions_note_length_check",
         ),
+        CheckConstraint(
+            "user_id IS NULL OR operator NOT LIKE 'system:%'",
+            name="profile_review_decisions_user_not_system_check",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     candidate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("enrichment_candidates.id"))
     decision: Mapped[str] = mapped_column(Text)
     operator: Mapped[str] = mapped_column(Text)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
     note: Mapped[str | None] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

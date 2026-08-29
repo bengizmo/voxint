@@ -135,4 +135,5 @@ def test_single_alembic_head() -> None:
     # 0049 = widen adjudication_decisions CHECK constraints for auto_enroll, #275.
     # 0050 = synthdetect_jobs + synthdetect_scores + AppSettings columns (#145).
     # 0051 = multi-user auth: users + auth_sessions tables, user_id FK on decisions (#9).
-    assert list(heads) == ["0051"]
+    # 0052 = profile_review_decisions.user_id attribution (#308).
+    assert list(heads) == ["0052"]

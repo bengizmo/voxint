@@ -90,8 +90,14 @@ def _decision(
     operator: str = "op",
     created_at: datetime,
 ) -> None:
-    session.add(
-        ProfileReviewDecision(
+    # Core INSERT: the test downgrades to a pre-0052 schema that lacks
+    # user_id, so the ORM model (which includes user_id) would emit an
+    # INSERT referencing a non-existent column.
+    from sqlalchemy import insert
+
+    session.execute(
+        insert(ProfileReviewDecision).values(
+            id=uuid.uuid4(),
             candidate_id=candidate_id,
             decision=decision,
             operator=operator,
@@ -100,7 +106,6 @@ def _decision(
             created_at=created_at,
         )
     )
-    session.flush()
 
 
 def test_schema_constraints_hold(engine: Engine, alembic_cfg: Config) -> None:
