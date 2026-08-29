@@ -226,8 +226,12 @@ expect:
 
 The default GPU overlay is tuned for headroom, not for the smallest card. On a
 host with one modest GPU (for example a single 12 GB consumer card shared by
-whisper, pyannote, titanet, and any co-resident LLM), the stock settings can
-exhaust VRAM. The first out-of-memory error can poison that service's CUDA
+whisper, pyannote, titanet, and any co-resident LLM or synthdetect service), the
+stock settings can exhaust VRAM. The synthdetect plugin
+(`compose.plugin-synthdetect.yaml`) adds ~1.5--2 GB of resident weights; on a
+12 GB card already running the transcription suite plus a GPU-offloaded bundled
+LLM, enabling synthdetect will likely OOM. Budget:
+[setup.md](setup.md#3-choose-your-compute-tier). The first out-of-memory error can poison that service's CUDA
 context, so every request after it fails with a cascade of
 `CUDA error: out of memory` and then `invalid device ordinal` until the service
 is restarted. Shrinking that first allocation is the fix.
@@ -1316,6 +1320,51 @@ run-asset input is clamped to `LLM_BUNDLED_RUN_ASSETS_MAX_INPUT_CHARS`
 recommended: uncomment the `-ngl 99` + device-reservation block in
 `compose.llm.yaml`. The pinned serving profile and provenance are in
 [gpu-contracts.md](gpu-contracts.md).
+
+### Synthetic-speech detection plugin (issue #145; optional)
+
+The synthdetect plugin scores recordings for AI-generated speech using a
+fine-tuned w2v2-AASIST classifier with Platt-calibrated risk scores. It runs as
+a standalone GPU service deployed via `compose.plugin-synthdetect.yaml`. Layer it
+on top of a GPU stack:
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yaml \
+               -f compose.plugin-synthdetect.yaml up -d
+```
+
+Enable it in **Settings → Synthetic-speech detection** (or
+`SYNTHDETECT_ENABLED=true`). With `SYNTHDETECT_AUTOGENERATE=true`, completed
+pipeline runs are scored automatically; otherwise, use the **Score** button on a
+run's detail page.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SYNTHDETECT_ENABLED` | `false` | Master switch. When false, the plugin is dormant. |
+| `SYNTHDETECT_AUTOGENERATE` | `false` | Auto-score completed runs. |
+| `SYNTHDETECT_URL` | `http://localhost:8025` | Service URL (the overlay overrides to `http://synthdetect:8025`). |
+| `SYNTHDETECT_HTTP_TIMEOUT_SECONDS` | `120` | HTTP timeout for scoring requests. |
+
+The service requires 1x NVIDIA GPU (tested on RTX 3060 12 GB). Weights are baked
+into the image (no download at startup). When the service is not running or the
+plugin is disabled, the pipeline completes normally; recordings are not scored.
+
+The run detail page shows a risk chip (low/medium/high) and the raw logit. A
+per-run report page shows all scored turns for that recording. Known limitations
+(Chatterbox evasion #252, VoxConverse channel confound #253) are disclosed on
+the report page and documented in
+[gpu-contracts.md](gpu-contracts.md#synthetic-speech-detection-synthdetect).
+
+Building from source:
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yaml \
+               -f compose.plugin-synthdetect.yaml \
+               -f compose.plugin-synthdetect.build.yaml \
+               build synthdetect
+```
+
+Weights must be staged before building; see `services/synthdetect/Dockerfile`.
 
 ### Run-level assets (issue #41; off by default)
 

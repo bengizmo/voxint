@@ -1999,7 +1999,7 @@ class TestCpuImageProvenance:
 
         image_bearing = {
             "compose.yaml", "compose.gpu.yaml", "compose.cpu.yaml", "compose.rocm.yaml",
-            "compose.llm.yaml",
+            "compose.llm.yaml", "compose.plugin-synthdetect.yaml",
         }
         pins: dict[str, set[str]] = {}
         seen = set()
@@ -2062,6 +2062,7 @@ class TestCpuImageProvenance:
             "compose.metal.yaml",
             "compose.ytdlp-egress.yaml",
             "compose.llm.yaml",
+            "compose.plugin-synthdetect.yaml",
         ):
             services = yaml.safe_load((REPO_ROOT / name).read_text())["services"]
             for svc_name, svc in services.items():
@@ -2074,6 +2075,61 @@ class TestCpuImageProvenance:
                     f"{name}:{svc_name} effective restart policy is {restart!r}, "
                     f"expected {expected!r}"
                 )
+
+    def test_synthdetect_overlay_wiring(self) -> None:
+        import yaml
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        doc = yaml.safe_load(
+            (REPO_ROOT / "compose.plugin-synthdetect.yaml").read_text()
+        )
+        services = doc["services"]
+        synthdetect = services["synthdetect"]
+        synthdetect_env_keys = {
+            "SYNTHDETECT_URL", "SYNTHDETECT_ENABLED",
+            "SYNTHDETECT_AUTOGENERATE", "SYNTHDETECT_HTTP_TIMEOUT_SECONDS",
+        }
+        for caller in ("api", "worker"):
+            env = services[caller]["environment"]
+            assert synthdetect_env_keys <= set(env), (
+                f"{caller} missing synthdetect env keys: "
+                f"{synthdetect_env_keys - set(env)}"
+            )
+            assert env["SYNTHDETECT_URL"] == "http://synthdetect:8025", (
+                f"{caller} SYNTHDETECT_URL must use service DNS, got {env['SYNTHDETECT_URL']}"
+            )
+        api_env = services["api"]["environment"]
+        worker_env = services["worker"]["environment"]
+        for key in synthdetect_env_keys:
+            assert api_env[key] == worker_env[key], (
+                f"api/worker split-brain: {key} differs"
+            )
+        ports = synthdetect.get("ports", [])
+        assert all(p.startswith("127.0.0.1:") for p in ports), (
+            f"synthdetect ports must bind loopback only, got {ports}"
+        )
+        volumes = synthdetect.get("volumes", [])
+        assert any(":ro" in v for v in volumes), (
+            "synthdetect media volume must be read-only"
+        )
+        hc = synthdetect.get("healthcheck", {})
+        hc_test = hc.get("test", [])
+        assert any("/healthz" in str(t) for t in hc_test), (
+            f"synthdetect healthcheck must probe /healthz, got {hc_test}"
+        )
+        deploy = synthdetect.get("deploy", {})
+        devices = deploy.get("resources", {}).get("reservations", {}).get("devices", [])
+        assert len(devices) == 1 and devices[0]["driver"] == "nvidia", (
+            f"synthdetect must reserve exactly one NVIDIA GPU, got {devices}"
+        )
+        build_doc = yaml.safe_load(
+            (REPO_ROOT / "compose.plugin-synthdetect.build.yaml").read_text()
+        )
+        build_svc = build_doc["services"]["synthdetect"]
+        assert set(build_svc) <= {"image", "pull_policy", "build"}, (
+            f"build overlay must only override image/pull_policy/build, got {set(build_svc)}"
+        )
 
     def test_metal_overlay_is_rewiring_only(self) -> None:
         # The metal tier's model services run natively on the host — the
