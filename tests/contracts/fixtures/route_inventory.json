@@ -60,6 +60,24 @@
     ]
   ],
   [
+    "/login",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/login",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/logout",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/media",
     [
       "GET"
@@ -777,6 +795,24 @@
   ],
   [
     "/submit",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/synthdetect/report/{run_id}",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/synthdetect/score/{run_id}",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/synthdetect/settings",
     [
       "POST"
     ]

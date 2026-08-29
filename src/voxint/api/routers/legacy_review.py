@@ -113,6 +113,7 @@ from voxint.api.model_provenance import select_run_model_identity
 from voxint.api.playback import playback_capability, representative_turns
 from voxint.api.routers.deps import (
     _TRANSLATION_ACTIVE_STATUSES,
+    CurrentUserDep,
     OperatorDep,
     SessionDep,
     _get_media_gate,
@@ -823,6 +824,7 @@ def decide(
     run_id: uuid.UUID,
     label: str,
     request: Request,
+    identity: CurrentUserDep,
     operator: OperatorDep,
     session: SessionDep,
     token: Annotated[uuid.UUID, Form()],
@@ -882,6 +884,7 @@ def decide(
             operator=operator,
             idempotency_key=nonce,
             speaker_id=speaker_id,
+            user_id=identity.user_id,
         )
     except ConflictingReplayError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -984,6 +987,7 @@ def merge_preview(
 def merge_apply(
     run_id: uuid.UUID,
     request: Request,
+    identity: CurrentUserDep,
     operator: OperatorDep,
     session: SessionDep,
     token: Annotated[uuid.UUID, Form()],
@@ -1032,6 +1036,7 @@ def merge_apply(
             target_speaker_id=speaker_id,
             target_name=display_name,
             expected=expected_ids,
+            user_id=identity.user_id,
         )
     except MergeConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1057,6 +1062,7 @@ def relabel_segment(
     run_id: uuid.UUID,
     segment_id: uuid.UUID,
     request: Request,
+    identity: CurrentUserDep,
     operator: OperatorDep,
     session: SessionDep,
     token: Annotated[uuid.UUID, Form()],
@@ -1162,6 +1168,7 @@ def relabel_segment(
             transcript_segment_id=segment_id,
             start_word_index=start_word_index,
             end_word_index=end_word_index,
+            user_id=identity.user_id,
         )
     except ConflictingReplayError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1387,6 +1394,7 @@ def enroll(
     run_id: uuid.UUID,
     label: str,
     request: Request,
+    identity: CurrentUserDep,
     operator: OperatorDep,
     session: SessionDep,
     token: Annotated[uuid.UUID, Form()],
@@ -1409,6 +1417,7 @@ def enroll(
             operator=operator,
             idempotency_key=nonce,
             gates=gates_from_settings(settings),
+            user_id=identity.user_id,
         )
     except EnrollmentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

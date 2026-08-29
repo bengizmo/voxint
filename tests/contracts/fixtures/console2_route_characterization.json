@@ -80,6 +80,30 @@
     true
   ],
   [
+    "/login",
+    [
+      "GET"
+    ],
+    "exempt",
+    false
+  ],
+  [
+    "/login",
+    [
+      "POST"
+    ],
+    "exempt",
+    false
+  ],
+  [
+    "/logout",
+    [
+      "POST"
+    ],
+    "exempt",
+    false
+  ],
+  [
     "/media",
     [
       "GET"
@@ -1042,5 +1066,29 @@
     ],
     "onboarding",
     true
+  ],
+  [
+    "/synthdetect/report/{run_id}",
+    [
+      "GET"
+    ],
+    "exempt",
+    false
+  ],
+  [
+    "/synthdetect/score/{run_id}",
+    [
+      "POST"
+    ],
+    "exempt",
+    false
+  ],
+  [
+    "/synthdetect/settings",
+    [
+      "POST"
+    ],
+    "exempt",
+    false
   ]
 ]

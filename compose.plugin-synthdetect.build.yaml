@@ -1,0 +1,17 @@
+# Build-from-source overlay for the synthdetect plugin service. Layer it
+# AFTER compose.plugin-synthdetect.yaml (it only overrides image/build;
+# the service definition lives in compose.plugin-synthdetect.yaml):
+#   docker compose -f compose.yaml -f compose.gpu.yaml \
+#                  -f compose.plugin-synthdetect.yaml \
+#                  -f compose.plugin-synthdetect.build.yaml \
+#                  build synthdetect
+#   docker compose -f compose.yaml -f compose.gpu.yaml \
+#                  -f compose.plugin-synthdetect.yaml \
+#                  -f compose.plugin-synthdetect.build.yaml up -d
+# Weights must be staged at build time: see services/synthdetect/Dockerfile.
+
+services:
+  synthdetect:
+    image: voxint-synthdetect:dev
+    pull_policy: never
+    build: services/synthdetect

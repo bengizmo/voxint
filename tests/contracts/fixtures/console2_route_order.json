@@ -54,6 +54,24 @@
     ]
   ],
   [
+    "/login",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/login",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/logout",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/static/htmx.min.js",
     [
       "GET"
@@ -779,6 +797,24 @@
     "/media/{run_id}/peaks",
     [
       "GET"
+    ]
+  ],
+  [
+    "/synthdetect/report/{run_id}",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/synthdetect/score/{run_id}",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/synthdetect/settings",
+    [
+      "POST"
     ]
   ]
 ]

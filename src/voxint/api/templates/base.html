@@ -245,6 +245,16 @@
     .health-dot.ok { background: var(--ok); }
     .health-dot.warn { background: var(--warn); }
     .health-dot.danger { background: var(--danger); }
+    .rail-user { display: flex; flex-direction: column; align-items: center;
+               gap: 2px; font-size: var(--t-xs); color: var(--ink-2); }
+    .rail-user .rail-username { max-width: calc(var(--rail-w) - 8px);
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+               text-align: center; }
+    .rail-user button { all: unset; cursor: pointer; display: flex;
+               align-items: center; justify-content: center; width: 28px;
+               height: 28px; border-radius: var(--r-sm);
+               color: var(--ink-2); }
+    .rail-user button:hover { background: var(--surface-2); color: var(--ink); }
 
     /* Command bar — 40px top strip per page (#207) */
     .command-bar { display: flex; align-items: center; gap: var(--space-3);
@@ -1322,6 +1332,17 @@
           <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><path d="M9 6.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zm0 1.5a1 1 0 110 2 1 1 0 010-2z"/><path d="M7.8 2l-.3 1.5c-.4.2-.7.4-1 .6L5 3.6l-1.2 2 1.2 1c0 .3-.1.6-.1.9s0 .6.1.9l-1.2 1 1.2 2 1.5-.5c.3.3.6.5 1 .6L7.8 13h2.4l.3-1.5c.4-.2.7-.4 1-.6l1.5.5 1.2-2-1.2-1c0-.3.1-.6.1-.9s0-.6-.1-.9l1.2-1-1.2-2-1.5.5c-.3-.3-.6-.5-1-.6L10.2 2H7.8z"/></svg>
           <span class="rail-tip">Settings</span>
         </a>
+        {% if shell.multi_user and shell.current_user %}
+        <div class="rail-user">
+          <span class="rail-username" title="{{ shell.current_user.username }}">{{ shell.current_user.username }}</span>
+          <form method="post" action="/logout">
+            <input type="hidden" name="csrf_token" value="{{ shell.csrf_logout_token }}">
+            <button type="submit" aria-label="Sign out">
+              <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false"><path d="M6 3H4a1 1 0 00-1 1v10a1 1 0 001 1h2M12 13l3-4-3-4M7 9h8"/></svg>
+            </button>
+          </form>
+        </div>
+        {% endif %}
         <div class="health-dot ok" role="img" aria-label="System health: ok"></div>
       </div>
     </aside>

@@ -1,0 +1,42 @@
+{# Settings → Synthetic speech detection (#145): the plugin's tri-state toggles
+   (enabled + autogenerate). Follows the _semantic.html / _translation.html
+   pattern: self-contained section with own form, rendered from _settings_context.
+   The synthdetect service URL is env-only (no UI override). #}
+<section id="synthdetect" aria-labelledby="synthdetect-heading">
+<h2 id="synthdetect-heading">Synthetic speech detection</h2>
+<p class="muted">Score each speaker turn for synthetic speech risk using a
+   dedicated model service. Scores are calibrated risk values, not portable
+   probabilities. The service must be running and reachable at the configured URL
+   for scoring to succeed. Changes here apply to your next run or job, no restart
+   needed.</p>
+{% for error in synthdetect_errors %}
+  <p class="notice" role="alert">{{ error }}</p>
+{% endfor %}
+<form method="post" action="/synthdetect/settings">
+  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+  <fieldset class="field feature-flag">
+    <legend>Synthetic speech detection</legend>
+    <p class="muted">Score speaker turns for synthetic speech risk. Requires the
+       synthdetect model service to be running.</p>
+    <label><input type="radio" name="synthdetect_enabled" value="on"{% if synthdetect_enabled_state == "on" %} checked{% endif %}>
+      On</label>
+    <label><input type="radio" name="synthdetect_enabled" value="off"{% if synthdetect_enabled_state == "off" %} checked{% endif %}>
+      Off</label>
+    <label><input type="radio" name="synthdetect_enabled" value="inherit"{% if synthdetect_enabled_state == "inherit" %} checked{% endif %}>
+      Use installation setting <span class="muted">(currently {{ "On" if synthdetect_enabled_env_default else "Off" }})</span></label>
+  </fieldset>
+  <fieldset class="field feature-flag">
+    <legend>Score new runs automatically</legend>
+    <p class="muted">Score each run as it finishes. With this off, score
+       individual runs on demand from the run detail page.
+       Requires synthetic speech detection to be on.</p>
+    <label><input type="radio" name="synthdetect_autogenerate" value="on"{% if synthdetect_autogenerate_state == "on" %} checked{% endif %}>
+      On</label>
+    <label><input type="radio" name="synthdetect_autogenerate" value="off"{% if synthdetect_autogenerate_state == "off" %} checked{% endif %}>
+      Off</label>
+    <label><input type="radio" name="synthdetect_autogenerate" value="inherit"{% if synthdetect_autogenerate_state == "inherit" %} checked{% endif %}>
+      Use installation setting <span class="muted">(currently {{ "On" if synthdetect_autogenerate_env_default else "Off" }})</span></label>
+  </fieldset>
+  <button type="submit">Save synthdetect settings</button>
+</form>
+</section>

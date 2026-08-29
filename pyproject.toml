@@ -40,6 +40,7 @@ dependencies = [
     # pin; a contract test binds it to services/titanet/requirements.cpu.txt).
     "onnxruntime==1.28.0",
     "tokenizers>=0.20",
+    "argon2-cffi>=23.1",
 ]
 
 [project.optional-dependencies]

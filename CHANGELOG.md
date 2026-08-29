@@ -27,6 +27,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   and progress percentage (#244 delta 5, needs stage-level progress callbacks).
 
 ### Added
+- **Multi-user authentication and roles** (#9). Opt-in via
+  `VOXINT_MULTI_USER=true`. Adds a local user table (Argon2id password
+  hashing), DB-backed session cookies, a login/logout form, and two roles
+  (reviewer/admin). The single-operator HTTP Basic path is unchanged when the
+  flag is off (the default). Per-user attribution: a nullable `user_id` FK on
+  `adjudication_decisions` links human rulings to the authenticated user (system
+  decisions stay `user_id=NULL`). Settings area is admin-only. User management
+  via CLI: `voxint user create/list/delete/set-role/set-password`. First user is
+  forced to admin. Migration 0051.
 - **Quote provenance manifest** (#122). Pull-quote and clip exports now have a
   JSON sidecar (`export.json`) carrying per-line speaker attribution, timecodes,
   clip integrity digest, per-stage model identity from the pipeline run, and
@@ -83,6 +92,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   link to their individual profile pages.
 - **Project detail: "+ add speaker" and "+ link folder" links** (#247).
   Navigation links in the sidebar section headers.
+- **Synthetic-speech detection plugin** (#145, epic #143). Opt-in audio
+  deepfake detection using a fine-tuned w2v2-AASIST classifier with
+  Platt-calibrated risk scores. Ships as a plugin with four pieces: a
+  standalone GPU inference service (`voxint-synthdetect`, compose overlay
+  `compose.plugin-synthdetect.yaml`), a plugin backend (DB tables, Celery
+  task, Platt calibration, job lifecycle), console integration (tri-state
+  settings toggles, run-detail score panel with all job states and risk
+  chips, standalone report page with known-limitations disclosure), and
+  manual scoring for existing runs. Enable via Settings or
+  `SYNTHDETECT_ENABLED=true`. Known limitations: Chatterbox evasion (#252,
+  25.90% EER after M2 fine-tuning) and VoxConverse channel confound (#253).
 
 ### Changed
 - **Synthdetect eval tooling extracted to private repo.** 46 files (21k lines)
