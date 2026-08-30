@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import uuid
 
 from sqlalchemy import func, select
@@ -15,11 +16,16 @@ from voxint.db.models import (
     MediaItem,
     PipelineRun,
     SavedQuote,
+    TranscriptSegment,
 )
 
 
 class QuoteDuplicateError(Exception):
     """Raised when the (project, segment, query) triple already exists."""
+
+
+class QuoteSegmentMismatchError(Exception):
+    """Raised when segment_id does not belong to run_id."""
 
 
 def resolve_project_id(session: Session, run_id: uuid.UUID) -> uuid.UUID | None:
@@ -39,6 +45,21 @@ def resolve_project_id(session: Session, run_id: uuid.UUID) -> uuid.UUID | None:
         return None
     project_id: uuid.UUID | None = row[0]
     return project_id
+
+
+def _verify_segment_belongs_to_run(
+    session: Session,
+    segment_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> None:
+    """Verify that segment_id belongs to run_id; raise on mismatch or missing."""
+    seg = session.get(TranscriptSegment, segment_id)
+    if seg is None:
+        msg = "Segment not found. The transcript may have been re-processed; re-run the search."
+        raise QuoteSegmentMismatchError(msg)
+    if seg.pipeline_run_id != run_id:
+        msg = "Segment does not belong to this run."
+        raise QuoteSegmentMismatchError(msg)
 
 
 def save_quote(
@@ -61,25 +82,28 @@ def save_quote(
     if project_id is None:
         msg = "This recording is not assigned to a project."
         raise ValueError(msg)
+    _verify_segment_belongs_to_run(session, segment_id, run_id)
+    normalized_note = note.strip() or None if note else None
+    query_trimmed = search_query.strip()
     quote = SavedQuote(
         project_id=project_id,
         segment_id=segment_id,
         run_id=run_id,
-        search_query=search_query,
+        search_query=query_trimmed,
         left_context=left_context,
         hit=hit,
         right_context=right_context,
         speaker_name=speaker_name,
         media_title=media_title,
         start_seconds=start_seconds,
-        note=note,
+        note=normalized_note,
         operator=operator,
     )
-    session.add(quote)
     try:
-        session.flush()
+        with session.begin_nested():
+            session.add(quote)
+            session.flush()
     except IntegrityError as exc:
-        session.rollback()
         if "saved_quotes_project_segment_query_key" in str(exc):
             raise QuoteDuplicateError from exc
         raise
@@ -127,13 +151,14 @@ def update_quote_note(
     quote = session.get(SavedQuote, quote_id)
     if quote is None:
         return None
-    quote.note = note
+    quote.note = note.strip() or None if note else None
     session.flush()
     return quote
 
 
 def _csv_safe(value: str) -> str:
-    if value and value[0] in ("=", "+", "-", "@"):
+    stripped = value.lstrip("\t\r\n ")
+    if stripped and stripped[0] in ("=", "+", "-", "@"):
         return "'" + value
     return value
 
@@ -143,11 +168,13 @@ def export_quotes_csv(
     project_id: uuid.UUID,
     project_name: str,
 ) -> tuple[str, str]:
-    """Export all saved quotes for a project as CSV.
+    """Export saved quotes for a project as CSV.
 
-    Returns (csv_content, filename).
+    Returns (csv_content, filename). Capped at 10,000 rows with a
+    truncation notice when the project has more.
     """
-    quotes, _ = list_quotes(session, project_id, limit=10_000)
+    cap = 10_000
+    quotes, total = list_quotes(session, project_id, limit=cap)
     output = io.StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow((
@@ -173,6 +200,8 @@ def export_quotes_csv(
             _csv_safe(q.note or ""),
             q.created_at.isoformat() if q.created_at else "",
         ))
-    safe_name = project_name.replace('"', "").replace(" ", "-").lower()[:40]
-    filename = f"voxint-quotes-{safe_name}.csv"
+    if total > cap:
+        writer.writerow((f"# {total - cap} additional quotes not exported (cap: {cap})",))
+    safe_name = re.sub(r"[^a-z0-9-]", "-", project_name.lower())[:40].strip("-")
+    filename = f"voxint-quotes-{safe_name or 'export'}.csv"
     return output.getvalue(), filename

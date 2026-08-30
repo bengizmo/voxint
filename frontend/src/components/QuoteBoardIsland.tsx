@@ -29,13 +29,19 @@ function NoteCell({
   quote: SavedQuoteRow;
   csrfToken: string;
 }) {
+  const [lastSaved, setLastSaved] = useState(quote.note ?? "");
   const [note, setNote] = useState(quote.note ?? "");
   const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState(false);
+  const savingRef = useRef(false);
 
   const save = useCallback(async () => {
-    setSaving(true);
+    if (savingRef.current || note === lastSaved) {
+      setEditing(false);
+      return;
+    }
+    savingRef.current = true;
+    setError(false);
     const body = new FormData();
     body.append("note", note);
     body.append("csrf_token", csrfToken);
@@ -46,35 +52,51 @@ function NoteCell({
       });
       if (res.ok) {
         const data = await res.json();
-        setNote(data.note ?? "");
+        const saved = data.note ?? "";
+        setLastSaved(saved);
+        setNote(saved);
+        setEditing(false);
+      } else {
+        setError(true);
       }
+    } catch {
+      setError(true);
     } finally {
-      setSaving(false);
-      setEditing(false);
+      savingRef.current = false;
     }
-  }, [note, csrfToken, quote.id]);
+  }, [note, lastSaved, csrfToken, quote.id]);
 
   if (editing) {
     return (
-      <input
-        ref={inputRef}
-        type="text"
-        className="w-full rounded-[var(--r-sm)] border border-[var(--line)] bg-[var(--surface)] px-1 py-0.5 text-sm text-[var(--ink)]"
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-        onBlur={save}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") save();
-          if (e.key === "Escape") {
-            setNote(quote.note ?? "");
-            setEditing(false);
-          }
-        }}
-        disabled={saving}
-        maxLength={2000}
-        aria-label="Edit note"
-        autoFocus
-      />
+      <div>
+        <input
+          type="text"
+          className="w-full rounded-[var(--r-sm)] border border-[var(--line)] bg-[var(--surface)] px-1 py-0.5 text-sm text-[var(--ink)]"
+          style={error ? { borderColor: "var(--warn)" } : undefined}
+          value={note}
+          onChange={(e) => { setNote(e.target.value); setError(false); }}
+          onBlur={save}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              (e.target as HTMLInputElement).blur();
+            }
+            if (e.key === "Escape") {
+              setNote(lastSaved);
+              setEditing(false);
+            }
+          }}
+          disabled={savingRef.current}
+          maxLength={2000}
+          aria-label="Edit note"
+          autoFocus
+        />
+        {error ? (
+          <span className="text-[length:var(--t-micro)] text-[var(--warn)]">
+            Save failed
+          </span>
+        ) : null}
+      </div>
     );
   }
 
@@ -87,13 +109,13 @@ function NoteCell({
         border: "none",
         padding: "2px 4px",
         cursor: "pointer",
-        color: note ? "var(--ink-2)" : "var(--ink-3)",
+        color: lastSaved ? "var(--ink-2)" : "var(--ink-3)",
         minHeight: "1.5em",
       }}
       onClick={() => setEditing(true)}
       title="Click to edit note"
     >
-      {note || "add note…"}
+      {lastSaved || "add note…"}
     </button>
   );
 }

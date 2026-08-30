@@ -250,21 +250,25 @@
 </section>
 {% endif %}
 
-{% if quote_board_props.quotes %}
 <section class="oc-section">
   <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:var(--space-3)">
     <h2 class="oc-section-title" style="margin-bottom:0">
       SAVED QUOTES
-      <span class="chip">{{ quote_board_props.total }}</span>
+      {% if quote_board_props.total %}<span class="chip">{{ quote_board_props.total }}</span>{% endif %}
     </h2>
+    {% if quote_board_props.total %}
     <a href="/projects/{{ detail.id }}/quotes/csv" class="secondary small">Export CSV</a>
+    {% endif %}
   </div>
   <div data-island="quote-board"
        data-props="{{ quote_board_props|tojson|replace('\"', '&quot;') }}">
+    {% if quote_board_props.total %}
     <p class="oc-muted">{{ quote_board_props.total }} saved quote{{ "s" if quote_board_props.total != 1 else "" }}.</p>
+    {% else %}
+    <p class="oc-muted">Save quotes from Explore to build your evidence board.</p>
+    {% endif %}
   </div>
 </section>
-{% endif %}
 
 <div class="lib-rail">
 <div>

@@ -19,9 +19,16 @@ class TestCsvSafe:
         value = f"{prefix}SUM(A1:A10)"
         assert _csv_safe(value) == f"'{prefix}SUM(A1:A10)"
 
-    def test_safe_hyphenated_word_not_escaped(self) -> None:
-        # Only leading character matters, so a hyphen at position 0 IS escaped
-        assert _csv_safe("-word") == "'-word"
-
     def test_number_string_unchanged(self) -> None:
         assert _csv_safe("42.5") == "42.5"
+
+    @pytest.mark.parametrize("ws", ["\t", "\r", "\n", " "])
+    def test_whitespace_prefixed_formula_escaped(self, ws: str) -> None:
+        value = f"{ws}=SUM(A1)"
+        assert _csv_safe(value) == f"'{ws}=SUM(A1)"
+
+    def test_whitespace_only_unchanged(self) -> None:
+        assert _csv_safe("   ") == "   "
+
+    def test_tab_prefixed_plain_text_unchanged(self) -> None:
+        assert _csv_safe("\thello") == "\thello"

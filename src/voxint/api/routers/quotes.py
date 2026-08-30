@@ -17,12 +17,13 @@ from voxint.api.routers.deps import (
 )
 from voxint.api.saved_quotes import (
     QuoteDuplicateError,
+    QuoteSegmentMismatchError,
     delete_quote,
     export_quotes_csv,
     save_quote,
     update_quote_note,
 )
-from voxint.db.models import MAX_QUOTE_NOTE_CHARS, Project
+from voxint.db.models import MAX_QUOTE_NOTE_CHARS, Project, SavedQuote
 
 quotes_router = APIRouter(dependencies=[Depends(require_onboarded)])
 router = quotes_router
@@ -35,7 +36,7 @@ def save_quote_endpoint(
     operator: OperatorDep,
     segment_id: Annotated[uuid.UUID, Form()],
     run_id: Annotated[uuid.UUID, Form()],
-    search_query: Annotated[str, Form(min_length=1)],
+    search_query: Annotated[str, Form(min_length=1, max_length=500)],
     left_context: Annotated[str, Form()],
     hit: Annotated[str, Form()],
     right_context: Annotated[str, Form()],
@@ -76,6 +77,11 @@ def save_quote_endpoint(
         return JSONResponse(
             {"ok": False, "error": "This quote is already saved."},
             status_code=409,
+        )
+    except QuoteSegmentMismatchError as exc:
+        return JSONResponse(
+            {"ok": False, "error": str(exc)},
+            status_code=422,
         )
     session.commit()
     return JSONResponse(
@@ -135,7 +141,7 @@ def export_quotes_csv_endpoint(
     operator: OperatorDep,
     project_id: uuid.UUID,
 ) -> StreamingResponse | JSONResponse:
-    """Export all saved quotes for a project as CSV."""
+    """Export saved quotes for a project as CSV."""
     project = session.get(Project, project_id)
     if project is None:
         return JSONResponse({"ok": False, "error": "Project not found."}, status_code=404)
@@ -148,7 +154,7 @@ def export_quotes_csv_endpoint(
     )
 
 
-def quote_to_dict(q: Any) -> dict[str, Any]:
+def quote_to_dict(q: SavedQuote) -> dict[str, Any]:
     """Serialize a SavedQuote to a dict for island props."""
     return {
         "id": str(q.id),
