@@ -45,9 +45,13 @@ def test_missing_binary_raises() -> None:
 
 def _read_pid(pidfile: Path) -> int:
     deadline = time.time() + 5
-    while time.time() < deadline and not pidfile.exists():
+    while time.time() < deadline:
+        if pidfile.exists():
+            content = pidfile.read_text().strip()
+            if content:
+                return int(content)
         time.sleep(0.02)
-    return int(pidfile.read_text().strip())
+    raise TimeoutError(f"{pidfile} was not written within 5 s")
 
 
 def _wait_gone(pid: int, *, timeout: float = 5.0) -> bool:
