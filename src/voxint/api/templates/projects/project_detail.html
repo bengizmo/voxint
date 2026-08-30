@@ -143,6 +143,13 @@
   </p>
   {% endif %}
 
+  {% if not insights.entities and not insights.topics and (ec.entity_runs or ec.topic_runs) %}
+  <p class="oc-muted" style="font-size: var(--t-xs); margin-bottom: var(--space-3);">
+    Enrichment ran on this project's recordings but found no topics or entity
+    mentions to report.
+  </p>
+  {% endif %}
+
   {% if insights.entities %}
   <div class="card pi-card">
     <h3 class="pi-card-title">TOP ENTITIES</h3>

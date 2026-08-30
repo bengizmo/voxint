@@ -19,11 +19,32 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   from diarization turns with canonical label_states() resolution, sub-50ms
   interval merging, overlap hatching, unresolved/excluded visual treatment,
   and keyboard-focusable blocks linking to transcript timestamps.
-- **Project overview** (#336, Phase 4). Entity frequency bars, topic chips,
-  and speaker-by-recording coverage matrix on the project detail page.
-  Compute-on-read with per-project advisory lock and fingerprint short-circuit.
+- **Explore page: corpus-wide evidence browser** (#331, #333, #334). New
+  top-level "Explore" section with KWIC concordance search across every
+  finished transcript (speaker, project, date, confidence, and suspect
+  filters; pagination; CSV export), plus a TF-IDF word cloud and ranked
+  distinctive terms for the corpus or a single project, cached and refreshed
+  after each run completes. `/search` redirects to `/explore`. Migration 0055.
+- **Speaker insights on the profile page** (#335). Distinctive vocabulary
+  (log-odds with an informative Dirichlet prior), conversation partners
+  (who speaks before and after them), and speaking pace, computed for all
+  eligible speakers after each run completes and rendered from cache.
+- **Project overview** (#336). The project page now opens with an Overview
+  section built from run-assets enrichment across the project's recordings:
+  summary stat tiles, most-mentioned entities with click-through to a
+  filtered Explore search, topic chips, and a speakers-by-recordings
+  coverage matrix. Computed on read behind a fingerprint cache, so it
+  self-heals after enrichment, adjudication, merges, and folder moves;
+  honest notes when some or all recordings have no enrichment yet.
 
 ### Fixed
+- **Project speaker counts no longer double-count re-runs** (#336). The
+  project page's speaker list now counts each recording once (its newest
+  completed run) instead of once per historical run. Membership follows the
+  same rule: a speaker who only appears in an older, superseded run of a
+  recording no longer shows on the project — the newest completed run is
+  the operative transcript, matching how the rest of the console resolves
+  speakers.
 - **Top-bar controls no longer overlap on narrow screens.** Below ~800px
   CSS width, the fixed-height command bar let the Table/Cards view toggle
   slip under the page action button ("+ Add media", "+ New speaker"),
