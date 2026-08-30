@@ -240,6 +240,30 @@
     ]
   ],
   [
+    "/quotes",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/quotes/{quote_id}",
+    [
+      "DELETE"
+    ]
+  ],
+  [
+    "/quotes/{quote_id}",
+    [
+      "PATCH"
+    ]
+  ],
+  [
+    "/projects/{project_id}/quotes/csv",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/runs",
     [
       "GET"
