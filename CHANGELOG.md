@@ -6,6 +6,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **Top-bar controls no longer overlap on narrow screens.** Below ~800px
+  CSS width, the fixed-height command bar let the Table/Cards view toggle
+  slip under the page action button ("+ Add media", "+ New speaker"),
+  which then swallowed its clicks. The bar now wraps on narrow screens so
+  every control stays visible and clickable.
+
 
 ## [0.30.0] - 2026-08-30
 
