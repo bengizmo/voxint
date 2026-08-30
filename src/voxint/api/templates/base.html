@@ -277,9 +277,15 @@
     /* Narrow viewport: rail → mobile nav disclosure (#207). On narrow screens,
        the rail hides behind a hamburger in the command bar; its disclosure
        stacks horizontally (icon row) above the main content. The search
-       placeholder hides to prevent command-bar overflow. */
+       placeholder hides to prevent command-bar overflow. The bar itself must
+       wrap: its fixed 40px row cannot shrink the view toggle below its
+       content, so on narrow screens the toggle spills under the page action
+       button, which then steals its clicks. */
     @media (max-width: 50rem) {
       .cb-search { display: none; }
+      .command-bar { flex-wrap: wrap; box-sizing: border-box; height: auto;
+              min-height: 40px;
+              padding-top: var(--space-1); padding-bottom: var(--space-1); }
       .app-shell { display: block; }
       :root.js .icon-rail { display: none; }
       :root.js[data-mobile-nav="open"] .icon-rail { display: flex;
