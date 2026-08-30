@@ -28,9 +28,9 @@ def test_stage_order_walk() -> None:
     assert tuple(walked) == STAGE_ORDER
 
 
-def test_terminal_states_have_no_exits() -> None:
-    assert ALLOWED_TRANSITIONS[RunStatus.COMPLETED] == frozenset()
-    assert ALLOWED_TRANSITIONS[RunStatus.CANCELLED] == frozenset()
+def test_completed_cancelled_exit_only_to_queued() -> None:
+    assert ALLOWED_TRANSITIONS[RunStatus.COMPLETED] == frozenset({RunStatus.QUEUED})
+    assert ALLOWED_TRANSITIONS[RunStatus.CANCELLED] == frozenset({RunStatus.QUEUED})
 
 
 def test_failed_only_requeues() -> None:
@@ -87,14 +87,16 @@ def test_failure_and_pause_keep_their_stage() -> None:
     held = snap(RunStatus.RUNNING, Stage.DIARIZE_EMBED)
     validate_transition(held, RunStatus.FAILED, Stage.DIARIZE_EMBED)
     validate_transition(held, RunStatus.AWAITING_ADJUDICATION, Stage.DIARIZE_EMBED)
+    validate_transition(held, RunStatus.PAUSED, Stage.DIARIZE_EMBED)
     for bad in (Stage.PREPARE, None):
         with pytest.raises(InvalidTransitionError):
             validate_transition(held, RunStatus.FAILED, bad)
 
 
-def test_requeue_from_failed_keeps_stage() -> None:
+def test_requeue_from_failed_keeps_stage_or_restarts() -> None:
     held = snap(RunStatus.FAILED, Stage.TRANSCRIBE)
     validate_transition(held, RunStatus.QUEUED, Stage.TRANSCRIBE)
+    validate_transition(held, RunStatus.QUEUED, None)  # restart from scratch
     with pytest.raises(InvalidTransitionError):
         validate_transition(held, RunStatus.QUEUED, Stage.FINALIZE)
 
@@ -134,6 +136,7 @@ def test_cancel_allowed_from_any_live_state() -> None:
         (RunStatus.QUEUED, None),
         (RunStatus.RUNNING, Stage.PREPARE),
         (RunStatus.AWAITING_ADJUDICATION, Stage.ENHANCE_MATCH),
+        (RunStatus.PAUSED, Stage.TRANSCRIBE),
     ):
         validate_transition(snap(status, stage), RunStatus.CANCELLED, None)
 
@@ -141,6 +144,52 @@ def test_cancel_allowed_from_any_live_state() -> None:
 def test_status_membership_still_enforced() -> None:
     with pytest.raises(InvalidTransitionError):
         validate_transition(snap(RunStatus.QUEUED, None), RunStatus.COMPLETED, None)
+
+
+def test_pause_from_running_keeps_stage() -> None:
+    held = snap(RunStatus.RUNNING, Stage.TRANSCRIBE)
+    validate_transition(held, RunStatus.PAUSED, Stage.TRANSCRIBE)
+    with pytest.raises(InvalidTransitionError):
+        validate_transition(held, RunStatus.PAUSED, Stage.PREPARE)
+
+
+def test_pause_from_queued_keeps_none() -> None:
+    held = snap(RunStatus.QUEUED, None)
+    validate_transition(held, RunStatus.PAUSED, None)
+
+
+def test_resume_from_paused_keeps_stage() -> None:
+    held = snap(RunStatus.PAUSED, Stage.TRANSCRIBE)
+    validate_transition(held, RunStatus.QUEUED, Stage.TRANSCRIBE)
+    with pytest.raises(InvalidTransitionError):
+        validate_transition(held, RunStatus.QUEUED, Stage.PREPARE)
+
+
+def test_paused_cannot_go_directly_to_running() -> None:
+    held = snap(RunStatus.PAUSED, Stage.TRANSCRIBE)
+    with pytest.raises(InvalidTransitionError):
+        validate_transition(held, RunStatus.RUNNING, Stage.TRANSCRIBE)
+
+
+def test_restart_from_completed_clears_stage() -> None:
+    held = snap(RunStatus.COMPLETED, None)
+    validate_transition(held, RunStatus.QUEUED, None)
+    with pytest.raises(InvalidTransitionError):
+        validate_transition(held, RunStatus.QUEUED, Stage.ACQUIRE)
+
+
+def test_restart_from_cancelled_clears_stage() -> None:
+    held = snap(RunStatus.CANCELLED, Stage.PREPARE)
+    validate_transition(held, RunStatus.QUEUED, None)
+    with pytest.raises(InvalidTransitionError):
+        validate_transition(held, RunStatus.QUEUED, Stage.PREPARE)
+
+
+def test_paused_has_entry_in_allowed() -> None:
+    assert RunStatus.PAUSED in ALLOWED_TRANSITIONS
+    assert ALLOWED_TRANSITIONS[RunStatus.PAUSED] == frozenset(
+        {RunStatus.QUEUED, RunStatus.CANCELLED}
+    )
 
 
 def test_error_types_carry_context() -> None:

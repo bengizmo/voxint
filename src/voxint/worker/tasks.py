@@ -61,6 +61,7 @@ from voxint.pipeline.engine import (
     INTERRUPTED_PREFIX,
     StageFailedError,
     close_cancelled_run_claims,
+    close_paused_run_claims,
     execute_run,
     recover_interrupted_runs,
 )
@@ -346,6 +347,7 @@ def recovery_sweep() -> dict[str, int]:
     # scans. Close those claims SKIPPED; never requeue a cancelled run.
     with factory() as session:
         cancelled_claims = close_cancelled_run_claims(session)
+        close_paused_run_claims(session)
         session.commit()
     cutoff = datetime.now(tz=UTC) - timedelta(seconds=settings.queued_run_stale_seconds)
     with factory() as session:

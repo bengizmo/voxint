@@ -41,8 +41,11 @@ from voxint.api.csrf import (
     CSRF_CANCEL,
     CSRF_FETCH,
     CSRF_NOTES,
+    CSRF_PAUSE,
     CSRF_PLUGIN,
     CSRF_REQUEUE,
+    CSRF_RESTART,
+    CSRF_RESUME,
     CSRF_RUN_ARCHIVE,
     CSRF_RUN_MEDIA_DELETE,
     CSRF_RUN_UNARCHIVE,
@@ -147,6 +150,9 @@ from voxint.ingest import (
     RunNotCancellableError,
     RunNotFailedError,
     RunNotFoundError,
+    RunNotPausableError,
+    RunNotPausedError,
+    RunNotRestartableError,
     UploadConflictError,
     UploadTooLargeError,
     UploadValidationError,
@@ -154,7 +160,10 @@ from voxint.ingest import (
     archive_run,
     cancel_run,
     delete_run_derived_media,
+    pause_run,
     requeue_failed_run,
+    restart_run,
+    resume_run,
     submit_upload,
     submit_url,
     unarchive_run,
@@ -897,9 +906,10 @@ def build_run_detail_context(
         "enqueue_deferred": request.query_params.get("enqueue") == "deferred",
         # CSRF token for the requeue form (rendered only when FAILED).
         "csrf_requeue": mint_csrf_token(request.app.state.csrf_secret, CSRF_REQUEUE),
-        # CSRF token for the cancel form (rendered only for a live run:
-        # queued / running / awaiting_adjudication — issue #5).
         "csrf_cancel": mint_csrf_token(request.app.state.csrf_secret, CSRF_CANCEL),
+        "csrf_pause": mint_csrf_token(request.app.state.csrf_secret, CSRF_PAUSE),
+        "csrf_resume": mint_csrf_token(request.app.state.csrf_secret, CSRF_RESUME),
+        "csrf_restart": mint_csrf_token(request.app.state.csrf_secret, CSRF_RESTART),
         # Soft-archive + derived-media deletion (issue #5, slice 2). The
         # buttons render only for a terminal run; un-archive replaces
         # archive once the run carries a stamp.
@@ -1173,6 +1183,81 @@ def cancel_run_route(
     # Pure DB state, no enqueue — commit and return to the run detail (PRG).
     session.commit()
     return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
+@actions_router.post("/runs/{run_id}/pause")
+def pause_run_route(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    revision: Annotated[int, Form()],
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> RedirectResponse:
+    """Pause a live run (QUEUED / RUNNING) — cooperative, at stage boundary."""
+    _require_csrf(request, CSRF_PAUSE, csrf_token)
+    try:
+        pause_run(session, run_id, expected_revision=revision)
+    except RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RunNotPausableError, StaleRevisionError, InvalidTransitionError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    session.commit()
+    return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
+
+@actions_router.post("/runs/{run_id}/resume")
+def resume_run_route(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    revision: Annotated[int, Form()],
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> RedirectResponse:
+    """Resume a PAUSED run — re-enqueues it for worker pickup."""
+    _require_csrf(request, CSRF_RESUME, csrf_token)
+    run = _run_or_404(session, run_id)
+    _reject_if_archived(run)
+    paused_stage = Stage(run.current_stage) if run.current_stage else None
+    try:
+        resume_run(session, run_id, expected_revision=revision)
+    except RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RunNotPausedError, RunArchivedError, StaleRevisionError, InvalidTransitionError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    session.commit()
+    return _run_redirect(
+        run_id, published=deps._publish_or_defer(run_id, stage=paused_stage)
+    )
+
+
+@actions_router.post("/runs/{run_id}/restart")
+def restart_run_route(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    revision: Annotated[int, Form()],
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> RedirectResponse:
+    """Restart a terminal run from scratch — re-processes all stages from ACQUIRE."""
+    _require_csrf(request, CSRF_RESTART, csrf_token)
+    run = _run_or_404(session, run_id)
+    _reject_if_archived(run)
+    try:
+        restart_run(session, run_id, expected_revision=revision)
+    except RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (
+        RunNotRestartableError, RunArchivedError,
+        StaleRevisionError, InvalidTransitionError,
+    ) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    session.commit()
+    return _run_redirect(
+        run_id, published=deps._publish_or_defer(run_id, stage=None)
+    )
+
 
 @actions_router.post("/runs/{run_id}/archive")
 def archive_run_route(

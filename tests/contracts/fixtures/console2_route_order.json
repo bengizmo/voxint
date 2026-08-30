@@ -276,6 +276,24 @@
     ]
   ],
   [
+    "/runs/{run_id}/pause",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/runs/{run_id}/resume",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/runs/{run_id}/restart",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/runs/{run_id}/archive",
     [
       "POST"
