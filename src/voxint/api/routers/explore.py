@@ -22,9 +22,12 @@ from voxint.api.explore_query import KWICFilters, KWICRow, corpus_stats, kwic_se
 from voxint.api.routers.deps import (
     OperatorDep,
     SessionDep,
+    get_session_factory,
     require_onboarded,
     templates,
 )
+from voxint.api.semantic_layout import semantic_layout
+from voxint.api.similar_query import similar_passages
 from voxint.db.models import Project, Speaker
 
 explore_router = APIRouter(dependencies=[Depends(require_onboarded)])
@@ -229,6 +232,54 @@ def explore_csv(
         media_type="text/csv",
         headers=headers,
     )
+
+
+@explore_router.get("/explore/segments/{segment_id}/similar", name="explore_similar")
+def explore_similar(
+    request: Request,
+    operator: OperatorDep,
+    segment_id: uuid.UUID,
+) -> JSONResponse:
+    """Passages nearest this segment in the embedding space (#357).
+
+    Read-only GET; the segment id is the only client input — text and run are
+    resolved server-side. Uses the app session factory directly (not
+    SessionDep) because the scan controls its own REPEATABLE READ snapshot.
+    """
+    page = similar_passages(
+        get_session_factory(request),
+        settings=request.app.state.settings,
+        segment_id=segment_id,
+    )
+    return JSONResponse(
+        {
+            "state": page.state.value,
+            "items": [
+                {
+                    "run_id": str(item.run_id),
+                    "title": item.title,
+                    "speaker_label": item.speaker_label,
+                    "start_seconds": item.start_seconds,
+                    "end_seconds": item.end_seconds,
+                    "preview": item.preview,
+                    "jump_url": item.jump_url,
+                }
+                for item in page.items
+            ],
+        }
+    )
+
+
+@explore_router.get("/explore/meaning-map", name="explore_meaning_map")
+def explore_meaning_map(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    project: uuid.UUID | None = None,
+) -> JSONResponse:
+    """The semantic meaning map for this scope, computed and cached on read (#357)."""
+    result = semantic_layout(session, request.app.state.settings, project)
+    return JSONResponse({"state": result.state, **result.payload})
 
 
 @explore_router.get("/explore/terms", name="explore_terms")

@@ -48,6 +48,18 @@
     ]
   ],
   [
+    "/explore/meaning-map",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/explore/segments/{segment_id}/similar",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/explore/terms",
     [
       "GET"

@@ -3210,7 +3210,11 @@ class BenchmarkItem(Base):
 class CorpusAnalysisArtifactKind(enum.StrEnum):
     TERM_STATS = "term_stats"
     SPEAKER_STATS = "speaker_stats"
-    UMAP_LAYOUT = "umap_layout"
+    # 2D layout of the corpus chunk embeddings (issue #357). The name is
+    # algorithm-neutral on purpose: the value was reserved pre-implementation as
+    # "umap_layout" but shipped (unused, so renamed without migration) as PCA;
+    # the payload records the actual method.
+    SEMANTIC_LAYOUT = "semantic_layout"
     PROJECT_INSIGHTS = "project_insights"
     TEMPORAL_TRENDS = "temporal_trends"
 

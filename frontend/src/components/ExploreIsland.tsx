@@ -1,4 +1,5 @@
-import { useState, useCallback } from "react";
+import { Fragment, useState, useCallback, useEffect, useRef } from "react";
+import { MeaningMap } from "./MeaningMap";
 import { TermBarChart } from "./TermBarChart";
 import { WordCloud, type TermDatum } from "./WordCloud";
 
@@ -64,6 +65,119 @@ const integerFormatter = new Intl.NumberFormat();
 
 function handleTermClick(term: string) {
   window.location.href = searchHref(term);
+}
+
+interface SimilarItem {
+  run_id: string;
+  title: string | null;
+  speaker_label: string | null;
+  start_seconds: number;
+  end_seconds: number;
+  preview: string;
+  jump_url: string;
+}
+
+interface SimilarResponse {
+  state: string;
+  items: SimilarItem[];
+}
+
+const SIMILAR_STATE_COPY: Record<string, string> = {
+  off: "The semantic index is disabled, so similar passages are unavailable.",
+  unavailable: "The semantic model is not installed, so similar passages are unavailable.",
+  indexing: "Passages are still being indexed. Try again once processing finishes.",
+  not_found: "This row's segment no longer exists.",
+  empty_text: "This row has no text to match against.",
+};
+
+/** The expanded "More like this" detail row (#357): lazy fetch on first
+ * expand, page-lifetime cache keyed by segment, honest state copy, and an
+ * abort on collapse so a slow response cannot land on a different row. */
+function SimilarPanel({
+  segmentId,
+  colSpan,
+  cache,
+}: {
+  segmentId: string;
+  colSpan: number;
+  cache: Map<string, SimilarResponse>;
+}) {
+  const [response, setResponse] = useState<SimilarResponse | null>(
+    () => cache.get(segmentId) ?? null,
+  );
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (cache.has(segmentId)) return;
+    const controller = new AbortController();
+    fetch(`/explore/segments/${segmentId}/similar`, { signal: controller.signal })
+      .then((res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        return res.json() as Promise<SimilarResponse>;
+      })
+      .then((body) => {
+        cache.set(segmentId, body);
+        setResponse(body);
+      })
+      .catch((error: unknown) => {
+        if ((error as { name?: string }).name !== "AbortError") setFailed(true);
+      });
+    return () => controller.abort();
+  }, [segmentId, cache]);
+
+  let content;
+  if (failed) {
+    content = (
+      <p className="text-sm text-[var(--ink-3)]">
+        Similar passages could not load. Try again after a refresh.
+      </p>
+    );
+  } else if (!response) {
+    content = <p className="text-sm text-[var(--ink-3)]">Finding similar passages…</p>;
+  } else if (response.state !== "ok") {
+    content = (
+      <p className="text-sm text-[var(--ink-3)]">
+        {SIMILAR_STATE_COPY[response.state] ?? "Similar passages are unavailable."}
+      </p>
+    );
+  } else if (response.items.length === 0) {
+    content = (
+      <p className="text-sm text-[var(--ink-3)]">
+        No other passages read like this one.
+      </p>
+    );
+  } else {
+    content = (
+      <ul className="m-0 list-none space-y-2 p-0">
+        {response.items.map((item) => (
+          <li key={`${item.run_id}-${item.start_seconds}`} className="text-sm">
+            <span className="block text-[length:var(--t-micro)] text-[var(--ink-3)]">
+              {item.speaker_label ? `${item.speaker_label} · ` : ""}
+              <a
+                className="text-[var(--accent)] no-underline hover:underline"
+                href={item.jump_url}
+              >
+                {item.title ?? "Untitled recording"} ·{" "}
+                {item.start_seconds.toFixed(1)}s
+              </a>
+            </span>
+            <span className="block text-[var(--ink-2)]">{item.preview}</span>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  return (
+    <tr className="border-b border-[var(--line)] bg-[var(--surface-2)]">
+      <td className="px-3 py-2" colSpan={colSpan}>
+        <p className="mb-1 mt-0 text-[length:var(--t-micro)] uppercase tracking-wide text-[var(--ink-3)]">
+          More like this passage
+        </p>
+        {content}
+      </td>
+    </tr>
+  );
 }
 
 type SaveState = "idle" | "saving" | "saved" | "duplicate" | "no-project" | "error";
@@ -173,6 +287,7 @@ export function ExploreIsland({
   page,
   pageSize,
   stats,
+  filters,
   termStats,
   csrfQuoteSave,
 }: ExploreIslandProps) {
@@ -189,6 +304,11 @@ export function ExploreIsland({
     setSavedSet((prev) => new Set(prev).add(key));
   }, []);
   const showSave = !!csrfQuoteSave && !!query;
+  // Expansion tracks the ROW key (a segment can appear in several KWIC rows);
+  // the fetch cache is per segment and lives for the page.
+  const [expandedSimilar, setExpandedSimilar] = useState<string | null>(null);
+  const similarCache = useRef(new Map<string, SimilarResponse>()).current;
+  const resultColumns = 5 + (showSave ? 1 : 0);
 
   return (
     <section aria-label="Explore results">
@@ -224,6 +344,8 @@ export function ExploreIsland({
           </div>
         </div>
       ) : null}
+
+      <MeaningMap projectId={filters.project_id} />
 
       {!query ? (
         stats.total_runs === 0 ? (
@@ -264,6 +386,9 @@ export function ExploreIsland({
                   <th className="px-2 py-1 text-left font-semibold" scope="col">
                     Source
                   </th>
+                  <th className="w-8 px-1 py-1" scope="col">
+                    <span className="sr-only">More like this</span>
+                  </th>
                   {showSave ? (
                     <th className="w-8 px-1 py-1" scope="col">
                       <span className="sr-only">Save</span>
@@ -274,10 +399,12 @@ export function ExploreIsland({
               <tbody>
                 {rows.map((row) => {
                   const paletteIndex = speakerPaletteIndex(row.speaker_id);
+                  const rowKey = `${row.segment_id}-${row.start_seconds}`;
+                  const isExpanded = expandedSimilar === rowKey;
                   return (
+                    <Fragment key={rowKey}>
                     <tr
                       className="border-b border-[var(--line)] hover:bg-[var(--surface-2)]"
-                      key={`${row.segment_id}-${row.start_seconds}`}
                     >
                       <td className="max-w-[25ch] overflow-hidden text-ellipsis whitespace-nowrap px-2 py-1 text-right text-[var(--ink-2)] opacity-70">
                         {row.left_context}
@@ -315,6 +442,26 @@ export function ExploreIsland({
                           </span>
                         ) : null}
                       </td>
+                      <td className="px-1 py-1 text-center">
+                        <button
+                          type="button"
+                          className="inline-flex h-6 w-6 items-center justify-center rounded-[var(--r-sm)] text-sm hover:bg-[var(--surface-2)]"
+                          style={{
+                            border: "none",
+                            background: "transparent",
+                            color: isExpanded ? "var(--accent)" : "var(--ink-2)",
+                            cursor: "pointer",
+                          }}
+                          onClick={() =>
+                            setExpandedSimilar(isExpanded ? null : rowKey)
+                          }
+                          title="More like this passage"
+                          aria-label="More like this passage"
+                          aria-expanded={isExpanded}
+                        >
+                          ≈
+                        </button>
+                      </td>
                       {showSave ? (
                         <td className="px-1 py-1 text-center">
                           <SaveButton
@@ -327,6 +474,14 @@ export function ExploreIsland({
                         </td>
                       ) : null}
                     </tr>
+                    {isExpanded ? (
+                      <SimilarPanel
+                        segmentId={row.segment_id}
+                        colSpan={resultColumns}
+                        cache={similarCache}
+                      />
+                    ) : null}
+                    </Fragment>
                   );
                 })}
               </tbody>

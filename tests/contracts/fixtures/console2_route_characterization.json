@@ -64,6 +64,22 @@
     true
   ],
   [
+    "/explore/meaning-map",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/explore/segments/{segment_id}/similar",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/explore/terms",
     [
       "GET"
