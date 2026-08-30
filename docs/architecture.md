@@ -44,20 +44,37 @@ A worker holding a stale snapshot gets `StaleRevisionError` and must re-read.
 Lost updates are structurally impossible.
 
 ```text
-queued ──▶ running ──▶ completed
+queued ──▶ running ──▶ completed ──▶ queued (restart from scratch, stage=None)
   ▲ ▲        │ ▲  │
-  │ │        │ │  └──▶ awaiting_adjudication ──▶ running   (human pause = DB state)
+  │ │        │ │  └──▶ awaiting_adjudication ──▶ running
   │ │        │ └──── running (stage advance)
   │ └────────┤          (lane handoff: running ──▶ queued, parked at the NEXT stage)
+  │          ├──▶ paused ──▶ queued (resume) or cancelled
   │          ▼
-  └──── failed          (requeue is explicit: failed ──▶ queued, keeping current_stage)
+  └──── failed ──▶ queued (requeue at same stage, or restart from scratch)
+
+  cancelled ──▶ queued (restart from scratch, stage=None)
+  queued ──▶ paused (pause before dispatch)
 ```
 
-`completed` and `cancelled` are terminal. A requeued run **retries the stage it was
-interrupted in**: earlier stages are not re-run and nothing is skipped. A
-lane handoff is the one deliberate exception to "queued keeps the stage": the
-stage that just committed is complete, so the run parks queued at its
-**successor**, waiting for the other lane's worker to pick it up.
+`completed`, `failed`, and `cancelled` are exit states for the normal flow,
+but none is fully terminal: `completed` and `cancelled` can transition to
+`queued` via restart-from-scratch (resets `current_stage` to `None`, so the
+run re-processes from ACQUIRE; prior `StageRun` rows are preserved as
+earlier attempts). `failed` can either requeue at its current stage (the
+existing retry path) or restart from scratch the same way.
+
+**Pausing** is cooperative: a `queued` or `running` run can be driven to
+`PAUSED`. A running run finishes its current stage first (the worker observes
+the transition via `StaleRevisionError` at the next stage boundary), then no
+further stages start. From `PAUSED`, a run resumes (`PAUSED` to `QUEUED`,
+re-enqueued for worker pickup) or is cancelled.
+
+A requeued run **retries the stage it was interrupted in**: earlier stages are
+not re-run and nothing is skipped. A lane handoff is the one deliberate
+exception to "queued keeps the stage": the stage that just committed is
+complete, so the run parks queued at its **successor**, waiting for the other
+lane's worker to pick it up.
 
 Validation covers the full `(status, stage)` tuple, not status membership alone: a
 run cannot start at the wrong stage, advance backwards or by more than one stage,
@@ -127,7 +144,7 @@ time) and the post lane at a small concurrency of its own, so the GPU no
 longer idles while a previous run's LLM enhancement is in flight. See
 [operations.md](operations.md) for the override recipe.
 
-## Data model (alembic revisions 0001–0051)
+## Data model (alembic revisions 0001–0053)
 
 | Table | Role |
 |---|---|
