@@ -35,6 +35,7 @@ from voxint.api.csrf import (
     CSRF_PROJECT_VOCAB,
     mint_csrf_token,
 )
+from voxint.api.project_insights import compute_project_insights
 from voxint.api.projects_query import list_projects, project_detail
 from voxint.api.routers.deps import (
     OperatorDep,
@@ -182,6 +183,9 @@ def _detail_context(
         "corrections_error": corrections_error,
         "error": error,
         "assigned": assigned,
+        # Entity/topic rollups over the project's canonical runs (issue #336).
+        # Synchronous and uncached: payloads are bounded, projects are modest.
+        "insights": compute_project_insights(session, detail.id),
     }
 
 

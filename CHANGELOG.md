@@ -6,6 +6,29 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Explore page: corpus-wide evidence browser** (#331, #333, #334). New
+  top-level "Explore" section with KWIC concordance search across every
+  finished transcript (speaker, project, date, confidence, and suspect
+  filters; pagination; CSV export), plus a TF-IDF word cloud and ranked
+  distinctive terms for the corpus or a single project, cached and refreshed
+  after each run completes. `/search` redirects to `/explore`. Migration 0055.
+- **Speaker insights on the profile page** (#335). Distinctive vocabulary
+  (log-odds with an informative Dirichlet prior), conversation partners
+  (who speaks before and after them), and speaking pace, computed for all
+  eligible speakers after each run completes and rendered from cache.
+- **Project overview: who and what comes up** (#336). The project page now
+  opens with entity frequency bars (people, organizations, products) and
+  recurring topics rolled up from run-assets enrichment across the project's
+  recordings, each linking into a filtered Explore search; a
+  speakers-by-recordings coverage matrix; honest notes when some or all
+  recordings have no enrichment yet.
+
+### Fixed
+- **Project speaker counts no longer double-count re-runs** (#336). The
+  project page's speaker list now counts each recording once (its newest
+  completed run) instead of once per historical run.
+
 
 ## [0.30.0] - 2026-08-30
 

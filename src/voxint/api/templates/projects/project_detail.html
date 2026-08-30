@@ -19,6 +19,162 @@
 {% block body %}
 {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
 
+<style>
+  .pi-cards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+  @media (max-width: 48rem) { .pi-cards { grid-template-columns: 1fr; } }
+  .pi-card { padding: var(--space-3); }
+  .pi-card-title {
+    font-size: var(--t-xs); font-weight: 600; letter-spacing: 0.06em;
+    color: var(--ink-2); margin: 0 0 var(--space-2);
+  }
+  .pi-kind-title {
+    font-size: var(--t-xs); font-weight: 600; letter-spacing: 0.04em;
+    color: var(--ink-3); margin: var(--space-2) 0 var(--space-1);
+  }
+  .pi-bars { display: flex; flex-direction: column; gap: 2px; }
+  .pi-bar-row {
+    display: grid; grid-template-columns: 9em 1fr 4.5em;
+    align-items: center; gap: var(--space-2);
+    padding: 2px var(--space-2); border-radius: 3px;
+    text-decoration: none; color: inherit;
+    font-size: var(--t-sm);
+  }
+  .pi-bar-row:hover { background: var(--surface-2); }
+  .pi-bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pi-bar-fill { height: 1rem; border-radius: 2px; min-width: 2px; background: var(--accent-soft); }
+  .pi-bar-row:hover .pi-bar-fill { background: var(--accent); }
+  .pi-bar-count { text-align: right; color: var(--ink-3); font-size: var(--t-xs); white-space: nowrap; }
+  .pi-topic-row {
+    display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-2);
+    padding: 3px var(--space-2); border-radius: 3px; font-size: var(--t-sm);
+    text-decoration: none; color: inherit;
+  }
+  .pi-topic-row:hover { background: var(--surface-2); }
+  .pi-topic-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pi-topic-count { color: var(--ink-3); font-size: var(--t-xs); flex-shrink: 0; }
+  .pi-coverage-note { color: var(--ink-3); font-size: var(--t-xs); margin: var(--space-2) 0 0; }
+  .pi-matrix-wrap { overflow-x: auto; }
+  .pi-matrix { border-collapse: collapse; font-size: var(--t-xs); }
+  .pi-matrix th, .pi-matrix td { padding: 2px 6px; text-align: center; }
+  .pi-matrix th[scope="row"] {
+    text-align: left; font-weight: 400; white-space: nowrap;
+    max-width: 11em; overflow: hidden; text-overflow: ellipsis;
+  }
+  .pi-matrix thead th {
+    color: var(--ink-3); font-weight: 400; vertical-align: bottom;
+    writing-mode: vertical-rl; transform: rotate(180deg);
+    max-height: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .pi-matrix td .pi-dot { color: var(--accent); }
+  .pi-explore-links { margin-top: var(--space-3); }
+</style>
+
+<section class="oc-section">
+  <h2 class="oc-section-title">OVERVIEW</h2>
+
+  {% if insights.coverage.total_runs == 0 %}
+  <p class="oc-muted">Insights appear here once this project's recordings finish processing.</p>
+  {% else %}
+
+  {% set entity_total = insights.entities.values()|map("length")|sum %}
+  {% if not insights.has_any_asset %}
+  <p class="oc-muted">Themes and names come from the optional run-assets enrichment,
+    which hasn't produced anything for this project yet. Turn on run assets under
+    <a href="/settings#features">Settings → Features</a> (it needs LLM enhancement on),
+    then new runs will generate topics and entity mentions.</p>
+  {% elif insights.has_assets_but_no_items %}
+  <p class="oc-muted">Enrichment ran on this project's recordings but found no topics
+    or entity mentions to report.</p>
+  {% else %}
+  <div class="pi-cards">
+    {% if entity_total %}
+    <div class="card pi-card">
+      <h3 class="pi-card-title">WHO AND WHAT COMES UP</h3>
+      {% for kind, heading in [("person", "PEOPLE"), ("organization", "ORGANIZATIONS"), ("product", "PRODUCTS"), ("other", "OTHER")] %}
+      {% set group = insights.entities[kind] %}
+      {% if group %}
+      <h4 class="pi-kind-title">{{ heading }}</h4>
+      {% set max_occ = group[0].occurrence_count if group[0].occurrence_count else 1 %}
+      <div class="pi-bars" role="list" aria-label="{{ heading|capitalize }} mentioned in this project">
+        {% for e in group %}
+        <a href="/explore?project={{ detail.id }}&amp;q={{ e.label|urlencode }}"
+           class="pi-bar-row" role="listitem"
+           title="{{ e.label }}: {{ e.occurrence_count }} mention{{ "" if e.occurrence_count == 1 else "s" }} across {{ e.run_count }} recording{{ "" if e.run_count == 1 else "s" }}">
+          <span class="pi-bar-label">{{ e.label }}</span>
+          <span class="pi-bar-fill" style="width: {{ (e.occurrence_count / max_occ * 100)|round }}%"></span>
+          <span class="pi-bar-count">{{ e.occurrence_count }} · {{ e.run_count }} rec</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% endfor %}
+      {% if insights.coverage.entity_runs < insights.coverage.total_runs %}
+      <p class="pi-coverage-note">Entities found in {{ insights.coverage.entity_runs }} of {{ insights.coverage.total_runs }} recordings — the rest have no enrichment yet.</p>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if insights.topics %}
+    <div class="card pi-card">
+      <h3 class="pi-card-title">RECURRING TOPICS</h3>
+      <div class="pi-bars" role="list" aria-label="Topics recurring across this project">
+        {% for t in insights.topics %}
+        <a href="/explore?project={{ detail.id }}&amp;q={{ t.label|urlencode }}"
+           class="pi-topic-row" role="listitem"
+           {% if t.description %}title="{{ t.description }}"{% endif %}>
+          <span class="pi-topic-label">{{ t.label }}</span>
+          <span class="pi-topic-count">{{ t.run_count }} recording{{ "" if t.run_count == 1 else "s" }}</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% if insights.coverage.topic_runs < insights.coverage.total_runs %}
+      <p class="pi-coverage-note">Topics found in {{ insights.coverage.topic_runs }} of {{ insights.coverage.total_runs }} recordings — the rest have no enrichment yet.</p>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if detail.matrix.rows %}
+  <div class="card pi-card" style="margin-top: var(--space-3);">
+    <h3 class="pi-card-title">WHO APPEARS WHERE</h3>
+    <div class="pi-matrix-wrap" role="region" aria-label="Speakers by recordings coverage" tabindex="0">
+      <table class="pi-matrix">
+        <thead>
+          <tr>
+            <td></td>
+            {% for col in detail.matrix.columns %}
+            <th scope="col" title="{{ col.title }}">{{ col.title|truncate(24, true) }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in detail.matrix.rows %}
+          <tr>
+            <th scope="row">
+              {% if row.name %}<a href="/speakers/{{ row.speaker_id }}">{{ row.name }}</a>
+              {% else %}<span class="oc-muted">Unnamed voice</span>{% endif %}
+            </th>
+            {% for present in row.cells %}
+            <td>{% if present %}<span class="pi-dot" aria-hidden="true">●</span><span class="visually-hidden">appears</span>{% else %}<span class="visually-hidden">absent</span>{% endif %}</td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if detail.matrix.omitted_recordings %}
+    <p class="pi-coverage-note">+ {{ detail.matrix.omitted_recordings }} older recording{{ "" if detail.matrix.omitted_recordings == 1 else "s" }} not shown.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <p class="pi-explore-links">
+    <a href="/explore?project={{ detail.id }}">Explore this project — search quotes and see its word cloud →</a>
+  </p>
+  {% endif %}
+</section>
+
 {# The fields this project actually overrides, named so the supersede copy never
    claims blanket replacement when only one field is set (ADR 0002 per-field). #}
 {% set own_fields %}{% if detail.has_own_vocabulary and detail.has_own_corrections %}vocabulary and corrections{% elif detail.has_own_vocabulary %}vocabulary{% elif detail.has_own_corrections %}corrections{% endif %}{% endset %}

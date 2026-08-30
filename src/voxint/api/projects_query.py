@@ -8,9 +8,12 @@ A project's speakers are DERIVED, not stored: they are the distinct speakers its
 runs resolve to, preferring a human adjudication over a grounded cosine match.
 That precedence already lives in :func:`voxint.adjudication.resolver.label_states`
 (the one resolver the workbench and exports share), so this module walks the
-project's completed runs and reuses it rather than re-deriving the rule. The walk
-is bounded by the project's run count (a single-operator, modest-project tool),
-one ``label_states`` call per completed run.
+project's canonical runs and reuses it rather than re-deriving the rule. Canonical
+means the newest completed, non-archived run per media item, so a re-run recording
+counts once, not once per historical run. The walk is bounded by the project's
+recording count (a single-operator, modest-project tool), one ``label_states``
+call per canonical run — a single pass that feeds both the speaker list and the
+speakers-by-recordings coverage matrix (issue #336).
 """
 
 import uuid
@@ -25,10 +28,15 @@ from voxint.adjudication.resolver import label_states
 from voxint.db.models import (
     MediaFolder,
     MediaItem,
+    MediaSourceMetadata,
     PipelineRun,
     Project,
     RunStatus,
 )
+
+# The coverage matrix stays scannable: at most this many recording columns,
+# newest first, with the count of older recordings disclosed instead of drawn.
+_MATRIX_MAX_COLUMNS = 20
 
 
 @dataclass(frozen=True)
@@ -62,6 +70,34 @@ class ProjectSpeaker:
 
 
 @dataclass(frozen=True)
+class ProjectRecording:
+    """One canonical recording in the project: its media item and newest run."""
+
+    media_id: uuid.UUID
+    run_id: uuid.UUID
+    title: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class MatrixRow:
+    """One speaker's presence across the matrix's recording columns."""
+
+    speaker_id: uuid.UUID
+    name: str | None
+    cells: tuple[bool, ...]
+
+
+@dataclass(frozen=True)
+class SpeakerMatrix:
+    """Speakers-by-recordings coverage: dot = the speaker appears in it."""
+
+    columns: tuple[ProjectRecording, ...]
+    rows: tuple[MatrixRow, ...]
+    omitted_recordings: int
+
+
+@dataclass(frozen=True)
 class AssignableFolder:
     """An unassigned folder (``project_id IS NULL``) offered by the assign form."""
 
@@ -91,6 +127,7 @@ class ProjectDetail:
     has_own_config: bool
     folders: list[ProjectFolder]
     speakers: list[ProjectSpeaker]
+    matrix: SpeakerMatrix
     assignable: list[AssignableFolder]
 
 
@@ -144,44 +181,102 @@ def _member_folders(session: Session, project_id: uuid.UUID) -> list[ProjectFold
     ]
 
 
-def _derived_speakers(session: Session, project_id: uuid.UUID) -> list[ProjectSpeaker]:
-    """Distinct speakers across the project's completed runs, human over grounded.
+def canonical_project_recordings(
+    session: Session, project_id: uuid.UUID
+) -> list[ProjectRecording]:
+    """The newest completed, non-archived run per media item, newest media first.
 
-    One ``label_states`` call per completed, non-archived run (it already applies
-    the human-decision-over-grounded-cosine precedence and canonicalizes merged
-    speakers), counting each speaker once per run they resolve a label in.
+    Same canonical-run rule as :func:`voxint.api.speaker_insights._canonical_runs`,
+    scoped to the project's folders. Titles prefer the scraped source title over
+    the raw source path, matching the Explore page.
     """
-    run_ids = (
-        session.execute(
-            sa_select(PipelineRun.id)
-            .join(MediaItem, MediaItem.id == PipelineRun.media_item_id)
-            .join(MediaFolder, MediaFolder.id == MediaItem.media_folder_id)
-            .where(MediaFolder.project_id == project_id)
-            .where(PipelineRun.status == RunStatus.COMPLETED.value)
-            .where(PipelineRun.archived_at.is_(None))
+    ranked = (
+        sa_select(
+            PipelineRun.id.label("run_id"),
+            PipelineRun.media_item_id.label("media_id"),
+            func.row_number()
+            .over(
+                partition_by=PipelineRun.media_item_id,
+                order_by=(PipelineRun.created_at.desc(), PipelineRun.id.desc()),
+            )
+            .label("rank"),
         )
-        .scalars()
-        .all()
+        .join(MediaItem, MediaItem.id == PipelineRun.media_item_id)
+        .join(MediaFolder, MediaFolder.id == MediaItem.media_folder_id)
+        .where(MediaFolder.project_id == project_id)
+        .where(PipelineRun.status == RunStatus.COMPLETED.value)
+        .where(PipelineRun.archived_at.is_(None))
+        .subquery()
     )
-    # id -> (name, run_count). A speaker counts once per run regardless of how
-    # many of its labels they hold.
-    tally: dict[uuid.UUID, tuple[str | None, int]] = {}
-    for run_id in run_ids:
-        seen: set[uuid.UUID] = set()
-        for state in label_states(session, run_id):
+    rows = session.execute(
+        sa_select(
+            ranked.c.run_id,
+            ranked.c.media_id,
+            func.coalesce(MediaSourceMetadata.title, MediaItem.source_path).label("title"),
+            MediaItem.created_at,
+        )
+        .join(MediaItem, MediaItem.id == ranked.c.media_id)
+        .outerjoin(
+            MediaSourceMetadata,
+            MediaSourceMetadata.media_item_id == MediaItem.id,
+        )
+        .where(ranked.c.rank == 1)
+        .order_by(MediaItem.created_at.desc(), MediaItem.id.desc())
+    ).all()
+    return [
+        ProjectRecording(
+            media_id=row.media_id,
+            run_id=row.run_id,
+            title=row.title,
+            created_at=row.created_at.astimezone(UTC),
+        )
+        for row in rows
+    ]
+
+
+def _speakers_and_matrix(
+    session: Session, recordings: list[ProjectRecording]
+) -> tuple[list[ProjectSpeaker], SpeakerMatrix]:
+    """One ``label_states`` pass feeding both the speaker list and the matrix.
+
+    ``label_states`` already applies the human-decision-over-grounded-cosine
+    precedence and canonicalizes merged speakers; a speaker counts once per
+    recording regardless of how many of its labels they hold.
+    """
+    # speaker id -> (name, set of recording indexes they appear in).
+    tally: dict[uuid.UUID, tuple[str | None, set[int]]] = {}
+    for index, recording in enumerate(recordings):
+        for state in label_states(session, recording.run_id):
             sid = state.speaker_id
-            if sid is None or sid in seen:
+            if sid is None:
                 continue
-            seen.add(sid)
-            name, count = tally.get(sid, (state.speaker_name, 0))
-            tally[sid] = (state.speaker_name or name, count + 1)
+            name, present = tally.get(sid, (state.speaker_name, set()))
+            present.add(index)
+            tally[sid] = (state.speaker_name or name, present)
     speakers = [
-        ProjectSpeaker(id=sid, name=name, run_count=count)
-        for sid, (name, count) in tally.items()
+        ProjectSpeaker(id=sid, name=name, run_count=len(present))
+        for sid, (name, present) in tally.items()
     ]
     # Name order, with unnamed speakers last, then by id for a stable tiebreak.
     speakers.sort(key=lambda s: (s.name is None, (s.name or "").lower(), str(s.id)))
-    return speakers
+
+    columns = tuple(recordings[:_MATRIX_MAX_COLUMNS])
+    rows = tuple(
+        MatrixRow(
+            speaker_id=speaker.id,
+            name=speaker.name,
+            cells=tuple(
+                index in tally[speaker.id][1] for index in range(len(columns))
+            ),
+        )
+        for speaker in speakers
+    )
+    matrix = SpeakerMatrix(
+        columns=columns,
+        rows=rows,
+        omitted_recordings=max(0, len(recordings) - len(columns)),
+    )
+    return speakers, matrix
 
 
 def _assignable_folders(session: Session) -> list[AssignableFolder]:
@@ -209,6 +304,8 @@ def project_detail(
         if project.corrections is not None
         else None
     )
+    recordings = canonical_project_recordings(session, project_id)
+    speakers, matrix = _speakers_and_matrix(session, recordings)
     return ProjectDetail(
         id=project.id,
         name=project.name,
@@ -219,6 +316,7 @@ def project_detail(
         has_own_corrections=corrections is not None,
         has_own_config=(vocabulary is not None or corrections is not None),
         folders=_member_folders(session, project_id),
-        speakers=_derived_speakers(session, project_id),
+        speakers=speakers,
+        matrix=matrix,
         assignable=_assignable_folders(session),
     )
