@@ -6,6 +6,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+
+## [0.30.0] - 2026-08-30
+
 ### Added
 - **Pause/resume and restart-from-scratch pipeline controls** (#324). The run
   detail page now has a **Pause** button for queued and running runs
