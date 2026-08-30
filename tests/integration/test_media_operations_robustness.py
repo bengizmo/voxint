@@ -14,6 +14,7 @@ from sqlalchemy import event, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.db.models import (
+    OPERATION_TERMINAL_STATES,
     MediaItem,
     MediaOperation,
     MediaOperationFile,
@@ -581,3 +582,97 @@ def test_claim_winner_waits_out_transient_lock_holder(
     assert observed_blocked, "winner returned without blocking on the lock holder"
     assert outcomes == ["completed"]
     _assert_completed_trash(session_factory, media_root, operation_id)
+
+
+def test_claim_winner_skips_after_lease_stolen_during_wait(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """A winner whose claim was stolen while it waited skips, touching nothing.
+
+    Companion to the blocking post-claim re-select (#346): blocking means the
+    winner can wake after an arbitrarily long wait. If that wait outlived the
+    lease and another reconciler stole the claim, the woken winner holds a
+    dead token and must not run the operation's filesystem work against the
+    new owner's in-flight pass. DB_APPLIED is the discriminating state: its
+    replay unlinks the origin before any claim-guarded CAS, so a stale winner
+    that proceeds does observable damage.
+    """
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    source = _media_file(media_root)
+    with session_factory() as session:
+        media, operation = _expired_trash(session)
+        operation.origin_digest = sha256_file(source)
+        operation.state = OperationState.DB_APPLIED.value
+        assert operation.destination_path is not None
+        destination = media_root / operation.destination_path
+        destination.parent.mkdir(parents=True)
+        destination.hardlink_to(source)
+        media.current_path = operation.destination_path
+        media.trashed_at = datetime.now(tz=UTC)
+        operation_id = operation.id
+        session.commit()
+
+    claim_committed = threading.Event()
+    stolen = threading.Event()
+    hook_installed = threading.Event()
+    outcomes: list[str] = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def instrumented_factory() -> Session:
+        session = session_factory()
+        if not hook_installed.is_set():
+            hook_installed.set()
+
+            @event.listens_for(session, "after_commit")
+            def _pause_after_claim_commit(_session: Session) -> None:
+                if claim_committed.is_set():
+                    return
+                claim_committed.set()
+                if not stolen.wait(timeout=10):
+                    raise RuntimeError("thief never stole the claim")
+
+        return session
+
+    def winner() -> None:
+        try:
+            outcome = _process_one(
+                cast("sessionmaker[Session]", instrumented_factory),
+                media_root,
+                operation_id,
+                300,
+            )
+            with lock:
+                outcomes.append(outcome)
+        except BaseException as exc:
+            with lock:
+                errors.append(exc)
+
+    winner_thread = threading.Thread(target=winner)
+    winner_thread.start()
+    try:
+        assert claim_committed.wait(timeout=10)
+        # While the winner is paused between its claim commit and its
+        # re-select, expire its lease and steal the claim, exactly as a
+        # concurrent reconciler does after a >lease-duration stall.
+        with session_factory() as thief:
+            current = thief.get(MediaOperation, operation_id)
+            assert current is not None
+            current.lease_expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+            thief.flush()
+            assert claim_operation(thief, operation_id, "reconciler:thief", 300)
+            thief.commit()
+    finally:
+        stolen.set()
+    winner_thread.join(timeout=15)
+
+    assert not winner_thread.is_alive()
+    assert not errors, errors
+    assert outcomes == ["skipped"]
+    assert source.is_file(), "stale winner must not touch the filesystem"
+    with session_factory() as session:
+        operation = session.get(MediaOperation, operation_id)
+        assert operation is not None
+        assert operation.claimed_by == "reconciler:thief"
+        assert operation.state not in OPERATION_TERMINAL_STATES
