@@ -699,6 +699,19 @@ def _register_routes(app: FastAPI) -> None:
         raise PluginError(
             "plugin route collisions with core: " + "; ".join(core_conflicts)
         )
+    # Reject plugin routes under /api/ — the public API sub-app owns that
+    # prefix and plugin routes mounted on the console would shadow it.
+    api_squatters = sorted(
+        f"{plugin_id}: {path}"
+        for plugin_id, routes in routes_by_plugin.items()
+        for path, _method in routes
+        if path.startswith("/api/")
+    )
+    if api_squatters:
+        raise PluginError(
+            "plugin routes must not use the /api/ prefix: "
+            + "; ".join(api_squatters)
+        )
     if built_routers:
         gated_plugins = APIRouter(dependencies=[Depends(require_onboarded)])
         for router in built_routers:
@@ -706,6 +719,17 @@ def _register_routes(app: FastAPI) -> None:
         console.include_router(gated_plugins)
 
     app.include_router(console)
+
+    # Public REST API: separate sub-app with its own OpenAPI, bearer auth, and
+    # JSON-only exception handlers. Mounted before the area-flag stamps so it
+    # does not pollute _iter_api_routes (mounted apps are opaque to it).
+    from voxint.api.api_app import create_api_app
+
+    api_app = create_api_app()
+    api_app.state.settings = app.state.settings
+    api_app.state.session_factory = app.state.session_factory
+    api_app.state.plugins = app.state.plugins
+    app.mount("/api/v1", api_app)
 
     # Console area-flag guard (#152 review): the sidebar and Home render a
     # dark-shipped area's links only when its flag is on AND its routes exist,

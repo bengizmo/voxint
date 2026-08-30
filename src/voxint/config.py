@@ -90,6 +90,7 @@ class Settings(BaseSettings):
     voxint_password: str = "change-me"
     voxint_multi_user: bool = False
     voxint_session_ttl_seconds: int = Field(default=7 * 24 * 3600, ge=3600)
+    voxint_api_key: str = ""
     # Secret keying the stateless CSRF token on the mutation forms. Independent
     # of voxint_password ON PURPOSE: a human-memorable password would turn every
     # rendered token into a fast offline password-verification oracle. Empty
