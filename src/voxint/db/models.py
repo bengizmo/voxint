@@ -3251,3 +3251,62 @@ class CorpusAnalysisArtifact(Base):
     source_hash: Mapped[str] = mapped_column(Text)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+MAX_QUOTE_NOTE_CHARS = 2000
+
+
+class SavedQuote(Base):
+    """A KWIC concordance row saved as project-scoped evidence (issue #338).
+
+    Quotes are denormalized snapshots of what the operator saw on the Explore
+    page at save time: the KWIC context, speaker name, and media title are
+    frozen so the quote board renders without re-executing the search.
+    Deduplicated by (project, segment, search query).
+    """
+
+    __tablename__ = "saved_quotes"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "segment_id",
+            "search_query",
+            name="saved_quotes_project_segment_query_key",
+        ),
+        Index(
+            "ix_saved_quotes_project_created",
+            "project_id",
+            "created_at",
+        ),
+        CheckConstraint(
+            "char_length(search_query) > 0",
+            name="saved_quotes_query_nonempty_check",
+        ),
+        CheckConstraint(
+            f"note IS NULL OR char_length(note) <= {MAX_QUOTE_NOTE_CHARS}",
+            name="saved_quotes_note_len_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+    )
+    segment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("transcript_segments.id", ondelete="CASCADE"),
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pipeline_runs.id", ondelete="CASCADE"),
+    )
+    search_query: Mapped[str] = mapped_column(Text)
+    left_context: Mapped[str] = mapped_column(Text)
+    hit: Mapped[str] = mapped_column(Text)
+    right_context: Mapped[str] = mapped_column(Text)
+    speaker_name: Mapped[str | None] = mapped_column(Text)
+    media_title: Mapped[str] = mapped_column(Text)
+    start_seconds: Mapped[float] = mapped_column(Float)
+    note: Mapped[str | None] = mapped_column(Text)
+    operator: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(),
+    )

@@ -1,3 +1,4 @@
+import { useState, useCallback } from "react";
 import { TermBarChart } from "./TermBarChart";
 import { WordCloud, type TermDatum } from "./WordCloud";
 
@@ -36,6 +37,7 @@ export interface ExploreIslandProps {
     suspect_only: boolean;
   };
   termStats?: TermDatum[];
+  csrfQuoteSave?: string;
 }
 
 function searchHref(term: string): string {
@@ -64,6 +66,106 @@ function handleTermClick(term: string) {
   window.location.href = searchHref(term);
 }
 
+type SaveState = "idle" | "saving" | "saved" | "duplicate" | "no-project" | "error";
+
+function SaveButton({
+  row,
+  query,
+  csrfToken,
+  savedSet,
+  onSaved,
+}: {
+  row: KWICRow;
+  query: string;
+  csrfToken: string;
+  savedSet: Set<string>;
+  onSaved: (key: string) => void;
+}) {
+  const key = `${row.segment_id}:${query}`;
+  const alreadySaved = savedSet.has(key);
+  const [state, setState] = useState<SaveState>(alreadySaved ? "saved" : "idle");
+
+  const handleClick = useCallback(async () => {
+    if (state === "saved" || state === "saving") return;
+    setState("saving");
+    const body = new FormData();
+    body.append("segment_id", row.segment_id);
+    body.append("run_id", row.run_id);
+    body.append("search_query", query);
+    body.append("left_context", row.left_context);
+    body.append("hit", row.hit);
+    body.append("right_context", row.right_context);
+    body.append("media_title", row.media_title);
+    body.append("start_seconds", String(row.start_seconds));
+    body.append("csrf_token", csrfToken);
+    if (row.speaker_name) body.append("speaker_name", row.speaker_name);
+
+    try {
+      const res = await fetch("/quotes", { method: "POST", body });
+      if (res.status === 201) {
+        setState("saved");
+        onSaved(key);
+      } else if (res.status === 409) {
+        setState("duplicate");
+        onSaved(key);
+      } else if (res.status === 422) {
+        setState("no-project");
+      } else {
+        setState("error");
+      }
+    } catch {
+      setState("error");
+    }
+  }, [row, query, csrfToken, state, key, onSaved]);
+
+  const label =
+    state === "saved" || state === "duplicate"
+      ? "✓"
+      : state === "saving"
+        ? "…"
+        : state === "no-project"
+          ? "—"
+          : state === "error"
+            ? "!"
+            : "⭳";
+
+  const title =
+    state === "saved"
+      ? "Saved to project"
+      : state === "duplicate"
+        ? "Already saved"
+        : state === "saving"
+          ? "Saving…"
+          : state === "no-project"
+            ? "Recording not in a project"
+            : state === "error"
+              ? "Save failed"
+              : "Save to quote board";
+
+  return (
+    <button
+      type="button"
+      className="inline-flex h-6 w-6 items-center justify-center rounded-[var(--r-sm)] text-sm hover:bg-[var(--surface-2)]"
+      style={{
+        opacity: state === "saved" || state === "duplicate" ? 0.5 : 1,
+        cursor:
+          state === "saved" || state === "saving" || state === "duplicate"
+            ? "default"
+            : "pointer",
+        border: "none",
+        background: "transparent",
+        color: "var(--ink-2)",
+      }}
+      onClick={handleClick}
+      title={title}
+      aria-label={title}
+      disabled={state === "saving"}
+    >
+      {label}
+    </button>
+  );
+}
+
 export function ExploreIsland({
   rows,
   total,
@@ -72,6 +174,7 @@ export function ExploreIsland({
   pageSize,
   stats,
   termStats,
+  csrfQuoteSave,
 }: ExploreIslandProps) {
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const terms = termStats ?? [];
@@ -81,6 +184,11 @@ export function ExploreIsland({
     [integerFormatter.format(stats.total_speakers), "speakers"],
     [Math.round(stats.total_hours).toLocaleString(), "hours"],
   ];
+  const [savedSet, setSavedSet] = useState<Set<string>>(() => new Set());
+  const handleSaved = useCallback((key: string) => {
+    setSavedSet((prev) => new Set(prev).add(key));
+  }, []);
+  const showSave = !!csrfQuoteSave && !!query;
 
   return (
     <section aria-label="Explore results">
@@ -156,6 +264,11 @@ export function ExploreIsland({
                   <th className="px-2 py-1 text-left font-semibold" scope="col">
                     Source
                   </th>
+                  {showSave ? (
+                    <th className="w-8 px-1 py-1" scope="col">
+                      <span className="sr-only">Save</span>
+                    </th>
+                  ) : null}
                 </tr>
               </thead>
               <tbody>
@@ -202,6 +315,17 @@ export function ExploreIsland({
                           </span>
                         ) : null}
                       </td>
+                      {showSave ? (
+                        <td className="px-1 py-1 text-center">
+                          <SaveButton
+                            row={row}
+                            query={query}
+                            csrfToken={csrfQuoteSave!}
+                            savedSet={savedSet}
+                            onSaved={handleSaved}
+                          />
+                        </td>
+                      ) : null}
                     </tr>
                   );
                 })}
