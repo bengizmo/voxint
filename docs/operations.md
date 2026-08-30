@@ -413,7 +413,7 @@ services:
   worker:
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q celery --concurrency=1
   worker-post:
-    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.29.0}
+    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.30.0}
     pull_policy: missing
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q post --concurrency=2
     restart: unless-stopped
@@ -837,15 +837,30 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   URL fetches go through `/media/fetch` instead.
 - **`POST /runs/{id}/requeue`**: an exact-revision (CAS) requeue of a FAILED run,
   the browser equivalent of `voxint requeue` (covers failed downloads).
+- **`POST /runs/{id}/pause`**: an exact-revision (CAS) pause of a `QUEUED` or
+  `RUNNING` run, from a button on the run detail page. Pausing is **cooperative
+  and pure DB state**: it drives the run to `PAUSED`. A `QUEUED` run paused
+  before dispatch never starts; a `RUNNING` run finishes its current stage
+  first (the worker observes the transition via `StaleRevisionError` at the
+  next stage boundary), then no further stages begin. The run detail page shows
+  an amber `PAUSED` pill with **Resume** and **Cancel** buttons.
+- **`POST /runs/{id}/resume`**: an exact-revision (CAS) resume of a `PAUSED`
+  run. Drives the run from `PAUSED` to `QUEUED` and re-enqueues it for worker
+  pickup; the run continues from the stage it was paused at.
+- **`POST /runs/{id}/restart`**: an exact-revision (CAS) restart-from-scratch
+  of a `COMPLETED`, `FAILED`, or `CANCELLED` run, from the Manage section on
+  the run detail page. Drives the run to `QUEUED` with `current_stage=None`,
+  so it re-processes from ACQUIRE. Prior `StageRun` rows are preserved as
+  earlier attempts, not deleted. A confirmation dialog guards the button.
 - **`POST /runs/{id}/cancel`**: an exact-revision (CAS) cancel of a *live* run
-  (`QUEUED` / `RUNNING` / `AWAITING_ADJUDICATION`), from a button on the run
-  detail page. Cancellation is **cooperative and pure DB state**: it drives the
-  run to `CANCELLED` and publishes nothing. A `QUEUED` run cancelled before
-  dispatch never starts; a `RUNNING` run's currently executing stage finishes
-  first (cancel is not an immediate process kill), then no further stages run.
-  Re-cancelling an already-cancelled run is an idempotent success, not an error.
-  Cancelling leaves media and any partial results in place; **delete/archive is
-  a separate action** (below).
+  (`QUEUED` / `RUNNING` / `PAUSED` / `AWAITING_ADJUDICATION`), from a button
+  on the run detail page. Cancellation is **cooperative and pure DB state**: it
+  drives the run to `CANCELLED` and publishes nothing. A `QUEUED` run cancelled
+  before dispatch never starts; a `RUNNING` run's currently executing stage
+  finishes first (cancel is not an immediate process kill), then no further
+  stages run. Re-cancelling an already-cancelled run is an idempotent success,
+  not an error. Cancelling leaves media and any partial results in place;
+  **delete/archive is a separate action** (below).
 - **`POST /runs/{id}/archive`** and **`POST /runs/{id}/unarchive`**: soft-archive
   a *terminal* run (`COMPLETED` / `FAILED` / `CANCELLED`), from the run detail
   page. Archiving stamps `pipeline_runs.archived_at` and **hides** the run from

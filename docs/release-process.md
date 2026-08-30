@@ -305,10 +305,12 @@ model assets) voids it for the gate it feeds.
    it lands via the PR in step 2, not a direct push): bump the version in
    `pyproject.toml` AND
    `src/voxint/__init__.py`, and bump the `VOXINT_IMAGE_TAG` default pin in
-   **all six image-bearing compose files**: `compose.yaml` + `compose.gpu.yaml`
+   **all seven image-bearing compose files**: `compose.yaml` + `compose.gpu.yaml`
    + `compose.cpu.yaml` + `compose.rocm.yaml` + `compose.ytdlp-egress.yaml` (the
    #16 egress overlay carries the base `voxint` tag too) + `compose.llm.yaml`
-   (the #67 bundled-LLM overlay carries the `voxint-llm` tag), plus the
+   (the #67 bundled-LLM overlay carries the `voxint-llm` tag) +
+   `compose.plugin-synthdetect.yaml` (the #143 synthdetect overlay carries the
+   `voxint-synthdetect` tag), plus the
    `.env.example` comment, so the default stack always runs the release this
    checkout documents.
    The same atomic pin bump is sometimes done mid-cycle by an ordinary change
