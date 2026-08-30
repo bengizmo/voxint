@@ -87,6 +87,7 @@ from voxint.api.runs_query import (
     searchable_languages,
 )
 from voxint.api.speaker_colors import speaker_palette
+from voxint.api.speaker_timeline import build_speaker_timeline
 from voxint.api.stats_query import DEFAULT_WINDOW, collect_stats, render_prometheus
 from voxint.api.transcript_view import (
     _run_label_universe,
@@ -832,6 +833,7 @@ def build_run_detail_context(
     the tutorial's route map — see the deferred activation slice).
     """
     run = _run_or_404(session, run_id)
+    speaker_timeline = build_speaker_timeline(session, run.id)
     # The attempt ledger, chronological — matches `voxint status`.
     stage_runs = list(
         session.execute(
@@ -863,6 +865,7 @@ def build_run_detail_context(
     context: dict[str, Any] = {
         "request": request,
         "run": run,
+        "speaker_timeline": speaker_timeline,
         "stage_runs": stage_runs,
         # Which model actually answered each stage, from that stage's
         # latest completed attempt (A1 provenance). "Not recorded" for

@@ -337,7 +337,16 @@ def test_asset_url_reads_the_loaded_map(monkeypatch: pytest.MonkeyPatch) -> None
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "island",
-    ["transcript-player", "workbench-player", "review-stepper", "corrections-editor", "explore"],
+    [
+        "transcript-player",
+        "workbench-player",
+        "review-stepper",
+        "corrections-editor",
+        "media-editor",
+        "explore",
+        "temporal-trends",
+        "speaker-timeline",
+    ],
 )
 def test_island_registered_in_main_ts(island: str) -> None:
     text = _MAIN_TS.read_text()
@@ -349,7 +358,16 @@ def test_island_registered_in_main_ts(island: str) -> None:
 
 @pytest.mark.parametrize(
     "island",
-    ["transcript-player", "workbench-player", "review-stepper", "corrections-editor", "explore"],
+    [
+        "transcript-player",
+        "workbench-player",
+        "review-stepper",
+        "corrections-editor",
+        "media-editor",
+        "explore",
+        "temporal-trends",
+        "speaker-timeline",
+    ],
 )
 def test_island_entry_file_exists(island: str) -> None:
     entry = _ENTRIES_DIR / f"{island}.tsx"
@@ -362,7 +380,16 @@ def test_island_entry_file_exists(island: str) -> None:
 
 @pytest.mark.parametrize(
     "island",
-    ["transcript-player", "workbench-player", "review-stepper", "corrections-editor", "explore"],
+    [
+        "transcript-player",
+        "workbench-player",
+        "review-stepper",
+        "corrections-editor",
+        "media-editor",
+        "explore",
+        "temporal-trends",
+        "speaker-timeline",
+    ],
 )
 def test_island_is_a_vite_input(island: str) -> None:
     text = _VITE_CONFIG.read_text()
