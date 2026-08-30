@@ -1500,6 +1500,541 @@ Threshold recalibration after Chatterbox fine-tuning (seed 0, dev partition):
 EER threshold 2.66, dev BF FPR 1.1%, holdout BF FPR 0.86%. Platt parameters:
 A = 4.28, B = -11.42; Brier score 0.0066.
 
+### M3 eval protocol (#252)
+
+Pre-registration for the Chatterbox improvement effort (GitHub #252). This
+section is binding: no training may begin until every artifact hash, baseline
+value, and gate threshold below is committed. Protocol version 1.4
+(v1.1, 2026-08-29: two-sample acceptance probe band, pinned Brier population,
+explicit paired-delta percentile; v1.2, 2026-08-29: AMI speaker identity
+repair and re-baselining rule, domain-matched bonafide comparison
+populations; v1.3, 2026-08-30: eval-only partition sanitization, unseen-FM
+slice disclosures, pre-registered slice-regeneration trigger; v1.4,
+2026-08-30: single-clip integrity exclusion after a fail-closed hash
+mismatch during the aborted first M2 scoring run). Designed via
+4-model consult (codex, deepseek-v4-pro, grok-4.5, kimi-k3); the v1.2 repair
+design, the v1.3 sanitization, and the v1.4 exclusion were independently
+reviewed.
+
+> ⚠ The re-baselining pass ran on 2026-08-30: the frozen M2 checkpoint was
+> re-scored on the frozen 68,015-clip manifest with the locked evaluator
+> revision, every to-be-determined value in this section is now filled,
+> and the provisional
+> pre-repair baselines are replaced. Gate limits kept their pre-registered
+> formulas (baseline plus fixed margin); only the measured M2 inputs changed.
+> Every change is itemized in "M2 re-baselining measurement (2026-08-30)"
+> below.
+
+#### v1.2 amendment: AMI speaker identity repair (2026-08-29)
+
+The corpus tooling namespaced AMI speakers per meeting, but AMI's annotation
+metadata assigns corpus-global person keys and one person attends several
+meetings. Five of the 19 canonical AMI persons in the composite corpus
+therefore straddled splits (three calibration/eval, two calibration/holdout),
+covering 63% of AMI clips and roughly 80% of the AMI eval clips. Because M2
+fine-tunes on the calibration split, the affected eval clips were scored by a
+model trained on those voices. The pre-repair M2 eval numbers on AMI strata
+are optimistic and are not valid gate baselines.
+
+The repair migrates the existing composite manifest: audio bytes, clip ids,
+and provenance are unchanged, and only speaker identities and split
+assignments are rewritten.
+
+- AMI speaker ids are canonicalized to the person key; synthetic-clone
+  variants keep their generator suffix on the canonical base. VoxConverse ids
+  stay recording-scoped (their labels are genuinely recording-local).
+- A canonical person whose clips agree on one split keeps it. A person
+  touching calibration in any meeting moves wholly to calibration: M2 already
+  trained on that voice, so it can never again serve as clean eval or holdout
+  material for M2-baseline comparisons. A person straddling only eval and
+  holdout moves wholly to holdout.
+- There is deliberately no fresh hash-rank re-assignment. Re-ranking could
+  move other M2-trained calibration voices into eval, recreating the leakage
+  elsewhere. The repaired eval is therefore a leakage-free interim cohort;
+  the challenge partition remains the unbiased cohort for ship decisions.
+- The pre-repair manifest is archived beside the repaired one, and the repair
+  tool emits a JSON audit (per-person actions, before/after counts, input and
+  output hashes). The repaired manifest hash becomes the binding one in the
+  frozen-artifacts table.
+- Split assignment for all future corpora (the challenge partition included)
+  uses canonical person identity from the start, and challenge speaker
+  freshness is defined against canonical identity.
+
+Re-baselining rule (ordering is binding): first freeze the repaired manifest
+and its audit; then re-score the frozen M2 checkpoint on the repaired splits
+to fill every to-be-determined value and replace the provisional baselines;
+then freeze the
+updated gate matrix. Only after the gate matrix is frozen may any candidate
+model be scored on the repaired eval. Gate limits keep their pre-registered
+margins (for example, per-generator non-regression stays baseline plus
+2.00pp); only the measured M2 inputs change. The pre-repair baselines remain
+in this document's history as invalid, with this amendment as the reason.
+
+The repaired AMI eval cohort is small (about 690 clips) until the challenge
+partition lands; per-generator EER confidence intervals on AMI strata must be
+read accordingly, and the effective component counts reported beside every
+number are the honest sample-size signal.
+
+#### v1.3 amendment: eval-only partition sanitization and unseen-FM slice disclosures (2026-08-30)
+
+**Eval-only partition sanitization (data-integrity correction).** Four
+generators are registered eval-only in the corpus assembler (ElevenLabs,
+Google TTS, Matcha-TTS, F5-TTS): their clips may exist only in the eval
+split. ElevenLabs and Google TTS are core gate generators that no model
+trains or calibrates on; Matcha-TTS and F5-TTS are the unseen-FM
+diagnostics. The v1.2 identity repair moved calibration-contacted persons
+wholly to calibration, and three of those persons were among the identities
+used to generate the eval-only slices. The repair therefore carried 2,140
+eval-only clips (535 per generator, all AMI-sourced) into the calibration
+split. Those clips have no permitted use anywhere: not Platt fitting
+(eval-only rule), not candidate training (the no-train guarantee), and not
+eval or holdout (M2 trained on those voices).
+
+A second migration removes them, by predicate rather than by enumerated
+person list: every clip whose generator is registered eval-only and whose
+post-repair split is not `eval` is dropped from the composite manifest, and
+the affected component clip counts are updated so the manifest stays
+internally truthful. Audio bytes and the sha-pinned source slice manifests
+are untouched; the pre-sanitization manifest is archived beside the
+sanitized one, and the migration emits a JSON audit listing every dropped
+clip id and sha256 with per-component, per-generator, and per-person
+counts. The sanitized manifest hash becomes the binding one in the
+frozen-artifacts table. Like the v1.2 repair, there is no fresh hash-rank
+re-assignment.
+
+**Surviving eval-only slice sizes (disclosure).** After sanitization each
+eval-only generator retains 125 AMI eval clips from 4 canonical persons,
+plus its VoxConverse eval slice (ElevenLabs 309, Google TTS 309, Matcha-TTS
+309, F5-TTS 302 clips). The AMI side of every eval-only generator is
+underpowered on its own: per-domain (AMI-only or VoxConverse-only) numbers
+for these generators are exploratory diagnostics, never gates. The binding
+metrics remain the pooled in-domain EERs already defined in this protocol,
+with grouped-bootstrap CIs and effective component counts reported beside
+every number.
+
+**Pre-registered regeneration trigger.** Whether the surviving slices are
+adequate is decided by precision, not by looking at the numbers. At the M2
+re-baselining pass: if the grouped-bootstrap 95% CI half-width of any
+eval-only generator's pooled eval EER exceeds 5.00pp, that generator's
+slice must be expanded or regenerated on clean post-repair eval identities
+(as a new corpus version with pinned generator versions and seeds) before
+any gate that consumes the metric may bind. For ElevenLabs and Google TTS
+that means their non-regression gates; for Matcha-TTS the P2+ unseen-FM
+gate. Phase 1 unseen-FM reporting stays diagnostic-only either way. An
+under-precision baseline is reported with its CI and marked non-binding
+until the slice is regenerated and the baseline re-measured.
+
+**F5-TTS reference-fallback disclosure (post-data amendment).** The F5-TTS
+slice generator selects one same-speaker reference clip per parent in
+deterministic seeded digest order and, when synthesis yields a non-finite
+output, retries with the next-ranked reference for up to 5 attempts; the
+first finite output wins. On the AMI slice, 41 of 660 parents (6.2%)
+required at least one fallback, which exceeded the roughly 2% rate at which
+the pre-generation consult said to stop and reassess; the VoxConverse slice
+required none (0 of 309 eligible parents; 7 parents were skipped for lacking
+any eligible reference, and 3 AMI parents for lacking a transcript, so the
+VoxConverse slice is 302 clips). The maintainer decision, recorded here
+before any M2 scoring of these slices, is to accept the slice with full
+disclosure rather than regenerate: fallbacks substitute a different
+same-speaker reference, deterministically, and every substitution is
+logged. The per-domain generation receipts (checkpoint and vocoder sha256s,
+synthesis parameters, environment pins, selection seed, reference-map
+hashes) and the per-parent fallback log are retained beside the slice
+manifests, and the used-reference maps are hash-bound in the receipts. If
+F5-TTS scoring behaves anomalously relative to the other eval-only slices,
+the fallback log is the first place to look.
+
+#### v1.4 amendment: single-clip integrity exclusion (2026-08-30)
+
+The first authoritative M2 scoring run aborted fail-closed at clip 57,126 of
+68,016: the canonical-PCM sha256 of one calibration-split Piper spoof clip,
+`ami-EN2002d-MEE073-turn-2345920-2632160--piper`, no longer matched its
+manifest row (expected `9f9da460...`, observed `6b5c6598...`; two independent
+decoders reproduce the observed digest). A full sweep of all 68,016 clips
+found exactly this one mismatch. The clip's duration matches its manifest row
+to the sample and the audio is intact-sounding speech, so the bytes appear to
+be the described synthesis with silently altered content; silent storage
+corruption and a generation-time hash-versus-write discrepancy cannot be
+distinguished from the surviving evidence. The recorded digest is consistent
+across every archived manifest generation back to the original Piper
+component manifest, so the v1.2 and v1.3 migrations are ruled out as causes.
+
+The original bytes are unrecoverable: every on-disk path to the file is a
+hardlink to a single inode, no backup exists, and Piper synthesis is
+non-deterministic (verified by regeneration), so the clip cannot be
+reproduced. Adopting the unexplained disk bytes into the manifest would
+launder an integrity failure into the frozen record, and a regenerated
+replacement would be a new, adaptively created clip. The clip is therefore
+structurally dropped, the most conservative of the three options.
+
+- The drop is a guarded migration in the evaluator repo
+  (`synthdetect_integrity_drop.py`): it verifies the frozen input-manifest
+  file sha, requires the on-disk hash to actually mismatch (it refuses to
+  drop an intact clip), removes exactly the one named row, decrements only
+  that component's clip count, revalidates the output row for row, and emits
+  a forensic audit (both digests, whole-file sha, file metadata, before and
+  after counts). The pre-drop manifest and split-hash report are archived
+  beside their successors; the referenced WAV is quarantined outside the
+  corpus root with an incident note.
+- Corpus impact: 68,016 clips become 68,015. Only the calibration split
+  changes (6,063 to 6,062 clips; one Piper spoof removed). The eval, holdout,
+  and challenge split hashes are byte-identical before and after, verified
+  mechanically. No evaluation-gate cohort loses a row; the Platt fit uses one
+  fewer calibration observation.
+- After the drop, a fresh canonical-PCM verification of all 68,015 retained
+  clips passed with zero mismatches.
+- Timing disclosure: this amendment is post-scoring-abort and pre-metric,
+  not pre-scoring. The aborted run wrote raw per-clip scores for the 57,126
+  clips preceding the failure. No metrics or aggregates were computed from
+  that journal and the maintainer did not inspect any scores. The aborted
+  journal is sealed with a recorded sha256, labeled invalid for metrics and
+  resume, and retained as evidence only. The exclusion trigger is a
+  deterministic input-integrity invariant, independent of model performance.
+- The authoritative M2 scoring run restarts from scratch against the amended
+  manifest under a new journal identity. The provisional baselines in this
+  section are carried forward as pre-registered expectations only; final
+  values come from the restarted run per the v1.2 re-baselining rule.
+
+#### Scope and precedence
+
+This protocol governs all model candidates trained under #252 (Phases 1
+through 4 of the approved plan). It takes precedence over experiment notes,
+ad-hoc analysis, and verbal agreements. Amendments may tighten gates or add
+metrics but never loosen or remove them. Every amendment is timestamped,
+version-bumped, and committed before the relevant training results are
+unblinded.
+
+#### Frozen artifacts
+
+The following artifacts must be hashed and committed before Phase 1 training.
+
+| Artifact | Role | Hash / version | Permitted use |
+|---|---|---|---|
+| M2 checkpoint (`finetuned_aasist.pth`) | Reference model | `e178446b640b8e9f9cf6dd359428b2243f49e24e613e1ae952cd706216b8111e` | Baseline scoring only |
+| XLS-R 300M (`xlsr2_300m.pt`) | Frozen frontend | `b08927597f2c9eb2ebd7dcc3ac78ee4b5f6021cbac4b3a6c5a9deec445d80ed9` | Feature extraction; shared across all candidates |
+| Selection seed | Partition assignment | `voxint-synthdetect-144` | Immutable; shared with bootstrap seeding |
+| Evaluator revision | Metric computation | `8c3f36a3c7791848ceb2d90235e8a2bdddb72350` (evaluator repo commit) | Locked after golden-test validation (742-test suite green at this revision) |
+| ffmpeg version | Codec pipeline | `7.1`, digest-pinned container `sha256:292a972c60356abd651d9a4f9c808c13e7473f65ad400b7eb99215f4e571931d` | Locked for all codec materialization |
+| Calibration manifest | Platt fitting | `0a6fa284c6af00dfbea31b8bdda923479c173376aea97fb4f5d9a807b024384d` | Calibration split only; no model selection |
+| Eval manifest | Iteration gates | `47a5fff1a76a053621f3129784c447217504d0063f2a8709485a1adb3d1f7560` | Phase gates; every touch logged |
+| Holdout manifest | Phase-exit confirmation | `10300125f17628686c8e7e3e9530d9c7eaaec0c002511e315fc9724121e3db11` | At most 1 touch per phase |
+| Challenge manifest | Ship decision | `528eaeaa19bb5988d1bddc7e77a8473d19d57adf2104b1668b4f5557c4414bf7` (RETIRED: the 2026-08-30 acceptance probe FAILED and the cohort was unblinded by the probe investigation; a reconstructed cohort under a new hash must replace it) | See Challenge procedure below |
+
+Per-split manifest hash definition: take every clip record in the frozen
+composite manifest carrying that split, sort the records by `clip_id`,
+serialize them as one JSON array with sorted keys and compact separators,
+and hash the UTF-8 bytes with SHA-256. The evaluator ships the tool that
+computes these hashes; the four values above must be reproducible from the
+frozen composite manifest alone. The frozen composite manifest (post-repair,
+post-sanitization, post-v1.4-exclusion, 68,015 clips) has file sha256
+`2c0717bb68b4802290fc033964ad3746e3dbf40ba66816b3fd832234173c5851`.
+
+Codec recipes (deterministic, reproducible via the existing degradation
+executor):
+
+| Name | Codec | Bitrate | Mode | Notes |
+|---|---|---|---|---|
+| `clean` | None | n/a | n/a | Original waveform |
+| `mp3-cbr48-v1` | MP3 | 48 kbps | CBR | `-c:a libmp3lame -b:a 48k -ar 16000 -ac 1` |
+| `opus-voip-cbr16-f20-v1` | Opus | 16 kbps | VoIP, 20 ms frames | `-c:a libopus -b:a 16k -vbr off -application voip -frame_duration 20 -ar 16000 -ac 1` |
+| `aac-lc-cbr48-v1` | AAC-LC | 48 kbps | CBR | `-c:a aac -b:a 48k -profile:a aac_low -ar 16000 -ac 1` |
+
+#### Partitions and access budget
+
+Four speaker-disjoint partitions. A speaker's clips never straddle two
+partitions. Assignment uses SHA-256 hash-rank with `SELECTION_SEED`.
+
+| Partition | Role | Access rule |
+|---|---|---|
+| **Calibration** | Fit Platt A, B; derive operating thresholds (5% FPR, 1% FPR) | No model selection. Thresholds frozen per seed before eval scoring. |
+| **Eval** | Iteration feedback and phase gates | Every touch logged. Semi-public by design. |
+| **Holdout** | Phase-exit confirmation | At most 1 touch per phase. Not for model selection. |
+| **Challenge** | Binding ship decision | Opened once per phase after all choices frozen. See Challenge procedure. |
+
+The challenge partition is a new 4th split created for this protocol. It is
+not carved from the existing eval set. Speaker-disjoint and prompt-disjoint
+from all other partitions and from all training data. Created and hash-frozen
+before any Phase 1 training.
+
+#### Metrics
+
+**Score polarity.** Higher raw score always means more likely synthetic.
+Monotonic Platt scaling preserves rank order and does not change EER.
+
+**Windowing.** All protocol scoring uses production windowing (4.0375 s
+windows, logit-mean pooling, 8,000-sample tail floor), the mode validated by
+the S5 windowing verdict and used by the shipped service. Upstream
+windowing remains a diagnostic mode only.
+
+**Per-generator EER.** For each synthetic generator g, compute EER against
+the frozen bonafide comparison population on the target partition. The
+comparison population is domain-matched (v1.2): core TTS and unseen FM
+generators score against in-domain bonafide (AMI and VoxConverse); the
+ASVspoof DF anchor scores against ASVspoof bonafide clips. The two bonafide
+pools are never mixed in one EER. Use the
+existing linear-interpolation EER implementation (FPR/FNR crossing via
+`eer_from_roc`). Report: EER point estimate, bootstrap 95% CI, effective
+group count, clip count.
+
+**Macro-average EER.** Equal-weight average of per-generator EERs across the
+core generators (Chatterbox, Piper, ElevenLabs, Google TTS). ASVspoof DF is
+an anchor reported separately; it is not included in the macro average.
+Unseen FM generators (Matcha-TTS, F5-TTS) are also reported separately.
+
+**TPR@5%FPR (primary operating metric).** On the calibration split, select
+the lowest threshold satisfying grouped, weighted bonafide FPR at most 5%.
+Freeze that threshold per seed. Apply it unchanged to eval, holdout, and
+challenge. Report: target FPR, threshold, realized FPR, TPR, effective
+bonafide group count, bootstrap CI. Per-generator TPR at the frozen threshold
+is also reported.
+
+**TPR@1%FPR (diagnostic).** Same procedure at 1% FPR. Not a binding gate. If
+calibration has fewer than 1,000 independent bonafide clusters, label this
+metric as underpowered in the report.
+
+**Codec-stratified EER.** For each codec c, compare synthetic codec-c
+descendants with bonafide codec-c descendants. Clean is its own stratum. All
+descendants of one parent remain one effective group. Minimum 50 parent groups
+per stratum to report; strata below this threshold are marked "underpowered"
+and excluded from the guard rail.
+
+**Out-of-sample Platt Brier score.** Fit Platt A and B on the calibration
+split using one effective observation per parent/speaker group. Compute Brier
+on the eval split with identical weighting. The binding Brier population is
+fixed to the four core generators (Chatterbox, Piper, ElevenLabs, Google TTS)
+and in-domain bonafide from AMI and VoxConverse. Exclude ASVspoof DF anchor
+clips. Do not expand this population when later phases add generators. Report
+full-eval Brier, including unseen FM generators and anchors, as a diagnostic.
+Require A > 0 (higher score must mean more synthetic). The M2 baseline Brier
+of 0.0066 was computed in-sample; the out-of-sample M2 value was required to
+be measured before the gate limit became final, and on 2026-08-30 it was:
+0.0347 on the binding population, fixing the gate limit at 0.0447.
+
+**Paired delta.** For M2-vs-candidate comparisons, define
+`delta = EER_candidate - EER_M2` and use identical bootstrap component draws
+for both models. The gate passes iff `quantile(delta, 0.95) < 0`. A second
+opening under the access budget uses `quantile(delta, 0.975) < 0`. Neutralize
+`model-seed` in the bootstrap-seed derivation for paired comparisons so both
+models draw identical component streams. Report the paired-delta distribution.
+
+#### Bootstrap procedure
+
+Connected-component resampling, 1,000 replicates, 95% percentile CI.
+
+1. Build connected components from shared speaker identity and
+   `partition_group_id`. A component includes every clean and codec-degraded
+   descendant and all paired bonafide/synthetic items.
+2. Resample components with replacement within each partition. Do not mix
+   partitions in one replicate.
+3. Within each replicate, retain generator and corpus strata composition.
+4. Compute the target metric per replicate.
+5. Report percentile CI using numpy `method="linear"` for cross-version
+   stability.
+6. For paired comparisons (M2 vs candidate), use the same component draws for
+   both models in each replicate.
+
+Thresholds (Platt parameters, operating-point thresholds) are calibration
+artifacts. They are not refitted inside eval/holdout/challenge bootstrap
+replicates.
+
+Bootstrap seed:
+`SHA-256(SELECTION_SEED || metric-schema-version || model-seed || cohort-hash || metric-context)`.
+
+#### M2 re-baselining measurement (2026-08-30)
+
+Run identity: the frozen M2 checkpoint (`e178446b...`) scored on all 68,015
+clips of the frozen composite manifest (`2c0717bb...`) with the locked
+evaluator revision (`8c3f36a3`), production windowing, deterministic CUDA
+settings, journal `journal_m2_r2.jsonl` (0 clip errors, 0 skips). Platt
+policy `m2-252-step6` fit on the 6,062-clip calibration split: A = 1.2222,
+B = -1.6236 (A > 0 as required), in-sample Brier 0.0414. Frozen operating
+thresholds from calibration: primary 5%-FPR threshold 1.7939 (realized
+weighted BF FPR 4.08%, TPR 95.00%); diagnostic 1%-FPR threshold 2.2556
+(realized 1.00%, TPR 90.42%), labeled underpowered because calibration has
+35 bona fide components, far below 1,000.
+
+Measured eval values (grouped bootstrap, 1,000 replicates, 95% percentile
+CI; effective component counts beside every number):
+
+| Metric | M2 measured | 95% CI | Components | Replaces |
+|---|---|---|---|---|
+| Piper EER | 1.84% | 0.00% to 2.56% | 18 | provisional 8.04% |
+| ElevenLabs EER | 3.28% | 0.00% to 4.30% | 18 | provisional 11.20% |
+| Google TTS EER | 4.69% | 0.75% to 5.68% | 18 | provisional 10.28% |
+| Chatterbox EER (primary endpoint) | 10.37% | 2.52% to 12.26% | 18 | ship-gate M2 reference |
+| ASVspoof DF anchor EER | 41.02% | 36.06% to 45.25% | 90 | newly measured |
+| Unseen FM (Matcha) EER | 14.98% | 2.15% to 18.36% | 18 | newly measured; under-precision, see trigger below |
+| Unseen FM (F5-TTS) EER | 11.48% | 2.19% to 12.76% | 18 | diagnostic only |
+| Macro-average core EER | 5.05% | n/a (mean of 4 cores) | n/a | reported |
+| AMI BF FPR at frozen 5%-FPR OP | 2.23% | n/a (point value at frozen threshold) | 4 (188 clips) | newly measured |
+| VoxConverse BF FPR at frozen 5%-FPR OP | 4.95% | n/a (point value at frozen threshold) | 14 (452 clips) | newly measured |
+| Out-of-sample Brier (binding population, n=2,376) | 0.0347 | n/a | n/a | newly measured |
+| Full-eval Brier (diagnostic, anchors included) | 0.1955 | n/a | n/a | reported |
+
+Per-source BF FPRs use the same inverse-component-size weighting as the
+calibration realized FPR. The ASVspoof DF anchor bona fide population sits
+at 63.26% weighted FPR at the frozen primary threshold; this is the
+documented cross-corpus confound (#253), reported for transparency and
+consumed by no gate.
+
+**Regeneration trigger evaluation (v1.3).** Half-width is computed as
+`(CI_hi - CI_lo) / 2` on the unrounded percentile bounds; this pins down a
+term the trigger left ambiguous for asymmetric intervals, and no
+classification below changes under either reading. CI half-widths of the
+eval-only generators: ElevenLabs 2.15pp and Google TTS 2.47pp, both within
+the 5.00pp precision bound, so their non-regression gates bind. Matcha-TTS 8.10pp
+exceeds the bound: the trigger fires, the P2+ unseen-FM gate does not bind,
+and the Matcha slice must be expanded or regenerated on clean post-repair
+eval identities before that gate can bind. The Matcha baseline above is
+recorded as under-precision and non-binding. F5-TTS at 5.28pp also exceeds
+the bound; no gate consumes F5-TTS (it is diagnostic-only in every phase),
+so this is a disclosure with no gate consequence.
+
+**Holdout confirmation (single touch, logged 2026-08-30).** One holdout
+scoring pass: Chatterbox EER 7.35% (CI 3.49% to 13.25%), Piper EER 0.34%,
+out-of-sample Brier 0.0412. No further holdout touches this phase.
+
+**Acceptance probe result (challenge partition): FAIL.** M2 Chatterbox EER
+on eval 10.37% (grouped-bootstrap SE 2.99pp) versus challenge 19.54% (SE
+1.17pp). The absolute delta of 9.17pp exceeds the pre-registered band of
+6.28pp (1.96 times the root sum of squared SEs), so the probe fails and the
+challenge manifest hash stays provisional. Per-source diagnostics: the
+challenge partition is entirely AMI-sourced (the VoxConverse challenge
+speakers remain deferred), and the shift is present within AMI itself
+(eval AMI-only Chatterbox EER 4.00% on 125 spoof clips, an underpowered
+exploratory number, versus 19.54% on the challenge cohort). Because this
+subsection discloses the cohort's numeric results, the cohort is unblinded:
+it is permanently retired and can never serve as a ship-decision cohort.
+Reconstruction must select a fresh challenge cohort (new speaker selection,
+new clips, new manifest hash) after the confounding investigation; the
+challenge procedure's blinding rules apply to that new cohort from scratch.
+No ship decision may consume any challenge cohort until then.
+
+#### Binding gate matrix
+
+**Non-regression gates (worst-of-3-seeds):**
+
+| Phase | Cohort | Metric | M2 baseline | Limit | Consequence |
+|---|---|---|---|---|---|
+| All | Eval | Piper EER | 1.84% | ≤3.84% | Blocks ship |
+| All | Eval | ElevenLabs EER | 3.28% | ≤5.28% | Blocks ship |
+| All | Eval | Google TTS EER | 4.69% | ≤6.69% | Blocks ship |
+| All | Eval | ASVspoof DF EER | 41.02% | ≤45.02% | Blocks ship |
+| All | Eval (AMI) | BF FPR at 5%-FPR OP | 2.23% | ≤5.00% | Blocks ship |
+| All | Eval (VoxConverse) | BF FPR at 5%-FPR OP | 4.95% | ≤10.00% | Blocks ship |
+| All | Eval | Out-of-sample Brier | 0.0347 | ≤0.0447 | Blocks ship |
+| P1 | Eval | Unseen FM (Matcha) EER | 14.98% | Report only | Diagnostic |
+| P2+ | Eval | Unseen FM (Matcha) EER | 14.98% (under-precision, non-binding) | ≤25.00% AND gap ≤10pp | Blocks ship once the Matcha slice is regenerated |
+| P2+ | Eval | Codec guard rail | n/a | No codec EER > min(2x pooled, pooled+10pp) | Blocks ship |
+
+Unseen FM gap condition: for each seed s,
+`Matcha_EER_s - Chatterbox_EER_s ≤ 10pp`. The maximum gap across seeds must
+satisfy this condition.
+
+The codec guard rail requires minimum 50 parent groups per stratum. Strata
+below this threshold are excluded from the guard rail but still reported.
+
+**Ship gates (median-of-3-seeds):**
+
+| Phase | Cohort | Metric | Limit | Notes |
+|---|---|---|---|---|
+| P1 (interim) | Eval | Chatterbox EER | ≤18.00% | Plus ≥5pp absolute gain over M2 |
+| P2 (primary) | Eval AND challenge | Chatterbox EER | ≤15.00% | Must pass on each cohort independently |
+| P3 (stretch) | Eval AND challenge | Chatterbox EER | ≤10.00% | Aspirational; not a blocker for lower-tier ships |
+
+All ship gates also require: every non-regression gate passes AND the
+paired-delta bootstrap CI for Chatterbox EER (candidate vs M2) excludes zero
+in the improving direction.
+
+#### Seed discipline and instability veto
+
+Three seeds per training configuration: seeds 0, 1, and 2.
+
+- **Non-regression gates**: evaluated on the worst (maximum) value across
+  seeds.
+- **Ship gates**: evaluated on the median value across seeds.
+- **Reporting**: all three seed values, median, and worst are always reported.
+
+**Instability veto.** If `worst - median > 5pp` on Chatterbox EER (the
+primary endpoint), the run is INVALID regardless of individual gate outcomes.
+Pre-specified remediation: train 2 additional seeds (3 and 4) under the same
+frozen configuration, then re-evaluate all gates as worst-of-5
+(non-regression) and median-of-5 (ship). If instability persists at 5 seeds,
+the configuration fails the phase.
+
+**Checkpoint selection.** Fixed rule per phase, committed before training:
+select the checkpoint at the epoch with the lowest Chatterbox EER on the
+calibration split. This rule does not vary per seed.
+
+#### Exclusion criteria
+
+- **Minimum clip duration**: 1.0 second after silence trimming. Clips below
+  this are excluded before scoring; the exclusion count is reported.
+- **Failed decodes**: codec materialization failures are logged and the parent
+  group is excluded from that codec stratum (not from clean). If more than 5%
+  of parent groups fail any single codec, the recipe is invalid.
+- **NaN or infinite scores**: any clip producing a NaN or infinite raw score
+  makes the entire seed's evaluation INVALID.
+- **Score polarity**: if Platt slope A is not positive after calibration
+  fitting, the seed is INVALID.
+
+#### Challenge procedure
+
+1. **Assembly.** Create the challenge partition from Chatterbox clips whose
+   speakers and prompts do not appear in calibration, eval, holdout, or
+   training data. Include matched bonafide speakers from AMI and VoxConverse,
+   also speaker-disjoint from all other partitions. Target: 130 Chatterbox
+   speakers (~90 AMI, ~40 VoxConverse, mirroring the eval source mix), 6
+   clips each. Select speakers via SHA-256 hash-rank with `SELECTION_SEED`
+   and context `"challenge-speakers-v1"`. Keep at least 40 AMI speakers as
+   reconstruction reserve. Final count confirmed by empirical power pilot
+   before freezing.
+
+2. **Acceptance probe.** Before hash-freezing, score the challenge partition
+   with the frozen M2 model. Let `E_challenge` and `E_eval` be M2 Chatterbox
+   EER on challenge and eval, with `SE_challenge` and `SE_eval` estimated from
+   each partition's own grouped bootstrap. Accept iff
+   `|E_challenge - E_eval| <= 1.96 * sqrt(SE_challenge^2 + SE_eval^2)`;
+   otherwise investigate confounding and reconstruct the partition. The
+   probe's detection floor is approximately 8 to 10 percentage points. Run
+   separate AMI and VoxConverse diagnostics alongside the pooled probe to
+   detect subtler corpus-specific shifts.
+
+3. **Freezing.** Hash the challenge manifest (speaker IDs, clip IDs, codec
+   variants, bonafide pairings). Expose only: manifest hash, total counts,
+   and acceptance-probe pass/fail. Withhold individual scores and per-stratum
+   outcomes.
+
+4. **Opening.** Score the challenge once per phase, after architecture,
+   augmentation policy, stopping rule, three training seeds, checkpoint
+   selection, and calibration procedure are all frozen for that phase. No
+   parameter may be changed between opening and verdict.
+
+5. **After opening.** Report all metrics per seed. If the ship gate fails, the
+   phase fails. Training may continue to the next phase, but the failed
+   result is recorded and the same challenge partition is reused (with
+   Bonferroni adjustment if consulted more than once for the same phase).
+
+6. **Budget.** One unblinding per phase. A second use of the same challenge
+   partition for the same phase requires halving the effective alpha
+   (equivalent to requiring the upper 97.5% CI to pass instead of 95%).
+
+#### Verdict definitions
+
+- **PASS**: every non-regression gate passes (worst-of-3) AND the applicable
+  ship gate passes (median-of-3) AND `quantile(delta, 0.95) < 0` for the
+  paired Chatterbox EER delta AND no instability veto fires.
+- **FAIL**: any binding gate does not pass after all pre-specified remediation
+  is exhausted.
+- **INVALID**: instability veto fired, NaN or infinite scores, Platt slope not
+  positive, or underpowered partition. An invalid run is not a pass or a fail;
+  it must be remediated before a verdict.
+
+All gate comparisons use unrounded values. 18.004% does not pass a ≤18.00%
+gate. Report all seed values, all metrics, all strata, and all exclusion
+counts whether the run passes or fails. A gate outcome is reported as
+computed and never retroactively reclassified.
+
 ### Service contract
 
 The synthdetect model service runs as a standalone FastAPI container

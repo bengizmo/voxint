@@ -1071,6 +1071,31 @@
                 transition: transform 120ms; }
     .media-card-group:not([open]) > summary::before { transform: rotate(-90deg); }
     .media-card-group .lib-cards { margin-top: var(--space-2); }
+    .lib-cards > li.folder-tile { padding: 0;
+                transition: border-color 120ms, box-shadow 120ms; }
+    .lib-cards > li.folder-tile:hover,
+    .lib-cards > li.folder-tile:focus-within { border-color: var(--accent);
+                box-shadow: var(--shadow-2); }
+    .media-folder-card { display: flex; flex-direction: column; gap: var(--space-2);
+                text-decoration: none; color: var(--ink); cursor: pointer;
+                padding: var(--card-pad); height: 100%; }
+    .media-folder-card .mfc-icon { display: flex; align-items: center; gap: var(--space-2); }
+    .media-folder-card .mfc-icon svg { flex-shrink: 0; }
+    .media-folder-card .mfc-name { font-weight: 600; font-size: var(--t-md);
+                word-break: break-word; }
+    .media-folder-card .mfc-stats { font-size: var(--t-sm); color: var(--ink-2); }
+    .media-folder-card .mfc-chips { display: flex; flex-wrap: wrap; gap: var(--space-1);
+                margin-top: auto; }
+    .cards-back { display: inline-flex; align-items: center; gap: var(--space-1);
+                font-size: var(--t-sm); color: var(--accent-ink);
+                text-decoration: none; margin-bottom: var(--space-3); }
+    .cards-back:hover { text-decoration: underline; }
+    .cards-drilldown-header { display: flex; align-items: center; gap: var(--space-2);
+                font-size: var(--t-lg); font-weight: 600;
+                margin: 0 0 var(--space-3) 0; }
+    .cards-section-label { font-size: var(--t-micro); font-weight: 700;
+                text-transform: uppercase; letter-spacing: .06em;
+                color: var(--ink-3); padding: var(--space-2) 0; margin: 0; }
     [hidden] { display: none !important; }
 
     /* --- R4 Speakers overview + detail -------------------------------- */
@@ -1387,7 +1412,7 @@
           <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><rect x="3" y="4" width="12" height="2" rx="1"/><rect x="3" y="8" width="12" height="2" rx="1"/><rect x="3" y="12" width="12" height="2" rx="1"/></svg>
         </button>
         {% block command_bar %}
-        <span class="cb-breadcrumb">{% block cb_breadcrumb %}{{ active_nav or 'home' }}{% endblock %}</span>
+        <span class="cb-breadcrumb">{% block cb_breadcrumb %}{{ active_nav or '???' }}{% endblock %}</span>
         <span class="cb-summary">{% block cb_summary %}{% endblock %}</span>
         <div class="cb-spacer"></div>
         {# #162: the decorative search affordance is removed until search

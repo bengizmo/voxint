@@ -30,6 +30,7 @@
   {% if overview.name_suggestions %}
   <span class="spk-todo-item">
     {{ overview.name_suggestion_total }} name suggestion{{ "s" if overview.name_suggestion_total != 1 }} to review
+    <a href="/review/{{ overview.name_suggestions[0].run_id }}" class="spk-todo-action">Review</a>
   </span>
   {% endif %}
   {% if overview.possible_duplicates %}
