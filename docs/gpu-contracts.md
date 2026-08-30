@@ -1504,12 +1504,14 @@ A = 4.28, B = -11.42; Brier score 0.0066.
 
 Pre-registration for the Chatterbox improvement effort (GitHub #252). This
 section is binding: no training may begin until every artifact hash, baseline
-value, and gate threshold below is committed. Protocol version 1.2
+value, and gate threshold below is committed. Protocol version 1.3
 (v1.1, 2026-08-29: two-sample acceptance probe band, pinned Brier population,
 explicit paired-delta percentile; v1.2, 2026-08-29: AMI speaker identity
 repair and re-baselining rule, domain-matched bonafide comparison
-populations). Designed via 4-model consult (codex, deepseek-v4-pro, grok-4.5,
-kimi-k3); the v1.2 repair design was independently reviewed.
+populations; v1.3, 2026-08-30: eval-only partition sanitization, unseen-FM
+slice disclosures, pre-registered slice-regeneration trigger). Designed via
+4-model consult (codex, deepseek-v4-pro, grok-4.5, kimi-k3); the v1.2 repair
+design and the v1.3 sanitization were independently reviewed.
 
 > ⚠ Values marked `[TBD]` must be filled by re-scoring the frozen M2
 > checkpoint with the grouped-bootstrap evaluator before any Phase 1 training.
@@ -1568,6 +1570,75 @@ partition lands; per-generator EER confidence intervals on AMI strata must be
 read accordingly, and the effective component counts reported beside every
 number are the honest sample-size signal.
 
+#### v1.3 amendment: eval-only partition sanitization and unseen-FM slice disclosures (2026-08-30)
+
+**Eval-only partition sanitization (data-integrity correction).** Four
+generators are registered eval-only in the corpus assembler (ElevenLabs,
+Google TTS, Matcha-TTS, F5-TTS): their clips may exist only in the eval
+split. ElevenLabs and Google TTS are core gate generators that no model
+trains or calibrates on; Matcha-TTS and F5-TTS are the unseen-FM
+diagnostics. The v1.2 identity repair moved calibration-contacted persons
+wholly to calibration, and three of those persons were among the identities
+used to generate the eval-only slices. The repair therefore carried 2,140
+eval-only clips (535 per generator, all AMI-sourced) into the calibration
+split. Those clips have no permitted use anywhere: not Platt fitting
+(eval-only rule), not candidate training (the no-train guarantee), and not
+eval or holdout (M2 trained on those voices).
+
+A second migration removes them, by predicate rather than by enumerated
+person list: every clip whose generator is registered eval-only and whose
+post-repair split is not `eval` is dropped from the composite manifest, and
+the affected component clip counts are updated so the manifest stays
+internally truthful. Audio bytes and the sha-pinned source slice manifests
+are untouched; the pre-sanitization manifest is archived beside the
+sanitized one, and the migration emits a JSON audit listing every dropped
+clip id and sha256 with per-component, per-generator, and per-person
+counts. The sanitized manifest hash becomes the binding one in the
+frozen-artifacts table. Like the v1.2 repair, there is no fresh hash-rank
+re-assignment.
+
+**Surviving eval-only slice sizes (disclosure).** After sanitization each
+eval-only generator retains 125 AMI eval clips from 4 canonical persons,
+plus its VoxConverse eval slice (ElevenLabs 309, Google TTS 309, Matcha-TTS
+309, F5-TTS 302 clips). The AMI side of every eval-only generator is
+underpowered on its own: per-domain (AMI-only or VoxConverse-only) numbers
+for these generators are exploratory diagnostics, never gates. The binding
+metrics remain the pooled in-domain EERs already defined in this protocol,
+with grouped-bootstrap CIs and effective component counts reported beside
+every number.
+
+**Pre-registered regeneration trigger.** Whether the surviving slices are
+adequate is decided by precision, not by looking at the numbers. At the M2
+re-baselining pass: if the grouped-bootstrap 95% CI half-width of any
+eval-only generator's pooled eval EER exceeds 5.00pp, that generator's
+slice must be expanded or regenerated on clean post-repair eval identities
+(as a new corpus version with pinned generator versions and seeds) before
+any gate that consumes the metric may bind. For ElevenLabs and Google TTS
+that means their non-regression gates; for Matcha-TTS the P2+ unseen-FM
+gate. Phase 1 unseen-FM reporting stays diagnostic-only either way. An
+under-precision baseline is reported with its CI and marked non-binding
+until the slice is regenerated and the baseline re-measured.
+
+**F5-TTS reference-fallback disclosure (post-data amendment).** The F5-TTS
+slice generator selects one same-speaker reference clip per parent in
+deterministic seeded digest order and, when synthesis yields a non-finite
+output, retries with the next-ranked reference for up to 5 attempts; the
+first finite output wins. On the AMI slice, 41 of 660 parents (6.2%)
+required at least one fallback, which exceeded the roughly 2% rate at which
+the pre-generation consult said to stop and reassess; the VoxConverse slice
+required none (0 of 309 eligible parents; 7 parents were skipped for lacking
+any eligible reference, and 3 AMI parents for lacking a transcript, so the
+VoxConverse slice is 302 clips). The maintainer decision, recorded here
+before any M2 scoring of these slices, is to accept the slice with full
+disclosure rather than regenerate: fallbacks substitute a different
+same-speaker reference, deterministically, and every substitution is
+logged. The per-domain generation receipts (checkpoint and vocoder sha256s,
+synthesis parameters, environment pins, selection seed, reference-map
+hashes) and the per-parent fallback log are retained beside the slice
+manifests, and the used-reference maps are hash-bound in the receipts. If
+F5-TTS scoring behaves anomalously relative to the other eval-only slices,
+the fallback log is the first place to look.
+
 #### Scope and precedence
 
 This protocol governs all model candidates trained under #252 (Phases 1
@@ -1586,12 +1657,21 @@ The following artifacts must be hashed and committed before Phase 1 training.
 | M2 checkpoint (`finetuned_aasist.pth`) | Reference model | `e178446b640b8e9f9cf6dd359428b2243f49e24e613e1ae952cd706216b8111e` | Baseline scoring only |
 | XLS-R 300M (`xlsr2_300m.pt`) | Frozen frontend | `b08927597f2c9eb2ebd7dcc3ac78ee4b5f6021cbac4b3a6c5a9deec445d80ed9` | Feature extraction; shared across all candidates |
 | Selection seed | Partition assignment | `voxint-synthdetect-144` | Immutable; shared with bootstrap seeding |
-| Evaluator revision | Metric computation | `[TBD: commit hash]` | Locked after golden-test validation |
-| ffmpeg version | Codec pipeline | `[TBD: version string]` | Locked for all codec materialization |
-| Calibration manifest | Platt fitting | `[TBD: manifest hash]` | Calibration split only; no model selection |
-| Eval manifest | Iteration gates | `[TBD: manifest hash]` | Phase gates; every touch logged |
-| Holdout manifest | Phase-exit confirmation | `[TBD: manifest hash]` | At most 1 touch per phase |
-| Challenge manifest | Ship decision | `[TBD: manifest hash]` | See Challenge procedure below |
+| Evaluator revision | Metric computation | `fbf6211b4d68bd1bb5a49ee495ae07eb6a164d6b` (evaluator repo commit) | Locked after golden-test validation (733-test suite green at this revision) |
+| ffmpeg version | Codec pipeline | `7.1`, digest-pinned container `sha256:292a972c60356abd651d9a4f9c808c13e7473f65ad400b7eb99215f4e571931d` | Locked for all codec materialization |
+| Calibration manifest | Platt fitting | `52d0fd78aa43eb3bb3f3ba96e55d81ddf41b45513cdc8bdcac4b5561c3a42739` | Calibration split only; no model selection |
+| Eval manifest | Iteration gates | `47a5fff1a76a053621f3129784c447217504d0063f2a8709485a1adb3d1f7560` | Phase gates; every touch logged |
+| Holdout manifest | Phase-exit confirmation | `10300125f17628686c8e7e3e9530d9c7eaaec0c002511e315fc9724121e3db11` | At most 1 touch per phase |
+| Challenge manifest | Ship decision | `528eaeaa19bb5988d1bddc7e77a8473d19d57adf2104b1668b4f5557c4414bf7` (provisional until the acceptance probe passes) | See Challenge procedure below |
+
+Per-split manifest hash definition: take every clip record in the frozen
+composite manifest carrying that split, sort the records by `clip_id`,
+serialize them as one JSON array with sorted keys and compact separators,
+and hash the UTF-8 bytes with SHA-256. The evaluator ships the tool that
+computes these hashes; the four values above must be reproducible from the
+frozen composite manifest alone. The frozen composite manifest (post-repair,
+post-sanitization, 68,016 clips) has file sha256
+`214e91dedb9b0014ff873ffe5b07948c0399f709d839a6d8a7ef3a32aa3589b5`.
 
 Codec recipes (deterministic, reproducible via the existing degradation
 executor):
