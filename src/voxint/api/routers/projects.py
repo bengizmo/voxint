@@ -35,6 +35,7 @@ from voxint.api.csrf import (
     CSRF_PROJECT_VOCAB,
     mint_csrf_token,
 )
+from voxint.api.project_insights import get_project_insights
 from voxint.api.projects_query import list_projects, project_detail
 from voxint.api.routers.deps import (
     OperatorDep,
@@ -162,11 +163,20 @@ def _detail_context(
         vocabulary_text = vocabulary_submitted
     else:
         vocabulary_text = "\n".join(detail.vocabulary) if detail.vocabulary else ""
+    insights = get_project_insights(session, detail.id)
+    # Pre-build a set of "row,col" strings for efficient Jinja2 coverage lookup
+    insights_coverage_set: set[str] = set()
+    if insights and insights.get("coverage", {}).get("cells"):
+        insights_coverage_set = {
+            f"{cell[0]},{cell[1]}" for cell in insights["coverage"]["cells"]
+        }
     return {
         "request": request,
         "active_nav": "projects",
         "now": datetime.now(UTC),
         "detail": detail,
+        "insights": insights,
+        "coverage_set": insights_coverage_set,
         "csrf_rename": mint_csrf_token(secret, CSRF_PROJECT_RENAME),
         "csrf_assign": mint_csrf_token(secret, CSRF_PROJECT_ASSIGN),
         "csrf_unlink": mint_csrf_token(secret, CSRF_PROJECT_UNLINK),
