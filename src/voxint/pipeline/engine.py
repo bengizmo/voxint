@@ -31,7 +31,7 @@ from collections.abc import Set as AbstractSet
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -279,6 +279,32 @@ def _stop_if_cancelled(
         return snap
 
 
+def _stop_if_paused(
+    session_factory: sessionmaker[Session],
+    run_id: uuid.UUID,
+    claim_id: uuid.UUID,
+) -> RunSnapshot | None:
+    """Resolve a lost post-stage CAS: was the run paused out from under us?
+
+    Mirrors :func:`_stop_if_cancelled` — the stage body already ran and its DB
+    effects were rolled back with the failed CAS. We close the abandoned RUNNING
+    claim as SKIPPED so the console never shows a stage "running" on a paused
+    run. Unlike cancellation, the run is not terminal — it can be resumed.
+    """
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        if run is None or RunStatus(run.status) is not RunStatus.PAUSED:
+            return None
+        snap = snapshot(run)
+        claim = session.get(StageRun, claim_id)
+        if claim is not None and claim.status == StageStatus.RUNNING.value:
+            claim.status = StageStatus.SKIPPED.value
+            claim.finished_at = datetime.now(tz=UTC)
+            claim.error = "paused before commit"
+        session.commit()
+        return snap
+
+
 def execute_run(
     session_factory: sessionmaker[Session],
     run_id: uuid.UUID,
@@ -385,13 +411,16 @@ def execute_run(
                     )
                     session.commit()
                 except StaleRevisionError:
-                    # A cancel landed while this stage was failing: the FAILED CAS
-                    # lost. Honour a confirmed cancellation over the failure;
-                    # re-raise for any other stale status (a real race).
+                    # A cancel or pause landed while this stage was failing: the
+                    # FAILED CAS lost. Honour a confirmed cancellation/pause over
+                    # the failure; re-raise for any other stale status.
                     session.rollback()
                     cancelled = _stop_if_cancelled(session_factory, run_id, claim_id)
                     if cancelled is not None:
                         return cancelled
+                    paused = _stop_if_paused(session_factory, run_id, claim_id)
+                    if paused is not None:
+                        return paused
                     raise
                 raise StageFailedError(stage, exc, failed) from exc
             _finish_claim(session, claim_id, StageStatus.COMPLETED, model_identity=identity)
@@ -423,15 +452,18 @@ def execute_run(
                 cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=upcoming)
                 session.commit()
             except StaleRevisionError:
-                # The operator cancelled while this stage body ran, so the
-                # post-stage advance/complete CAS lost. Discard this stage's
+                # The operator cancelled or paused while this stage body ran, so
+                # the post-stage advance/complete CAS lost. Discard this stage's
                 # (rolled-back) effects and stop cleanly IFF the run is now
-                # CANCELLED; any other stale status is a genuine invariant breach
-                # (recovery lease-steal, duplicate worker) and must propagate.
+                # CANCELLED or PAUSED; any other stale status is a genuine
+                # invariant breach and must propagate.
                 session.rollback()
                 cancelled = _stop_if_cancelled(session_factory, run_id, claim_id)
                 if cancelled is not None:
                     return cancelled
+                paused = _stop_if_paused(session_factory, run_id, claim_id)
+                if paused is not None:
+                    return paused
                 raise
 
 
@@ -519,5 +551,38 @@ def close_cancelled_run_claims(session: Session) -> list[uuid.UUID]:
     closed: list[uuid.UUID] = []
     for claim in claims:
         _finish_claim(session, claim.id, StageStatus.SKIPPED, "cancelled before commit")
+        closed.append(claim.pipeline_run_id)
+    return closed
+
+
+def close_paused_run_claims(session: Session) -> list[uuid.UUID]:
+    """Close stage claims left RUNNING on a PAUSED run — the crash-window
+    backstop for cooperative pause.
+
+    Unlike :func:`close_cancelled_run_claims` (which closes unconditionally
+    because CANCELLED is terminal), this checks lease expiry: a PAUSED run can
+    be resumed, so closing a live worker's claim would let a resumed run start
+    a second worker on the same stage concurrently.
+    """
+    now = datetime.now(tz=UTC)
+    claims = (
+        session.execute(
+            select(StageRun)
+            .join(PipelineRun, PipelineRun.id == StageRun.pipeline_run_id)
+            .where(
+                StageRun.status == StageStatus.RUNNING.value,
+                PipelineRun.status == RunStatus.PAUSED.value,
+                or_(
+                    StageRun.lease_expires_at.is_(None),
+                    StageRun.lease_expires_at <= now,
+                ),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    closed: list[uuid.UUID] = []
+    for claim in claims:
+        _finish_claim(session, claim.id, StageStatus.SKIPPED, "paused before commit")
         closed.append(claim.pipeline_run_id)
     return closed

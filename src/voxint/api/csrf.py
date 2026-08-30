@@ -70,6 +70,11 @@ CSRF_REQUEUE = "requeue"
 # Run cancellation (issue #5). Its own action — a distinct pipeline-state
 # mutation on the run detail page, never interchangeable with requeue/notes.
 CSRF_CANCEL = "cancel"
+# Operator-initiated pause/resume and restart-from-scratch. Each is a distinct
+# pipeline-state mutation, so each mints its own action token.
+CSRF_PAUSE = "pause"
+CSRF_RESUME = "resume"
+CSRF_RESTART = "restart"
 CSRF_CLAIM = "claim"
 # The first-run setup wizard (issue #3). One action for the whole flow: its
 # POST steps land in slice 4, and a token minted on one wizard step being valid

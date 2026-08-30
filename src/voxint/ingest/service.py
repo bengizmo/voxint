@@ -162,11 +162,12 @@ class MissingStageError(IngestError):
 class RunNotCancellableError(IngestError):
     """Cancel attempted on a run whose status forbids it (COMPLETED / FAILED).
 
-    Only QUEUED, RUNNING, and AWAITING_ADJUDICATION are cancellable — the same
-    states ``ALLOWED_TRANSITIONS`` permits ``→ CANCELLED`` from. FAILED is not
-    terminal (it is requeueable), it is simply not *cancellable*; COMPLETED is
-    done. An already-CANCELLED run is not an error — :func:`cancel_run` treats a
-    repeat cancel as an idempotent no-op, not this exception.
+    Only QUEUED, RUNNING, AWAITING_ADJUDICATION, and PAUSED are cancellable —
+    the same states ``ALLOWED_TRANSITIONS`` permits ``→ CANCELLED`` from. FAILED
+    is not terminal (it is requeueable), it is simply not *cancellable*;
+    COMPLETED is done. An already-CANCELLED run is not an error —
+    :func:`cancel_run` treats a repeat cancel as an idempotent no-op, not this
+    exception.
     """
 
     def __init__(self, run_id: uuid.UUID, status: RunStatus) -> None:
@@ -177,14 +178,44 @@ class RunNotCancellableError(IngestError):
         self.status = status
 
 
+class RunNotPausableError(IngestError):
+    """Pause attempted on a run whose status forbids it."""
+
+    def __init__(self, run_id: uuid.UUID, status: RunStatus) -> None:
+        super().__init__(f"run is {status.value}, only queued/running runs can be paused")
+        self.run_id = run_id
+        self.status = status
+
+
+class RunNotPausedError(IngestError):
+    """Resume attempted on a run that is not PAUSED."""
+
+    def __init__(self, run_id: uuid.UUID, status: RunStatus) -> None:
+        super().__init__(f"run is {status.value}, only paused runs can be resumed")
+        self.run_id = run_id
+        self.status = status
+
+
+class RunNotRestartableError(IngestError):
+    """Restart attempted on a run whose status forbids it."""
+
+    def __init__(self, run_id: uuid.UUID, status: RunStatus) -> None:
+        super().__init__(
+            f"run is {status.value}, only completed/failed/cancelled runs"
+            " can be restarted from scratch"
+        )
+        self.run_id = run_id
+        self.status = status
+
+
 class RunNotArchivableError(IngestError):
     """Archive attempted on a run whose status forbids it (issue #5).
 
     Only terminal runs — COMPLETED, FAILED, CANCELLED — may be soft-archived: a
-    QUEUED/RUNNING/AWAITING_ADJUDICATION run is still live, so archiving (hiding)
-    it is ambiguous; the operator must cancel it first. Un-archiving is always
-    allowed and never raises this. An already-archived run is not an error either
-    — :func:`archive_run` treats a repeat archive as an idempotent no-op.
+    QUEUED/RUNNING/AWAITING_ADJUDICATION/PAUSED run is still live, so archiving
+    (hiding) it is ambiguous; the operator must cancel it first. Un-archiving is
+    always allowed and never raises this. An already-archived run is not an error
+    either — :func:`archive_run` treats a repeat archive as an idempotent no-op.
     """
 
     def __init__(self, run_id: uuid.UUID, status: RunStatus) -> None:
@@ -754,7 +785,7 @@ def requeue_failed_run(
 
 
 _CANCELLABLE_STATUSES = frozenset(
-    {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.AWAITING_ADJUDICATION}
+    {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.AWAITING_ADJUDICATION, RunStatus.PAUSED}
 )
 
 
@@ -764,8 +795,8 @@ def cancel_run(
     *,
     expected_revision: int | None = None,
 ) -> RunSnapshot:
-    """CAS-cancel a live run (QUEUED / RUNNING / AWAITING_ADJUDICATION), guarded
-    by exact revision.
+    """CAS-cancel a live run (QUEUED / RUNNING / AWAITING_ADJUDICATION / PAUSED),
+    guarded by exact revision.
 
     Cancellation is *cooperative* and pure DB state: it drives the existing
     ``→ CANCELLED`` transition and the caller commits — there is nothing to
@@ -816,10 +847,108 @@ def cancel_run(
         raise
 
 
+_PAUSABLE_STATUSES = frozenset({RunStatus.QUEUED, RunStatus.RUNNING})
+
+
+def pause_run(
+    session: Session,
+    run_id: uuid.UUID,
+    *,
+    expected_revision: int | None = None,
+) -> RunSnapshot:
+    """CAS-pause a live run (QUEUED / RUNNING), guarded by exact revision.
+
+    Pause is cooperative and pure DB state (like cancel): a worker mid-run
+    observes the pause at its next stage boundary. A QUEUED run paused before
+    dispatch is held and will not start until resumed.
+
+    Idempotent: pausing an already-PAUSED run returns the current snapshot.
+    ``AWAITING_ADJUDICATION`` is excluded — it is already pipeline-paused.
+    """
+    run = session.get(PipelineRun, run_id)
+    if run is None:
+        raise RunNotFoundError(run_id)
+    held = snapshot(run)
+    if held.status is RunStatus.PAUSED:
+        return held
+    if held.status not in _PAUSABLE_STATUSES:
+        raise RunNotPausableError(run_id, held.status)
+    if expected_revision is not None and held.revision != expected_revision:
+        raise StaleRevisionError(run_id, expected_revision)
+    try:
+        return cas_update_run(
+            session, held, status=RunStatus.PAUSED, current_stage=held.current_stage,
+        )
+    except StaleRevisionError:
+        session.expire(run)
+        fresh = snapshot(run)
+        if fresh.status is RunStatus.PAUSED:
+            return fresh
+        raise
+
+
+def resume_run(
+    session: Session,
+    run_id: uuid.UUID,
+    *,
+    expected_revision: int | None = None,
+) -> RunSnapshot:
+    """CAS-resume a PAUSED run by transitioning it back to QUEUED.
+
+    The caller commits then lazily publishes the appropriate Celery task.
+    """
+    run = session.get(PipelineRun, run_id)
+    if run is None:
+        raise RunNotFoundError(run_id)
+    if run.archived_at is not None:
+        raise RunArchivedError(run_id)
+    held = snapshot(run)
+    if held.status is not RunStatus.PAUSED:
+        raise RunNotPausedError(run_id, held.status)
+    if expected_revision is not None and held.revision != expected_revision:
+        raise StaleRevisionError(run_id, expected_revision)
+    return cas_update_run(
+        session, held, status=RunStatus.QUEUED, current_stage=held.current_stage,
+    )
+
+
+_RESTARTABLE_STATUSES = frozenset(
+    {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
+)
+
+
+def restart_run(
+    session: Session,
+    run_id: uuid.UUID,
+    *,
+    expected_revision: int | None = None,
+) -> RunSnapshot:
+    """CAS-restart a terminal run from scratch (stage=None → starts at ACQUIRE).
+
+    Unlike requeue (which retries the failed stage), restart clears the stage and
+    error so the full pipeline runs again. Prior StageRun rows are preserved as
+    earlier attempts. The caller commits then lazily publishes.
+    """
+    run = session.get(PipelineRun, run_id)
+    if run is None:
+        raise RunNotFoundError(run_id)
+    if run.archived_at is not None:
+        raise RunArchivedError(run_id)
+    held = snapshot(run)
+    if held.status not in _RESTARTABLE_STATUSES:
+        raise RunNotRestartableError(run_id, held.status)
+    if expected_revision is not None and held.revision != expected_revision:
+        raise StaleRevisionError(run_id, expected_revision)
+    return cas_update_run(
+        session, held, status=RunStatus.QUEUED, current_stage=None, error=None,
+    )
+
+
 # Terminal statuses eligible for archive and derived-media deletion. FAILED is
 # included: it is not cancellable, but it *is* a settled outcome an operator may
 # want to hide or clear (it stays requeueable only until archived — see the
-# archived-run guard on requeue).
+# archived-run guard on requeue). PAUSED is excluded: it is live (resume or
+# cancel first).
 _ARCHIVABLE_STATUSES = frozenset(
     {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
 )

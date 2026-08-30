@@ -66,9 +66,25 @@ pipeline.</p>
 {% endif %}
 {% endif %}
 
+{% if run.status in ("queued", "running") %}
+<form method="post" action="/runs/{{ run.id }}/pause" class="pause action-row">
+  <input type="hidden" name="revision" value="{{ run.revision }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_pause }}">
+  <button type="submit">Pause run</button>
+  <span class="oc-muted">
+    {% if run.status == "running" %}
+      Holds the run after the current stage (<code>{{ run.current_stage or "—" }}</code>)
+      finishes. The stage now running completes first, then no further stages start
+      until you resume.
+    {% else %}
+      Holds this run in the queue. It will not start processing until you resume it.
+    {% endif %}
+  </span>
+</form>
+{% endif %}
+
 {% if run.status in ("queued", "running", "awaiting_adjudication") %}
 <form method="post" action="/runs/{{ run.id }}/cancel" class="cancel action-row">
-  {# Carry the rendered revision so a stale tab's cancel 409s (exact-revision CAS). #}
   <input type="hidden" name="revision" value="{{ run.revision }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_cancel }}">
   <button type="submit">Cancel run</button>
@@ -81,6 +97,22 @@ pipeline.</p>
       Stops the run; no further stages will run. Media is left in place (delete is separate).
     {% endif %}
   </span>
+</form>
+{% endif %}
+
+{% if run.status == "paused" %}
+<form method="post" action="/runs/{{ run.id }}/resume" class="resume action-row">
+  <input type="hidden" name="revision" value="{{ run.revision }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_resume }}">
+  <button type="submit">Resume run</button>
+  <span class="oc-muted">Resumes processing from where it was paused
+    ({% if run.current_stage %}<code>{{ run.current_stage }}</code>{% else %}the beginning{% endif %}).</span>
+</form>
+<form method="post" action="/runs/{{ run.id }}/cancel" class="cancel action-row">
+  <input type="hidden" name="revision" value="{{ run.revision }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_cancel }}">
+  <button type="submit">Cancel run</button>
+  <span class="oc-muted">Cancels this paused run. Media is left in place.</span>
 </form>
 {% endif %}
 
@@ -101,6 +133,16 @@ pipeline.</p>
    (completed / failed / cancelled) — a live run must be cancelled first. #}
 <section class="card">
 <h2>Manage</h2>
+{% if not run_archived %}
+<form method="post" action="/runs/{{ run.id }}/restart" class="restart action-row"
+      onsubmit="return confirm('Restart this run from scratch? It will re-process all stages from the beginning. Existing results from prior attempts are preserved in the stage ledger.')">
+  <input type="hidden" name="revision" value="{{ run.revision }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_restart }}">
+  <button type="submit">Restart from scratch</button>
+  <span class="oc-muted">Queues the run to re-process all stages from the beginning.
+    Prior stage results are kept in the ledger as earlier attempts.</span>
+</form>
+{% endif %}
 {% if run_archived %}
 <form method="post" action="/runs/{{ run.id }}/unarchive" class="unarchive action-row">
   <input type="hidden" name="csrf_token" value="{{ csrf_run_unarchive }}">

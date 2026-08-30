@@ -5,7 +5,8 @@ Every mutation of a run's (status, current_stage) pair goes through
 If another worker moved the run first, zero rows match and
 :class:`StaleRevisionError` is raised — the caller re-reads and re-decides
 instead of clobbering. Human pauses are plain DB state
-(``AWAITING_ADJUDICATION``), never a held task.
+(``AWAITING_ADJUDICATION`` for pipeline-initiated, ``PAUSED`` for
+operator-initiated), never a held task.
 
 Validation covers the full ``(status, stage) -> (status, stage)`` tuple, not
 just status membership: a run cannot start at the wrong stage, advance
@@ -26,21 +27,23 @@ if TYPE_CHECKING:
     from voxint.config import Settings
 
 ALLOWED_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
-    RunStatus.QUEUED: frozenset({RunStatus.RUNNING, RunStatus.CANCELLED}),
+    RunStatus.QUEUED: frozenset({RunStatus.RUNNING, RunStatus.CANCELLED, RunStatus.PAUSED}),
     RunStatus.RUNNING: frozenset(
         {
             RunStatus.RUNNING,  # stage-to-stage advance
             RunStatus.QUEUED,  # segment handoff parks the run for the other lane
             RunStatus.AWAITING_ADJUDICATION,
+            RunStatus.PAUSED,
             RunStatus.COMPLETED,
             RunStatus.FAILED,
             RunStatus.CANCELLED,
         }
     ),
     RunStatus.AWAITING_ADJUDICATION: frozenset({RunStatus.RUNNING, RunStatus.CANCELLED}),
-    RunStatus.FAILED: frozenset({RunStatus.QUEUED}),  # explicit requeue only
-    RunStatus.COMPLETED: frozenset(),
-    RunStatus.CANCELLED: frozenset(),
+    RunStatus.PAUSED: frozenset({RunStatus.QUEUED, RunStatus.CANCELLED}),
+    RunStatus.FAILED: frozenset({RunStatus.QUEUED}),  # requeue or restart
+    RunStatus.COMPLETED: frozenset({RunStatus.QUEUED}),  # restart from scratch
+    RunStatus.CANCELLED: frozenset({RunStatus.QUEUED}),  # restart from scratch
 }
 
 
@@ -124,12 +127,26 @@ def validate_transition(
     elif status in (RunStatus.AWAITING_ADJUDICATION, RunStatus.FAILED):
         if held_stage is None or stage is not held_stage:
             raise reject(f"must keep stage {held_stage!r}, got {stage!r}")
-    elif current is RunStatus.AWAITING_ADJUDICATION and status is RunStatus.RUNNING:
+    elif status is RunStatus.PAUSED:
+        # QUEUED → PAUSED may carry held_stage=None (a fresh run never started)
+        if held_stage is not None and stage is not held_stage:
+            raise reject(f"must keep stage {held_stage!r}, got {stage!r}")
+    elif (
+        (current is RunStatus.AWAITING_ADJUDICATION and status is RunStatus.RUNNING)
+        or (current is RunStatus.PAUSED and status is RunStatus.QUEUED)
+    ):
         if stage is not held_stage:
             raise reject(f"resume must keep stage {held_stage!r}, got {stage!r}")
     elif current is RunStatus.FAILED and status is RunStatus.QUEUED:
-        if stage is not held_stage:
-            raise reject(f"requeue must keep stage {held_stage!r}, got {stage!r}")
+        # requeue keeps the failed stage; restart clears to None (start over)
+        if stage is not held_stage and stage is not None:
+            raise reject(
+                f"requeue must keep stage {held_stage!r} or restart (None),"
+                f" got {stage!r}"
+            )
+    elif current in (RunStatus.COMPLETED, RunStatus.CANCELLED) and status is RunStatus.QUEUED:
+        if stage is not None:
+            raise reject("restart must clear current_stage (start from scratch)")
     elif status is RunStatus.COMPLETED:
         if held_stage is not STAGE_ORDER[-1]:
             raise reject(f"cannot complete from stage {held_stage!r}")
