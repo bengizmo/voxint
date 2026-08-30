@@ -39,14 +39,13 @@ class TestPCA:
         assert np.array_equal(pca_2d(m), pca_2d(m.copy()))
 
     def test_sign_fixed_against_mirroring(self) -> None:
-        # Negating the input flips every candidate eigenvector; the loading
-        # sign rule must keep the projection orientation stable up to the
-        # data's own reflection (coords of -m are -coords of m, not an
-        # arbitrary per-axis mirror).
+        # Negating the input negates the mean and the centered rows but leaves
+        # the covariance identical, so eigh sees the same eigenvectors up to
+        # sign. The loading sign rule must pick the SAME signed eigenvectors
+        # both times, making coords(-m) exactly -coords(m) rather than an
+        # arbitrary per-axis mirror.
         m = _two_cluster_matrix()
-        coords = pca_2d(m)
-        again = pca_2d(np.vstack([m, m])[: m.shape[0]])
-        assert np.allclose(coords, again)
+        assert np.allclose(pca_2d(-m), -pca_2d(m))
 
     def test_separates_clusters_on_first_component(self) -> None:
         n = 10

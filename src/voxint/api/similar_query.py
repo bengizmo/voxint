@@ -1,4 +1,4 @@
-""""More like this passage": nearest-neighbour search from a KWIC row (#357).
+"""More like this passage: nearest-neighbour search from a KWIC row (#357).
 
 Given one transcript segment, find the corpus passages closest to it in the
 embedding space the spine already maintains. The segment's operator-effective
@@ -32,7 +32,7 @@ import enum
 import uuid
 from dataclasses import dataclass, field, replace
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.api.meaning_query import (
@@ -123,10 +123,8 @@ def shape_similar(
     """
     best_by_span: dict[tuple[uuid.UUID, float, float], Candidate] = {}
     for c in candidates:
-        if (
-            c.run_id == source_run_id
-            and c.start_seconds < source_end
-            and c.end_seconds > source_start
+        if c.run_id == source_run_id and _spans_overlap(
+            c.start_seconds, c.end_seconds, source_start, source_end
         ):
             continue
         span = (c.run_id, c.start_seconds, c.end_seconds)
@@ -148,6 +146,18 @@ def shape_similar(
         if len(kept) >= top_k:
             break
     return kept
+
+
+def _spans_overlap(start: float, end: float, source_start: float, source_end: float) -> bool:
+    """Strict interval overlap, with a zero-duration source treated as a point.
+
+    Touching at a boundary is not overlap (half-open convention), but a
+    zero-length source segment (start == end) would overlap nothing under the
+    strict test, so it degrades to half-open point containment.
+    """
+    if source_end > source_start:
+        return start < source_end and end > source_start
+    return start <= source_start < end
 
 
 def _distance(c: Candidate) -> float:
@@ -182,13 +192,17 @@ def _load_source(session: Session, segment_id: uuid.UUID) -> _SourceSegment | No
 
     covering: list[float] | None = None
     if len(effective.split()) < MIN_QUERY_TOKENS:
+        # Half-open containment of the segment START, matching the product's
+        # [start, end) interval convention: a paragraph ending exactly where
+        # the segment begins does NOT cover it (an inclusive end would hand a
+        # boundary segment the PRECEDING paragraph's vector).
         row = session.execute(
             select(SegmentEmbedding.embedding)
             .where(
                 SegmentEmbedding.pipeline_run_id == seg.pipeline_run_id,
                 SegmentEmbedding.embedding_space == EMBEDDING_SPACE,
                 SegmentEmbedding.start_seconds <= seg.start_seconds,
-                SegmentEmbedding.end_seconds >= seg.start_seconds,
+                SegmentEmbedding.end_seconds > seg.start_seconds,
             )
             .order_by(SegmentEmbedding.chunk_index.asc())
             .limit(1)
@@ -263,8 +277,29 @@ def similar_passages(
             return SimilarResultsPage(SimilarSearchState.INDEXING)
 
         distance = SegmentEmbedding.embedding.cosine_distance(query_vector)
+        # The source-span exclusion is ALSO applied in SQL, before the bounded
+        # LIMIT: a long self-similar recording could otherwise fill the whole
+        # candidate window with chunks the shaping would then discard, leaving
+        # the page underfilled while valid neighbours sit just past the limit.
+        # shape_similar keeps the same rule as the pure, unit-tested net.
+        if source.end_seconds > source.start_seconds:
+            source_span = and_(
+                SegmentEmbedding.start_seconds < source.end_seconds,
+                SegmentEmbedding.end_seconds > source.start_seconds,
+            )
+        else:
+            source_span = and_(
+                SegmentEmbedding.start_seconds <= source.start_seconds,
+                SegmentEmbedding.end_seconds > source.start_seconds,
+            )
         stmt = (
             with_run_joins(select(*base_columns(), distance.label("distance")))
+            .where(
+                ~and_(
+                    SegmentEmbedding.pipeline_run_id == source.run_id,
+                    source_span,
+                )
+            )
             .order_by(distance.asc(), SegmentEmbedding.id.asc())
             .limit(candidate_limit)
         )

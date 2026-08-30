@@ -1,4 +1,4 @@
-""""More like this passage" + the semantic meaning map end to end (#357).
+"""More-like-this passages + the semantic meaning map end to end (#357).
 
 Both features read the PR1 embedding index, so both are exercised over real
 seeded ``segment_embeddings`` rows produced by the real job flow with the
@@ -182,6 +182,33 @@ class TestSimilarPassages:
         seed_onboarded(session_factory)
         page = _similar(session_factory, _segment_id(session_factory, run_id))
         assert page.state is SimilarSearchState.INDEXING
+
+    def test_boundary_short_segment_uses_its_own_paragraph_not_the_preceding(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # Regression (review HIGH): the covering-chunk lookup is half-open on
+        # the segment start. A short segment starting exactly where the
+        # previous paragraph ENDS (index 1 -> start 10s, paragraph 0 spans
+        # [0, 10)) must resolve to ITS paragraph's vector; an inclusive end
+        # predicate would deterministically hand it paragraph 0's vector and
+        # surface the wrong twin.
+        source = _seed_indexed_run(
+            session_factory,
+            [("S0", _LONG_OTHER, None), ("S1", "a very short remark", None)],
+        )
+        right_twin = _seed_indexed_run(
+            session_factory, [("S0", "a very short remark", None)]
+        )
+        wrong_twin = _seed_indexed_run(session_factory, [("S0", _LONG_OTHER, None)])
+        page = similar_passages(
+            session_factory,
+            settings=make_settings(),
+            segment_id=_segment_id(session_factory, source, index=1),
+        )
+        assert page.state is SimilarSearchState.OK
+        assert page.items
+        assert page.items[0].run_id == right_twin
+        assert page.items[0].run_id != wrong_twin
 
     def test_short_segment_uses_covering_chunk_without_an_embedder(
         self, session_factory: sessionmaker[Session]

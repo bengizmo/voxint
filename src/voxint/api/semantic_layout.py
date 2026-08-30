@@ -25,9 +25,16 @@ from, so every point carries what the canvas needs and never joins back.
 Coordinates are not durable identifiers: adding or correcting material
 changes the principal components and every point may move. Per-component
 sign fixing keeps recomputes from mirroring, nothing more.
+
+Accepted staleness: the fingerprint covers the indexed corpus (run
+membership, generation, row counts, embedding space, algorithm), not the
+denormalized display metadata inside cached points. An edited media title
+keeps showing its old text in tooltips until the next corpus change
+recomputes the layout.
 """
 
 import hashlib
+import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -64,6 +71,8 @@ MAX_POINTS = 3000
 # A layout of fewer points than this is noise dressed up as structure.
 MIN_POINTS = 5
 _PREVIEW_CHARS = 160
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -195,8 +204,11 @@ def _get_cached(
 
 
 def _lock_key(scope_kind: str, project_id: uuid.UUID | None) -> int:
+    # Hash the WHOLE scope string: truncating the raw bytes would key every
+    # scope off the identical "semantic" prefix, collapsing per-scope locking
+    # into one global lock.
     raw = f"semantic_layout:{scope_kind}:{project_id or ''}"
-    return int.from_bytes(raw.encode()[:8], "big") & 0x7FFFFFFF
+    return int.from_bytes(hashlib.sha256(raw.encode()).digest()[:8], "big") & 0x7FFFFFFF
 
 
 def _write_artifact(
@@ -315,7 +327,15 @@ def semantic_layout(
     settings: Settings,
     project_id: uuid.UUID | None = None,
 ) -> SemanticLayoutResult:
-    """Return the map for this scope, computing and caching if stale or missing."""
+    """Return the map for this scope, computing and caching if stale or missing.
+
+    The fingerprint and the point load are separate READ COMMITTED statements,
+    so a concurrent embedding publish could straddle them and key a torn
+    payload under the wrong hash. The load is therefore bracketed: the
+    fingerprint is recomputed after loading and the pass retries (bounded)
+    until the two agree; only a verified pairing is cached. A layout computed
+    from a corpus that will not hold still is never written.
+    """
     if not resolve_effective_semantic_index_enabled(get_app_settings(session), settings):
         return SemanticLayoutResult(state="off")
 
@@ -324,10 +344,25 @@ def semantic_layout(
     if cached is not None and cached.source_hash == fingerprint:
         return SemanticLayoutResult(state="ok", payload=cached.payload)
 
-    try:
-        points, total = _load_points(session, project_id)
-    except ValueError:
-        return SemanticLayoutResult(state="insufficient")
+    points: list[dict[str, Any]] = []
+    total = 0
+    verified = False
+    for _ in range(3):
+        try:
+            points, total = _load_points(session, project_id)
+        except ValueError as exc:
+            # pca_2d's documented degenerate inputs (too few points, rank
+            # deficiency, non-finite values) all land here; log the reason so
+            # genuine data corruption is visible in ops, not silently dressed
+            # up as a small corpus.
+            logger.warning("semantic layout not computable: %s", exc)
+            return SemanticLayoutResult(state="insufficient")
+        recheck = _layout_fingerprint(session, project_id)
+        if recheck == fingerprint:
+            verified = True
+            break
+        fingerprint = recheck
+
     if len(points) < MIN_POINTS:
         return SemanticLayoutResult(state="insufficient")
 
@@ -339,5 +374,10 @@ def semantic_layout(
         "sampled": total > len(points),
         "points": points,
     }
-    _write_artifact(session, project_id, payload, fingerprint)
+    if verified:
+        _write_artifact(session, project_id, payload, fingerprint)
+    else:
+        logger.warning(
+            "semantic layout fingerprint kept moving; serving uncached result"
+        )
     return SemanticLayoutResult(state="ok", payload=payload)

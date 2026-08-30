@@ -78,6 +78,31 @@ class TestSourceSpanExclusion:
         adjacent = _cand(run_id=_SOURCE_RUN, start=20.0, end=30.0)
         assert _shape([adjacent]) == [adjacent]
 
+    def test_zero_length_source_still_excludes_containing_paragraph(self) -> None:
+        # A zero-duration source segment (start == end) overlaps nothing under
+        # the strict test, so exclusion degrades to point containment: the
+        # paragraph holding the instant must still be excluded.
+        paragraph = _cand(run_id=_SOURCE_RUN, start=5.0, end=40.0)
+        kept = shape_similar(
+            [paragraph],
+            source_run_id=_SOURCE_RUN,
+            source_start=10.0,
+            source_end=10.0,
+        )
+        assert kept == []
+
+    def test_zero_length_source_keeps_boundary_touch(self) -> None:
+        # Point containment is half-open: a paragraph ENDING exactly at the
+        # instant does not contain it.
+        before = _cand(run_id=_SOURCE_RUN, start=0.0, end=10.0)
+        kept = shape_similar(
+            [before],
+            source_run_id=_SOURCE_RUN,
+            source_start=10.0,
+            source_end=10.0,
+        )
+        assert kept == [before]
+
     def test_other_run_overlapping_interval_kept(self) -> None:
         # Overlap exclusion is scoped to the source run; the same clock range
         # in a different recording is a legitimate result.

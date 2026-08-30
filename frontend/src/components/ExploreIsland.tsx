@@ -97,10 +97,12 @@ function SimilarPanel({
   segmentId,
   colSpan,
   cache,
+  panelId,
 }: {
   segmentId: string;
   colSpan: number;
   cache: Map<string, SimilarResponse>;
+  panelId: string;
 }) {
   const [response, setResponse] = useState<SimilarResponse | null>(
     () => cache.get(segmentId) ?? null,
@@ -116,7 +118,10 @@ function SimilarPanel({
         return res.json() as Promise<SimilarResponse>;
       })
       .then((body) => {
-        cache.set(segmentId, body);
+        // Only settled answers are cached: "indexing" (and friends) are
+        // transient, and pinning one for the page lifetime would keep saying
+        // "still indexing" after indexing finished.
+        if (body.state === "ok") cache.set(segmentId, body);
         setResponse(body);
       })
       .catch((error: unknown) => {
@@ -150,7 +155,10 @@ function SimilarPanel({
     content = (
       <ul className="m-0 list-none space-y-2 p-0">
         {response.items.map((item) => (
-          <li key={`${item.run_id}-${item.start_seconds}`} className="text-sm">
+          <li
+            key={`${item.run_id}-${item.start_seconds}-${item.end_seconds}`}
+            className="text-sm"
+          >
             <span className="block text-[length:var(--t-micro)] text-[var(--ink-3)]">
               {item.speaker_label ? `${item.speaker_label} · ` : ""}
               <a
@@ -169,7 +177,7 @@ function SimilarPanel({
   }
 
   return (
-    <tr className="border-b border-[var(--line)] bg-[var(--surface-2)]">
+    <tr id={panelId} className="border-b border-[var(--line)] bg-[var(--surface-2)]">
       <td className="px-3 py-2" colSpan={colSpan}>
         <p className="mb-1 mt-0 text-[length:var(--t-micro)] uppercase tracking-wide text-[var(--ink-3)]">
           More like this passage
@@ -304,8 +312,9 @@ export function ExploreIsland({
     setSavedSet((prev) => new Set(prev).add(key));
   }, []);
   const showSave = !!csrfQuoteSave && !!query;
-  // Expansion tracks the ROW key (a segment can appear in several KWIC rows);
-  // the fetch cache is per segment and lives for the page.
+  // KWIC emits one row per segment (one ts_headline per matching segment),
+  // so the row key is unique per render; the fetch cache is per segment and
+  // lives for the page.
   const [expandedSimilar, setExpandedSimilar] = useState<string | null>(null);
   const similarCache = useRef(new Map<string, SimilarResponse>()).current;
   const resultColumns = 5 + (showSave ? 1 : 0);
@@ -458,6 +467,7 @@ export function ExploreIsland({
                           title="More like this passage"
                           aria-label="More like this passage"
                           aria-expanded={isExpanded}
+                          aria-controls={`similar-${row.segment_id}`}
                         >
                           ≈
                         </button>
@@ -479,6 +489,7 @@ export function ExploreIsland({
                         segmentId={row.segment_id}
                         colSpan={resultColumns}
                         cache={similarCache}
+                        panelId={`similar-${row.segment_id}`}
                       />
                     ) : null}
                     </Fragment>

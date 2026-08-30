@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /** Semantic meaning map (#357): a canvas scatter of the corpus chunk
  * embeddings projected to 2D server-side (PCA). Points are colored by
@@ -105,11 +105,19 @@ export function MeaningMap({ projectId }: { projectId: string | null }) {
 
   const toggle = useCallback(() => {
     setOpen((was) => {
-      if (!was && fetchState.phase === "idle") void load();
+      // Reopening after a failed load retries; a successful load is kept for
+      // the page lifetime.
+      if (!was && (fetchState.phase === "idle" || fetchState.phase === "error")) {
+        void load();
+      }
       return !was;
     });
   }, [fetchState.phase, load]);
 
+  // Re-runs on phase changes too: the wrapper div only exists in the ready
+  // branch, so an effect keyed on `open` alone would fire during "loading",
+  // find no element, and never attach — leaving width 0 and the canvas blank
+  // on first open.
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -118,12 +126,15 @@ export function MeaningMap({ projectId }: { projectId: string | null }) {
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [open]);
+  }, [open, fetchState.phase]);
 
-  const points =
-    fetchState.phase === "ready" && fetchState.data.state === "ok"
-      ? (fetchState.data.points ?? [])
-      : [];
+  const points = useMemo(
+    () =>
+      fetchState.phase === "ready" && fetchState.data.state === "ok"
+        ? (fetchState.data.points ?? [])
+        : [],
+    [fetchState],
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -196,6 +207,33 @@ export function MeaningMap({ projectId }: { projectId: string | null }) {
     [nearestPoint],
   );
 
+  // Keyboard path to the same selection the mouse gets: arrows cycle through
+  // the points, Escape clears. The selected passage renders as ordinary HTML
+  // below the canvas, so the transcript link is reachable from there.
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLCanvasElement>) => {
+      if (points.length === 0) return;
+      if (event.key === "Escape") {
+        setSelected(null);
+        return;
+      }
+      const step =
+        event.key === "ArrowRight" || event.key === "ArrowDown"
+          ? 1
+          : event.key === "ArrowLeft" || event.key === "ArrowUp"
+            ? -1
+            : 0;
+      if (step === 0) return;
+      event.preventDefault();
+      setSelected((was) => {
+        const index = was ? points.indexOf(was) : -1;
+        const next = (index + step + points.length) % points.length;
+        return points[next];
+      });
+    },
+    [points],
+  );
+
   return (
     <section className="mb-4" aria-label="Meaning map">
       <button
@@ -233,11 +271,13 @@ export function MeaningMap({ projectId }: { projectId: string | null }) {
                   ref={canvasRef}
                   style={{ width: "100%", height: HEIGHT, display: "block" }}
                   className="rounded-[var(--r-md)] border border-[var(--line)] bg-[var(--surface)]"
-                  role="img"
-                  aria-label={`Meaning map: ${points.length} passages positioned by similarity`}
+                  role="application"
+                  tabIndex={0}
+                  aria-label={`Meaning map: ${points.length} passages positioned by similarity. Arrow keys move the selection; details appear below the map.`}
                   onMouseMove={handleMove}
                   onMouseLeave={() => setHovered(null)}
                   onClick={handleClick}
+                  onKeyDown={handleKeyDown}
                 />
                 {hovered ? (
                   <div
@@ -266,7 +306,10 @@ export function MeaningMap({ projectId }: { projectId: string | null }) {
                   : ""}
               </p>
               {selected ? (
-                <div className="mt-2 rounded-[var(--r-md)] border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-sm">
+                <div
+                  aria-live="polite"
+                  className="mt-2 rounded-[var(--r-md)] border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-sm"
+                >
                   <span className="block text-[length:var(--t-micro)] text-[var(--ink-3)]">
                     {selected.speaker_label ? `${selected.speaker_label} · ` : ""}
                     {selected.media_title} · {formatTime(selected.start_seconds)}

@@ -277,7 +277,12 @@ def explore_meaning_map(
     session: SessionDep,
     project: uuid.UUID | None = None,
 ) -> JSONResponse:
-    """The semantic meaning map for this scope, computed and cached on read (#357)."""
+    """The semantic meaning map for this scope, computed and cached on read (#357).
+
+    This GET intentionally materializes derived cache (an advisory-locked,
+    idempotent artifact write an attacker cannot influence) — not a pattern to
+    copy for operator-owned state, which belongs on CSRF-checked POSTs.
+    """
     result = semantic_layout(session, request.app.state.settings, project)
     return JSONResponse({"state": result.state, **result.payload})
 
