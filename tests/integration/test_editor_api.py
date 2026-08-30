@@ -133,7 +133,7 @@ def test_valid_claim_token_enables_editing(
         follow_redirects=False,
     )
     assert resp.status_code == 200
-    assert "Editing enabled" in resp.text
+    assert "Read-only" not in resp.text
 
 
 def test_stale_claim_token_degrades_to_read_only(

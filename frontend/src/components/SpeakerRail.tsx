@@ -2,6 +2,13 @@ import { useCallback, useRef, useState } from "react";
 
 import { ApiError, apiFetch } from "../lib/api-client";
 import { makeNonce } from "../lib/nonce";
+import type { Segment } from "./TranscriptPlayer";
+
+export interface LabelsResult {
+  labels: LabelStateShape[];
+  segments: Segment[];
+  progress: { verified: number; total: number };
+}
 
 export interface LabelStateShape {
   label: string;
@@ -31,7 +38,7 @@ interface SpeakerRailProps {
   labelStates: LabelStateShape[];
   speakers: { id: string; displayName: string }[];
   onClaimLost: () => void;
-  onLabelsChanged: (states: LabelStateShape[]) => void;
+  onLabelsChanged: (result: LabelsResult) => void;
 }
 
 function resolutionBadge(s: LabelStateShape): React.JSX.Element {
@@ -201,7 +208,7 @@ function MergePanel({
   labelStates: LabelStateShape[];
   speakers: { id: string; displayName: string }[];
   busy: boolean;
-  onMerge: (data: LabelStateShape[]) => void;
+  onMerge: (data: LabelsResult) => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [target, setTarget] = useState("");
@@ -269,7 +276,7 @@ function MergePanel({
         },
         body: body.toString(),
       });
-      const data = (await res.json()) as LabelStateShape[];
+      const data = (await res.json()) as LabelsResult;
       setPreview(null);
       setSelected(new Set());
       setTarget("");
@@ -422,11 +429,11 @@ export function SpeakerRail({
     [],
   );
 
-  const adoptStates = useCallback(
-    (data: LabelStateShape[]) => {
-      const enriched = applyPalette(data);
+  const adoptResult = useCallback(
+    (data: LabelsResult) => {
+      const enriched = applyPalette(data.labels);
       setLabelStates(enriched);
-      onLabelsChanged(enriched);
+      onLabelsChanged({ ...data, labels: enriched });
     },
     [applyPalette, onLabelsChanged],
   );
@@ -455,8 +462,8 @@ export function SpeakerRail({
             body: new URLSearchParams(body).toString(),
           },
         );
-        const data = (await res.json()) as LabelStateShape[];
-        adoptStates(data);
+        const data = (await res.json()) as LabelsResult;
+        adoptResult(data);
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
           onClaimLost();
@@ -468,7 +475,7 @@ export function SpeakerRail({
         setBusy(false);
       }
     },
-    [reviewToken, runId, onClaimLost, adoptStates],
+    [reviewToken, runId, onClaimLost, adoptResult],
   );
 
   const enroll = useCallback(
@@ -494,8 +501,8 @@ export function SpeakerRail({
             body: new URLSearchParams(body).toString(),
           },
         );
-        const data = (await res.json()) as LabelStateShape[];
-        adoptStates(data);
+        const data = (await res.json()) as LabelsResult;
+        adoptResult(data);
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
           onClaimLost();
@@ -507,7 +514,7 @@ export function SpeakerRail({
         setBusy(false);
       }
     },
-    [reviewToken, runId, onClaimLost, adoptStates],
+    [reviewToken, runId, onClaimLost, adoptResult],
   );
 
   return (
@@ -531,7 +538,7 @@ export function SpeakerRail({
           labelStates={labelStates}
           speakers={speakers}
           busy={busy}
-          onMerge={adoptStates}
+          onMerge={adoptResult}
         />
       )}
       {error && (

@@ -20,12 +20,15 @@ from voxint.adjudication.transcript import TranscriptText, attributed_transcript
 from voxint.api.csrf import (
     CSRF_ANNOTATION_TAGS,
     CSRF_CLIP_EXTRACT,
+    CSRF_TRANSLATION_GENERATE,
     mint_csrf_token,
 )
 from voxint.api.editor_query import media_detail
+from voxint.api.languages import language_label
 from voxint.api.playback import playback_capability
 from voxint.api.presentation import friendly_media_label
 from voxint.api.routers.deps import (
+    _TRANSLATION_ACTIVE_STATUSES,
     OperatorDep,
     SessionDep,
     _get_media_gate,
@@ -39,8 +42,16 @@ from voxint.api.transcript_view import (
     _run_label_universe,
     _transcript_island_props,
 )
+from voxint.app_settings import get_app_settings, resolve_effective_translation_target_language
 from voxint.config import Settings
 from voxint.db.models import PipelineRun, RunStatus
+from voxint.enrichment.translation_jobs import (
+    active_or_last_job as active_or_last_translation_job,
+)
+from voxint.enrichment.translation_jobs import (
+    normalized_language,
+    translation_gates_open,
+)
 from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import active_speakers
 
@@ -149,6 +160,32 @@ def media_detail_page(
                 island_props["clipCsrf"] = mint_csrf_token(
                     request.app.state.csrf_secret, CSRF_CLIP_EXTRACT
                 )
+
+            translate_row = get_app_settings(session)
+            if translation_gates_open(settings, translate_row):
+                detected = normalized_language(selected_run_obj.detected_language)
+                preferred = normalized_language(
+                    resolve_effective_translation_target_language(translate_row, settings)
+                )
+                translate_job = active_or_last_translation_job(session, run_id)
+                default_target = (
+                    preferred if preferred is not None and preferred != detected else None
+                )
+                island_props["translate"] = {
+                    "csrf": mint_csrf_token(
+                        request.app.state.csrf_secret, CSRF_TRANSLATION_GENERATE
+                    ),
+                    "defaultTarget": default_target,
+                    "defaultTargetLabel": (
+                        language_label(default_target) if default_target else None
+                    ),
+                    "active": translate_job is not None
+                    and translate_job.status in _TRANSLATION_ACTIVE_STATUSES,
+                    "runAnchor": f"/runs/{run_id}#run-translation-{run_id}",
+                    "transcriptUrl": f"/runs/{run_id}/transcript",
+                }
+            else:
+                island_props["translate"] = None
 
     return templates.TemplateResponse(
         request,
