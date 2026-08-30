@@ -78,6 +78,12 @@
     ]
   ],
   [
+    "/favicon.ico",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/static/app/{asset_path:path}",
     [
       "GET"
@@ -265,6 +271,24 @@
   ],
   [
     "/runs/{run_id}/cancel",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/runs/{run_id}/pause",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/runs/{run_id}/resume",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/runs/{run_id}/restart",
     [
       "POST"
     ]

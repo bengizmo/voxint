@@ -37,6 +37,9 @@ EXEMPT_PATHS = {
     # load before onboarding completes (the setup wizard extends base.html).
     # Still auth-gated by the route's own OperatorDep, not open like /healthz.
     "/static/app/{asset_path:path}",
+    # Favicon (#320): on `app` like the other assets, so browser tab icons work
+    # on the setup wizard too. Auth-gated by its own OperatorDep, not open.
+    "/favicon.ico",
     "/setup",
     "/setup/folders/browse",
     "/setup/folders",

@@ -2,6 +2,7 @@
 {% from "fragments/export_menu.html" import export_menu %}
 {% from "legacy_review/review_journey.html" import review_journey %}
 {% block title %}Voxint — review {{ run_source_title(run) }}{% endblock %}
+{% block cb_breadcrumb %}review / <strong>{{ run_source_title(run) }}</strong>{% endblock %}
 {% block body %}
 <p><a href="/review">← queue</a></p>
 

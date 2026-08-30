@@ -14,6 +14,7 @@
      (the rail is always visible on desktop). */
   document.documentElement.classList.add("js");})();</script>
   <title>{% block title %}Voxint review{% endblock %}</title>
+  <link rel="icon" type="image/png" href="/favicon.ico">
   <script src="/static/htmx.min.js"></script>
   {# Island stylesheet (issue #48). Placed BEFORE the inline <style> so the
      hand-authored block wins any property collision as the later source. The
@@ -426,6 +427,7 @@
     .pill.completed, .pill.succeeded { background: var(--ok-soft); border-color: var(--ok); }
     .pill.failed { background: var(--danger-soft); border-color: var(--danger); }
     .pill.queued, .pill.awaiting_adjudication { background: var(--surface-2); }
+    .pill.paused { background: var(--warn-soft); border-color: var(--warn); }
     .pill.cancelled { background: var(--surface-2); color: var(--ink-3); }
     .pill.skipped { background: var(--surface-2); color: var(--ink-3); }
     /* Device-activity pills (W3): neutral/informational, never an alarm colour. */
@@ -1046,7 +1048,29 @@
                       justify-content: space-between; }
     .register-folder { display: flex; gap: .8rem; align-items: end;
                        flex-wrap: wrap; margin-top: .8rem; }
-    .lib-cards-placeholder { padding: var(--space-6); text-align: center; }
+    .lib-cards > li { position: relative; }
+    .lib-cards > li.is-selected { border-color: var(--accent);
+                background: rgba(79,192,181,.04); }
+    .media-card-check { position: absolute; top: var(--space-2); left: var(--space-2); }
+    .media-card-duration { position: absolute; top: var(--space-2); right: var(--space-3);
+                font-family: var(--font-mono); font-size: var(--t-sm); color: var(--ink-2); }
+    .media-card-title { display: block; margin-top: var(--space-3);
+                font-weight: 500; color: var(--ink); text-decoration: none; }
+    .media-card-title:hover { color: var(--accent); }
+    a.media-card-title { cursor: pointer; }
+    .media-card-meta { font-size: var(--t-sm); color: var(--ink-2); margin-top: var(--space-1); }
+    .media-card-chips { display: flex; flex-wrap: wrap; gap: var(--space-1);
+                margin-top: var(--space-2); }
+    .media-card-group { margin-bottom: var(--space-4); }
+    .media-card-group > summary { cursor: pointer; display: flex; align-items: center;
+                gap: var(--space-2); font-size: var(--t-micro); font-weight: 700;
+                text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3);
+                padding: var(--space-2) 0; list-style: none; }
+    .media-card-group > summary::-webkit-details-marker { display: none; }
+    .media-card-group > summary::before { content: "▾"; font-size: var(--t-sm);
+                transition: transform 120ms; }
+    .media-card-group:not([open]) > summary::before { transform: rotate(-90deg); }
+    .media-card-group .lib-cards { margin-top: var(--space-2); }
     [hidden] { display: none !important; }
 
     /* --- R4 Speakers overview + detail -------------------------------- */
@@ -1361,12 +1385,11 @@
         <span class="cb-breadcrumb">{% block cb_breadcrumb %}{{ active_nav or 'home' }}{% endblock %}</span>
         <span class="cb-summary">{% block cb_summary %}{% endblock %}</span>
         <div class="cb-spacer"></div>
-        {% block cb_search %}
-        <div class="cb-search" aria-hidden="true">
-          <span>Search everything</span>
-          <kbd>&#8984;K</kbd>
-        </div>
-        {% endblock %}
+        {# #162: the decorative search affordance is removed until search
+           exists — a visible "Search everything ⌘K" that does nothing is a
+           broken promise. The block stays as the seam the real command
+           palette will fill; the .cb-search CSS is kept for it too. #}
+        {% block cb_search %}{% endblock %}
         {% block cb_actions %}
         <button type="button" class="secondary" data-theme-cycle>Theme: System</button>
         {% endblock %}

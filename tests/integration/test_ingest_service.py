@@ -30,11 +30,17 @@ from voxint.ingest import (
     RunNotCancellableError,
     RunNotFailedError,
     RunNotFoundError,
+    RunNotPausableError,
+    RunNotPausedError,
+    RunNotRestartableError,
     UploadConflictError,
     UploadValidationError,
     UrlValidationError,
     cancel_run,
+    pause_run,
     requeue_failed_run,
+    restart_run,
+    resume_run,
     submit_media_item,
     submit_media_item_if_new,
     submit_url,
@@ -1077,3 +1083,242 @@ def test_if_new_persists_sidecar_speaker_hint(
         stored = session.get(PipelineRun, run_id)
         assert stored.diarization_max_speakers == 5
         assert stored.diarization_num_speakers is None
+
+
+# ── pause_run ────────────────────────────────────────────────────────────
+
+
+def test_pause_missing_run_raises_not_found(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session, pytest.raises(RunNotFoundError):
+        pause_run(session, uuid.uuid4())
+
+
+def test_pause_queued_run(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/pause-q.wav").run_id
+        session.commit()
+
+    with session_factory() as session:
+        result = pause_run(session, run_id)
+        session.commit()
+        assert result.status is RunStatus.PAUSED
+        assert result.current_stage is None
+
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored.status == RunStatus.PAUSED.value
+
+
+def test_pause_running_run_keeps_stage(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/pause-run.wav").run_id
+        session.commit()
+        _drive_to_running(session, run_id, Stage.TRANSCRIBE)
+
+    with session_factory() as session:
+        result = pause_run(session, run_id)
+        session.commit()
+        assert result.status is RunStatus.PAUSED
+        assert result.current_stage is Stage.TRANSCRIBE
+
+
+def test_pause_already_paused_is_idempotent(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/pause-idem.wav").run_id
+        session.commit()
+
+    with session_factory() as session:
+        pause_run(session, run_id)
+        session.commit()
+
+    with session_factory() as session:
+        result = pause_run(session, run_id)
+        assert result.status is RunStatus.PAUSED
+
+
+def test_pause_completed_run_raises_not_pausable(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/pause-done.wav").run_id
+        session.commit()
+        held = _drive_to_running(session, run_id, Stage.FINALIZE)
+        cas_update_run(session, held, status=RunStatus.COMPLETED, current_stage=None)
+        session.commit()
+
+    with session_factory() as session, pytest.raises(RunNotPausableError):
+        pause_run(session, run_id)
+
+
+def test_pause_with_stale_revision_rejects(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/pause-stale.wav").run_id
+        session.commit()
+
+    with session_factory() as session, pytest.raises(StaleRevisionError):
+        pause_run(session, run_id, expected_revision=999)
+
+
+# ── resume_run ───────────────────────────────────────────────────────────
+
+
+def test_resume_missing_run_raises_not_found(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session, pytest.raises(RunNotFoundError):
+        resume_run(session, uuid.uuid4())
+
+
+def test_resume_paused_run_transitions_to_queued(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/resume.wav").run_id
+        session.commit()
+        _drive_to_running(session, run_id, Stage.TRANSCRIBE)
+
+    with session_factory() as session:
+        pause_run(session, run_id)
+        session.commit()
+
+    with session_factory() as session:
+        result = resume_run(session, run_id)
+        session.commit()
+        assert result.status is RunStatus.QUEUED
+        assert result.current_stage is Stage.TRANSCRIBE
+
+
+def test_resume_non_paused_raises_not_paused(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/resume-bad.wav").run_id
+        session.commit()
+
+    with session_factory() as session, pytest.raises(RunNotPausedError):
+        resume_run(session, run_id)
+
+
+def test_cancel_paused_run_succeeds(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/cancel-paused.wav").run_id
+        session.commit()
+
+    with session_factory() as session:
+        pause_run(session, run_id)
+        session.commit()
+
+    with session_factory() as session:
+        result = cancel_run(session, run_id)
+        session.commit()
+        assert result.status is RunStatus.CANCELLED
+
+
+# ── restart_run ──────────────────────────────────────────────────────────
+
+
+def test_restart_missing_run_raises_not_found(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session, pytest.raises(RunNotFoundError):
+        restart_run(session, uuid.uuid4())
+
+
+def test_restart_completed_run_queues_at_none(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/restart-done.wav").run_id
+        session.commit()
+        held = _drive_to_running(session, run_id, Stage.FINALIZE)
+        cas_update_run(session, held, status=RunStatus.COMPLETED, current_stage=None)
+        session.commit()
+
+    with session_factory() as session:
+        result = restart_run(session, run_id)
+        session.commit()
+        assert result.status is RunStatus.QUEUED
+        assert result.current_stage is None
+
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored.status == RunStatus.QUEUED.value
+        assert stored.current_stage is None
+        assert stored.error is None
+
+
+def test_restart_failed_run_clears_error(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/restart-fail.wav").run_id
+        session.commit()
+        _drive_to_failed(session, run_id, Stage.TRANSCRIBE)
+
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored.error is not None
+
+    with session_factory() as session:
+        result = restart_run(session, run_id)
+        session.commit()
+        assert result.status is RunStatus.QUEUED
+        assert result.current_stage is None
+
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored.error is None
+
+
+def test_restart_cancelled_run(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/restart-cancel.wav").run_id
+        session.commit()
+
+    with session_factory() as session:
+        cancel_run(session, run_id)
+        session.commit()
+
+    with session_factory() as session:
+        result = restart_run(session, run_id)
+        session.commit()
+        assert result.status is RunStatus.QUEUED
+        assert result.current_stage is None
+
+
+def test_restart_running_run_raises_not_restartable(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/restart-run.wav").run_id
+        session.commit()
+        _drive_to_running(session, run_id, Stage.PREPARE)
+
+    with session_factory() as session, pytest.raises(RunNotRestartableError):
+        restart_run(session, run_id)
+
+
+def test_restart_archived_run_raises_archived(
+    session_factory: sessionmaker[Session],
+) -> None:
+    from voxint.ingest import RunArchivedError, archive_run
+
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/restart-arch.wav").run_id
+        session.commit()
+        held = _drive_to_running(session, run_id, Stage.FINALIZE)
+        cas_update_run(session, held, status=RunStatus.COMPLETED, current_stage=None)
+        session.commit()
+
+    with session_factory() as session:
+        archive_run(session, run_id)
+        session.commit()
+
+    with session_factory() as session, pytest.raises(RunArchivedError):
+        restart_run(session, run_id)

@@ -303,3 +303,20 @@ def test_collapse_stages_with_wait_estimate(
 
     enrich = next(s for s in result if s.key == "enrich")
     assert enrich.wait_estimate_seconds is None
+
+
+def test_legacy_transcript_crumb_follows_shell_flag(
+    client_flag_off: TestClient,
+    client_flag_on: TestClient,
+    session_factory: sessionmaker[Session],
+) -> None:
+    """#319: the legacy transcript page crumbs to its canonical parent - the run
+    browser the shell exposes ('jobs /' when jobs is on, 'runs /' when off) -
+    instead of falling through to the 'home' default."""
+    run_id = _make_run(session_factory, status=RunStatus.COMPLETED)
+
+    off = client_flag_off.get(f"/runs/{run_id}/transcript").text
+    assert f'class="cb-breadcrumb">runs / <strong>{run_id.hex[:8]}</strong>' in off
+
+    on = client_flag_on.get(f"/runs/{run_id}/transcript").text
+    assert f'class="cb-breadcrumb">jobs / <strong>{run_id.hex[:8]}</strong>' in on

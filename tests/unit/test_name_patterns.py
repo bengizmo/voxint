@@ -298,3 +298,57 @@ def test_empty_inputs_yield_nothing() -> None:
     assert _metadata() == []
     assert _segment("") == []
     assert _segment("   ") == []
+
+
+# ---------------------------------------------------------------------------
+# _snippet word alignment (#318)
+# ---------------------------------------------------------------------------
+
+from voxint.enrichment.producers.name_patterns import (  # noqa: E402
+    _SNIPPET_ALIGN_CHARS,
+    SNIPPET_CONTEXT_CHARS,
+    _snippet,
+)
+
+
+def test_snippet_edges_expand_to_word_boundaries() -> None:
+    # 11-char tokens; the fixed +/-60 window lands mid-token on both sides,
+    # so both edges must walk outward to whitespace.
+    text = "abcdefghij " * 40
+    start = 300  # mid-token (300 % 11 == 3)
+    result = _snippet(text, start, start + 4)
+    tokens = result.split(" ")
+    assert tokens[0] == "abcdefghij"
+    assert tokens[-1] == "abcdefghij"
+
+
+def test_snippet_keeps_punctuation_attached_to_tokens() -> None:
+    # Punctuation is not whitespace: an edge landing inside "chen," keeps the
+    # whole token, comma included.
+    filler = "abcdefghij " * 10
+    text = filler + "sarah chen, host of the show " + filler
+    idx = text.index("host")
+    result = _snippet(text, idx, idx + 4)
+    assert "sarah chen," in result
+    assert "hen," not in result.split(" ", 1)[0] or result.split(" ", 1)[0] == "chen,"
+
+
+def test_snippet_long_unbroken_token_cut_at_cap() -> None:
+    text = "a" * 500
+    start, end = 250, 254
+    result = _snippet(text, start, end)
+    # No whitespace to find: both sides stop at the alignment cap.
+    assert len(result) == 2 * (SNIPPET_CONTEXT_CHARS + _SNIPPET_ALIGN_CHARS) + (
+        end - start
+    )
+
+
+def test_snippet_at_text_start_and_end() -> None:
+    text = "jane doe hosts the show"
+    assert _snippet(text, 0, 8) == text  # window covers everything
+    assert _snippet(text, len(text) - 4, len(text)) == text
+
+
+def test_snippet_collapses_whitespace() -> None:
+    text = "jane\n\tdoe   hosts the show"
+    assert _snippet(text, 0, 8) == "jane doe hosts the show"

@@ -64,6 +64,7 @@ class RunStatus(enum.StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     AWAITING_ADJUDICATION = "awaiting_adjudication"
+    PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"

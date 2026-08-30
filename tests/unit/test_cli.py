@@ -198,6 +198,33 @@ def test_doctor_prints_results_and_maps_exit_code(
     assert "a hard dependency is down" in out
 
 
+def test_doctor_prints_both_llm_lanes_without_changing_exit_code(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #316: a bundled-only install reports both AI lanes honestly — the bundled
+    # advisory line appears, the unconfigured BYO endpoint says so instead of
+    # "rejected" — and neither is hard, so the exit code stays 0.
+    import voxint.db.session as db_session
+    import voxint.diagnostics as diagnostics
+
+    class _Engine:
+        def dispose(self) -> None:
+            pass
+
+    monkeypatch.setattr(db_session, "build_engine", lambda *a, **k: _Engine())
+    canned = [
+        diagnostics.CheckResult("postgres", True, True, "connected"),
+        diagnostics.CheckResult("llm bundled", True, False, "reachable (HTTP 200)"),
+        diagnostics.CheckResult("llm endpoint", True, False, "not configured"),
+    ]
+    monkeypatch.setattr(diagnostics, "run_diagnostics", lambda *a, **k: canned)
+
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "[ok  ] llm bundled: reachable (HTTP 200)" in out
+    assert "[ok  ] llm endpoint: not configured" in out
+
+
 def test_doctor_fails_verdict_when_a_plugin_cannot_load(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
