@@ -1657,7 +1657,7 @@ The following artifacts must be hashed and committed before Phase 1 training.
 | M2 checkpoint (`finetuned_aasist.pth`) | Reference model | `e178446b640b8e9f9cf6dd359428b2243f49e24e613e1ae952cd706216b8111e` | Baseline scoring only |
 | XLS-R 300M (`xlsr2_300m.pt`) | Frozen frontend | `b08927597f2c9eb2ebd7dcc3ac78ee4b5f6021cbac4b3a6c5a9deec445d80ed9` | Feature extraction; shared across all candidates |
 | Selection seed | Partition assignment | `voxint-synthdetect-144` | Immutable; shared with bootstrap seeding |
-| Evaluator revision | Metric computation | `fbf6211b4d68bd1bb5a49ee495ae07eb6a164d6b` (evaluator repo commit) | Locked after golden-test validation (733-test suite green at this revision) |
+| Evaluator revision | Metric computation | `258f73ed22b167bd5382682860eef86d1c25a0b1` (evaluator repo commit) | Locked after golden-test validation (735-test suite green at this revision) |
 | ffmpeg version | Codec pipeline | `7.1`, digest-pinned container `sha256:292a972c60356abd651d9a4f9c808c13e7473f65ad400b7eb99215f4e571931d` | Locked for all codec materialization |
 | Calibration manifest | Platt fitting | `52d0fd78aa43eb3bb3f3ba96e55d81ddf41b45513cdc8bdcac4b5561c3a42739` | Calibration split only; no model selection |
 | Eval manifest | Iteration gates | `47a5fff1a76a053621f3129784c447217504d0063f2a8709485a1adb3d1f7560` | Phase gates; every touch logged |
@@ -1704,6 +1704,11 @@ before any Phase 1 training.
 
 **Score polarity.** Higher raw score always means more likely synthetic.
 Monotonic Platt scaling preserves rank order and does not change EER.
+
+**Windowing.** All protocol scoring uses production windowing (4.0375 s
+windows, logit-mean pooling, 8,000-sample tail floor), the mode validated by
+the S5 windowing verdict and used by the shipped service. Upstream
+windowing remains a diagnostic mode only.
 
 **Per-generator EER.** For each synthetic generator g, compute EER against
 the frozen bonafide comparison population on the target partition. The
