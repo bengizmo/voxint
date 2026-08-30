@@ -297,3 +297,146 @@ def test_unknown_view_degrades_to_table(
     resp = client.get("/media?view=bogus")
     assert resp.status_code == 200
     assert "grid-table" in resp.text
+
+
+# ---- cards drill-down (PR #341) ---------------------------------------------
+
+
+@pytest.fixture()
+def _seeded_folders(
+    session_factory: sessionmaker[Session],
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """Two folders with media items; returns (interviews_id, lectures_id)."""
+    with session_factory() as session:
+        f_int = MediaFolder(path="interviews")
+        f_lec = MediaFolder(path="lectures")
+        session.add_all([f_int, f_lec])
+        session.flush()
+        for i in range(3):
+            _add_media(
+                session,
+                source_path=f"interviews/rec_{i}.wav",
+                folder_id=f_int.id,
+                duration_seconds=60.0 * (i + 1),
+            )
+        _add_media(
+            session,
+            source_path="lectures/lec_1.mp3",
+            folder_id=f_lec.id,
+            duration_seconds=3600.0,
+        )
+        _add_media(session, source_path="misc/unfiled.flac")
+        session.commit()
+        return f_int.id, f_lec.id
+
+
+def test_cards_top_level_shows_folder_cards(
+    client: TestClient, _seeded_folders: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    f_int, f_lec = _seeded_folders
+    resp = client.get("/media?view=cards")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "media-folder-card" in body
+    assert f"open={f_int}" in body
+    assert f"open={f_lec}" in body
+    assert "Unfiled" in body
+    # Top-level: no drill-down back link or folder-contents region
+    assert "All folders" not in body
+    assert 'aria-label="Folder contents"' not in body
+
+
+def test_cards_drilldown_valid_folder(
+    client: TestClient, _seeded_folders: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    f_int, _ = _seeded_folders
+    resp = client.get(f"/media?view=cards&open={f_int}")
+    assert resp.status_code == 200
+    body = resp.text
+    assert 'aria-label="Folder contents"' in body
+    assert "interviews" in body
+    assert "All folders" in body
+    assert "rec_0.wav" in body
+    assert "rec_1.wav" in body
+    assert "rec_2.wav" in body
+    assert "unfiled.flac" not in body
+
+
+def test_cards_drilldown_invalid_uuid_falls_back(
+    client: TestClient, _seeded_folders: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    bogus = uuid.uuid4()
+    resp = client.get(f"/media?view=cards&open={bogus}")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "All folders" not in body
+    assert "media-folder-card" in body
+
+
+def test_cards_drilldown_non_uuid_falls_back(
+    client: TestClient, _seeded_folders: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    resp = client.get("/media?view=cards&open=not-a-uuid")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "All folders" not in body
+    assert "media-folder-card" in body
+
+
+def test_cards_drilldown_sort_links_carry_open(
+    client: TestClient, _seeded_folders: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    f_int, _ = _seeded_folders
+    resp = client.get(f"/media?view=cards&sort=name&open={f_int}")
+    assert resp.status_code == 200
+    body = resp.text
+    for sort_key in ("added", "name", "duration", "size"):
+        assert f"sort={sort_key}&view=cards&open={f_int}" in body
+
+
+def test_cards_drilldown_hidden_input_preserves_open(
+    client: TestClient, _seeded_folders: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    f_int, _ = _seeded_folders
+    resp = client.get(f"/media?view=cards&open={f_int}")
+    assert resp.status_code == 200
+    assert f'name="open" value="{f_int}"' in resp.text
+
+
+def test_cards_open_ignored_in_table_view(
+    client: TestClient, _seeded_folders: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    f_int, _ = _seeded_folders
+    resp = client.get(f"/media?view=table&open={f_int}")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "All folders" not in body
+    assert 'aria-label="Folder contents"' not in body
+    assert "grid-table" in body
+
+
+def test_cards_top_level_has_selection_affordances(
+    client: TestClient, _seeded_folders: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    resp = client.get("/media?view=cards")
+    assert resp.status_code == 200
+    body = resp.text
+    # The unfiled item card carries its own checkbox inside the bulk form,
+    # and the section has a select-all box plus the (hidden) action bar.
+    assert 'class="media-card-check"' in body
+    assert 'name="media_id"' in body
+    assert 'data-select-all-box aria-label="Select all"' in body
+    assert "data-action-bar" in body
+
+
+def test_cards_drilldown_has_selection_affordances(
+    client: TestClient, _seeded_folders: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    f_int, _ = _seeded_folders
+    resp = client.get(f"/media?view=cards&open={f_int}")
+    assert resp.status_code == 200
+    body = resp.text
+    # Every in-folder row is selectable and the folder view has select-all.
+    assert body.count('name="media_id"') == 3
+    assert 'data-select-all-box aria-label="Select all"' in body
+    assert "data-action-bar" in body
