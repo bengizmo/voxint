@@ -7,12 +7,6 @@
 {%- if media_summary.folder_count %}{{ media_summary.folder_count }} folder{{ "s" if media_summary.folder_count != 1 else "" }} · {% endif -%}
 {{ media_summary.file_count }} recording{{ "s" if media_summary.file_count != 1 else "" }} · {{ media_summary.total_hours }}
 {%- endblock %}
-{% block cb_search %}
-<div class="cb-search" aria-hidden="true">
-  <span>Filter media</span>
-  <kbd>/</kbd>
-</div>
-{% endblock %}
 {% block cb_actions %}
 <nav class="view-toggle" aria-label="Show as">
   {% for value in views %}

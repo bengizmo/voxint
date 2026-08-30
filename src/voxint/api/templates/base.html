@@ -1362,12 +1362,11 @@
         <span class="cb-breadcrumb">{% block cb_breadcrumb %}{{ active_nav or 'home' }}{% endblock %}</span>
         <span class="cb-summary">{% block cb_summary %}{% endblock %}</span>
         <div class="cb-spacer"></div>
-        {% block cb_search %}
-        <div class="cb-search" aria-hidden="true">
-          <span>Search everything</span>
-          <kbd>&#8984;K</kbd>
-        </div>
-        {% endblock %}
+        {# #162: the decorative search affordance is removed until search
+           exists — a visible "Search everything ⌘K" that does nothing is a
+           broken promise. The block stays as the seam the real command
+           palette will fill; the .cb-search CSS is kept for it too. #}
+        {% block cb_search %}{% endblock %}
         {% block cb_actions %}
         <button type="button" class="secondary" data-theme-cycle>Theme: System</button>
         {% endblock %}

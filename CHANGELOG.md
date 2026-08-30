@@ -6,6 +6,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **Decorative search chrome removed** (#162). The inert "Search everything
+  ⌘K" / "Find a person" / "Filter media" affordances in the topbar and on the
+  media and speakers pages are gone until search actually exists; the layout
+  seam and styles stay for the real implementation.
+
 ### Fixed
 - **Settings status reports the two AI lanes separately and honestly**
   (#316). The single "Local AI model" row only ever probed the
