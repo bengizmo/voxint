@@ -6,6 +6,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Project temporal trends** (#337, Phase 5). Interactive D3 line chart on
+  the project detail page showing term and entity frequency over recording
+  dates. Adaptive calendar bucketing (day/week/month), date provenance
+  tracking (source upload date preferred, ingestion date fallback), top-20
+  series with selectable top-5 display, responsive SVG, and keyboard-
+  accessible data points. Compute-on-read with advisory-locked fingerprint
+  short-circuit, stored as a TEMPORAL_TRENDS corpus analysis artifact.
+- **Run speaker timeline** (#337, Phase 5). Visual speaker timeline on the
+  run detail page showing who spoke when as colored horizontal lanes. Built
+  from diarization turns with canonical label_states() resolution, sub-50ms
+  interval merging, overlap hatching, unresolved/excluded visual treatment,
+  and keyboard-focusable blocks linking to transcript timestamps.
+- **Project overview** (#336, Phase 4). Entity frequency bars, topic chips,
+  and speaker-by-recording coverage matrix on the project detail page.
+  Compute-on-read with per-project advisory lock and fingerprint short-circuit.
+
 ### Fixed
 - **Top-bar controls no longer overlap on narrow screens.** Below ~800px
   CSS width, the fixed-height command bar let the Table/Cards view toggle
