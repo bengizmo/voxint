@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "fragments/_chips.html" import chip %}
+{% from "fragments/_chips.html" import chip, needs_you_chip %}
 {% block title %}Voxint — media{% endblock %}
 
 {% block cb_breadcrumb %}media /{% endblock %}
@@ -223,7 +223,7 @@
         {% elif group.running_count %}
         {{ chip("transcribing") }}
         {% elif group.needs_review_count %}
-        <span class="chip chip-warn">{{ group.needs_review_count }} need you</span>
+        <span class="chip chip-warn">{{ group.needs_review_count }} need{{ "s" if group.needs_review_count == 1 else "" }} you</span>
         {% elif group.completed_count == group.item_count and group.item_count > 0 %}
         {{ chip("all reviewed") }}
         {% else %}
@@ -251,7 +251,7 @@
       <span>
         {% if row.latest_run_id %}
           {% if row.unresolved_count %}
-          <span class="chip chip-warn">{{ row.unresolved_count }} voice{{ "s" if row.unresolved_count != 1 else "" }} need you</span>
+          {{ needs_you_chip(row.unresolved_count) }}
           {% elif row.latest_run_status == "completed" %}
           {{ chip("reviewed") }}
           {% else %}
@@ -289,7 +289,7 @@
       <span>
         {% if row.latest_run_id %}
           {% if row.unresolved_count %}
-          <span class="chip chip-warn">{{ row.unresolved_count }} voice{{ "s" if row.unresolved_count != 1 else "" }} need you</span>
+          {{ needs_you_chip(row.unresolved_count) }}
           {% elif row.latest_run_status == "completed" %}
           {{ chip("reviewed") }}
           {% else %}

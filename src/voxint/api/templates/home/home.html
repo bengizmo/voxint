@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "fragments/_chips.html" import needs_you_chip %}
 {% block title %}Voxint — home{% endblock %}
 
 {% block cb_breadcrumb %}home{% endblock %}
@@ -22,7 +23,7 @@
     <div class="attention-card{% if unresolved_voices %} attention-warn{% endif %}">
       <span class="attention-count">{{ unresolved_voices }}</span>
       <div class="attention-body">
-        <strong class="attention-label">voices without a name</strong>
+        <strong class="attention-label">voice{{ "s" if unresolved_voices != 1 else "" }} without a name</strong>
         <span class="attention-note">across reviewed recordings</span>
       </div>
       {% if unresolved_voices %}<a class="attention-arrow" href="/speakers" aria-label="Review speakers">→</a>{% endif %}
@@ -91,7 +92,7 @@
       <span class="recent-time" title="{{ item.at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_clock_time(item.at, now=now) }}</span>
       <span class="recent-body">
         {% if item.kind == "run_completed" %}
-        Run finished — <a href="{% if shell.jobs_enabled %}/jobs/{{ item.run_id }}{% else %}/runs/{{ item.run_id }}{% endif %}">{{ friendly_media_label(item.title, item.source_path) }}</a>{% if item.unresolved_count %} <span class="chip chip-warn">{{ item.unresolved_count }} voice{{ "s" if item.unresolved_count != 1 else "" }} need you</span>{% endif %}
+        Run finished — <a href="{% if shell.jobs_enabled %}/jobs/{{ item.run_id }}{% else %}/runs/{{ item.run_id }}{% endif %}">{{ friendly_media_label(item.title, item.source_path) }}</a>{% if item.unresolved_count %} {{ needs_you_chip(item.unresolved_count) }}{% endif %}
         {% elif item.kind == "run_failed" %}
         Run failed — <a href="{% if shell.jobs_enabled %}/jobs/{{ item.run_id }}{% else %}/runs/{{ item.run_id }}{% endif %}">{{ friendly_media_label(item.title, item.source_path) }}</a>
         {% elif item.kind == "run_started" %}

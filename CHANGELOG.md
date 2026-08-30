@@ -7,6 +7,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **Singular/plural copy errors** (#318). "1 voice need you" is now "1 voice
+  needs you" everywhere (home activity feed, media library, jobs board, via a
+  shared chip macro that also fixes the jobs board's unstyled needs-you chip),
+  the speakers header says "1 person" instead of "1 people", the home
+  attention card says "voice without a name" at a count of one, and
+  name-evidence snippets no longer start or end mid-word.
 - **Console favicon** (#320). The console now ships a favicon (the teal "V"
   brand mark) served from an authenticated `/favicon.ico` route, so browser
   tabs show an icon instead of a 404 on every page.
