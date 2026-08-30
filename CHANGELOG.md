@@ -7,6 +7,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **Topbar section label on review pages** (#319). The review workbench and
+  its transcript page now label the topbar "review / <media name>" (they fell
+  through to "home"), and the legacy transcript page crumbs to "jobs /" or
+  "runs /" following which run browser the console exposes.
 - **Singular/plural copy errors** (#318). "1 voice need you" is now "1 voice
   needs you" everywhere (home activity feed, media library, jobs board, via a
   shared chip macro that also fixes the jobs board's unstyled needs-you chip),
