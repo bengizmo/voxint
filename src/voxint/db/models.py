@@ -3211,6 +3211,7 @@ class CorpusAnalysisArtifactKind(enum.StrEnum):
     TERM_STATS = "term_stats"
     SPEAKER_STATS = "speaker_stats"
     UMAP_LAYOUT = "umap_layout"
+    PROJECT_INSIGHTS = "project_insights"
 
 
 class CorpusAnalysisArtifact(Base):

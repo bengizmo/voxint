@@ -274,6 +274,7 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
             )
             _refresh_term_stats(factory, run_id)
             _refresh_speaker_insights(factory, run_id)
+            _refresh_project_insights(factory, run_id)
         elif final.status is RunStatus.QUEUED and final.current_stage in POST_SEGMENT:
             # This covers both the first GPU→post handoff and a duplicate GPU
             # delivery observing an already-parked run. Re-publishing is safe:
@@ -835,6 +836,56 @@ def compute_speaker_insights() -> dict[str, int]:
         session.commit()
     logger.info("compute_speaker_insights speakers=%d", count)
     return {"speakers": count}
+
+
+def _refresh_project_insights(
+    factory: sessionmaker[Session], run_id: uuid.UUID
+) -> None:
+    from celery.exceptions import OperationalError
+
+    from voxint.db.models import MediaFolder, MediaItem
+
+    try:
+        with factory() as session:
+            project_id = session.execute(
+                select(MediaFolder.project_id)
+                .join(MediaItem, MediaItem.media_folder_id == MediaFolder.id)
+                .join(PipelineRun, PipelineRun.media_item_id == MediaItem.id)
+                .where(PipelineRun.id == run_id)
+            ).scalar_one_or_none()
+        if project_id is None:
+            return
+        compute_project_insights.apply_async(
+            (str(project_id),), ignore_result=True
+        )
+    except OperationalError:
+        logger.warning(
+            "project-insights refresh enqueue deferred (broker unavailable) for run %s",
+            run_id,
+            exc_info=True,
+        )
+    except Exception:
+        logger.exception("post-finalize project-insights refresh failed for run %s", run_id)
+
+
+@app.task(name="voxint.compute_project_insights", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
+def compute_project_insights(project_id_str: str) -> dict[str, int]:
+    from voxint.api.project_insights import project_insights
+
+    factory, _ = _runtime()
+    project_id = uuid.UUID(project_id_str)
+    with factory() as session:
+        payload = project_insights(session, project_id)
+        session.commit()
+    entity_count = len(payload.get("entities", []))
+    topic_count = len(payload.get("topics", []))
+    logger.info(
+        "compute_project_insights project=%s entities=%d topics=%d",
+        project_id_str,
+        entity_count,
+        topic_count,
+    )
+    return {"entities": entity_count, "topics": topic_count}
 
 
 @app.task(name="voxint.research_speaker", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]

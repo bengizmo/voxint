@@ -1,5 +1,6 @@
 [
   "voxint.activity_prune",
+  "voxint.compute_project_insights",
   "voxint.compute_speaker_insights",
   "voxint.compute_term_stats",
   "voxint.finish_pipeline",

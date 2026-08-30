@@ -12,6 +12,7 @@ const registry: Record<
   "corrections-editor": () => import("./entries/corrections-editor"),
   "media-editor": () => import("./entries/media-editor"),
   "explore": () => import("./entries/explore"),
+  "project-wordcloud": () => import("./entries/project-wordcloud"),
 };
 
 for (const el of document.querySelectorAll<HTMLElement>("[data-island]")) {

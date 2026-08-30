@@ -18,6 +18,7 @@ these pages exist and the flag is set (no base.html change).
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -35,6 +36,8 @@ from voxint.api.csrf import (
     CSRF_PROJECT_VOCAB,
     mint_csrf_token,
 )
+from voxint.api.explore_query import term_stats
+from voxint.api.project_insights import project_insights
 from voxint.api.projects_query import list_projects, project_detail
 from voxint.api.routers.deps import (
     OperatorDep,
@@ -133,6 +136,8 @@ def _detail_context(
     vocabulary_submitted: str | None = None,
     vocabulary_mode: str | None = None,
     corrections_error: str | None = None,
+    insights: dict[str, Any] | None = None,
+    term_data: list[Any] | None = None,
 ) -> dict[str, Any]:
     # The just-assigned folder, echoed as a confirmation banner that names the
     # supersede relationship when the folder carries a pack.
@@ -182,6 +187,17 @@ def _detail_context(
         "corrections_error": corrections_error,
         "error": error,
         "assigned": assigned,
+        "insights": insights,
+        "term_data": term_data,
+        "coverage_lookup": _coverage_lookup(insights) if insights else {},
+    }
+
+
+def _coverage_lookup(insights: dict[str, Any]) -> dict[str, int]:
+    cov = insights.get("coverage", {})
+    return {
+        f'{c["speaker_idx"]},{c["recording_idx"]}': c["segment_count"]
+        for c in cov.get("cells", [])
     }
 
 
@@ -196,10 +212,23 @@ def project_detail_page(
     detail = project_detail(session, project_id)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"no project {project_id}")
+    pi: dict[str, Any] | None = None
+    td: list[Any] | None = None
+    try:
+        pi = project_insights(session, project_id)
+        ts = term_stats(session, project_id)
+        td = ts.terms if ts.terms else None
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "project insights computation failed for %s", project_id
+        )
     return templates.TemplateResponse(
         request,
         "projects/project_detail.html",
-        _detail_context(request, session, detail, assigned_id=assigned),
+        _detail_context(
+            request, session, detail, assigned_id=assigned,
+            insights=pi, term_data=td,
+        ),
     )
 
 

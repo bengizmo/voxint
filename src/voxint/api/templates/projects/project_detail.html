@@ -17,6 +17,58 @@
 {% endblock %}
 
 {% block body %}
+<style>
+  .insight-card { padding: var(--space-3); margin-bottom: var(--space-3); }
+  .insight-card-title {
+    font-size: var(--t-xs); font-weight: 600; letter-spacing: 0.06em;
+    color: var(--ink-2); margin: 0 0 var(--space-2);
+  }
+  .term-bars { display: flex; flex-direction: column; gap: 2px; }
+  .term-bar-row {
+    display: grid; grid-template-columns: 9em 1fr 3em;
+    align-items: center; gap: var(--space-2);
+    padding: 2px var(--space-2); border-radius: 3px;
+    text-decoration: none; color: inherit; font-size: var(--t-sm);
+  }
+  .term-bar-row:hover { background: var(--surface-2); }
+  .term-bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .term-bar-fill {
+    height: 1rem; border-radius: 2px; min-width: 2px;
+    background: var(--accent-soft);
+  }
+  .term-bar-row:hover .term-bar-fill { background: var(--accent); }
+  .term-bar-count { text-align: right; color: var(--ink-3); font-size: var(--t-xs); }
+  .pi-stat-row {
+    display: flex; gap: var(--space-3); flex-wrap: wrap;
+    margin-bottom: var(--space-3); font-size: var(--t-sm);
+  }
+  .pi-stat { color: var(--ink-2); }
+  .pi-topic-list { display: flex; flex-direction: column; gap: 2px; }
+  .pi-topic-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 4px var(--space-2); border-radius: 3px;
+    text-decoration: none; color: inherit; font-size: var(--t-sm);
+  }
+  .pi-topic-row:hover { background: var(--surface-2); }
+  .pi-topic-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pi-topic-count { color: var(--ink-3); font-size: var(--t-xs); flex-shrink: 0; margin-left: var(--space-2); }
+  .pi-matrix-wrap { overflow-x: auto; }
+  .pi-matrix { border-collapse: collapse; font-size: var(--t-xs); }
+  .pi-matrix th, .pi-matrix td { padding: 2px 4px; text-align: center; }
+  .pi-matrix-col-head { color: var(--ink-3); font-weight: 400; min-width: 1.5em; }
+  .pi-matrix-row-head {
+    text-align: left; white-space: nowrap; padding-right: var(--space-2);
+    max-width: 10em; overflow: hidden; text-overflow: ellipsis;
+  }
+  .pi-matrix-row-head a { color: inherit; text-decoration: none; }
+  .pi-matrix-row-head a:hover { text-decoration: underline; }
+  .pi-matrix-cell { width: 1.5em; height: 1.5em; }
+  .pi-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent-soft);
+  }
+  .pi-matrix-present .pi-dot { background: var(--accent); }
+</style>
 {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
 
 {# The fields this project actually overrides, named so the supersede copy never
@@ -123,6 +175,106 @@
     </form>
     {% endif %}
   </section>
+
+  {% if insights and insights.stats.run_count > 0 %}
+  <section class="oc-section">
+    <div class="oc-section-header">
+      <h2 class="oc-section-title">INSIGHTS</h2>
+      <a href="/explore?project={{ detail.id }}" class="oc-section-link">Explore all &rarr;</a>
+    </div>
+
+    <div class="pi-stat-row">
+      <span class="pi-stat">{{ insights.stats.run_count }} recording{{ "s" if insights.stats.run_count != 1 else "" }}</span>
+      <span class="pi-stat">{{ insights.stats.speaker_count }} speaker{{ "s" if insights.stats.speaker_count != 1 else "" }}</span>
+      {% if insights.stats.runs_with_entities < insights.stats.run_count %}
+      <span class="pi-stat oc-muted">{{ insights.stats.runs_with_entities }} of {{ insights.stats.run_count }} enriched</span>
+      {% endif %}
+    </div>
+
+    {% if insights.entities %}
+    <div class="card insight-card">
+      <h3 class="insight-card-title">TOP ENTITIES</h3>
+      <div class="term-bars" role="list" aria-label="Most mentioned entities">
+        {%- set max_occ = insights.entities[:20]|map(attribute="occurrence_count")|max -%}
+        {% for e in insights.entities[:20] %}
+        <a href="/explore?q={{ e.display_surface|urlencode }}&amp;project={{ detail.id }}"
+           class="term-bar-row" role="listitem"
+           title="{{ e.display_surface }}{% if e.kind %} ({{ e.kind }}){% endif %}: {{ e.run_count }} file{{ 's' if e.run_count != 1 else '' }}, {{ e.occurrence_count }} mention{{ 's' if e.occurrence_count != 1 else '' }}">
+          <span class="term-bar-label">{{ e.display_surface }}</span>
+          <span class="term-bar-fill" style="width: {{ (e.occurrence_count / max_occ * 100)|round }}%"></span>
+          <span class="term-bar-count">{{ e.run_count }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% elif insights.stats.runs_with_entities == 0 %}
+    <p class="oc-muted">No entity data yet. Entities appear after recordings finish with LLM enrichment enabled.</p>
+    {% endif %}
+
+    {% if insights.topics %}
+    <div class="card insight-card">
+      <h3 class="insight-card-title">TOPICS</h3>
+      <div class="pi-topic-list">
+        {% for t in insights.topics[:15] %}
+        <a href="/explore?q={{ t.label|urlencode }}&amp;project={{ detail.id }}" class="pi-topic-row"
+           title="{{ t.label }}: discussed in {{ t.run_count }} recording{{ 's' if t.run_count != 1 else '' }}{% if t.description %} — {{ t.description }}{% endif %}">
+          <span class="pi-topic-label">{{ t.label }}</span>
+          <span class="pi-topic-count">{{ t.run_count }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% elif insights.stats.runs_with_topics == 0 %}
+    <p class="oc-muted">No topic data yet. Topics appear after recordings finish with LLM enrichment enabled.</p>
+    {% endif %}
+
+    {% if insights.coverage.speakers %}
+    <div class="card insight-card">
+      <h3 class="insight-card-title">SPEAKER COVERAGE</h3>
+      <div class="pi-matrix-wrap">
+        <table class="pi-matrix" role="grid">
+          <thead>
+            <tr>
+              <th></th>
+              {% for rec in insights.coverage.recordings[:30] %}
+              <th class="pi-matrix-col-head" title="{{ rec.title }}">{{ loop.index }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for spk in insights.coverage.speakers[:20] %}
+            {% set spk_idx = loop.index0 %}
+            <tr>
+              <td class="pi-matrix-row-head">
+                <a href="/speakers/{{ spk.id }}">{{ spk.label[:20] }}</a>
+              </td>
+              {% for rec in insights.coverage.recordings[:30] %}
+              {% set segs = coverage_lookup.get(spk_idx|string ~ "," ~ loop.index0|string, 0) %}
+              <td class="pi-matrix-cell{% if segs %} pi-matrix-present{% endif %}"
+                  title="{% if segs %}{{ spk.label }} in {{ rec.title }}: {{ segs }} segment{{ 's' if segs != 1 else '' }}{% else %}not present{% endif %}">
+                {% if segs %}<span class="pi-dot"></span>{% endif %}
+              </td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if term_data %}
+    <div class="card insight-card">
+      <h3 class="insight-card-title">WORD CLOUD</h3>
+      <div data-island="project-wordcloud"
+           data-props='{{ {"terms": term_data[:100], "projectId": detail.id|string}|tojson }}'>
+        <noscript><p class="oc-muted">Word cloud needs JavaScript.</p></noscript>
+      </div>
+    </div>
+    {% endif %}
+
+  </section>
+  {% endif %}
 </div>
 
 <aside>
