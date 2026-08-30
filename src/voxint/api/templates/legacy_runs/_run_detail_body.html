@@ -260,6 +260,21 @@ which model answered rather than proving the exact build.</p>
 {% endfor %}
 </section>
 
+{% if speaker_timeline is not none %}
+<section class="card">
+  <div data-island="speaker-timeline"
+       data-run-id="{{ run.id }}"
+       data-props="{{ speaker_timeline|tojson|replace('\"', '&quot;') }}">
+    <h2>Speaker timeline</h2>
+    <ul class="oc-muted">
+      {% for lane in speaker_timeline.lanes %}
+      <li>{{ lane.speaker_name or lane.label }} — {{ "%.1f"|format(lane.total_seconds) }} seconds speaking</li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+{% endif %}
+
 {# Glossary provenance (issue #123): the exact vocabulary hint whisper decoded this
    run with, the operator's glossary unioned with the pack's words. Read-only; NULL
    means the run had no vocabulary or predates this record. #}

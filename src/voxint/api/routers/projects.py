@@ -46,6 +46,7 @@ from voxint.api.routers.deps import (
     templates,
 )
 from voxint.api.setup_wizard import SetupValidationError, normalize_vocabulary
+from voxint.api.temporal_trends import get_temporal_trends
 from voxint.db.models import MediaFolder, Project
 from voxint.domain_packs.corrections import (
     MAX_MATCH_CHARS,
@@ -164,6 +165,7 @@ def _detail_context(
     else:
         vocabulary_text = "\n".join(detail.vocabulary) if detail.vocabulary else ""
     insights = get_project_insights(session, detail.id)
+    temporal_trends = get_temporal_trends(session, detail.id)
     # Pre-build a set of "row,col" strings for efficient Jinja2 coverage lookup
     insights_coverage_set: set[str] = set()
     if insights and insights.get("coverage", {}).get("cells"):
@@ -176,6 +178,7 @@ def _detail_context(
         "now": datetime.now(UTC),
         "detail": detail,
         "insights": insights,
+        "temporal_trends": temporal_trends,
         "coverage_set": insights_coverage_set,
         "csrf_rename": mint_csrf_token(secret, CSRF_PROJECT_RENAME),
         "csrf_assign": mint_csrf_token(secret, CSRF_PROJECT_ASSIGN),

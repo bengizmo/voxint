@@ -29,6 +29,8 @@ export default defineConfig({
         "corrections-editor": "src/entries/corrections-editor.tsx",
         "media-editor": "src/entries/media-editor.tsx",
         "explore": "src/entries/explore.tsx",
+        "temporal-trends": "src/entries/temporal-trends.tsx",
+        "speaker-timeline": "src/entries/speaker-timeline.tsx",
       },
     },
   },
