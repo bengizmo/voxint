@@ -34,14 +34,18 @@ if TYPE_CHECKING:
 # --------------------------------------------------------------------------- #
 # Status
 # --------------------------------------------------------------------------- #
-def install_kind() -> str:
-    """The deployment's install kind, or ``"unknown"``.
+def install_kind(settings: Settings) -> str:
+    """The deployment's install kind: ``"docker"``, ``"native"``, or ``"unknown"``.
 
-    An install-kind marker (baked into the images and set by the native launcher)
-    does not exist yet (#161 defers it to a follow-up), so this honestly reports
-    ``"unknown"`` for every deployment rather than guessing. It is a function, not
-    a constant, so the marker read slots in here without touching the call site.
+    Reads the ``VOXINT_INSTALL_KIND`` marker (#317): the app-image Dockerfile
+    bakes ``docker``, the native launcher's launchd plists set ``native``.
+    Anything else — unset, a typo, a future value this build does not know —
+    degrades to ``"unknown"`` rather than guessing, so dev-from-source honestly
+    reports unknown and a bad marker cannot break the status page.
     """
+    kind = settings.voxint_install_kind
+    if kind in ("docker", "native"):
+        return kind
     return "unknown"
 
 

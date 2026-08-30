@@ -7,6 +7,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **Settings status knows how Voxint was installed** (#317). A
+  `VOXINT_INSTALL_KIND` marker stamped by the packaging (baked into the app
+  image for Docker installs, set by the native launcher's service
+  environment) replaces the hardcoded "Install type unknown". Existing
+  installs pick it up on their next `docker compose up` image pull or
+  `voxint-native.sh up` (the launcher re-renders service definitions every
+  start). Running from source still honestly reports unknown.
 - **Home "voices without a name" card dead-ended** (#315). The card's arrow
   now opens the review queue sorted by unresolved voices (where those voices
   can actually be named) instead of /speakers, which never lists them, and

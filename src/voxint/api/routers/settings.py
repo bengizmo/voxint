@@ -932,7 +932,7 @@ def _install_summary(settings: Settings, snapshot: ResourceSnapshot) -> str:
     """One-line install summary for the status banner."""
     import voxint
 
-    kind = settings_view.install_kind()
+    kind = settings_view.install_kind(settings)
     parts = [f"{kind} install" if kind != "unknown" else "Install type unknown"]
     if settings.compute_tier == "cpu":
         parts.append("GPU acceleration off")

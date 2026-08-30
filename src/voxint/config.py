@@ -178,6 +178,14 @@ class Settings(BaseSettings):
     # CPU whisper measured 0.38-0.45x RT under these budgets (Gate M), so
     # metal intentionally has no factor of its own (docs/gpu-contracts.md).
     compute_tier: Literal["gpu", "cpu", "rocm", "metal"] = "gpu"
+    # Install-kind marker for the settings status page (#317, deferred from
+    # #161). Stamped by the packaging, not the operator: the app-image
+    # Dockerfile bakes "docker", the native launcher's launchd plists set
+    # "native". A plain string (not a Literal) so an unexpected value degrades
+    # to "unknown" in settings_view.install_kind() instead of failing Settings
+    # construction for the whole app. Dev-from-source stays unset -> "unknown",
+    # which is honest.
+    voxint_install_kind: str | None = None
     asr_url: str = "http://localhost:8022"
     diarizer_url: str = "http://localhost:8024"
     embedder_url: str = "http://localhost:8021"

@@ -497,6 +497,10 @@ native_service_env() {
   printf 'DIARIZER_URL=%s\n' "$NATIVE_DIARIZER_URL"
   printf 'EMBEDDER_URL=%s\n' "$NATIVE_EMBEDDER_URL"
   printf 'COMPUTE_TIER=metal\n'
+  # Install-kind marker for the settings status page (#317). Plists are
+  # re-rendered on every `up` (bootstrap_service), so existing installs pick
+  # this up on their next start with no migration step.
+  printf 'VOXINT_INSTALL_KIND=native\n'
   printf 'PYTHONUNBUFFERED=1\n'
   # Transcript semantic-search MiniLM weights: the embedder resolves these with
   # raw os.getenv, so the supervised processes need them in-env (not just .env).
