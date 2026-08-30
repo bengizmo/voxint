@@ -145,26 +145,40 @@ def _member_folders(session: Session, project_id: uuid.UUID) -> list[ProjectFold
 
 
 def _derived_speakers(session: Session, project_id: uuid.UUID) -> list[ProjectSpeaker]:
-    """Distinct speakers across the project's completed runs, human over grounded.
+    """Distinct speakers across the project's canonical runs, human over grounded.
 
-    One ``label_states`` call per completed, non-archived run (it already applies
-    the human-decision-over-grounded-cosine precedence and canonicalizes merged
-    speakers), counting each speaker once per run they resolve a label in.
+    Canonical means the newest completed, non-archived run per media item — the
+    same rule the project insights use — so a re-run recording counts once, not
+    once per historical run, and a speaker present only in a superseded run no
+    longer appears (the newest completed run is the operative transcript). One
+    ``label_states`` call per canonical run (it already applies the
+    human-decision-over-grounded-cosine precedence and canonicalizes merged
+    speakers), counting each speaker once per recording they resolve a label in.
     """
-    run_ids = (
-        session.execute(
-            sa_select(PipelineRun.id)
-            .join(MediaItem, MediaItem.id == PipelineRun.media_item_id)
-            .join(MediaFolder, MediaFolder.id == MediaItem.media_folder_id)
-            .where(MediaFolder.project_id == project_id)
-            .where(PipelineRun.status == RunStatus.COMPLETED.value)
-            .where(PipelineRun.archived_at.is_(None))
+    ranked = (
+        sa_select(
+            PipelineRun.id.label("run_id"),
+            func.row_number()
+            .over(
+                partition_by=PipelineRun.media_item_id,
+                order_by=(PipelineRun.created_at.desc(), PipelineRun.id.desc()),
+            )
+            .label("rank"),
         )
+        .join(MediaItem, MediaItem.id == PipelineRun.media_item_id)
+        .join(MediaFolder, MediaFolder.id == MediaItem.media_folder_id)
+        .where(MediaFolder.project_id == project_id)
+        .where(PipelineRun.status == RunStatus.COMPLETED.value)
+        .where(PipelineRun.archived_at.is_(None))
+        .subquery()
+    )
+    run_ids = (
+        session.execute(sa_select(ranked.c.run_id).where(ranked.c.rank == 1))
         .scalars()
         .all()
     )
-    # id -> (name, run_count). A speaker counts once per run regardless of how
-    # many of its labels they hold.
+    # id -> (name, run_count). A speaker counts once per recording regardless of
+    # how many of its labels they hold.
     tally: dict[uuid.UUID, tuple[str | None, int]] = {}
     for run_id in run_ids:
         seen: set[uuid.UUID] = set()
