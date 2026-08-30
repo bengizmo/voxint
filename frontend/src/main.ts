@@ -13,6 +13,7 @@ const registry: Record<
   "media-editor": () => import("./entries/media-editor"),
   "explore": () => import("./entries/explore"),
   "temporal-trends": () => import("./entries/temporal-trends"),
+  "speaker-timeline": () => import("./entries/speaker-timeline"),
 };
 
 for (const el of document.querySelectorAll<HTMLElement>("[data-island]")) {
