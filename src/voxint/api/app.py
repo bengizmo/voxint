@@ -560,6 +560,20 @@ def _register_routes(app: FastAPI) -> None:
             media_type="text/javascript",
         )
 
+    @app.get("/favicon.ico")
+    def favicon_asset(operator: OperatorDep) -> FileResponse:
+        # A route, not a StaticFiles mount, for the same reason as htmx_asset:
+        # "everything but /healthz authenticates" is absolute, so the pre-auth
+        # favicon request from a fresh tab 401s (browsers tolerate that; the
+        # icon loads with the first authenticated page). Served as PNG under the
+        # .ico name so <link>-less requests (browser default probe) still hit.
+        # Not immutable: the icon may change across versions under this URL.
+        return FileResponse(
+            Path(__file__).parent / "static" / "favicon.png",
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
     @app.get("/static/app/{asset_path:path}")
     def app_asset(asset_path: str, operator: OperatorDep) -> FileResponse:
         # Same rationale as htmx_asset: a route, not a StaticFiles mount, so the

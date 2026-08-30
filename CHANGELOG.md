@@ -6,6 +6,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **Console favicon** (#320). The console now ships a favicon (the teal "V"
+  brand mark) served from an authenticated `/favicon.ico` route, so browser
+  tabs show an icon instead of a 404 on every page.
+
 
 ## [0.29.0] - 2026-08-29
 

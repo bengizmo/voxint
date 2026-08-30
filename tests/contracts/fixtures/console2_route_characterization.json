@@ -48,6 +48,14 @@
         true
     ],
     [
+        "/favicon.ico",
+        [
+            "GET"
+        ],
+        "exempt",
+        true
+    ],
+    [
         "/fetch",
         [
             "POST"

@@ -44,6 +44,7 @@ def test_healthz_is_open(client: TestClient) -> None:
         ("GET", "/media/00000000-0000-0000-0000-000000000000"),
         ("POST", "/review/00000000-0000-0000-0000-000000000000/release"),
         ("GET", "/static/htmx.min.js"),
+        ("GET", "/favicon.ico"),
     ],
 )
 def test_routes_challenge_unauthenticated(
@@ -64,6 +65,13 @@ def test_htmx_asset_served_authenticated(client: TestClient) -> None:
     resp = client.get("/static/htmx.min.js", auth=CREDS)
     assert resp.status_code == 200
     assert "htmx" in resp.text[:200]
+
+
+def test_favicon_served_authenticated(client: TestClient) -> None:
+    resp = client.get("/favicon.ico", auth=CREDS)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+    assert resp.content.startswith(b"\x89PNG")
 
 
 def test_wrong_password_rejected(client: TestClient) -> None:
