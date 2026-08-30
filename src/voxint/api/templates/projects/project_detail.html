@@ -64,7 +64,25 @@
   .pi-cov-empty { color: var(--ink-3); }
   .pi-explore-link { display: inline-block; margin-top: var(--space-3); }
   .pi-coverage-note { font-size: var(--t-xs); color: var(--ink-3); margin-top: var(--space-1); }
+  .tt-fallback-meta { margin: 0; color: var(--ink-2); font-size: var(--t-sm); }
+  .tt-fallback-provenance { margin: var(--space-1) 0 0; color: var(--ink-3); font-size: var(--t-xs); }
 </style>
+
+{% macro temporal_trends_mount(trends) -%}
+<div data-island="temporal-trends" data-props='{{ trends|tojson }}' class="card pi-card">
+  <h3 class="pi-card-title">TEMPORAL TRENDS</h3>
+  {% if trends.range.start and trends.range.end %}
+  <p class="tt-fallback-meta">
+    {{ trends.range.start }} to {{ trends.range.end }}
+    &middot; {{ trends.range.bucket_unit }} buckets
+    &middot; {{ trends.coverage.dated_recordings }} dated recording{{ "s" if trends.coverage.dated_recordings != 1 else "" }}
+  </p>
+  {% else %}
+  <p class="tt-fallback-meta">No dated recordings are available yet.</p>
+  {% endif %}
+  <p class="tt-fallback-provenance">{{ trends.date_provenance.label }}</p>
+</div>
+{%- endmacro %}
 
 {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
 
@@ -112,6 +130,8 @@
       <div class="pi-stat-label">speakers</div>
     </div>
   </div>
+
+  {{ temporal_trends_mount(temporal_trends) }}
 
   {% if ec.entity_runs < ec.total_runs or ec.topic_runs < ec.total_runs %}
   <p class="oc-muted" style="font-size: var(--t-xs); margin-bottom: var(--space-3);">
@@ -202,6 +222,7 @@
 {% else %}
 <section class="oc-section">
   <h2 class="oc-section-title">OVERVIEW</h2>
+  {{ temporal_trends_mount(temporal_trends) }}
   {% if detail.speakers %}
   <p class="oc-muted">
     This project has {{ detail.speakers|length }} speaker{{ "s" if detail.speakers|length != 1 else "" }}
