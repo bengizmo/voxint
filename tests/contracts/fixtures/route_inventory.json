@@ -180,6 +180,18 @@
     ]
   ],
   [
+    "/media/{media_id}/editor/claim",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/{media_id}/editor/release",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/media/{run_id}",
     []
   ],

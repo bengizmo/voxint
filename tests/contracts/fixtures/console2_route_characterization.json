@@ -240,6 +240,22 @@
     true
   ],
   [
+    "/media/{media_id}/editor/claim",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/media/{media_id}/editor/release",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/media/{run_id}",
     [],
     "onboarding",

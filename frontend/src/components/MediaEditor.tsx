@@ -39,6 +39,7 @@ import {
 } from "./TranscriptPlayer";
 
 export interface MediaEditorProps {
+  mediaId: string;
   runId: string;
   mediaUrl: string;
   segments: Segment[];
@@ -55,6 +56,7 @@ export interface MediaEditorProps {
   annotationLimits?: AnnotationLimits;
   tagCsrf?: string | null;
   clipCsrf?: string | null;
+  claimCsrf?: string | null;
   labelStates?: LabelStateShape[];
   translate?: {
     csrf: string;
@@ -68,12 +70,13 @@ export interface MediaEditorProps {
 
 
 export function MediaEditor({
+  mediaId,
   runId,
   mediaUrl,
   segments: initialSegments,
   capability,
   lowConfidenceThreshold,
-  reviewToken,
+  reviewToken: initialReviewToken,
   initialProgress,
   peaksUrl,
   turns,
@@ -84,6 +87,7 @@ export function MediaEditor({
   annotationLimits = FALLBACK_ANNOTATION_LIMITS,
   tagCsrf = null,
   clipCsrf = null,
+  claimCsrf = null,
   labelStates: initialLabelStates = [],
   translate = null,
 }: MediaEditorProps): React.JSX.Element {
@@ -91,6 +95,9 @@ export function MediaEditor({
   const [progress, setProgress] = useState(initialProgress);
   const [editText, setEditText] = useState("");
   const { busy, busyRef, setBusy } = useBusyGuard();
+  const [reviewToken, setReviewToken] = useState<string | null>(
+    initialReviewToken,
+  );
   const [claimLost, setClaimLost] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
@@ -114,6 +121,85 @@ export function MediaEditor({
   >(translate?.active ? "started" : "idle");
   const [translateError, setTranslateError] = useState<string | null>(null);
   const translateBusyRef = useRef(false);
+  const [claiming, setClaiming] = useState(false);
+
+  const claimForEditing = useCallback(async () => {
+    if (!claimCsrf || claiming) return;
+    setClaiming(true);
+    try {
+      const body = new URLSearchParams({
+        run_id: runId,
+        csrf_token: claimCsrf,
+      });
+      const res = await apiFetch(`/media/${mediaId}/editor/claim`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          accept: "application/json",
+        },
+        body: body.toString(),
+      });
+      const data = (await res.json()) as { token: string };
+      setReviewToken(data.token);
+      setClaimLost(false);
+      window.history.replaceState(null, "", `?token=${data.token}`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setError(err.detail);
+      } else {
+        setError(err instanceof ApiError ? err.detail : "Could not claim.");
+      }
+    } finally {
+      setClaiming(false);
+    }
+  }, [claimCsrf, claiming, runId, mediaId]);
+
+  // Heartbeat: re-claim periodically to renew the TTL (same-operator reuse
+  // per ADR 0004 — claim_run with the same reviewer returns a fresh token).
+  useEffect(() => {
+    if (!reviewToken || !claimCsrf || claimLost) return;
+    const interval = setInterval(() => {
+      void (async () => {
+        try {
+          const body = new URLSearchParams({
+            run_id: runId,
+            csrf_token: claimCsrf,
+          });
+          const res = await apiFetch(`/media/${mediaId}/editor/claim`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/x-www-form-urlencoded",
+              accept: "application/json",
+            },
+            body: body.toString(),
+          });
+          const data = (await res.json()) as { token: string };
+          setReviewToken(data.token);
+        } catch {
+          // Heartbeat failure is not fatal — the claim expires, and the next
+          // mutation will 409 and set claimLost.
+        }
+      })();
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [reviewToken, claimCsrf, claimLost, runId, mediaId]);
+
+  // Release on unload (best-effort — sendBeacon for reliability).
+  useEffect(() => {
+    if (!reviewToken || claimLost) return;
+    const onUnload = () => {
+      const body = new URLSearchParams({
+        run_id: runId,
+        token: reviewToken,
+      });
+      navigator.sendBeacon(
+        `/media/${mediaId}/editor/release`,
+        body,
+      );
+    };
+    window.addEventListener("beforeunload", onUnload);
+    return () => window.removeEventListener("beforeunload", onUnload);
+  }, [reviewToken, claimLost, runId, mediaId]);
 
   const editTextRef = useRef(editText);
   editTextRef.current = editText;
@@ -589,9 +675,30 @@ export function MediaEditor({
         {claimLost && (
           <p role="alert" className="notice text-sm">
             Your claim expired or was taken over. Everything you already saved is
-            safe. Copy any unsaved edit from the box below, then close and
-            reopen this page to start a new editing session.
+            safe. Copy any unsaved edit from the box below, then{" "}
+            <button
+              type="button"
+              onClick={() => void claimForEditing()}
+              disabled={claiming}
+              className="underline"
+            >
+              {claiming ? "Re-claiming…" : "re-claim to continue editing"}
+            </button>
+            .
           </p>
+        )}
+        {!reviewToken && !claimLost && claimCsrf && (
+          <div className="notice text-sm">
+            Read-only view.{" "}
+            <button
+              type="button"
+              onClick={() => void claimForEditing()}
+              disabled={claiming}
+              className="btn-primary"
+            >
+              {claiming ? "Claiming…" : "Claim for editing"}
+            </button>
+          </div>
         )}
 
         <section className="me-toolbar" aria-label="Editor controls">
