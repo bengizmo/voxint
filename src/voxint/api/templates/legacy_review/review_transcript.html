@@ -2,6 +2,7 @@
 {% from "legacy_review/review_journey.html" import review_journey %}
 {% from "fragments/outline_fallback.html" import outline_fallback %}
 {% block title %}Voxint — check the words: {{ run_source_title(run) }}{% endblock %}
+{% block cb_breadcrumb %}review / <strong>{{ run_source_title(run) }}</strong>{% endblock %}
 {% block body %}
 {# Backward nav only (issue #117 Phase B): "the people" is Step 1, the workbench.
    The sequence never promotes a sideways jump; a step's own Continue moves it

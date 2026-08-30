@@ -24,6 +24,14 @@
   "unknown":        ("chip-neutral", "unknown"),
 } %}
 
+{# Count-inflected "needs you" chip. Owns BOTH the inflection ("1 voice needs
+   you" / "2 voices need you") and the warn class, so call sites cannot drift
+   into subject-verb disagreement or fall through the exact-key chip() lookup
+   to chip-neutral (which "2 voices need you" did on the jobs page). #}
+{% macro needs_you_chip(count) -%}
+<span class="chip chip-warn">{{ count }} voice{{ "s" if count != 1 else "" }} need{{ "s" if count == 1 else "" }} you</span>
+{%- endmacro %}
+
 {% macro chip(label, extra_class="") -%}
 {%- set key = label.split()[0] if label.split()[0] in ["transcribing", "learned"] else label.lower().rstrip("s") if label.lower().rstrip("s") in CHIP_MAP else label.lower() -%}
 {%- set entry = CHIP_MAP.get(key, ("chip-neutral", none)) -%}

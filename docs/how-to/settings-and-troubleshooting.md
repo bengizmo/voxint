@@ -374,9 +374,11 @@ A **Check for updates** button links to the releases page.
 Below the banner, the page has two panels:
 
 - **Parts of Voxint** lists each component (Console & API, Transcriber, Voice
-  separation, Voice identity, Database, Task queue, Local AI model) with a
-  colored dot showing its health. The Local AI model row has a **Turn on**
-  button when it is not yet enabled.
+  separation, Voice identity, Database, Task queue, Bundled AI model, Your own
+  AI endpoint) with a colored dot showing its health. The two AI rows are
+  independent: the bundled model reports its own health when it is active, and
+  the "Your own AI endpoint" row says "not configured" until you point it at a
+  service of your own (it has a **Turn on** or **Set up** button until then).
 - **This computer right now** shows live gauges that refresh every 15 seconds:
   Processor, Memory, and Disk (media) on every install; Graphics card and
   Graphics memory appear when a GPU is available.

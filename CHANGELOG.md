@@ -6,6 +6,50 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **Decorative search chrome removed** (#162). The inert "Search everything
+  ⌘K" / "Find a person" / "Filter media" affordances in the topbar and on the
+  media and speakers pages are gone until search actually exists; the layout
+  seam and styles stay for the real implementation.
+
+### Fixed
+- **Settings status reports the two AI lanes separately and honestly**
+  (#316). The single "Local AI model" row only ever probed the
+  bring-your-own endpoint, so a healthy bundled-only install showed
+  "rejected (HTTP 401)" and an amber banner. The status page now shows
+  "Bundled AI model" (probed when the bundle is active) and "Your own AI
+  endpoint" (probed only when a deliberate endpoint is configured; the
+  untouched install default reads "not configured" instead of a false
+  alarm). `voxint doctor` and the setup wizard report the same two lanes;
+  exit codes are unchanged (both checks stay advisory). A deliberately
+  configured endpoint that rejects still warns - a broken deliberate
+  config is real information.
+- **Settings status knows how Voxint was installed** (#317). A
+  `VOXINT_INSTALL_KIND` marker stamped by the packaging (baked into the app
+  image for Docker installs, set by the native launcher's service
+  environment) replaces the hardcoded "Install type unknown". Existing
+  installs pick it up on their next `docker compose up` image pull or
+  `voxint-native.sh up` (the launcher re-renders service definitions every
+  start). Running from source still honestly reports unknown.
+- **Home "voices without a name" card dead-ended** (#315). The card's arrow
+  now opens the review queue sorted by unresolved voices (where those voices
+  can actually be named) instead of /speakers, which never lists them, and
+  its note says "across recordings waiting for review" (the old "across
+  reviewed recordings" was false).
+- **Topbar section label on review pages** (#319). The review workbench and
+  its transcript page now label the topbar "review / <media name>" (they fell
+  through to "home"), and the legacy transcript page crumbs to "jobs /" or
+  "runs /" following which run browser the console exposes.
+- **Singular/plural copy errors** (#318). "1 voice need you" is now "1 voice
+  needs you" everywhere (home activity feed, media library, jobs board, via a
+  shared chip macro that also fixes the jobs board's unstyled needs-you chip),
+  the speakers header says "1 person" instead of "1 people", the home
+  attention card says "voice without a name" at a count of one, and
+  name-evidence snippets no longer start or end mid-word.
+- **Console favicon** (#320). The console now ships a favicon (the teal "V"
+  brand mark) served from an authenticated `/favicon.ico` route, so browser
+  tabs show an icon instead of a 404 on every page.
+
 
 ## [0.29.0] - 2026-08-29
 

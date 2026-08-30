@@ -60,6 +60,11 @@ COPY --from=frontend /app/frontend/dist ./src/voxint/api/static/app
 # Honor the committed lockfile exactly; no dev deps, no editable install.
 RUN uv sync --frozen --no-dev --no-editable --no-cache
 ENV PATH="/app/.venv/bin:$PATH"
+# Install-kind marker for the settings status page (#317). Baked HERE only:
+# every compose overlay runs images built from this Dockerfile, so ENV
+# inheritance covers them all and per-overlay duplication would be drift risk.
+# Contract-tested (tests/contracts/test_install_kind_marker.py).
+ENV VOXINT_INSTALL_KIND=docker
 
 RUN useradd --create-home voxint
 USER voxint

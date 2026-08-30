@@ -14,6 +14,7 @@
      (the rail is always visible on desktop). */
   document.documentElement.classList.add("js");})();</script>
   <title>{% block title %}Voxint review{% endblock %}</title>
+  <link rel="icon" type="image/png" href="/favicon.ico">
   <script src="/static/htmx.min.js"></script>
   {# Island stylesheet (issue #48). Placed BEFORE the inline <style> so the
      hand-authored block wins any property collision as the later source. The
@@ -1361,12 +1362,11 @@
         <span class="cb-breadcrumb">{% block cb_breadcrumb %}{{ active_nav or 'home' }}{% endblock %}</span>
         <span class="cb-summary">{% block cb_summary %}{% endblock %}</span>
         <div class="cb-spacer"></div>
-        {% block cb_search %}
-        <div class="cb-search" aria-hidden="true">
-          <span>Search everything</span>
-          <kbd>&#8984;K</kbd>
-        </div>
-        {% endblock %}
+        {# #162: the decorative search affordance is removed until search
+           exists — a visible "Search everything ⌘K" that does nothing is a
+           broken promise. The block stays as the seam the real command
+           palette will fill; the .cb-search CSS is kept for it too. #}
+        {% block cb_search %}{% endblock %}
         {% block cb_actions %}
         <button type="button" class="secondary" data-theme-cycle>Theme: System</button>
         {% endblock %}

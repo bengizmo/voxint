@@ -8,9 +8,11 @@ Two deliberate rules:
 
 * **Hard vs advisory.** Postgres, Redis, and the three model services are hard —
   the pipeline cannot run without them, so a failure sets exit 1. The Hugging
-  Face token and the LLM endpoint are advisory: the default install needs no HF
-  token (weights are vendored) and enhancement is best-effort, so their state is
-  reported but never changes the exit code.
+  Face token and both LLM lanes (the bundled local model and the BYO endpoint,
+  #316) are advisory: the default install needs no HF token (weights are
+  vendored) and enhancement is best-effort, so their state is reported but never
+  changes the exit code. An enabled-but-unconfigured BYO endpoint reports an
+  ok-state "not configured" without being probed at all.
 * **No secrets in output.** ``database_url``/``redis_url``/``llm_api_key`` are
   credentials. A detail string therefore never echoes a URL, a token, or a raw
   exception (a DSN can ride inside ``str(exc)``) — only the exception *type* and
@@ -29,7 +31,9 @@ from sqlalchemy.orm import Session
 
 from voxint.api.health_probe import probe_services
 from voxint.app_settings import (
+    byo_llm_configured,
     get_app_settings,
+    llm_bundled_active,
     resolve_effective_llm_api_key,
     resolve_effective_llm_enabled,
     resolve_effective_llm_endpoint,
@@ -37,6 +41,11 @@ from voxint.app_settings import (
 from voxint.config import Settings
 
 HF_WHOAMI_URL = "https://huggingface.co/api/whoami-v2"
+
+# The detail string check_llm emits for an enabled-but-unconfigured BYO endpoint
+# (#316). A shared constant, not inline prose: the status page keys the BYO
+# row's off-state on it, so a copy edit in one place must break loudly.
+LLM_NOT_CONFIGURED_DETAIL = "not configured"
 
 
 @dataclass(frozen=True)
@@ -129,8 +138,37 @@ def check_hf_token(token: str | None, *, client: httpx.Client) -> CheckResult:
     return CheckResult("hugging face token", False, False, f"HTTP {resp.status_code}")
 
 
+def check_llm_bundled(
+    *, active: bool, base_url: str, client: httpx.Client
+) -> CheckResult | None:
+    """Advisory: does the bundled local LLM answer ``/models``, when active (#316).
+
+    ``active`` is :func:`~voxint.app_settings.llm_bundled_active` — the single
+    predicate the enhancement/run-asset routing sites resolve through, so this
+    check can never disagree with what a run would use. Returns ``None`` when the
+    bundle is inactive: an install without the bundle has nothing to probe, and
+    the status page renders that as an honest "off" row instead.
+
+    The probe mirrors :func:`check_llm`'s shape (GET ``<base>/models``, keyless —
+    the bundled endpoint takes no key). ``hard=False``: the bundle is best-effort
+    polish, never a pipeline dependency, so its state never changes the exit code.
+    """
+    if not active:
+        return None
+    url = base_url.rstrip("/") + "/models"
+    try:
+        resp = client.get(url)
+    except httpx.InvalidURL:
+        return CheckResult("llm bundled", False, False, "invalid url")
+    except Exception as exc:
+        return CheckResult("llm bundled", False, False, f"unreachable ({_safe(exc)})")
+    if resp.is_success:
+        return CheckResult("llm bundled", True, False, f"reachable (HTTP {resp.status_code})")
+    return CheckResult("llm bundled", False, False, f"rejected (HTTP {resp.status_code})")
+
+
 def check_llm(
-    *, enabled: bool, base_url: str, api_key: str, client: httpx.Client
+    *, enabled: bool, configured: bool, base_url: str, api_key: str, client: httpx.Client
 ) -> CheckResult | None:
     """Advisory: does the LLM endpoint answer ``/models`` with a 2xx, when on.
 
@@ -150,9 +188,21 @@ def check_llm(
     never raises into its caller: a transport failure, a malformed URL, or any other
     error building/sending the request (e.g. a non-encodable ``api_key``) all normalize
     to a redacted, type-only advisory miss.
+
+    ``configured`` is :func:`~voxint.app_settings.byo_llm_configured` — whether a
+    DISTINCT, deliberately-configured BYO endpoint exists. When LLM work is
+    enabled but the BYO endpoint is the untouched install default with no key
+    (a bundled-only install, #316), probing would report "rejected (HTTP 401)"
+    for an endpoint the operator never chose: instead this returns an ok-state
+    "not configured" without probing, so doctor, the setup wizard, and the
+    status page all stop false-alarming together. A DELIBERATELY configured
+    endpoint that rejects still reports honestly — a broken deliberate config
+    is real information.
     """
     if not enabled:
         return None
+    if not configured:
+        return CheckResult("llm endpoint", True, False, LLM_NOT_CONFIGURED_DETAIL)
     url = base_url.rstrip("/") + "/models"
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
@@ -206,15 +256,36 @@ def run_diagnostics(
     # check; that is robustness for a diagnostic, not a fallback masking a fault.
     llm_enabled = settings.llm_enabled
     base_url, api_key = settings.llm_base_url, settings.llm_api_key.strip()
+    byo_configured = byo_llm_configured(None, settings)
+    bundled_active = llm_bundled_active(None, settings)
     with contextlib.suppress(SQLAlchemyError), Session(engine) as session:
         row = get_app_settings(session)
-        # Enablement resolves through the SAME canonical row-over-env helper the
+        # Enablement resolves through the SAME canonical row-over-env helpers the
         # pipeline and enrichment gates use, so doctor can't drift from a run.
+        # (Both lane predicates read row attributes, so they run INSIDE the
+        # session too.)
         llm_enabled = resolve_effective_llm_enabled(row, settings)
         base_url, _model = resolve_effective_llm_endpoint(row, settings)
         api_key = resolve_effective_llm_api_key(row, settings)
+        byo_configured = byo_llm_configured(row, settings)
+        bundled_active = llm_bundled_active(row, settings)
+    # The bundle does work only inside an llm-enabled run (resolve_run_preferences
+    # gates enhancement on prefs.llm_enabled; asset jobs gate on
+    # resolve_effective_llm_enabled) — so with the master switch off, an active
+    # bundle flag is inert and probing it would misreport a lane that cannot run.
+    bundled = check_llm_bundled(
+        active=llm_enabled and bundled_active,
+        base_url=settings.llm_bundled_base_url,
+        client=http_client,
+    )
+    if bundled is not None:
+        results.append(bundled)
     llm = check_llm(
-        enabled=llm_enabled, base_url=base_url, api_key=api_key, client=http_client
+        enabled=llm_enabled,
+        configured=byo_configured,
+        base_url=base_url,
+        api_key=api_key,
+        client=http_client,
     )
     if llm is not None:
         results.append(llm)

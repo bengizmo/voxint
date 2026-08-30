@@ -157,9 +157,10 @@ def test_home_renders_attention_cards_and_stats(
     # Attention cards above the fold, before the activity section.
     cards_at = body.index('class="attention-cards"')
     assert cards_at < body.index("ACTIVITY")
-    # Attention counts: the seed's one unresolved COMPLETED run.
+    # Attention counts: the seed's one unresolved COMPLETED run (singular
+    # label inflection, #318).
     assert "recordings to review" in body
-    assert "voices without a name" in body
+    assert "voice without a name" in body
     assert "failed runs" in body
     # Non-zero cards link to their queues.
     assert 'href="/review"' in body
@@ -183,7 +184,7 @@ def test_home_attention_counts_match_their_queues(
     assert (eligible, voices) == (1, 1)
     body = client.get("/").text
     assert "recordings to review" in body
-    assert "voices without a name" in body
+    assert "voice without a name" in body
 
 
 def test_home_empty_states_are_quiet_not_links(client: TestClient) -> None:
@@ -350,3 +351,16 @@ def test_stats_exclude_archived_runs(session_factory: sessionmaker[Session]) -> 
         assert runs_created_since(session, since=now - timedelta(hours=1)) == 1
         # Sanity: the active run really exists (guards against an over-broad filter).
         assert session.get(PipelineRun, active) is not None
+
+
+def test_home_unresolved_voices_card_links_to_review_queue(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """#315: the 'voices without a name' card must land where those voices can
+    be resolved - the review queue sorted by unresolved count - not /speakers,
+    which only lists already-known people. The note states the true scope."""
+    seed_snapshot(session_factory)
+    body = client.get("/").text
+    assert 'href="/review?sort=unresolved" aria-label="Review voices without a name"' in body
+    assert "across recordings waiting for review" in body
+    assert "across reviewed recordings" not in body
