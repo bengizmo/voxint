@@ -748,7 +748,7 @@ _DOCTOR_REMEDIATION: dict[str, str] = {
     # the bundled model service (or turn the bundle off), never to edit the BYO
     # endpoint settings — steering the operator there would be a wrong map.
     "llm bundled": (
-        "The bundled AI model is turned on but isn't answering — start its service"
+        "The bundled AI model is turned on but isn't answering. Start its service"
         " (the compose LLM overlay, or the native launcher's model services), or"
         " turn the bundled model off in Settings. Transcription and diarization"
         " still run; enhancement is simply skipped until it's reachable."
