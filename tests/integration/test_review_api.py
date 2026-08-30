@@ -478,6 +478,20 @@ def test_transcript_shows_review_sequence_and_back(
     assert "Step 1 of 2" in body
     assert "Step 2 of 2" in body
     assert "Back to the people" in body
+
+
+def test_workbench_and_transcript_crumb_says_review(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """#319: both review workbench pages label the topbar 'review /' (they fell
+    through to the 'home' default), with the friendly media label as the leaf."""
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    token = claim_token(client, run_id)
+
+    for path in (f"/review/{run_id}", f"/review/{run_id}/transcript"):
+        body = client.get(path, params={"token": token}).text
+        assert 'class="cb-breadcrumb">review / <strong>' in body, path
     assert "← workbench" not in body
 
 

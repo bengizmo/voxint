@@ -36,6 +36,12 @@
     ]
   ],
   [
+    "/favicon.ico",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/fetch",
     [
       "POST"

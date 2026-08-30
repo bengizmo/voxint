@@ -723,8 +723,11 @@ available. CPU, memory, and disk are read from the host via stdlib
 (`os.getloadavg`, `/proc/meminfo`, `shutil.disk_usage`); GPU metrics come from
 the model services' `/healthz` telemetry. A "Parts of Voxint" component
 list shows live health for the console, each model service, the database, the
-task queue, and the Local AI model (with a primary "Turn on" button when
-disabled). The banner includes an install summary with GPU acceleration status
+task queue, and the two AI lanes as separate rows: "Bundled AI model" (the
+optional local model, probed only when active) and "Your own AI endpoint"
+(probed only when a deliberate endpoint is configured; an untouched default
+reads "not configured" rather than raising a false alarm, with a primary
+"Turn on" or "Set up" button as applicable). The banner includes an install summary with GPU acceleration status
 and a "Check for updates" link to the GitHub releases page. The page is
 reachable from the sidebar "Hardware" shortcut; the older `GET /resources`
 address still works and redirects here. Warnings are warn-only in v1; the NVIDIA

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "fragments/_chips.html" import chip %}
+{% from "fragments/_chips.html" import chip, needs_you_chip %}
 {% block title %}Voxint — media{% endblock %}
 
 {% block cb_breadcrumb %}media /{% endblock %}
@@ -7,12 +7,6 @@
 {%- if media_summary.folder_count %}{{ media_summary.folder_count }} folder{{ "s" if media_summary.folder_count != 1 else "" }} · {% endif -%}
 {{ media_summary.file_count }} recording{{ "s" if media_summary.file_count != 1 else "" }} · {{ media_summary.total_hours }}
 {%- endblock %}
-{% block cb_search %}
-<div class="cb-search" aria-hidden="true">
-  <span>Filter media</span>
-  <kbd>/</kbd>
-</div>
-{% endblock %}
 {% block cb_actions %}
 <nav class="view-toggle" aria-label="Show as">
   {% for value in views %}
@@ -223,7 +217,9 @@
         {% elif group.running_count %}
         {{ chip("transcribing") }}
         {% elif group.needs_review_count %}
-        <span class="chip chip-warn">{{ group.needs_review_count }} need you</span>
+        {# Folder-level chip: counts RECORDINGS, not voices, so it stays
+           noun-less and outside needs_you_chip (which owns the voice copy). #}
+        <span class="chip chip-warn">{{ group.needs_review_count }} need{{ "s" if group.needs_review_count == 1 else "" }} you</span>
         {% elif group.completed_count == group.item_count and group.item_count > 0 %}
         {{ chip("all reviewed") }}
         {% else %}
@@ -251,7 +247,7 @@
       <span>
         {% if row.latest_run_id %}
           {% if row.unresolved_count %}
-          <span class="chip chip-warn">{{ row.unresolved_count }} voice{{ "s" if row.unresolved_count != 1 else "" }} need you</span>
+          {{ needs_you_chip(row.unresolved_count) }}
           {% elif row.latest_run_status == "completed" %}
           {{ chip("reviewed") }}
           {% else %}
@@ -289,7 +285,7 @@
       <span>
         {% if row.latest_run_id %}
           {% if row.unresolved_count %}
-          <span class="chip chip-warn">{{ row.unresolved_count }} voice{{ "s" if row.unresolved_count != 1 else "" }} need you</span>
+          {{ needs_you_chip(row.unresolved_count) }}
           {% elif row.latest_run_status == "completed" %}
           {{ chip("reviewed") }}
           {% else %}

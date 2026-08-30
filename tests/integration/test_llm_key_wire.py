@@ -105,9 +105,7 @@ def _completion(content: object) -> httpx.Response:
     return httpx.Response(200, json={"choices": [{"message": {"content": body}}]})
 
 
-def _capturing_factory(
-    captured: list[str | None], content: object
-) -> type[HttpLLMClient]:
+def _capturing_factory(captured: list[str | None], content: object) -> type[HttpLLMClient]:
     """A drop-in ``HttpLLMClient`` **subclass** that records the outbound
     ``Authorization`` header on a real MockTransport-backed client.
 
@@ -160,9 +158,7 @@ def _make_settings(**overrides: object) -> Settings:
     return Settings(_env_file=None, **base)  # type: ignore[arg-type]
 
 
-def _seed_app_settings(
-    session_factory: sessionmaker[Session], *, key: str | None
-) -> None:
+def _seed_app_settings(session_factory: sessionmaker[Session], *, key: str | None) -> None:
     """Set the singleton row's LLM key (and a row endpoint) for a DB-driven site."""
     with session_factory() as session:
         row = get_or_create(session, llm_enabled_default=True)
@@ -395,13 +391,19 @@ def test_check_llm_wire_carries_key_and_omits_when_absent() -> None:
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     result = check_llm(
-        enabled=True, base_url="https://row.example/v1", api_key="sk-effective", client=client
+        enabled=True,
+        configured=True,
+        base_url="https://row.example/v1",
+        api_key="sk-effective",
+        client=client,
     )
     assert result is not None and result.ok
     assert captured == ["Bearer sk-effective"]
 
     captured.clear()
-    check_llm(enabled=True, base_url="https://row.example/v1", api_key="", client=client)
+    check_llm(
+        enabled=True, configured=True, base_url="https://row.example/v1", api_key="", client=client
+    )
     assert captured == [None]  # empty key -> no Authorization header on the wire
 
 
@@ -446,7 +448,11 @@ def test_check_llm_result_never_contains_the_key() -> None:
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     result = check_llm(
-        enabled=True, base_url="https://row.example/v1", api_key=SENTINEL, client=client
+        enabled=True,
+        configured=True,
+        base_url="https://row.example/v1",
+        api_key=SENTINEL,
+        client=client,
     )
     assert result is not None
     assert SENTINEL not in (result.detail or "")

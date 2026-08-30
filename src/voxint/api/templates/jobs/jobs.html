@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "fragments/_chips.html" import chip %}
+{% from "fragments/_chips.html" import chip, needs_you_chip %}
 {% block title %}Voxint — jobs{% endblock %}
 
 {% block cb_breadcrumb %}jobs /{% endblock %}
@@ -73,7 +73,7 @@
       <span>{{ chip(humanize_status(item.status)) }}</span>
       <span>
         {% if item.status == "completed" and item.unresolved_count > 0 %}
-        {{ chip(item.unresolved_count ~ " voices need you") }}
+        {{ needs_you_chip(item.unresolved_count) }}
         {% elif item.status == "completed" %}
         {{ chip("reviewed") }}
         {% elif item.status == "failed" and item.error %}

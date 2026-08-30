@@ -4,13 +4,7 @@
 
 {% block cb_breadcrumb %}speakers /{% endblock %}
 {% block cb_summary %}
-{%- if overview.rows %}{{ overview.rows|length }} people · {{ overview.verified_count }} verified by you{% endif -%}
-{% endblock %}
-{% block cb_search %}
-<div class="cb-search" aria-hidden="true">
-  <span>Find a person</span>
-  <kbd>&#8984;K</kbd>
-</div>
+{%- if overview.rows %}{{ overview.rows|length }} {{ "person" if overview.rows|length == 1 else "people" }} · {{ overview.verified_count }} verified by you{% endif -%}
 {% endblock %}
 {% block cb_actions %}
 <nav class="view-toggle" aria-label="Show as">

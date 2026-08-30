@@ -78,6 +78,12 @@
     ]
   ],
   [
+    "/favicon.ico",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/static/app/{asset_path:path}",
     [
       "GET"

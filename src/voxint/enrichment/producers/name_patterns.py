@@ -27,12 +27,18 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-PATTERN_SET_VERSION = 1
+# v2: _snippet grew bounded word-alignment (#318) — stored evidence snippets
+# changed shape, so re-running enrichment must recompute rather than hit the
+# unchanged-signature idempotency short-circuit and keep mid-word snippets.
+PATTERN_SET_VERSION = 2
 
 MAX_NAME_TOKENS = 4
 MIN_NAME_CHARS = 2
 MAX_NAME_CHARS = 120
 SNIPPET_CONTEXT_CHARS = 60
+# Extra per-side budget for expanding a snippet edge to the nearest whitespace
+# so stored evidence does not start or end mid-word (#318).
+_SNIPPET_ALIGN_CHARS = 30
 CONTEXT_WINDOW_CHARS = 80
 
 
@@ -679,8 +685,19 @@ def _is_ambiguous(name: str) -> bool:
 
 
 def _snippet(text: str, start: int, end: int) -> str:
+    # Expand the fixed window outward to the nearest whitespace so evidence
+    # snippets do not start or end mid-word ("...arah Chen, hos..."). Bounded:
+    # at most _SNIPPET_ALIGN_CHARS extra per side, and a long unbroken token
+    # is cut at the cap rather than swallowed whole. Snippets are stored at
+    # sweep time, so this shapes newly stored evidence, not just display.
     lo = max(0, start - SNIPPET_CONTEXT_CHARS)
     hi = min(len(text), end + SNIPPET_CONTEXT_CHARS)
+    lo_floor = max(0, lo - _SNIPPET_ALIGN_CHARS)
+    while lo > lo_floor and not text[lo - 1].isspace():
+        lo -= 1
+    hi_ceil = min(len(text), hi + _SNIPPET_ALIGN_CHARS)
+    while hi < hi_ceil and not text[hi].isspace():
+        hi += 1
     return re.sub(r"\s+", " ", text[lo:hi]).strip()
 
 

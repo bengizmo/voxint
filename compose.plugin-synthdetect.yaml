@@ -25,7 +25,7 @@ services:
       SYNTHDETECT_HTTP_TIMEOUT_SECONDS: ${SYNTHDETECT_HTTP_TIMEOUT_SECONDS:-120}
 
   synthdetect:
-    image: ghcr.io/bengizmo/voxint-synthdetect:${VOXINT_IMAGE_TAG:-0.29.0}
+    image: ghcr.io/bengizmo/voxint-synthdetect:${VOXINT_IMAGE_TAG:-0.29.1}
     pull_policy: missing
     restart: unless-stopped
     environment:

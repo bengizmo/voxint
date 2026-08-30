@@ -277,7 +277,7 @@ def test_config_records_versions_and_signature(session: Session, run_id: uuid.UU
     _add_metadata(session, run_id, title="Interview with Jane Doe")
     producer_run = _produce(session, run_id)
     assert producer_run.config is not None
-    assert producer_run.config["pattern_set_version"] == 1
+    assert producer_run.config["pattern_set_version"] == 2
     assert producer_run.config["scoring_version"] == 1
     assert producer_run.config["input_signature"]
     # The key carries the FULL input signature — no truncation, so a prefix
