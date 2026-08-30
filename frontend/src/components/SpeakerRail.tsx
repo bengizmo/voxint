@@ -19,6 +19,7 @@ export interface LabelStateShape {
   speakerId: string | null;
   speakerName: string | null;
   cosineConfidence: number | null;
+  cosineSpeakerId: string | null;
   cosineSpeakerName: string | null;
   cosineGrounded: boolean;
   llmHintName: string | null;
@@ -89,7 +90,6 @@ function SpeakerCard({
   busy,
   onDecide,
   onEnroll,
-  defaultExpanded,
 }: {
   state: LabelStateShape;
   reviewToken: string | null;
@@ -98,10 +98,9 @@ function SpeakerCard({
   busy: boolean;
   onDecide: (label: string, action: string, speakerId?: string) => void;
   onEnroll: (label: string, name: string) => void;
-  defaultExpanded: boolean;
 }) {
   const [enrollName, setEnrollName] = useState("");
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [expanded, setExpanded] = useState(false);
   const resolved = isResolved(state);
 
   return (
@@ -117,6 +116,7 @@ function SpeakerCard({
               <button
                 type="button"
                 onClick={() => setExpanded((on) => !on)}
+                aria-expanded={expanded}
                 className="text-sm ml-auto secondary"
               >
                 {expanded ? "Hide" : "Change"}
@@ -203,16 +203,13 @@ function SpeakerCard({
           )}
           {writable && reviewToken && (
             <div className="card-actions my-1">
-              {state.cosineGrounded && state.cosineSpeakerName ? (
+              {state.cosineGrounded && state.cosineSpeakerId ? (
                 <>
                   <button
                     type="button"
-                    onClick={() => {
-                      const sp = speakers.find(
-                        (s) => s.displayName === state.cosineSpeakerName,
-                      );
-                      if (sp) onDecide(state.label, "assign", sp.id);
-                    }}
+                    onClick={() =>
+                      onDecide(state.label, "assign", state.cosineSpeakerId!)
+                    }
                     disabled={busy}
                     className="primary mr-2"
                   >
@@ -374,6 +371,7 @@ function MergePanel({
   speakers,
   busy,
   onMerge,
+  onClaimLost,
 }: {
   runId: string;
   reviewToken: string | null;
@@ -381,6 +379,7 @@ function MergePanel({
   speakers: { id: string; displayName: string }[];
   busy: boolean;
   onMerge: (data: LabelsResult) => void;
+  onClaimLost: () => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [target, setTarget] = useState("");
@@ -424,7 +423,11 @@ function MergePanel({
       const data = (await res.json()) as MergePreview;
       setPreview(data);
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Preview failed.");
+      if (err instanceof ApiError && err.status === 409) {
+        onClaimLost();
+      } else {
+        setError(err instanceof ApiError ? err.detail : "Preview failed.");
+      }
     } finally {
       setPreviewBusy(false);
     }
@@ -457,7 +460,11 @@ function MergePanel({
       setNewName("");
       onMerge(data);
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Merge failed.");
+      if (err instanceof ApiError && err.status === 409) {
+        onClaimLost();
+      } else {
+        setError(err instanceof ApiError ? err.detail : "Merge failed.");
+      }
     } finally {
       setMergeBusy(false);
     }
@@ -701,7 +708,6 @@ export function SpeakerRail({
     const bR = isResolved(b) ? 1 : 0;
     return aR - bR;
   });
-  const firstUnresolvedLabel = sortedStates.find((s) => !isResolved(s))?.label;
 
   return (
     <div className="lib-rail" role="complementary" aria-label="Speaker rail">
@@ -715,7 +721,6 @@ export function SpeakerRail({
           busy={busy}
           onDecide={(l, a, sp) => void decide(l, a, sp)}
           onEnroll={(l, n) => void enroll(l, n)}
-          defaultExpanded={s.label === firstUnresolvedLabel}
         />
       ))}
       {writable && reviewToken && (
@@ -726,6 +731,7 @@ export function SpeakerRail({
           speakers={speakers}
           busy={busy}
           onMerge={adoptResult}
+          onClaimLost={onClaimLost}
         />
       )}
       {error && (

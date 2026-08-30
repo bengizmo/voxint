@@ -150,6 +150,7 @@ def media_detail_page(
                     "speakerId": str(s.speaker_id) if s.speaker_id else None,
                     "speakerName": s.speaker_name,
                     "cosineConfidence": s.cosine_confidence,
+                    "cosineSpeakerId": str(s.cosine_speaker_id) if s.cosine_speaker_id else None,
                     "cosineSpeakerName": s.cosine_speaker_name,
                     "cosineGrounded": s.cosine_grounded,
                     "llmHintName": s.llm_hint_name,
@@ -248,7 +249,15 @@ def editor_claim(
         )
     except ClaimUnavailableError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return JSONResponse({"token": str(token)})
+    return JSONResponse({
+        "token": str(token),
+        "tagCsrf": mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_ANNOTATION_TAGS
+        ),
+        "clipCsrf": mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_CLIP_EXTRACT
+        ),
+    })
 
 
 @router.post("/media/{media_id}/editor/release")

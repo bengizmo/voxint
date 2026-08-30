@@ -537,6 +537,7 @@ def _label_state_shape(s: LabelState) -> dict[str, Any]:
         "speakerId": str(s.speaker_id) if s.speaker_id else None,
         "speakerName": s.speaker_name,
         "cosineConfidence": s.cosine_confidence,
+        "cosineSpeakerId": str(s.cosine_speaker_id) if s.cosine_speaker_id else None,
         "cosineSpeakerName": s.cosine_speaker_name,
         "cosineGrounded": s.cosine_grounded,
         "llmHintName": s.llm_hint_name,

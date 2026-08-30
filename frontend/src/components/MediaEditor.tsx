@@ -85,8 +85,8 @@ export function MediaEditor({
   annotations: initialAnnotations = [],
   annotationTags: initialAnnotationTags = [],
   annotationLimits = FALLBACK_ANNOTATION_LIMITS,
-  tagCsrf = null,
-  clipCsrf = null,
+  tagCsrf: initialTagCsrf = null,
+  clipCsrf: initialClipCsrf = null,
   claimCsrf = null,
   labelStates: initialLabelStates = [],
   translate = null,
@@ -98,6 +98,8 @@ export function MediaEditor({
   const [reviewToken, setReviewToken] = useState<string | null>(
     initialReviewToken,
   );
+  const [tagCsrf, setTagCsrf] = useState(initialTagCsrf);
+  const [clipCsrf, setClipCsrf] = useState(initialClipCsrf);
   const [claimLost, setClaimLost] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
@@ -122,9 +124,13 @@ export function MediaEditor({
   const [translateError, setTranslateError] = useState<string | null>(null);
   const translateBusyRef = useRef(false);
   const [claiming, setClaiming] = useState(false);
+  const claimingRef = useRef(false);
+  const reviewTokenRef = useRef(reviewToken);
+  reviewTokenRef.current = reviewToken;
 
   const claimForEditing = useCallback(async () => {
-    if (!claimCsrf || claiming) return;
+    if (!claimCsrf || claimingRef.current) return;
+    claimingRef.current = true;
     setClaiming(true);
     try {
       const body = new URLSearchParams({
@@ -139,25 +145,33 @@ export function MediaEditor({
         },
         body: body.toString(),
       });
-      const data = (await res.json()) as { token: string };
+      const data = (await res.json()) as {
+        token: string;
+        tagCsrf: string;
+        clipCsrf: string;
+      };
+      reviewTokenRef.current = data.token;
       setReviewToken(data.token);
+      setTagCsrf(data.tagCsrf);
+      setClipCsrf(data.clipCsrf);
       setClaimLost(false);
-      window.history.replaceState(null, "", `?token=${data.token}`);
+      const p = new URLSearchParams(window.location.search);
+      p.set("token", data.token);
+      window.history.replaceState(null, "", `?${p}`);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
-        setError(err.detail);
-      } else {
-        setError(err instanceof ApiError ? err.detail : "Could not claim.");
-      }
+      setError(err instanceof ApiError ? err.detail : "Could not claim.");
     } finally {
+      claimingRef.current = false;
       setClaiming(false);
     }
-  }, [claimCsrf, claiming, runId, mediaId]);
+  }, [claimCsrf, runId, mediaId]);
+
+  const claimed = reviewToken !== null && !claimLost;
 
   // Heartbeat: re-claim periodically to renew the TTL (same-operator reuse
   // per ADR 0004 — claim_run with the same reviewer returns a fresh token).
   useEffect(() => {
-    if (!reviewToken || !claimCsrf || claimLost) return;
+    if (!claimed || !claimCsrf) return;
     const interval = setInterval(() => {
       void (async () => {
         try {
@@ -174,23 +188,27 @@ export function MediaEditor({
             body: body.toString(),
           });
           const data = (await res.json()) as { token: string };
+          reviewTokenRef.current = data.token;
           setReviewToken(data.token);
-        } catch {
-          // Heartbeat failure is not fatal — the claim expires, and the next
-          // mutation will 409 and set claimLost.
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 409) {
+            setClaimLost(true);
+          }
         }
       })();
     }, 60_000);
     return () => clearInterval(interval);
-  }, [reviewToken, claimCsrf, claimLost, runId, mediaId]);
+  }, [claimed, claimCsrf, runId, mediaId]);
 
   // Release on unload (best-effort — sendBeacon for reliability).
   useEffect(() => {
-    if (!reviewToken || claimLost) return;
+    if (!claimed) return;
     const onUnload = () => {
+      const tok = reviewTokenRef.current;
+      if (!tok) return;
       const body = new URLSearchParams({
         run_id: runId,
-        token: reviewToken,
+        token: tok,
       });
       navigator.sendBeacon(
         `/media/${mediaId}/editor/release`,
@@ -198,8 +216,12 @@ export function MediaEditor({
       );
     };
     window.addEventListener("beforeunload", onUnload);
-    return () => window.removeEventListener("beforeunload", onUnload);
-  }, [reviewToken, claimLost, runId, mediaId]);
+    window.addEventListener("pagehide", onUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onUnload);
+      window.removeEventListener("pagehide", onUnload);
+    };
+  }, [claimed, runId, mediaId]);
 
   const editTextRef = useRef(editText);
   editTextRef.current = editText;
@@ -700,6 +722,11 @@ export function MediaEditor({
             </button>
           </div>
         )}
+        {error && !writable && (
+          <p role="alert" className="notice text-sm">
+            {error}
+          </p>
+        )}
 
         <section className="me-toolbar" aria-label="Editor controls">
           <div className="progress-wrap">
@@ -823,9 +850,10 @@ export function MediaEditor({
                     </span>
                   )}
                 </p>
-                {current.corrections?.status === "shown" && provOpen && (
+                {current.corrections?.status === "shown" && (
                   <ul
                     id="editor-provenance-body"
+                    hidden={!provOpen}
                     className="review-provenance-list text-sm my-1"
                   >
                     {current.corrections.entries.map((entry, i) => (
@@ -1023,7 +1051,7 @@ export function MediaEditor({
             writable={writable}
             labelStates={initialLabelStates}
             speakers={speakers}
-            onClaimLost={() => setClaimLost(true)}
+            onClaimLost={onAnnotationClaimLost}
             onLabelsChanged={onLabelsChanged}
           />
         </div>
