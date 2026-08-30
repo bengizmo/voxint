@@ -13,11 +13,25 @@
     "format:check": "prettier --check src"
   },
   "dependencies": {
+    "d3-array": "^3.2.4",
+    "d3-axis": "^3.0.0",
+    "d3-cloud": "^1.2.9",
+    "d3-format": "^3.1.2",
+    "d3-scale": "^4.0.2",
+    "d3-shape": "^3.2.0",
+    "d3-time-format": "^4.1.0",
     "react": "19.1.1",
     "react-dom": "19.1.1"
   },
   "devDependencies": {
     "@eslint/js": "9.34.0",
+    "@types/d3-array": "^3.2.2",
+    "@types/d3-axis": "^3.0.6",
+    "@types/d3-cloud": "^1.2.9",
+    "@types/d3-format": "^3.0.4",
+    "@types/d3-scale": "^4.0.9",
+    "@types/d3-shape": "^3.2.0",
+    "@types/d3-time-format": "^4.0.3",
     "@types/react": "19.1.9",
     "@types/react-dom": "19.1.7",
     "@vitejs/plugin-react": "4.7.0",

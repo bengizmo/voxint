@@ -38,6 +38,7 @@ from sqlalchemy import (
     SmallInteger,
     Text,
     UniqueConstraint,
+    Uuid,
     func,
     text,
 )
@@ -3204,3 +3205,47 @@ class BenchmarkItem(Base):
 
     benchmark_run: Mapped["BenchmarkRun"] = relationship(back_populates="items")
     pipeline_run: Mapped["PipelineRun | None"] = relationship()
+
+
+class CorpusAnalysisArtifactKind(enum.StrEnum):
+    TERM_STATS = "term_stats"
+    SPEAKER_STATS = "speaker_stats"
+    UMAP_LAYOUT = "umap_layout"
+
+
+class CorpusAnalysisArtifact(Base):
+    __tablename__ = "corpus_analysis_artifacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_kind",
+            "scope_id",
+            "artifact_kind",
+            "generation",
+            name="corpus_analysis_artifacts_generation_key",
+        ),
+        CheckConstraint(
+            "scope_kind IN ('corpus', 'project', 'speaker')",
+            name="corpus_analysis_artifacts_scope_kind_check",
+        ),
+        CheckConstraint(
+            "generation >= 1",
+            name="corpus_analysis_artifacts_generation_check",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(payload) = 'object'",
+            name="corpus_analysis_artifacts_payload_object_check",
+        ),
+        CheckConstraint(
+            "source_hash ~ '^[0-9a-f]{64}$'",
+            name="corpus_analysis_artifacts_source_hash_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    scope_kind: Mapped[str] = mapped_column(Text)
+    scope_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    artifact_kind: Mapped[str] = mapped_column(Text)
+    generation: Mapped[int] = mapped_column(Integer)
+    source_hash: Mapped[str] = mapped_column(Text)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
