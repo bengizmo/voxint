@@ -299,7 +299,7 @@ def compute_tfidf(
                 total += (count / doc_lengths[i]) * idf
         tfidf_avg[term] = total / doc_freq
 
-    ranked = sorted(tfidf_avg.items(), key=lambda x: x[1], reverse=True)[:top_n]
+    ranked = sorted(tfidf_avg.items(), key=lambda kv: (-kv[1], kv[0]))[:top_n]
     return [
         TermStat(
             term=term,

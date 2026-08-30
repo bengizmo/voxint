@@ -22,7 +22,6 @@ export function TermBarChart({
   return (
     <div
       className="term-bar-chart"
-      role="list"
       aria-label="Top terms by frequency"
     >
       {items.map((t) => (
@@ -30,7 +29,6 @@ export function TermBarChart({
           key={t.term}
           className="term-bar-row"
           onClick={() => onTermClick(t.term)}
-          role="listitem"
           type="button"
         >
           <span className="term-bar-label">{t.term}</span>

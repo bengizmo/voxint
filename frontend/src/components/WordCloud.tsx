@@ -101,11 +101,11 @@ export function WordCloud({
 
   return (
     <svg
-      width={width}
+      width="100%"
       height={height}
       viewBox={`0 0 ${width} ${height}`}
       className="word-cloud-svg"
-      role="img"
+      role="group"
       aria-label="Word cloud of top corpus terms"
     >
       <g transform={`translate(${width / 2},${height / 2})`}>
