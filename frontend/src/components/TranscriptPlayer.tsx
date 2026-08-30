@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -263,6 +264,198 @@ function formatTime(seconds: number): string {
   return seconds.toFixed(2);
 }
 
+interface TranscriptRowProps {
+  seg: Segment;
+  index: number;
+  active: boolean;
+  jumpFlash: boolean;
+  seek: boolean;
+  seekDisabledReason: string | undefined;
+  lowConfidenceThreshold: number;
+  splitting: SplitFocus | null;
+  lineSpans: AnnotationLineSpan[] | undefined;
+  isStaleLocator: boolean;
+  translationLine: string | undefined;
+  translationLang: string | undefined;
+  reassignSpeakers?: { id: string; displayName: string }[];
+  reassignBusy?: boolean;
+  activeLineRef: React.RefObject<HTMLParagraphElement | null>;
+  onActivate: (index: number) => void;
+  onSplitAt?: (sourceSegmentId: string, wordIndex: number) => void;
+  onReassign?: (seg: Segment, speakerId: string | null) => void;
+}
+
+const TranscriptRow = memo(function TranscriptRow({
+  seg,
+  index,
+  active,
+  jumpFlash,
+  seek,
+  seekDisabledReason,
+  lowConfidenceThreshold,
+  splitting,
+  lineSpans,
+  isStaleLocator,
+  translationLine,
+  translationLang,
+  reassignSpeakers,
+  reassignBusy,
+  activeLineRef,
+  onActivate,
+  onSplitAt,
+  onReassign,
+}: TranscriptRowProps) {
+  // Uncertain is a NON-background cue (a dashed underline + chip): the
+  // active line owns the background tint, so the two never collide.
+  const uncertain =
+    seg.confidence != null && seg.confidence < lowConfidenceThreshold;
+  const classes = ["tp-line", "my-1", "text-sm"];
+  if (seg.paletteIndex != null) classes.push(`spk-${seg.paletteIndex}`);
+  if (uncertain) classes.push("tp-uncertain");
+  // Base .tp-line owns padding + radius (issue #92) so the active tint
+  // and the hover surface align without per-state padding utilities.
+  // No opacity dimming on inactive lines: element opacity compounds
+  // into child chips/timecodes and pushed small text below AA (review
+  // finding) — the active line's tint + aria-current carry emphasis.
+  if (active) classes.push("bg-seg/20");
+  // Deep-link jump flash (issue #121): a brief fading highlight on the
+  // line a ?t= jump landed on. Cleared by the mount effect's timeout.
+  if (jumpFlash) classes.push("tp-jump-flash");
+
+  return (
+    <p
+      ref={active ? activeLineRef : undefined}
+      data-seg-index={index}
+      // Selection anchors for the annotation layer (issue #86): the
+      // IMMUTABLE parent id every capture endpoint addresses, plus the
+      // split child's word range when this line is one. selection.ts reads
+      // these off the line the Range boundary lands in.
+      data-seg-id={seg.sourceSegmentId ?? undefined}
+      data-word-start={seg.wordStart ?? undefined}
+      data-word-end={seg.wordEnd ?? undefined}
+      className={classes.join(" ")}
+      aria-current={active ? "true" : undefined}
+      // Click-the-line-to-seek (issue #49). Only a hint when seeking is
+      // disabled — the button carries the accessible affordance.
+      onClick={seek ? () => onActivate(index) : undefined}
+      style={seek ? { cursor: "pointer" } : undefined}
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onActivate(index);
+        }}
+        disabled={!seek}
+        title={seek ? "Play this line" : seekDisabledReason}
+        aria-label={`Play line at ${formatTime(seg.start)} seconds`}
+        className="mr-2"
+      >
+        ▶
+      </button>
+      <span className="opacity-60 tabular-nums mr-2">
+        [{formatTime(seg.start)}–{formatTime(seg.end)}]
+      </span>
+      {uncertain && (
+        <span
+          className="tp-uncertain-chip"
+          title="Low ASR confidence — uncertain, not necessarily wrong"
+        >
+          uncertain
+        </span>
+      )}
+      {seg.label != null && <span className="spk-badge">{seg.label}</span>}
+      {seg.speaker !== seg.label && <strong>{seg.speaker}:</strong>}{" "}
+      {splitting ? (
+        // A cut lands BEFORE the clicked word, so word 0 has no legal cut
+        // (its index would be 0, and the backend requires 0 < index < n);
+        // it renders inert. stopPropagation keeps the click off the line's
+        // seek handler — splitting must not also scrub the audio.
+        <span>
+          {splitting.words.map((w, wi) => (
+            <button
+              key={wi}
+              type="button"
+              disabled={wi === 0}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSplitAt?.(splitting.sourceSegmentId, wi);
+              }}
+              title={
+                wi === 0
+                  ? "Cannot split before the first word"
+                  : `Split before “${w.word.trim()}”`
+              }
+              className="tp-split-word px-0.5 rounded hover:bg-splitword/30 disabled:opacity-60 disabled:cursor-default"
+            >
+              {w.word}
+            </button>
+          ))}
+        </span>
+      ) : (
+        // [data-seg-text] is the stable anchor selection.ts walks to for a
+        // code-point offset; the wrapper's text stays byte-identical to
+        // seg.text whether or not it carries highlight marks.
+        <span data-seg-text>
+          {lineSpans && lineSpans.length > 0
+            ? renderAnnotatedText(seg.text, lineSpans)
+            : seg.text}
+        </span>
+      )}
+      {translationLine ? (
+        // Interleaved translated line (issue #133): same texts the
+        // JS-off fallback renders, so hydration changes nothing.
+        <span className="tp-translation" lang={translationLang}>
+          {translationLine}
+        </span>
+      ) : null}
+      {isStaleLocator && (
+        <span
+          className="hl-stale-locator"
+          title="A highlight anchored near here is stale; the text it covered has changed. Re-anchor or refresh it from the Highlights panel."
+        >
+          stale highlight ≈ here
+        </span>
+      )}
+      {onReassign != null &&
+        reassignSpeakers != null &&
+        seg.wordStart != null &&
+        seg.wordEnd != null && (
+          <label
+            className="tp-reassign ml-2 text-xs opacity-80"
+            // Keep the whole control — label text included — off the line's
+            // seek handler, not just the <select>.
+            onClick={(e) => e.stopPropagation()}
+          >
+            {" · "}speaker:{" "}
+            <select
+              // Bound to the child's OWN range-override id: "" (inherit) is
+              // selected exactly when the child has no child-scoped ruling,
+              // so an inherited speaker is never shown as a child assignment.
+              // Server truth, so a failed write (no reconcile) re-imposes the
+              // prior value on the next render rather than leaving the picked
+              // option showing. WRITE is by id regardless.
+              value={seg.wordRangeSpeakerId ?? ""}
+              disabled={reassignBusy}
+              aria-label={`Reassign speaker for “${seg.text}”`}
+              onChange={(e) => {
+                e.stopPropagation();
+                onReassign(seg, e.target.value === "" ? null : e.target.value);
+              }}
+            >
+              <option value="">↺ inherit (follow the segment)</option>
+              {reassignSpeakers.map((sp) => (
+                <option key={sp.id} value={sp.id}>
+                  {sp.displayName}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+    </p>
+  );
+});
+
 // A programmatic scrollIntoView emits `scroll` events that must NOT be read as
 // the operator taking over. `wheel`/`touchmove`/keyboard scrolling are detected
 // by their OWN events (which a programmatic scroll never emits), so they stop
@@ -500,13 +693,19 @@ export const TranscriptPlayer = forwardRef<
     const audio = audioRef.current;
     if (audio && seek) playTurn(audio, seg.start, seg.end);
   };
+  const playRef = useRef(play);
+  playRef.current = play;
+  const segmentsRef = useRef(segments);
+  segmentsRef.current = segments;
   // Activating a line plays it AND (when a driver is attached) selects it, so the
   // edit cursor tracks what the operator clicked. Without the callback this is
   // exactly `play` — the read-only page is unchanged.
-  const activateLine = (index: number, seg: Segment) => {
-    play(seg);
+  const activateLine = useCallback((index: number) => {
+    const seg = segmentsRef.current[index];
+    if (!seg) return;
+    playRef.current(seg);
     onSegmentSelect?.(index);
-  };
+  }, [onSegmentSelect]);
   // A waveform-region click (issue #57): ALWAYS select + reveal the segment in
   // the list (selection is a reading act), and additionally play it only when
   // seeking is trusted — the strip itself never touches the audio element, so
@@ -605,7 +804,6 @@ export const TranscriptPlayer = forwardRef<
       </div>
       <div ref={listRef}>
         {segments.map((seg, i) => {
-          const active = i === activeIndex;
           // Split mode (issue #59): this focused, unsplit, splittable line shows
           // its words as clickable cut points instead of its plain text. Guarded
           // on a matching parent id so a stale fetch never paints the wrong line.
@@ -613,172 +811,37 @@ export const TranscriptPlayer = forwardRef<
             splitFocus != null &&
             onSplitAt != null &&
             i === splitFocus.segmentIndex &&
-            seg.sourceSegmentId === splitFocus.sourceSegmentId;
-          // Uncertain is a NON-background cue (a dashed underline + chip): the
-          // active line owns the background tint, so the two never collide.
-          const uncertain =
-            seg.confidence != null && seg.confidence < lowConfidenceThreshold;
-          const classes = ["tp-line", "my-1", "text-sm"];
-          if (seg.paletteIndex != null) classes.push(`spk-${seg.paletteIndex}`);
-          if (uncertain) classes.push("tp-uncertain");
-          // Base .tp-line owns padding + radius (issue #92) so the active tint
-          // and the hover surface align without per-state padding utilities.
-          // No opacity dimming on inactive lines: element opacity compounds
-          // into child chips/timecodes and pushed small text below AA (review
-          // finding) — the active line's tint + aria-current carry emphasis.
-          if (active) classes.push("bg-seg/20");
-          // Deep-link jump flash (issue #121): a brief fading highlight on the
-          // line a ?t= jump landed on. Cleared by the mount effect's timeout.
-          if (i === jumpIndex) classes.push("tp-jump-flash");
+            seg.sourceSegmentId === splitFocus.sourceSegmentId
+              ? splitFocus
+              : null;
           return (
-            <p
-              // Keyed by parent + word-range (falling back to start time) so a
-              // whole-run reconcile after a split/reassign re-associates each line
-              // with its own DOM node — a split parent's children share a start
-              // time, so a start-only key could otherwise remount the wrong <select>
-              // and drop its focus. Index keeps unsplit lines with equal starts
-              // distinct.
+            // Keyed by parent + word-range (falling back to start time) so a
+            // whole-run reconcile after a split/reassign re-associates each line
+            // with its own DOM node — a split parent's children share a start
+            // time, so a start-only key could otherwise remount the wrong <select>
+            // and drop its focus. Index keeps unsplit lines with equal starts
+            // distinct.
+            <TranscriptRow
               key={`${seg.sourceSegmentId ?? "x"}-${seg.wordStart ?? "u"}-${seg.wordEnd ?? "u"}-${seg.start}-${i}`}
-              ref={active ? activeLineRef : undefined}
-              data-seg-index={i}
-              // Selection anchors for the annotation layer (issue #86): the
-              // IMMUTABLE parent id every capture endpoint addresses, plus the
-              // split child's word range when this line is one. selection.ts reads
-              // these off the line the Range boundary lands in.
-              data-seg-id={seg.sourceSegmentId ?? undefined}
-              data-word-start={seg.wordStart ?? undefined}
-              data-word-end={seg.wordEnd ?? undefined}
-              className={classes.join(" ")}
-              aria-current={active ? "true" : undefined}
-              // Click-the-line-to-seek (issue #49). Only a hint when seeking is
-              // disabled — the button carries the accessible affordance.
-              onClick={
-                seek
-                  ? () => {
-                      activateLine(i, seg);
-                    }
-                  : undefined
-              }
-              style={seek ? { cursor: "pointer" } : undefined}
-            >
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  activateLine(i, seg);
-                }}
-                disabled={!seek}
-                title={seek ? "Play this line" : capability.reasons[0]?.message}
-                aria-label={`Play line at ${formatTime(seg.start)} seconds`}
-                className="mr-2"
-              >
-                ▶
-              </button>
-              <span className="opacity-60 tabular-nums mr-2">
-                [{formatTime(seg.start)}–{formatTime(seg.end)}]
-              </span>
-              {uncertain && (
-                <span
-                  className="tp-uncertain-chip"
-                  title="Low ASR confidence — uncertain, not necessarily wrong"
-                >
-                  uncertain
-                </span>
-              )}
-              {seg.label != null && (
-                <span className="spk-badge">{seg.label}</span>
-              )}
-              {seg.speaker !== seg.label && <strong>{seg.speaker}:</strong>}{" "}
-              {splitting ? (
-                // A cut lands BEFORE the clicked word, so word 0 has no legal cut
-                // (its index would be 0, and the backend requires 0 < index < n);
-                // it renders inert. stopPropagation keeps the click off the line's
-                // seek handler — splitting must not also scrub the audio.
-                <span>
-                  {splitFocus.words.map((w, wi) => (
-                    <button
-                      key={wi}
-                      type="button"
-                      disabled={wi === 0}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSplitAt(splitFocus.sourceSegmentId, wi);
-                      }}
-                      title={
-                        wi === 0
-                          ? "Cannot split before the first word"
-                          : `Split before “${w.word.trim()}”`
-                      }
-                      className="tp-split-word px-0.5 rounded hover:bg-splitword/30 disabled:opacity-60 disabled:cursor-default"
-                    >
-                      {w.word}
-                    </button>
-                  ))}
-                </span>
-              ) : (
-                // [data-seg-text] is the stable anchor selection.ts walks to for a
-                // code-point offset; the wrapper's text stays byte-identical to
-                // seg.text whether or not it carries highlight marks.
-                <span data-seg-text>
-                  {(() => {
-                    const lineSpans = annotationSpans?.get(i);
-                    return lineSpans && lineSpans.length > 0
-                      ? renderAnnotatedText(seg.text, lineSpans)
-                      : seg.text;
-                  })()}
-                </span>
-              )}
-              {translation?.lines[i] ? (
-                // Interleaved translated line (issue #133): same texts the
-                // JS-off fallback renders, so hydration changes nothing.
-                <span className="tp-translation" lang={translation.language}>
-                  {translation.lines[i]}
-                </span>
-              ) : null}
-              {staleLocators?.has(i) && (
-                <span
-                  className="hl-stale-locator"
-                  title="A highlight anchored near here is stale; the text it covered has changed. Re-anchor or refresh it from the Highlights panel."
-                >
-                  stale highlight ≈ here
-                </span>
-              )}
-              {onReassign != null &&
-                reassignSpeakers != null &&
-                seg.wordStart != null &&
-                seg.wordEnd != null && (
-                  <label
-                    className="tp-reassign ml-2 text-xs opacity-80"
-                    // Keep the whole control — label text included — off the line's
-                    // seek handler, not just the <select>.
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {" · "}speaker:{" "}
-                    <select
-                      // Bound to the child's OWN range-override id: "" (inherit) is
-                      // selected exactly when the child has no child-scoped ruling,
-                      // so an inherited speaker is never shown as a child assignment.
-                      // Server truth, so a failed write (no reconcile) re-imposes the
-                      // prior value on the next render rather than leaving the picked
-                      // option showing. WRITE is by id regardless.
-                      value={seg.wordRangeSpeakerId ?? ""}
-                      disabled={reassignBusy}
-                      aria-label={`Reassign speaker for “${seg.text}”`}
-                      onChange={(e) => {
-                        e.stopPropagation();
-                        onReassign(seg, e.target.value === "" ? null : e.target.value);
-                      }}
-                    >
-                      <option value="">↺ inherit (follow the segment)</option>
-                      {reassignSpeakers.map((sp) => (
-                        <option key={sp.id} value={sp.id}>
-                          {sp.displayName}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-            </p>
+              seg={seg}
+              index={i}
+              active={i === activeIndex}
+              jumpFlash={i === jumpIndex}
+              seek={seek}
+              seekDisabledReason={capability.reasons[0]?.message}
+              lowConfidenceThreshold={lowConfidenceThreshold}
+              splitting={splitting}
+              lineSpans={annotationSpans?.get(i)}
+              isStaleLocator={staleLocators?.has(i) ?? false}
+              translationLine={translation?.lines[i] || undefined}
+              translationLang={translation?.language}
+              reassignSpeakers={reassignSpeakers}
+              reassignBusy={reassignBusy}
+              activeLineRef={activeLineRef}
+              onActivate={activateLine}
+              onSplitAt={onSplitAt}
+              onReassign={onReassign}
+            />
           );
         })}
       </div>

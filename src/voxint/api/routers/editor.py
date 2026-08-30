@@ -1,10 +1,9 @@
-"""Media detail and editor page (Console 2.0 P3a, issue #156).
+"""Media detail and editor page (Console 2.0 P3a/P3b, issues #156/#157).
 
-``GET /media/{media_id}`` is the media detail page that will host the editor
-island (#157). Until the island ships, it renders a server-side transcript
-fallback with run metadata, a run chooser, and progress state. The existing
-``/review/{run_id}/*`` endpoints remain the only mutation surface; the editor
-island will call them directly.
+``GET /media/{media_id}/editor`` serves the media-editor island: run metadata,
+a run chooser, and — for a completed run — the editor with transcript, speaker
+rail, annotations, and waveform. The existing ``/review/{run_id}/*`` endpoints
+are the mutation surface; the island calls them directly.
 """
 
 from __future__ import annotations

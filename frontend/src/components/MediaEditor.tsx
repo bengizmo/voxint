@@ -100,6 +100,11 @@ export function MediaEditor({
   helpOpenRef.current = helpOpen;
   const [assignStatus, setAssignStatus] = useState<string | null>(null);
 
+  const editTextRef = useRef(editText);
+  editTextRef.current = editText;
+  const confirmDiscardRef = useRef(confirmDiscard);
+  confirmDiscardRef.current = confirmDiscard;
+
   const playerRef = useRef<TranscriptPlayerHandle>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
   const annotationRootRef = useRef<HTMLDivElement>(null);
@@ -209,10 +214,14 @@ export function MediaEditor({
     }
   }, [current, cursor, postJson, runId, editText, applyResult, segments, busyRef, setBusy]);
 
+  const currentRef = useRef(current);
+  currentRef.current = current;
+
   const splitAt = useCallback(
     async (sourceSegmentId: string, wordIndex: number) => {
       if (busyRef.current) return;
-      if (current && editText !== (current.text ?? "") && !confirmDiscard) {
+      const cur = currentRef.current;
+      if (cur && editTextRef.current !== (cur.text ?? "") && !confirmDiscardRef.current) {
         setConfirmDiscard(true);
         return;
       }
@@ -246,7 +255,7 @@ export function MediaEditor({
         setBusy(false);
       }
     },
-    [postForm, runId, current, editText, confirmDiscard, busyRef, setBusy, setCursor],
+    [postForm, runId, busyRef, setBusy, setCursor],
   );
 
   const reassignChild = useCallback(
@@ -517,9 +526,8 @@ export function MediaEditor({
         {claimLost && (
           <p role="alert" className="notice text-sm">
             Your claim expired or was taken over. Everything you already saved is
-            safe — copy any unsaved edit from the box first, then{" "}
-            <a href={`/review/${runId}`}>re-claim in the workbench</a> and reopen
-            this page to continue.
+            safe. Copy any unsaved edit from the box below, then close and
+            reopen this page to start a new editing session.
           </p>
         )}
 
@@ -572,10 +580,10 @@ export function MediaEditor({
 
         {done && (
           <div className="review-done card-actions">
-            <a className="btn-primary" href={`/runs/${runId}/transcript`}>
-              Open the transcript to export
+            <a className="btn-primary" href="#export-menu">
+              Download transcript
             </a>
-            <a href="/review">Back to Review</a>
+            <a href="/media">Back to the library</a>
           </div>
         )}
 
@@ -755,15 +763,9 @@ export function MediaEditor({
                     }
                   : null
               }
-              onSplitAt={
-                writable ? (id, wi) => void splitAt(id, wi) : undefined
-              }
+              onSplitAt={writable ? splitAt : undefined}
               reassignSpeakers={writable ? speakers : undefined}
-              onReassign={
-                writable
-                  ? (seg, speakerId) => void reassignChild(seg, speakerId)
-                  : undefined
-              }
+              onReassign={writable ? reassignChild : undefined}
               reassignBusy={busy}
               annotationSpans={annotationSpans}
               staleLocators={annotationStaleLines}

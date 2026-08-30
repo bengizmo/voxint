@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "fragments/export_menu.html" import export_menu %}
 {% block title %}Voxint — {{ media_label }}{% endblock %}
 
 {% block cb_breadcrumb %}media / <strong>{{ media_label|lower|replace(" ", "-") }}</strong>{% endblock %}
@@ -13,11 +14,10 @@
 {% endblock %}
 
 {% block body %}
-{# Media detail page (Console 2.0 P3a, issue #156). Renders run metadata, a
-   run chooser, and — when a completed run is selected — a server-rendered
-   transcript fallback. The editor island (#157) will mount here when it ships,
-   consuming the embedded island_props payload. Until then, the transcript is
-   display-only; edits go through the legacy /review path. #}
+{# Media detail page with the editor island (Console 2.0 P3a/P3b, issues
+   #156/#157). Renders run metadata, a run chooser, and — when a completed run
+   is selected — the media-editor island with a server-rendered transcript
+   table as JS-off fallback. #}
 
 <div class="lib-two-col">
 
@@ -29,13 +29,8 @@
          JS-off / hydration-failure fallback. #}
       <div data-island="media-editor" data-props='{{ island_props|tojson }}'>
         <div class="card" id="transcript-document">
-          {% if token %}
-          <p class="notice">Editing enabled. Mutations go through the
-          <a href="/review/{{ selected_run.id }}?token={{ token }}">legacy review page</a>
-          until the editor island ships.</p>
-          {% else %}
-          <p class="notice">Read-only view.
-          <a href="/review/{{ selected_run.id }}">Claim this run</a> to edit.</p>
+          {% if not token %}
+          <p class="notice">Read-only view. Claim this run to edit.</p>
           {% endif %}
 
           <table class="grid-table transcript-table">
@@ -57,6 +52,10 @@
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div id="export-menu" tabindex="-1">
+        {{ export_menu(selected_run) }}
       </div>
 
     {% elif selected_run %}
