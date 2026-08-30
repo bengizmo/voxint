@@ -167,7 +167,7 @@ def aggregate_topics(
     """Aggregate casefolded topics, returning the top ten by recording count."""
     casings: dict[str, Counter[str]] = defaultdict(Counter)
     runs: dict[str, set[uuid.UUID]] = defaultdict(set)
-    descriptions: dict[str, tuple[float, int, str | None]] = {}
+    descriptions: dict[str, tuple[float, bool, int, str | None]] = {}
     seen_index = 0
 
     for run_id, topics in per_run_topics:
@@ -187,9 +187,11 @@ def aggregate_topics(
 
             casings[key][label] += 1
             runs[key].add(run_id)
-            candidate = (confidence, -seen_index, description)
+            # Highest confidence wins; on a confidence tie a real description
+            # beats a missing one, then first-seen order settles it.
+            candidate = (confidence, description is not None, -seen_index, description)
             current = descriptions.get(key)
-            if current is None or candidate[:2] > current[:2]:
+            if current is None or candidate[:3] > current[:3]:
                 descriptions[key] = candidate
             seen_index += 1
 
@@ -197,7 +199,7 @@ def aggregate_topics(
         TopicInsight(
             label=_display_label(casing_counts),
             run_count=len(runs[key]),
-            description=descriptions[key][2],
+            description=descriptions[key][3],
         )
         for key, casing_counts in casings.items()
     ]

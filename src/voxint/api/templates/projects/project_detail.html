@@ -79,7 +79,7 @@
   {% set entity_total = insights.entities.values()|map("length")|sum %}
   {% if not insights.has_any_asset %}
   <p class="oc-muted">Themes and names come from the optional run-assets enrichment,
-    which hasn't produced anything for this project yet. Turn on run assets under
+    which hasn't produced topics or entity mentions for this project yet. Turn on run assets under
     <a href="/settings#features">Settings → Features</a> (it needs LLM enhancement on),
     then new runs will generate topics and entity mentions.</p>
   {% elif insights.has_assets_but_no_items %}
@@ -94,7 +94,7 @@
       {% set group = insights.entities[kind] %}
       {% if group %}
       <h4 class="pi-kind-title">{{ heading }}</h4>
-      {% set max_occ = group[0].occurrence_count if group[0].occurrence_count else 1 %}
+      {% set max_occ = group|map(attribute="occurrence_count")|max or 1 %}
       <div class="pi-bars" role="list" aria-label="{{ heading|capitalize }} mentioned in this project">
         {% for e in group %}
         <a href="/explore?project={{ detail.id }}&amp;q={{ e.label|urlencode }}"
@@ -109,7 +109,7 @@
       {% endif %}
       {% endfor %}
       {% if insights.coverage.entity_runs < insights.coverage.total_runs %}
-      <p class="pi-coverage-note">Entities found in {{ insights.coverage.entity_runs }} of {{ insights.coverage.total_runs }} recordings — the rest have no enrichment yet.</p>
+      <p class="pi-coverage-note">Entity enrichment covers {{ insights.coverage.entity_runs }} of {{ insights.coverage.total_runs }} recordings — the rest haven't been enriched yet.</p>
       {% endif %}
     </div>
     {% endif %}
@@ -128,7 +128,7 @@
         {% endfor %}
       </div>
       {% if insights.coverage.topic_runs < insights.coverage.total_runs %}
-      <p class="pi-coverage-note">Topics found in {{ insights.coverage.topic_runs }} of {{ insights.coverage.total_runs }} recordings — the rest have no enrichment yet.</p>
+      <p class="pi-coverage-note">Topic enrichment covers {{ insights.coverage.topic_runs }} of {{ insights.coverage.total_runs }} recordings — the rest haven't been enriched yet.</p>
       {% endif %}
     </div>
     {% endif %}
@@ -154,6 +154,7 @@
             <th scope="row">
               {% if row.name %}<a href="/speakers/{{ row.speaker_id }}">{{ row.name }}</a>
               {% else %}<span class="oc-muted">Unnamed voice</span>{% endif %}
+              {% if detail.matrix.omitted_recordings and not row.cells|select|list %}<span class="oc-muted">(older recordings only)</span>{% endif %}
             </th>
             {% for present in row.cells %}
             <td>{% if present %}<span class="pi-dot" aria-hidden="true">●</span><span class="visually-hidden">appears</span>{% else %}<span class="visually-hidden">absent</span>{% endif %}</td>

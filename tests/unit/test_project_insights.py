@@ -140,6 +140,15 @@ class TestAggregateTopics:
         )
         assert result[0].description == "high"
 
+    def test_confidence_tie_prefers_a_real_description_over_none(self) -> None:
+        result = aggregate_topics(
+            [
+                (_run(), [{"label": "Heat", "confidence": 0.9}]),
+                (_run(), [{"label": "heat", "description": "present", "confidence": 0.9}]),
+            ]
+        )
+        assert result[0].description == "present"
+
     def test_none_confidence_sorts_lowest_and_first_none_wins_tie(self) -> None:
         result = aggregate_topics(
             [

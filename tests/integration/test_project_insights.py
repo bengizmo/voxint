@@ -1,5 +1,6 @@
 """Project overview insights against the migrated PostgreSQL schema (#336)."""
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -281,7 +282,7 @@ def test_detail_page_renders_links_coverage_and_escaped_values(
     assert response.status_code == 200
     assert "Acme Corp" in response.text
     assert f"/explore?project={project_id}&amp;q=Acme%20Corp" in response.text
-    assert "Entities found in 1 of 2 recordings" in response.text
+    assert "Entity enrichment covers 1 of 2 recordings" in response.text
     assert "<b>Evil</b>" not in response.text
     assert "&lt;b&gt;Evil&lt;/b&gt;" in response.text
     assert "<script>alert(1)</script>.wav" not in response.text
@@ -314,13 +315,16 @@ def test_detail_page_explains_when_run_assets_are_absent(
     response = client.get(f"/projects/{project_id}")
 
     assert response.status_code == 200
-    assert "hasn't produced anything for this project yet" in response.text
+    assert "hasn't produced topics or entity mentions for this project yet" in response.text
     assert 'href="/settings#features"' in response.text
 
 
 def test_detail_page_distinguishes_assets_with_empty_results(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
+    # The writer can legitimately record an entity asset whose model reply
+    # offered no mentions at all (an authoritative "no entities"); an empty
+    # topics payload is writer-unreachable, so none is seeded.
     with session_factory() as session:
         project, folder = _project_and_folder(session)
         run = _run(session, _media(session, folder, "project/recording.wav"))
@@ -328,16 +332,103 @@ def test_detail_page_distinguishes_assets_with_empty_results(
             session,
             run,
             RunAssetKind.ENTITY_MENTIONS,
-            {"mentions": []},
+            {
+                "mentions": [],
+                "diagnostics": {"dropped_unlocatable": 0, "dropped_out_of_run": 0},
+            },
         )
-        _asset(session, run, RunAssetKind.TOPICS, {"topics": []})
         project_id = project.id
         session.commit()
 
     response = client.get(f"/projects/{project_id}")
 
     assert response.status_code == 200
-    assert "found no topics\n    or entity mentions to report" in response.text
+    assert "found no topics" in response.text
+    assert "entity mentions to report" in response.text
+
+
+def test_entity_bar_widths_never_exceed_the_track(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Rows rank by recording count, but bar widths scale to the group's max
+    occurrence count — a lower-ranked entity with more occurrences must not
+    overflow the track."""
+    now = datetime.now(UTC)
+    with session_factory() as session:
+        project, folder = _project_and_folder(session)
+        first_run = _run(
+            session, _media(session, folder, "project/first.wav", created_at=now)
+        )
+        second_run = _run(
+            session,
+            _media(
+                session,
+                folder,
+                "project/second.wav",
+                created_at=now + timedelta(seconds=1),
+            ),
+        )
+        # "Frequent Corp" leads by run_count (2 runs, 1 occurrence each);
+        # "Loud Corp" has one run but five occurrences.
+        _asset(
+            session, first_run, RunAssetKind.ENTITY_MENTIONS, _entity_payload("Frequent Corp")
+        )
+        _asset(
+            session,
+            second_run,
+            RunAssetKind.ENTITY_MENTIONS,
+            {
+                "mentions": [
+                    {"surface": "Frequent Corp", "kind": "organization", "occurrences": [{}]},
+                    {
+                        "surface": "Loud Corp",
+                        "kind": "organization",
+                        "occurrences": [{}, {}, {}, {}, {}],
+                    },
+                ]
+            },
+        )
+        project_id = project.id
+        session.commit()
+
+    response = client.get(f"/projects/{project_id}")
+
+    assert response.status_code == 200
+    widths = [
+        int(match)
+        for match in re.findall(r"width: (\d+)%", response.text)
+    ]
+    assert widths, "expected entity bars to render"
+    assert max(widths) == 100
+    assert all(width <= 100 for width in widths)
+
+
+def test_speaker_only_in_historical_rerun_is_not_listed(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Membership follows canonical runs: a speaker assigned only in an older,
+    superseded run of a media item is absent from the roster and the matrix
+    (the newest completed run is the operative transcript)."""
+    now = datetime.now(UTC)
+    with session_factory() as session:
+        project, folder = _project_and_folder(session)
+        media = _media(session, folder, "project/recording.wav")
+        historical = _run(session, media, created_at=now - timedelta(days=1))
+        canonical = _run(session, media, created_at=now)
+        ghost = Speaker(display_name="Ghost")
+        current = Speaker(display_name="Current")
+        session.add_all([ghost, current])
+        session.flush()
+        _assign_speaker(session, historical, ghost, label="SPEAKER_00")
+        _assign_speaker(session, canonical, current, label="SPEAKER_00")
+        project_id = project.id
+        session.commit()
+
+        detail = project_detail(session, project_id)
+
+    assert detail is not None
+    assert [speaker.name for speaker in detail.speakers] == ["Current"]
+    assert [row.name for row in detail.matrix.rows] == ["Current"]
 
 
 def test_matrix_is_canonical_newest_first_and_counts_recordings_once(

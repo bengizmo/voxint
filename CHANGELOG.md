@@ -27,7 +27,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ### Fixed
 - **Project speaker counts no longer double-count re-runs** (#336). The
   project page's speaker list now counts each recording once (its newest
-  completed run) instead of once per historical run.
+  completed run) instead of once per historical run. Membership follows the
+  same rule: a speaker who only appears in an older, superseded run of a
+  recording no longer shows on the project — the newest completed run is
+  the operative transcript, matching how the rest of the console resolves
+  speakers.
 
 
 ## [0.30.0] - 2026-08-30
