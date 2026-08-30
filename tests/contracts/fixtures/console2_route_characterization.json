@@ -48,6 +48,30 @@
     true
   ],
   [
+    "/explore",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/explore/csv",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/explore/terms",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/favicon.ico",
     [
       "GET"

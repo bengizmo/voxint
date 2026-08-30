@@ -222,6 +222,24 @@
     ]
   ],
   [
+    "/explore",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/explore/csv",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/explore/terms",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/runs",
     [
       "GET"

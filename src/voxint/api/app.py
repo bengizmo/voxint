@@ -51,6 +51,7 @@ from voxint.api.routers.deps import (
     templates,
 )
 from voxint.api.routers.editor import router as editor_router
+from voxint.api.routers.explore import router as explore_router
 from voxint.api.routers.home import router as home_router
 from voxint.api.routers.jobs import router as jobs_router
 from voxint.api.routers.legacy_review import router as review_router
@@ -545,6 +546,11 @@ def _register_routes(app: FastAPI) -> None:
     # app.state.projects_routed, so the sidebar's Projects link appears only once
     # these pages exist AND console_projects_enabled is set.
     console.include_router(projects_router)
+
+    # ---- Explore (corpus-wide evidence browser, #331): KWIC concordance,
+    # term stats, and word cloud across the transcript corpus. The /search
+    # route is retained in legacy_runs but redirects here for continuity.
+    console.include_router(explore_router)
 
     # ---- Run submission/browsing/transcript: moved to
     # routers/legacy_runs.py; included here to keep registration order.

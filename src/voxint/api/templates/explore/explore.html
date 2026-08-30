@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% set active_nav = "explore" %}
+
+{% block title %}Voxint — explore{% endblock %}
+{% block cb_breadcrumb %}explore{% endblock %}
+{% block cb_summary %}{{ stats.total_runs }} recordings · {{ "%.0f"|format(stats.total_hours) }} hours{% endblock %}
+
+{% block body %}
+<style>
+  .lib-container { width: 100%; }
+  .lib-header { display: flex; align-items: center; justify-content: space-between; }
+  .explore-search-form { margin-block: var(--space-4); }
+  .search-row { display: flex; gap: var(--space-2); }
+  .explore-search-input {
+    flex: 1; font-size: var(--t-base); padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--line); border-radius: var(--r-md);
+    background: var(--surface); color: var(--ink); font-family: var(--font-ui);
+  }
+  .explore-search-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .explore-filters {
+    display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2);
+    align-items: center;
+  }
+  .explore-filter-select {
+    padding: var(--space-1) var(--space-2); border: 1px solid var(--line);
+    border-radius: var(--r-sm); background: var(--surface); color: var(--ink);
+    font-family: var(--font-ui); font-size: var(--t-sm);
+  }
+  .explore-toggle {
+    display: flex; align-items: center; gap: var(--space-1); font-size: var(--t-sm);
+    color: var(--ink-2); cursor: pointer;
+  }
+  .explore-results-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-block: var(--space-3);
+  }
+  .explore-count { font-size: var(--t-sm); color: var(--ink-2); }
+  .explore-empty-state {
+    text-align: center; padding: var(--space-6); color: var(--ink-3);
+    font-size: var(--t-base);
+  }
+  .kwic-table { width: 100%; border-collapse: collapse; font-size: var(--t-sm); }
+  .kwic-table th {
+    text-align: left; padding: var(--space-1) var(--space-2);
+    border-bottom: 2px solid var(--line); font-size: var(--t-micro);
+    text-transform: uppercase; letter-spacing: .05em; color: var(--ink-3);
+  }
+  .kwic-table td { padding: var(--space-1) var(--space-2); border-bottom: 1px solid var(--line); }
+  .kwic-table tr:hover { background: var(--surface-2); }
+  .kwic-table .kwic-left {
+    text-align: right; color: var(--ink-2); max-width: 25ch; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .kwic-hit { font-weight: 600; white-space: nowrap; }
+  .kwic-hit mark {
+    background: var(--accent-soft); color: var(--accent); padding: 0 2px;
+    border-radius: 2px;
+  }
+  .kwic-right {
+    color: var(--ink-2); max-width: 25ch; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .kwic-meta { font-size: var(--t-micro); white-space: nowrap; }
+  .kwic-meta a { color: var(--accent); text-decoration: none; }
+  .kwic-meta a:hover { text-decoration: underline; }
+  .explore-pagination {
+    display: flex; gap: var(--space-3); align-items: center; justify-content: center;
+    margin-top: var(--space-4);
+  }
+  .explore-page-info { font-size: var(--t-sm); color: var(--ink-3); }
+  .chip {
+    display: inline-block; padding: 0 var(--space-1); font-size: var(--t-micro);
+    border-radius: var(--r-sm);
+  }
+  .chip.warn { background: var(--warn-soft); color: var(--warn); }
+  .chip.muted { background: var(--surface-2); color: var(--ink-3); }
+  .speaker-chip {
+    display: inline-block; padding: 0 var(--space-1); font-size: var(--t-micro);
+    border-radius: var(--r-sm); background: var(--accent-soft); color: var(--accent);
+    margin-right: var(--space-1);
+  }
+  /* Term stats panel — word cloud + bar chart */
+  .explore-term-panel {
+    border: 1px solid var(--line); border-radius: var(--r-md);
+    background: var(--surface); padding: var(--space-3) var(--space-4);
+  }
+  .explore-term-heading {
+    font-size: var(--t-micro); text-transform: uppercase; letter-spacing: .05em;
+    color: var(--ink-3); font-weight: 600; margin: 0 0 var(--space-2);
+  }
+  .explore-term-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4);
+    align-items: start;
+  }
+  .explore-term-cloud { display: flex; justify-content: center; overflow: hidden; }
+  .explore-term-bars { max-height: 22rem; overflow-y: auto; }
+  .word-cloud-svg text:hover { filter: brightness(1.3); }
+  .term-bar-chart { display: flex; flex-direction: column; gap: 1px; }
+  .term-bar-row {
+    display: grid; grid-template-columns: 6rem 1fr 2.5rem; gap: var(--space-2);
+    align-items: center; padding: 2px var(--space-1);
+    border: none; background: none; color: var(--ink); font-family: var(--font-ui);
+    font-size: var(--t-sm); text-align: left; cursor: pointer;
+    border-radius: var(--r-sm);
+  }
+  .term-bar-row:hover { background: var(--surface-2); }
+  .term-bar-label {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-weight: 500;
+  }
+  .term-bar-track {
+    height: 6px; background: var(--surface-2); border-radius: var(--r-full);
+    overflow: hidden;
+  }
+  .term-bar-fill {
+    display: block; height: 100%; background: var(--accent);
+    border-radius: var(--r-full); transition: width .2s;
+  }
+  .term-bar-count {
+    font-size: var(--t-micro); color: var(--ink-3); text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  @media (max-width: 48rem) {
+    .explore-term-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 40rem) {
+    .search-row { align-items: stretch; flex-direction: column; }
+  }
+</style>
+
+<div class="lib-container">
+  <div class="lib-header"><h1>Explore</h1></div>
+
+  <form method="get" action="/explore" class="explore-search-form">
+    <div class="search-row">
+      <input type="search" name="q" value="{{ query|e }}"
+             placeholder="Search across all transcripts…"
+             class="explore-search-input" autofocus>
+      <button type="submit" class="primary">Search</button>
+    </div>
+
+    <div class="explore-filters">
+      {% if projects %}
+      <select name="project" class="explore-filter-select">
+        <option value="">All projects</option>
+        {% for p in projects %}
+        <option value="{{ p.id }}"{% if filters.project_id and filters.project_id|string == p.id|string %} selected{% endif %}>{{ p.name }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
+
+      {% if speakers %}
+      <select name="speaker" class="explore-filter-select">
+        <option value="">All speakers</option>
+        {% for s in speakers %}
+        <option value="{{ s.id }}"{% if filters.speaker_id and filters.speaker_id|string == s.id|string %} selected{% endif %}>{{ s.display_name }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
+
+      <label class="explore-toggle">
+        <input type="checkbox" name="confidence" value="1"{% if filters.low_confidence_only %} checked{% endif %}>
+        Low confidence only
+      </label>
+      <label class="explore-toggle">
+        <input type="checkbox" name="suspect" value="1"{% if filters.suspect_only %} checked{% endif %}>
+        Suspect only
+      </label>
+    </div>
+  </form>
+
+  {% if query %}
+  <div class="explore-results-header">
+    <span class="explore-count">{{ total }} match{{ "es" if total != 1 }} for <strong>"{{ query|e }}"</strong></span>
+    {% if total > 0 %}
+    <a href="/explore/csv?{{ request.query_params }}" class="secondary small">Export CSV{% if total > 500 %} (first 500){% endif %}</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div data-island="explore" data-props='{{ explore_props|tojson }}'>
+    {% if not query %}
+    <div class="explore-empty-state"><p>Type a term to search across all transcripts.</p></div>
+    {% elif total == 0 %}
+    <div class="explore-empty-state"><p>No matches for <strong>"{{ query|e }}"</strong>.</p></div>
+    {% else %}
+    <div class="table-wrap">
+      <table class="kwic-table" role="grid" aria-label="Concordance matches">
+        <thead>
+          <tr>
+            <th class="kwic-left" scope="col">Context</th>
+            <th class="kwic-hit" scope="col">Match</th>
+            <th class="kwic-right" scope="col">Context</th>
+            <th class="kwic-meta" scope="col">Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td class="kwic-left">{{ row.left_context }}</td>
+            <td class="kwic-hit"><mark>{{ row.hit }}</mark></td>
+            <td class="kwic-right">{{ row.right_context }}</td>
+            <td class="kwic-meta">
+              {% if row.speaker_name %}<span class="speaker-chip">{{ row.speaker_name }}</span>{% endif %}
+              <a href="/runs/{{ row.run_id }}/transcript#t={{ row.start_seconds }}">{{ row.media_title }} · {{ "%.1f"|format(row.start_seconds) }}s</a>
+              {% if row.suspect %}<span class="chip warn">suspect</span>{% endif %}
+              {% if row.confidence is not none and row.confidence < 0.7 %}<span class="chip muted">low conf</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if total > page_size %}
+    <nav class="explore-pagination" aria-label="Results pages">
+      {% if page > 1 %}<a href="/explore?{{ pagination_qs(page - 1) }}" class="secondary">← Previous</a>{% endif %}
+      <span class="explore-page-info">Page {{ page }} of {{ (total + page_size - 1) // page_size }}</span>
+      {% if page * page_size < total %}<a href="/explore?{{ pagination_qs(page + 1) }}" class="secondary">Next →</a>{% endif %}
+    </nav>
+    {% endif %}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
