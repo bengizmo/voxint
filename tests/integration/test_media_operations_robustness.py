@@ -502,9 +502,6 @@ def test_claim_winner_waits_out_transient_lock_holder(
         session = session_factory()
         if not hook_installed.is_set():
             hook_installed.set()
-            pids["winner"] = session.execute(
-                text("SELECT pg_backend_pid()")
-            ).scalar_one()
 
             @event.listens_for(session, "after_commit")
             def _pause_after_claim_commit(_session: Session) -> None:
@@ -558,17 +555,24 @@ def test_claim_winner_waits_out_transient_lock_holder(
     observed_blocked = False
     try:
         assert holder_locked.wait(timeout=10)
+        # Ask from the holder's side: its open transaction pins its
+        # connection, so its backend pid is stable. The winner's is not: the
+        # claim commit releases its pooled connection, and the re-select may
+        # run on a different backend (seen as a CI-only flake).
         with session_factory() as control:
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 if winner_done.is_set():
                     break
-                blocking = control.execute(
-                    text("SELECT pg_blocking_pids(:pid)"),
-                    {"pid": pids["winner"]},
+                blocked_count = control.execute(
+                    text(
+                        "SELECT count(*) FROM pg_stat_activity "
+                        "WHERE :holder_pid = ANY(pg_blocking_pids(pid))"
+                    ),
+                    {"holder_pid": pids["holder"]},
                 ).scalar_one()
                 control.rollback()
-                if pids["holder"] in blocking:
+                if blocked_count:
                     observed_blocked = True
                     break
                 time.sleep(0.02)
