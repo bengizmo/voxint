@@ -51,13 +51,9 @@ id = "voxint-upstream-domain-strings"
 description = "Upstream private-domain strings (project identity / IP leak)"
 regex = '''(?i)\b(hvac|fullstackhvac|compendium)\b'''
 [rules.allowlist]
-# "hvac" is used as a benign, generic example domain-pack value in the #104
-# sidecar test/doc fixtures and the #335 speaker-stats test fixtures (a demo
-# vertical, not maintainer identity). Exempt
-# these files from THIS rule only; every other gitleaks rule still scans
-# them in full, and the path scope keeps "hvac"/"fullstackhvac"/"compendium"
-# guarded everywhere else. Path-scoped (not fingerprint) so it clears both the
-# worktree and the published history commits without a history rewrite.
+# These files contained "hvac" in historical commits (scrubbed to "solar" in
+# this PR). The path allowlist covers the git-history scan; the worktree is
+# already clean.
 paths = [
     '''^\.gitleaks\.toml$''',
     '''(^|/)docs/how-to/add-media-and-manage-runs\.md$''',
@@ -127,4 +123,8 @@ commits = [
     "33c4dc2a01934f9a534b3658c5c71e3e861a73e5",
     "2c6307eb139a3a2d05b4eb9d67af2bfeb0867618",
     "9945c8a649d09c8c8ab8b7c1d85bec270fac358d",
+    # 8948dbd6: #335 speaker-insights test used "hvac" as a word-frequency
+    # fixture token. Scrubbed to "solar" in the same PR; the historical
+    # commit is allowlisted because published history is never rewritten.
+    "8948dbd60c7464b63361b672c7057cd2447a1e42",
 ]

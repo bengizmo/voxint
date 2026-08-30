@@ -37,7 +37,6 @@ from tests.integration.test_runs_api import make_run
 from voxint.adjudication.review_state import set_correction
 from voxint.api.app import create_app
 from voxint.api.meaning_query import MeaningSearchState, search_passages
-from voxint.app_settings import get_app_settings
 from voxint.config import Settings
 from voxint.db.models import (
     MediaItem,
@@ -186,40 +185,15 @@ class TestPreview:
 
 
 class TestHonestStates:
-    def test_empty_query_via_route(self, client: TestClient) -> None:
-        resp = client.get("/search")
-        assert resp.status_code == 200
-        assert "Type what you are looking for" in resp.text
-        # The Exact/Meaning toggle renders on the search page too.
-        assert 'aria-label="Search mode"' in resp.text
+    def test_search_redirects_to_explore(self, client: TestClient) -> None:
+        resp = client.get("/search", follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/explore"
 
-    def test_off_state_when_flag_disabled_via_route(
-        self, client: TestClient, session_factory: sessionmaker[Session]
-    ) -> None:
-        with session_factory() as session:
-            row = get_app_settings(session)
-            assert row is not None
-            row.semantic_index_enabled = False
-            session.commit()
-        resp = client.get("/search", params={"q": "anything"})
-        assert resp.status_code == 200
-        assert "Semantic search is turned off" in resp.text
-
-    def test_unavailable_state_when_weights_absent_via_route(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # The route uses the real in-process embedder. Point the weight paths at a
-        # location that cannot exist so minilm_artifacts_available() is False
-        # regardless of ambient env — otherwise this assertion flips wherever the
-        # vendored weights are configured (e.g. a golden run in the same session).
-        # A query it cannot embed must report UNAVAILABLE, not 500.
-        monkeypatch.setenv("VOXINT_MINILM_ONNX_PATH", "/nonexistent/voxint-test/model.onnx")
-        monkeypatch.setenv(
-            "VOXINT_MINILM_TOKENIZER_PATH", "/nonexistent/voxint-test/tokenizer.json"
-        )
-        resp = client.get("/search", params={"q": "anything"})
-        assert resp.status_code == 200
-        assert "Semantic search is unavailable" in resp.text
+    def test_search_carries_query_to_explore(self, client: TestClient) -> None:
+        resp = client.get("/search", params={"q": "anything"}, follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/explore?q=anything"
 
     def test_indexing_state_when_enabled_but_nothing_indexed(
         self, session_factory: sessionmaker[Session]

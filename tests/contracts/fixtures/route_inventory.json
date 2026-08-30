@@ -36,6 +36,24 @@
     ]
   ],
   [
+    "/explore",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/explore/csv",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/explore/terms",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/favicon.ico",
     [
       "GET"

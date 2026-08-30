@@ -1,5 +1,7 @@
 [
   "voxint.activity_prune",
+  "voxint.compute_speaker_insights",
+  "voxint.compute_term_stats",
   "voxint.finish_pipeline",
   "voxint.gc_sweep",
   "voxint.generate_run_asset",

@@ -28,6 +28,7 @@ export default defineConfig({
         "review-stepper": "src/entries/review-stepper.tsx",
         "corrections-editor": "src/entries/corrections-editor.tsx",
         "media-editor": "src/entries/media-editor.tsx",
+        "explore": "src/entries/explore.tsx",
       },
     },
   },

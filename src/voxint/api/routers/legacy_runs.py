@@ -55,7 +55,6 @@ from voxint.api.csrf import (
     mint_csrf_token,
 )
 from voxint.api.languages import LANGUAGE_NAMES, language_label
-from voxint.api.meaning_query import search_passages
 from voxint.api.model_provenance import select_run_model_identity
 from voxint.api.playback import MediaResolutionError, playback_capability, resolve_servable_media
 from voxint.api.presentation import title_from_snapshot
@@ -707,36 +706,16 @@ def runs(
 def search(
     request: Request,
     operator: OperatorDep,
-    session: SessionDep,
     q: str | None = None,
 ) -> Response:
-    # The ranked semantic "Meaning" mode (issue #121): a distinct surface from
-    # the chronological /runs browse, reading the embedding index the spine
-    # builds. search_passages needs the session FACTORY, not this request's
-    # session: it opens its own two short sessions (a settings gate, then one
-    # read-only REPEATABLE READ snapshot that wraps all ranking arms so a
-    # concurrent publish cannot straddle them). SessionDep still runs first,
-    # so the factory is initialized and the basic-auth + onboarding gates on
-    # this router have already passed. The feature/weights/indexing
-    # state comes back on the page object, which the template renders honestly.
-    settings: Settings = request.app.state.settings
-    page = search_passages(
-        request.app.state.session_factory,
-        settings=settings,
-        query=q or "",
-    )
-    return templates.TemplateResponse(
-        request,
-        "legacy_runs/search.html",
-        {
-            "request": request,
-            "page": page,
-            "query": page.query,
-            # Meaning search pairs with Runs (reached from its toggle), so the
-            # Runs nav item stays lit rather than leaving the nav orphaned.
-            "active_nav": "runs",
-        },
-    )
+    # Redirect to /explore (#331). The corpus Explore page subsumes the old
+    # semantic search surface; preserve the query parameter for continuity.
+    from urllib.parse import urlencode
+
+    target = "/explore"
+    if q:
+        target = f"/explore?{urlencode({'q': q})}"
+    return RedirectResponse(target, status_code=302)
 
 @core_router.post("/submit")
 def submit_media_upload(

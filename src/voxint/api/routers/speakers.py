@@ -40,6 +40,7 @@ from voxint.api.routers.deps import (
     require_speakers_enabled,
     templates,
 )
+from voxint.api.speaker_insights import get_speaker_insights
 from voxint.api.speakers_query import (
     SORT_LABELS,
     VIEWS,
@@ -718,6 +719,8 @@ def _profile_context(
             )
         ).scalars()
     } if run_ids else {}
+    insights = get_speaker_insights(session, speaker.id) if aggregate.files > 0 else None
+    insights_eligible = aggregate.files >= 2 and aggregate.segments >= 10
     return {
         "request": request,
         "aggregate": aggregate,
@@ -725,6 +728,8 @@ def _profile_context(
         "gates": gates,
         "enrollments": enrollment_count(session, speaker.id),
         "runs_by_id": runs_by_id,
+        "insights": insights,
+        "insights_eligible": insights_eligible,
         "research": _research_state(session, settings, speaker, include_aliases=True),
         "research_qs": "?page=profile",
         "active_nav": "speakers",

@@ -21,6 +21,46 @@
 {% endblock %}
 
 {% block body %}
+<style>
+  .insight-card { padding: var(--space-3); margin-bottom: var(--space-3); }
+  .insight-card-title {
+    font-size: var(--t-xs); font-weight: 600; letter-spacing: 0.06em;
+    color: var(--ink-2); margin: 0 0 var(--space-2);
+  }
+  .term-bars { display: flex; flex-direction: column; gap: 2px; }
+  .term-bar-row {
+    display: grid; grid-template-columns: 7em 1fr 3em;
+    align-items: center; gap: var(--space-2);
+    padding: 2px var(--space-2); border-radius: 3px;
+    text-decoration: none; color: inherit;
+    font-size: var(--t-sm);
+  }
+  .term-bar-row:hover { background: var(--surface-2); }
+  .term-bar-label { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .term-bar-fill {
+    height: 1rem; border-radius: 2px; min-width: 2px;
+    background: var(--accent-soft);
+  }
+  .term-bar-row:hover .term-bar-fill { background: var(--accent); }
+  .term-bar-count { text-align: right; color: var(--ink-3); font-size: var(--t-xs); }
+  .ego-transitions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+  @media (max-width: 36rem) { .ego-transitions { grid-template-columns: 1fr; } }
+  .ego-col-title {
+    font-size: var(--t-xs); font-weight: 600; letter-spacing: 0.04em;
+    color: var(--ink-3); margin: 0 0 var(--space-2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ego-edge {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 3px var(--space-2); font-size: var(--t-sm);
+  }
+  .ego-edge:hover { background: var(--surface-2); border-radius: 3px; }
+  .ego-edge-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ego-edge-count { color: var(--ink-3); font-size: var(--t-xs); flex-shrink: 0; margin-left: var(--space-2); }
+  .wpm-stat { display: flex; align-items: baseline; gap: var(--space-2); margin-bottom: var(--space-1); }
+  .wpm-value { font-size: 2rem; font-weight: 300; color: var(--accent-ink); }
+  .wpm-unit { font-size: var(--t-sm); color: var(--ink-3); }
+</style>
 {% if archived %}
 <p class="notice error" role="alert">This speaker is archived: the profile is read-only
 and web research is off. Restore the speaker from the
@@ -73,6 +113,95 @@ and web research is off. Restore the speaker from the
     <div class="tile-label">LAST HEARD</div>
   </div>
 </div>
+
+{% if insights %}
+<section class="oc-section">
+  <h2 class="oc-section-title">INSIGHTS</h2>
+
+  {% if insights.distinctive_terms %}
+  <div class="card insight-card">
+    <h3 class="insight-card-title">DISTINCTIVE VOCABULARY</h3>
+    <p class="oc-muted" style="margin-bottom: var(--space-3); font-size: var(--t-xs);">
+      Based on {{ "{:,}".format(insights.speaker_token_count) }} words
+      across {{ insights.recording_count }} recording{{ "s" if insights.recording_count != 1 else "" }}
+    </p>
+    <div class="term-bars" role="list" aria-label="Terms distinctive to {{ speaker.display_name }}">
+      {%- set max_z = insights.distinctive_terms[0].z_score if insights.distinctive_terms and insights.distinctive_terms[0].z_score else 1 -%}
+      {% for t in insights.distinctive_terms[:20] %}
+      <a href="/explore?q={{ t.term|urlencode }}&amp;speaker={{ speaker.id }}"
+         class="term-bar-row" role="listitem"
+         title="{{ t.term }}: used {{ t.count }}x (z-score {{ '%.1f'|format(t.z_score) }})">
+        <span class="term-bar-label">{{ t.term }}</span>
+        <span class="term-bar-fill" style="width: {{ (t.z_score / max_z * 100)|round }}%"></span>
+        <span class="term-bar-count">{{ t.count }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if insights.ego_transitions_in or insights.ego_transitions_out %}
+  <div class="card insight-card">
+    <h3 class="insight-card-title">CONVERSATION PARTNERS</h3>
+    <div class="ego-transitions">
+      {% if insights.ego_transitions_in %}
+      <div class="ego-col">
+        <h4 class="ego-col-title">SPEAKS BEFORE {{ speaker.display_name|upper }}</h4>
+        {% for edge in insights.ego_transitions_in[:8] %}
+        <div class="ego-edge" title="{{ edge.speaker_name or 'Unknown' }} spoke before {{ speaker.display_name }} {{ edge.count }}x">
+          <span class="ego-edge-name">{{ edge.speaker_name or "Unknown" }}</span>
+          <span class="ego-edge-count">{{ edge.count }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if insights.ego_transitions_out %}
+      <div class="ego-col">
+        <h4 class="ego-col-title">{{ speaker.display_name|upper }} SPEAKS BEFORE</h4>
+        {% for edge in insights.ego_transitions_out[:8] %}
+        <div class="ego-edge" title="{{ speaker.display_name }} spoke before {{ edge.speaker_name or 'Unknown' }} {{ edge.count }}x">
+          <span class="ego-edge-name">{{ edge.speaker_name or "Unknown" }}</span>
+          <span class="ego-edge-count">{{ edge.count }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if insights.wpm is not none %}
+  <div class="card insight-card">
+    <h3 class="insight-card-title">SPEAKING PACE</h3>
+    <div class="wpm-stat">
+      <span class="wpm-value">{{ insights.wpm|round|int }}</span>
+      <span class="wpm-unit">words/min</span>
+    </div>
+    {% if insights.wpm_timed_segments < insights.wpm_total_segments %}
+    <p class="oc-muted" style="font-size: var(--t-xs);">
+      Based on {{ insights.wpm_timed_segments }} of {{ insights.wpm_total_segments }} segments with word-level timing
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <p style="margin-top: var(--space-3);">
+    <a href="/explore?speaker={{ speaker.id }}" class="secondary small">
+      All quotes by {{ speaker.display_name }} in Explore &rarr;
+    </a>
+  </p>
+</section>
+{% elif not archived and insights_eligible %}
+<section class="oc-section">
+  <h2 class="oc-section-title">INSIGHTS</h2>
+  <p class="oc-muted">Speaker insights are being computed. Refresh to check.</p>
+</section>
+{% elif not archived and aggregate.files > 0 and not insights_eligible %}
+<section class="oc-section">
+  <h2 class="oc-section-title">INSIGHTS</h2>
+  <p class="oc-muted">Not enough data for speaker insights. This speaker needs at least 2 recordings with substantial speech.</p>
+</section>
+{% endif %}
 
 {% include "speakers/profile_panel.html" %}
 

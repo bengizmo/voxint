@@ -138,4 +138,5 @@ def test_single_alembic_head() -> None:
     # 0052 = profile_review_decisions.user_id attribution (#308).
     # 0053 = widen pipeline_runs status CHECK for operator-initiated PAUSED.
     # 0054 = API keys for the public REST API (#340).
-    assert list(heads) == ["0054"]
+    # 0055 = corpus_analysis_artifacts table for viz cache, issue #332.
+    assert list(heads) == ["0055"]

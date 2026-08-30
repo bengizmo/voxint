@@ -272,6 +272,8 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
                     run_id=run_id, session_factory=factory, settings=settings
                 ),
             )
+            _refresh_term_stats(factory, run_id)
+            _refresh_speaker_insights(factory, run_id)
         elif final.status is RunStatus.QUEUED and final.current_stage in POST_SEGMENT:
             # This covers both the first GPU→post handoff and a duplicate GPU
             # delivery observing an already-parked run. Re-publishing is safe:
@@ -749,6 +751,90 @@ def _auto_enroll_speakers(
             session.commit()
     except Exception:
         logger.exception("post-finalize auto-enrollment failed for run %s", run_id)
+
+
+def _refresh_term_stats(
+    factory: sessionmaker[Session], run_id: uuid.UUID
+) -> None:
+    """Best-effort post-completion term-stats refresh (issue #334).
+
+    Enqueues a corpus-wide refresh so the explore word cloud stays warm.
+    A completed run is COMPLETED whatever happens here.
+    """
+    from celery.exceptions import OperationalError
+
+    try:
+        compute_term_stats.apply_async((None,), ignore_result=True)
+    except OperationalError:
+        logger.warning(
+            "term-stats refresh enqueue deferred (broker unavailable) for run %s",
+            run_id,
+            exc_info=True,
+        )
+    except Exception:
+        logger.exception("post-finalize term-stats refresh failed for run %s", run_id)
+
+
+@app.task(name="voxint.compute_term_stats", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
+def compute_term_stats(project_id_str: str | None = None) -> dict[str, int]:
+    """Recompute corpus or project term stats and cache the artifact (issue #334).
+
+    Dispatched after run completion to pre-warm the explore word cloud, or
+    on-demand from the explore page. The synchronous in-request path handles
+    small corpora; this task handles background refresh.
+    """
+    from voxint.api.explore_query import term_stats
+
+    factory, _ = _runtime()
+    project_id = uuid.UUID(project_id_str) if project_id_str else None
+    with factory() as session:
+        result = term_stats(session, project_id)
+        session.commit()
+    logger.info(
+        "compute_term_stats project=%s terms=%d",
+        project_id_str or "corpus",
+        len(result.terms),
+    )
+    return {"terms": len(result.terms)}
+
+
+def _refresh_speaker_insights(
+    factory: sessionmaker[Session], run_id: uuid.UUID
+) -> None:
+    """Best-effort post-completion speaker-insights refresh (issue #335).
+
+    Enqueues a corpus-wide refresh so speaker profile insights stay warm.
+    A completed run is COMPLETED whatever happens here.
+    """
+    from celery.exceptions import OperationalError
+
+    try:
+        compute_speaker_insights.apply_async(ignore_result=True)
+    except OperationalError:
+        logger.warning(
+            "speaker-insights refresh enqueue deferred (broker unavailable) for run %s",
+            run_id,
+            exc_info=True,
+        )
+    except Exception:
+        logger.exception("post-finalize speaker-insights refresh failed for run %s", run_id)
+
+
+@app.task(name="voxint.compute_speaker_insights", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
+def compute_speaker_insights() -> dict[str, int]:
+    """Recompute all speakers' insights in one corpus fold (issue #335).
+
+    Dispatched after run completion to pre-warm speaker profile insights.
+    The profile page reads cached artifacts only.
+    """
+    from voxint.api.speaker_insights import compute_all_speaker_insights
+
+    factory, _ = _runtime()
+    with factory() as session:
+        count = compute_all_speaker_insights(session)
+        session.commit()
+    logger.info("compute_speaker_insights speakers=%d", count)
+    return {"speakers": count}
 
 
 @app.task(name="voxint.research_speaker", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
