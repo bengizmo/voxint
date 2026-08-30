@@ -7,6 +7,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **Settings status reports the two AI lanes separately and honestly**
+  (#316). The single "Local AI model" row only ever probed the
+  bring-your-own endpoint, so a healthy bundled-only install showed
+  "rejected (HTTP 401)" and an amber banner. The status page now shows
+  "Bundled AI model" (probed when the bundle is active) and "Your own AI
+  endpoint" (probed only when a deliberate endpoint is configured; the
+  untouched install default reads "not configured" instead of a false
+  alarm). `voxint doctor` and the setup wizard report the same two lanes;
+  exit codes are unchanged (both checks stay advisory). A deliberately
+  configured endpoint that rejects still warns - a broken deliberate
+  config is real information.
 - **Settings status knows how Voxint was installed** (#317). A
   `VOXINT_INSTALL_KIND` marker stamped by the packaging (baked into the app
   image for Docker installs, set by the native launcher's service

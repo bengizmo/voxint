@@ -14,6 +14,7 @@ from voxint.diagnostics import (
     check_database,
     check_hf_token,
     check_llm,
+    check_llm_bundled,
     check_models,
     check_redis,
     check_state,
@@ -169,7 +170,11 @@ def test_check_llm_none_when_disabled() -> None:
     client = _http(lambda r: httpx.Response(200))
     assert (
         check_llm(
-            enabled=False, base_url="http://localhost:8000/v1", api_key="", client=client
+            enabled=False,
+            configured=True,
+            base_url="http://localhost:8000/v1",
+            api_key="",
+            client=client,
         )
         is None
     )
@@ -178,7 +183,11 @@ def test_check_llm_none_when_disabled() -> None:
 def test_check_llm_ready_on_2xx() -> None:
     client = _http(lambda r: httpx.Response(200, json={"data": []}))
     result = check_llm(
-        enabled=True, base_url="http://localhost:8000/v1", api_key="sk-x", client=client
+        enabled=True,
+        configured=True,
+        base_url="http://localhost:8000/v1",
+        api_key="sk-x",
+        client=client,
     )
     assert result is not None
     assert result.ok is True and result.hard is False
@@ -192,7 +201,11 @@ def test_check_llm_rejected_non_2xx_is_advisory_miss() -> None:
     for status in (401, 404, 500):
         client = _http(lambda r, s=status: httpx.Response(s))
         result = check_llm(
-            enabled=True, base_url="http://localhost:8000/v1", api_key="sk-x", client=client
+            enabled=True,
+            configured=True,
+            base_url="http://localhost:8000/v1",
+            api_key="sk-x",
+            client=client,
         )
         assert result is not None
         assert result.ok is False and result.hard is False
@@ -208,7 +221,11 @@ def test_check_llm_unexpected_exception_does_not_raise() -> None:
         raise UnicodeEncodeError("ascii", "clé", 2, 3, "ordinal not in range")
 
     result = check_llm(
-        enabled=True, base_url="http://localhost:8000/v1", api_key="sk-x", client=_http(handler)
+        enabled=True,
+        configured=True,
+        base_url="http://localhost:8000/v1",
+        api_key="sk-x",
+        client=_http(handler),
     )
     assert result is not None
     assert result.ok is False and result.hard is False
@@ -220,7 +237,11 @@ def test_check_llm_transport_error_is_advisory_failure() -> None:
         raise httpx.ConnectError("no route")
 
     result = check_llm(
-        enabled=True, base_url="http://localhost:8000/v1", api_key="", client=_http(handler)
+        enabled=True,
+        configured=True,
+        base_url="http://localhost:8000/v1",
+        api_key="",
+        client=_http(handler),
     )
     assert result is not None
     assert result.ok is False and result.hard is False
@@ -233,7 +254,7 @@ def test_check_llm_invalid_url_does_not_crash() -> None:
         raise AssertionError("request should not be attempted on an invalid url")
 
     result = check_llm(
-        enabled=True, base_url="http://[::1", api_key="", client=_http(handler)
+        enabled=True, configured=True, base_url="http://[::1", api_key="", client=_http(handler)
     )
     assert result is not None
     assert result.ok is False and result.hard is False and result.detail == "invalid url"
@@ -305,3 +326,129 @@ def test_check_state_failed_when_hard_and_down() -> None:
 
 def test_check_state_unverified_when_advisory_and_down() -> None:
     assert check_state(CheckResult("llm endpoint", False, False, "invalid url")) == "unverified"
+
+
+# ---- #316: lane-aware LLM checks -------------------------------------------
+
+
+def test_check_llm_not_configured_reports_ok_without_probing() -> None:
+    # Enabled but no deliberate BYO endpoint (the untouched install default with
+    # no key): probing would 401 against an endpoint the operator never chose,
+    # so the check reports an ok-state "not configured" and NEVER touches the
+    # network (the handler proves no request is attempted).
+    def handler(_r: httpx.Request) -> httpx.Response:
+        raise AssertionError("an unconfigured BYO endpoint must not be probed")
+
+    result = check_llm(
+        enabled=True,
+        configured=False,
+        base_url="https://api.openai.com/v1",
+        api_key="",
+        client=_http(handler),
+    )
+    assert result is not None
+    assert result.ok is True and result.hard is False
+    assert result.detail == "not configured"
+
+
+def test_check_llm_bundled_none_when_inactive() -> None:
+    def handler(_r: httpx.Request) -> httpx.Response:
+        raise AssertionError("an inactive bundle must not be probed")
+
+    assert (
+        check_llm_bundled(active=False, base_url="http://127.0.0.1:8090/v1", client=_http(handler))
+        is None
+    )
+
+
+def test_check_llm_bundled_state_matrix() -> None:
+    base = "http://127.0.0.1:8090/v1"
+    ok = check_llm_bundled(active=True, base_url=base, client=_http(lambda r: httpx.Response(200)))
+    assert ok is not None and ok.ok is True and ok.hard is False
+    assert ok.name == "llm bundled" and ok.detail == "reachable (HTTP 200)"
+
+    rejected = check_llm_bundled(
+        active=True, base_url=base, client=_http(lambda r: httpx.Response(500))
+    )
+    assert rejected is not None and rejected.ok is False and rejected.hard is False
+    assert rejected.detail == "rejected (HTTP 500)"
+
+    def refuse(_r: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    down = check_llm_bundled(active=True, base_url=base, client=_http(refuse))
+    assert down is not None and down.ok is False and down.hard is False
+    assert down.detail == "unreachable (ConnectError)"
+    assert base not in down.detail  # never echo the URL
+
+    bad = check_llm_bundled(active=True, base_url="http://[::1", client=_http(refuse))
+    assert bad is not None and bad.ok is False and bad.detail == "invalid url"
+
+
+def test_check_llm_bundled_probe_is_keyless_models_get(monkeypatch) -> None:
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), request.headers.get("authorization")))
+        return httpx.Response(200)
+
+    check_llm_bundled(active=True, base_url="http://127.0.0.1:8090/v1", client=_http(handler))
+    assert seen == [("http://127.0.0.1:8090/v1/models", None)]
+
+
+def test_run_diagnostics_bundled_only_install_is_all_green() -> None:
+    """The walkthrough scenario (#316): bundle active, BYO at the untouched
+    default with no key. The bundled endpoint is probed, the BYO endpoint is
+    NOT (the handler rejects any request to it), and nothing is a miss. The
+    sqlite engine has no app_settings table, so this also exercises the
+    row-read-failure fallback to env-only predicate resolution."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "openai" not in (request.url.host or ""), (
+            "the unconfigured BYO default endpoint must not be probed"
+        )
+        if (request.url.port or 0) == 8090:
+            return httpx.Response(200, json={"data": []})
+        return _healthz("cpu")
+
+    class _Ping:
+        def ping(self) -> bool:
+            return True
+
+    results = run_diagnostics(
+        _settings(
+            llm_enabled=True,
+            llm_bundled_enabled=True,
+            llm_bundled_base_url="http://127.0.0.1:8090/v1",
+            llm_bundled_model="qwen",
+        ),
+        create_engine("sqlite://"),
+        hf_token=None,
+        http_client=_http(handler),
+        redis_client=_Ping(),
+        include_hf_token=False,
+    )
+    by_name = {r.name: r for r in results}
+    assert by_name["llm bundled"].ok is True
+    assert by_name["llm bundled"].detail == "reachable (HTTP 200)"
+    assert by_name["llm endpoint"].ok is True
+    assert by_name["llm endpoint"].detail == "not configured"
+    assert exit_code(results) == 0
+
+
+def test_run_diagnostics_bundled_inactive_has_no_bundled_row() -> None:
+    class _Ping:
+        def ping(self) -> bool:
+            return True
+
+    results = run_diagnostics(
+        _settings(llm_enabled=False),
+        create_engine("sqlite://"),
+        hf_token=None,
+        http_client=_http(lambda r: _healthz("cpu")),
+        redis_client=_Ping(),
+        include_hf_token=False,
+    )
+    names = [r.name for r in results]
+    assert "llm bundled" not in names
+    assert "llm endpoint" not in names

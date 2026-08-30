@@ -338,3 +338,34 @@ def test_service_identity_view_renders_on_hardware(
     client = _client(session_factory)
     body = client.get("/settings/hardware").text
     assert "large-v2" in body
+
+
+def test_status_page_splits_the_two_ai_lanes(
+    session_factory: sessionmaker[Session], tmp_path: Path,
+) -> None:
+    """#316: LLM work enabled but the BYO endpoint untouched (the default URL,
+    no key). The page must NOT probe-and-warn the endpoint the operator never
+    chose: the BYO row reads "not configured" (off dot), the bundled row is
+    present (off here - no bundle in the test env), and the old conflated
+    "Local AI model" label is gone. Fully offline: neither lane is probed."""
+    client = _client(session_factory, media_root=tmp_path, llm_enabled=True)
+    # The onboarded row wins over env for enablement; flip it on there too.
+    seed_onboarded(session_factory, llm_enabled=True)
+    body = client.get("/settings/status").text
+    assert "Bundled AI model" in body
+    assert "Your own AI endpoint" in body
+    assert "Local AI model" not in body
+    assert "not configured" in body
+    assert "rejected (HTTP 401)" not in body
+    assert "Set up" in body
+
+
+def test_status_page_default_install_shows_both_ai_rows_off(
+    session_factory: sessionmaker[Session], tmp_path: Path,
+) -> None:
+    client = _client(session_factory, media_root=tmp_path)
+    body = client.get("/settings/status").text
+    assert "Bundled AI model" in body
+    assert "Your own AI endpoint" in body
+    assert "off -- used for polish &amp; profiles" in body
+    assert "Turn on" in body

@@ -766,7 +766,7 @@ def _doctor_category(name: str) -> str:
         return "redis"
     if name in {"transcription", "diarization", "speaker embedding"}:
         return "models"
-    if name == "llm endpoint":
+    if name in {"llm endpoint", "llm bundled"}:
         return "llm"
     return "other"
 
@@ -800,7 +800,11 @@ _COMPONENT_LABELS: dict[str, str] = {
     "transcription": "Transcriber",
     "diarization": "Voice separation",
     "speaker embedding": "Voice identity",
-    "llm endpoint": "Local AI model",
+    # #316: the one "Local AI model" row painted a healthy bundled-only install
+    # as rejected (it only ever probed the BYO endpoint). The two AI lanes are
+    # independent capabilities with independent health, so they get one row each.
+    "llm bundled": "Bundled AI model",
+    "llm endpoint": "Your own AI endpoint",
 }
 
 _COMPONENT_ORDER = (
@@ -810,6 +814,7 @@ _COMPONENT_ORDER = (
     "speaker embedding",
     "postgres",
     "redis",
+    "llm bundled",
     "llm endpoint",
 )
 
@@ -837,25 +842,43 @@ def _build_components(
             })
             continue
         check = by_name.get(key)
-        if check is None:
-            continue
-        state = check["state"]
         label = _COMPONENT_LABELS.get(key, key)
-        if state == "ready":
-            dot = "ok"
-            state_text = f"running · {check['detail']}" if check["detail"] else "running"
-        elif key == "llm endpoint" and not llm_enabled:
-            dot = "off"
-            state_text = "off -- used for polish & profiles"
+        if check is None:
+            if key == "llm bundled":
+                # The bundle is inactive (not installed / not enabled): an
+                # honest "off" row, not a warning — many installs never add it.
+                dot = "off"
+                state_text = "off"
+            elif key == "llm endpoint":
+                # LLM work is disabled entirely; the row stays visible so the
+                # operator can discover the capability.
+                dot = "off"
+                state_text = "off -- used for polish & profiles"
+            else:
+                continue
         else:
-            dot = "warn"
-            state_text = check["detail"] or state
+            state = check["state"]
+            if key == "llm endpoint" and state == "ready" and check["detail"] == "not configured":
+                # #316: enabled, but no deliberate BYO endpoint (the untouched
+                # install default). Not probed, not a warning — the bundled row
+                # above reports the lane that is actually in use.
+                dot = "off"
+                state_text = "not configured"
+            elif state == "ready":
+                dot = "ok"
+                state_text = f"running · {check['detail']}" if check["detail"] else "running"
+            elif key == "llm endpoint" and not llm_enabled:
+                dot = "off"
+                state_text = "off -- used for polish & profiles"
+            else:
+                dot = "warn"
+                state_text = check["detail"] or state
         action_url: str | None = None
         action_label: str | None = None
         action_style: str | None = None
         if key == "llm endpoint" and dot == "off":
             action_url = "/settings#llm"
-            action_label = "Turn on"
+            action_label = "Turn on" if state_text.startswith("off") else "Set up"
             action_style = "primary"
         rows.append({
             "label": label,
