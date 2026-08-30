@@ -222,11 +222,8 @@ export function TemporalTrendChart({
                 fill="var(--surface)"
                 stroke={item.color}
                 strokeWidth="2"
-                tabIndex={0}
                 onPointerEnter={() => setHovered(point)}
                 onPointerLeave={() => setHovered(null)}
-                onFocus={() => setHovered(point)}
-                onBlur={() => setHovered(null)}
               >
                 <title>{`${item.label}: ${point.value} · ${bucketLabel(point.bucket)}`}</title>
               </circle>

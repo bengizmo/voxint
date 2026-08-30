@@ -231,19 +231,27 @@ def _bucket_index(buckets: list[BucketMeta], value: date) -> int | None:
 
 
 def count_term_frequencies(
-    recordings: list[RecordingInput], buckets: list[BucketMeta]
+    recordings: list[RecordingInput],
+    buckets: list[BucketMeta],
+    *,
+    pre_tokenized: list[list[str]] | None = None,
 ) -> list[TermSeries]:
     """Count token occurrences per bucket and return the top term series."""
     bucket_counts: defaultdict[str, list[int]] = defaultdict(lambda: [0] * len(buckets))
     totals: Counter[str] = Counter()
     recording_counts: Counter[str] = Counter()
 
-    for recording in recordings:
+    for idx, recording in enumerate(recordings):
         recording_date, _ = resolve_date(recording["upload_date"], recording["created_at"])
         index = _bucket_index(buckets, recording_date)
         if index is None:
             continue
-        frequencies = Counter(tokenize(recording["effective_text"]))
+        tokens = (
+            pre_tokenized[idx]
+            if pre_tokenized is not None
+            else tokenize(recording["effective_text"])
+        )
+        frequencies = Counter(tokens)
         for term, count in frequencies.items():
             bucket_counts[term][index] += count
             totals[term] += count
@@ -386,11 +394,10 @@ def build_temporal_trends(recordings: list[RecordingInput]) -> TemporalTrendsPay
             else:
                 buckets[index]["date_sources"]["ingestion_created_at"] += 1
 
-    terms = count_term_frequencies(recordings, buckets)
+    per_recording_tokens = [tokenize(recording["effective_text"]) for recording in recordings]
+    terms = count_term_frequencies(recordings, buckets, pre_tokenized=per_recording_tokens)
     entities = count_entity_frequencies(recordings, buckets)
-    all_term_keys = {
-        term for recording in recordings for term in tokenize(recording["effective_text"])
-    }
+    all_term_keys = {term for tokens in per_recording_tokens for term in tokens}
     all_entity_keys = {
         _normalize_entity(surface)
         for recording in recordings
@@ -416,9 +423,7 @@ def build_temporal_trends(recordings: list[RecordingInput]) -> TemporalTrendsPay
     payload["entities"] = entities
     payload["coverage"] = {
         "dated_recordings": len(recordings),
-        "term_recordings": sum(
-            bool(tokenize(recording["effective_text"])) for recording in recordings
-        ),
+        "term_recordings": sum(bool(tokens) for tokens in per_recording_tokens),
         "entity_enriched_recordings": sum(
             isinstance(recording["entity_mentions"], dict) for recording in recordings
         ),

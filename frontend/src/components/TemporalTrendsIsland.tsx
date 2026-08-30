@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import {
   TemporalTrendChart,
@@ -71,25 +71,26 @@ function formatRange(start: string | null, end: string | null): string {
 
 export function TemporalTrendsIsland(props: TemporalTrendsProps) {
   const [mode, setMode] = useState<Mode>("terms");
-  const topTerms = useMemo(
-    () => props.terms.slice(0, MAX_VISIBLE),
-    [props.terms],
-  );
-  const topEntities = useMemo(
-    () => props.entities.slice(0, MAX_VISIBLE),
-    [props.entities],
-  );
   const [termKeys, setTermKeys] = useState(
-    () => new Set(topTerms.map((item) => item.key)),
+    () => new Set(props.terms.slice(0, MAX_VISIBLE).map((item) => item.key)),
   );
   const [entityKeys, setEntityKeys] = useState(
-    () => new Set(topEntities.map((item) => item.key)),
+    () =>
+      new Set(props.entities.slice(0, MAX_VISIBLE).map((item) => item.key)),
   );
-  const options = mode === "terms" ? topTerms : topEntities;
+  const options = mode === "terms" ? props.terms : props.entities;
   const selectedKeys = mode === "terms" ? termKeys : entityKeys;
-  const selectedSeries: TemporalChartSeries[] = options
-    .map((item, index) => ({ ...item, color: SERIES_COLORS[index] }))
-    .filter((item) => selectedKeys.has(item.key));
+  const selectedList = options.filter((item) => selectedKeys.has(item.key));
+  const colorByKey = new Map(
+    selectedList.map((item, index) => [
+      item.key,
+      SERIES_COLORS[index % SERIES_COLORS.length],
+    ]),
+  );
+  const selectedSeries: TemporalChartSeries[] = selectedList.map((item) => ({
+    ...item,
+    color: colorByKey.get(item.key) ?? SERIES_COLORS[0],
+  }));
 
   const toggleSeries = (key: string) => {
     const setter = mode === "terms" ? setTermKeys : setEntityKeys;
@@ -149,7 +150,7 @@ export function TemporalTrendsIsland(props: TemporalTrendsProps) {
         <>
           <fieldset className="mb-2 flex flex-wrap gap-x-3 gap-y-1 border-0 p-0">
             <legend className="sr-only">Visible {mode}</legend>
-            {options.map((item, index) => (
+            {options.map((item) => (
               <label
                 key={item.key}
                 className="inline-flex cursor-pointer items-center gap-1 text-[length:var(--t-xs)] text-[var(--ink-2)]"
@@ -161,7 +162,10 @@ export function TemporalTrendsIsland(props: TemporalTrendsProps) {
                 />
                 <span
                   className="inline-block h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: SERIES_COLORS[index] }}
+                  style={{
+                    backgroundColor:
+                      colorByKey.get(item.key) ?? "var(--line)",
+                  }}
                   aria-hidden="true"
                 />
                 {item.label}

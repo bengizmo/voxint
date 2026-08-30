@@ -113,16 +113,25 @@ export function SpeakerTimelineIsland({
       (total, lane) => total + lane.intervals.length,
       0,
     );
-    const lanes = timeline.lanes.map((lane, laneIndex) => ({
-      lane,
-      color: `var(--spk-${speakerPaletteIndex(lane.label)})`,
-      patternId: `speaker-overlap-${laneIndex}`,
-      intervals: lane.intervals.filter(
-        (interval) =>
-          intervalCount <= LARGE_INTERVAL_COUNT ||
-          x(interval.end_seconds) - x(interval.start_seconds) >= 1,
-      ),
-    }));
+    let filteredCount = 0;
+    const lanes = timeline.lanes.map((lane, laneIndex) => {
+      const visible = lane.intervals.filter((interval) => {
+        if (
+          intervalCount > LARGE_INTERVAL_COUNT &&
+          x(interval.end_seconds) - x(interval.start_seconds) < 1
+        ) {
+          filteredCount++;
+          return false;
+        }
+        return true;
+      });
+      return {
+        lane,
+        color: `var(--spk-${speakerPaletteIndex(lane.speaker_id ?? lane.label)})`,
+        patternId: `speaker-overlap-${laneIndex}`,
+        intervals: visible,
+      };
+    });
     const axisY =
       TOP_MARGIN + timeline.lanes.length * (LANE_HEIGHT + LANE_GAP) + 2;
     return {
@@ -136,6 +145,7 @@ export function SpeakerTimelineIsland({
       longTime: timeline.duration_seconds >= 3_600,
       plotStart,
       plotEnd,
+      filteredCount,
     };
   }, [timeline, width]);
 
@@ -318,6 +328,15 @@ export function SpeakerTimelineIsland({
           ) : null}
         </svg>
       </div>
+
+      {model.filteredCount > 0 && (
+        <p
+          className="text-xs"
+          style={{ color: "var(--ink-3)", marginTop: "0.25rem" }}
+        >
+          {model.filteredCount} very short turns not shown at this scale.
+        </p>
+      )}
 
       <div
         className="mt-2 flex flex-wrap gap-x-4 gap-y-1"

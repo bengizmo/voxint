@@ -69,7 +69,7 @@
 </style>
 
 {% macro temporal_trends_mount(trends) -%}
-<div data-island="temporal-trends" data-props='{{ trends|tojson }}' class="card pi-card">
+<div data-island="temporal-trends" data-props="{{ trends|tojson|replace('\"', '&quot;') }}" class="card pi-card">
   <h3 class="pi-card-title">TEMPORAL TRENDS</h3>
   {% if trends.range.start and trends.range.end %}
   <p class="tt-fallback-meta">

@@ -198,7 +198,7 @@ def test_only_sub_50ms_nonnegative_gaps_merge(
     ] == [(0.0, 3.0), (3.05, 4.0)]
 
 
-def test_overlapping_same_label_intervals_are_not_coalesced(
+def test_overlapping_same_label_intervals_are_coalesced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     turns = [_turn(0, 0.0, 2.0), _turn(1, 1.5, 3.0)]
@@ -207,7 +207,10 @@ def test_overlapping_same_label_intervals_are_not_coalesced(
     timeline = build_speaker_timeline(_session(turns), uuid.uuid4())
 
     assert timeline is not None
-    assert len(timeline["lanes"][0]["intervals"]) == 2
+    intervals = timeline["lanes"][0]["intervals"]
+    assert len(intervals) == 1
+    assert intervals[0]["start_seconds"] == 0.0
+    assert intervals[0]["end_seconds"] == 3.0
 
 
 def test_overlap_flag_survives_adjacent_merge(monkeypatch: pytest.MonkeyPatch) -> None:

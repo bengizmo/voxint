@@ -79,10 +79,9 @@ def _merge_adjacent(intervals: list[TimelineInterval]) -> list[TimelineInterval]
             continue
         previous = merged[-1]
         gap = interval["start_seconds"] - previous["end_seconds"]
-        below_threshold = gap < ADJACENT_GAP_SECONDS and not isclose(
+        if gap < ADJACENT_GAP_SECONDS and not isclose(
             gap, ADJACENT_GAP_SECONDS, rel_tol=0.0, abs_tol=1e-9
-        )
-        if gap >= 0.0 and below_threshold:
+        ):
             previous["end_seconds"] = max(previous["end_seconds"], interval["end_seconds"])
             previous["overlap"] = previous["overlap"] or interval["overlap"]
         else:

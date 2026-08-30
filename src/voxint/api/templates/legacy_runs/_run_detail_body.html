@@ -264,7 +264,7 @@ which model answered rather than proving the exact build.</p>
 <section class="card">
   <div data-island="speaker-timeline"
        data-run-id="{{ run.id }}"
-       data-props='{{ speaker_timeline|tojson }}'>
+       data-props="{{ speaker_timeline|tojson|replace('\"', '&quot;') }}">
     <h2>Speaker timeline</h2>
     <ul class="oc-muted">
       {% for lane in speaker_timeline.lanes %}
