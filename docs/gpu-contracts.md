@@ -1516,13 +1516,14 @@ mismatch during the aborted first M2 scoring run). Designed via
 design, the v1.3 sanitization, and the v1.4 exclusion were independently
 reviewed.
 
-> ⚠ Values marked `[TBD]` must be filled by re-scoring the frozen M2
-> checkpoint with the grouped-bootstrap evaluator before any Phase 1 training.
-> The provisional M2 numbers in this section were measured on the
-> pre-repair (contaminated) eval split; the v1.2 re-baselining rule below
-> governs how they are replaced. If re-scoring shifts any M2 baseline,
-> the gate limit keeps its pre-registered formula (baseline plus its fixed
-> margin) and only the M2 input changes; note every change.
+> ⚠ The re-baselining pass ran on 2026-08-30: the frozen M2 checkpoint was
+> re-scored on the frozen 68,015-clip manifest with the locked evaluator
+> revision, every to-be-determined value in this section is now filled,
+> and the provisional
+> pre-repair baselines are replaced. Gate limits kept their pre-registered
+> formulas (baseline plus fixed margin); only the measured M2 inputs changed.
+> Every change is itemized in "M2 re-baselining measurement (2026-08-30)"
+> below.
 
 #### v1.2 amendment: AMI speaker identity repair (2026-08-29)
 
@@ -1561,7 +1562,8 @@ assignments are rewritten.
 
 Re-baselining rule (ordering is binding): first freeze the repaired manifest
 and its audit; then re-score the frozen M2 checkpoint on the repaired splits
-to fill every `[TBD]` and replace the provisional baselines; then freeze the
+to fill every to-be-determined value and replace the provisional baselines;
+then freeze the
 updated gate matrix. Only after the gate matrix is frozen may any candidate
 model be scored on the repaired eval. Gate limits keep their pre-registered
 margins (for example, per-generator non-regression stays baseline plus
@@ -1716,7 +1718,7 @@ The following artifacts must be hashed and committed before Phase 1 training.
 | Calibration manifest | Platt fitting | `0a6fa284c6af00dfbea31b8bdda923479c173376aea97fb4f5d9a807b024384d` | Calibration split only; no model selection |
 | Eval manifest | Iteration gates | `47a5fff1a76a053621f3129784c447217504d0063f2a8709485a1adb3d1f7560` | Phase gates; every touch logged |
 | Holdout manifest | Phase-exit confirmation | `10300125f17628686c8e7e3e9530d9c7eaaec0c002511e315fc9724121e3db11` | At most 1 touch per phase |
-| Challenge manifest | Ship decision | `528eaeaa19bb5988d1bddc7e77a8473d19d57adf2104b1668b4f5557c4414bf7` (provisional until the acceptance probe passes) | See Challenge procedure below |
+| Challenge manifest | Ship decision | `528eaeaa19bb5988d1bddc7e77a8473d19d57adf2104b1668b4f5557c4414bf7` (RETIRED: the 2026-08-30 acceptance probe FAILED and the cohort was unblinded by the probe investigation; a reconstructed cohort under a new hash must replace it) | See Challenge procedure below |
 
 Per-split manifest hash definition: take every clip record in the frozen
 composite manifest carrying that split, sort the records by `clip_id`,
@@ -1804,8 +1806,9 @@ and in-domain bonafide from AMI and VoxConverse. Exclude ASVspoof DF anchor
 clips. Do not expand this population when later phases add generators. Report
 full-eval Brier, including unseen FM generators and anchors, as a diagnostic.
 Require A > 0 (higher score must mean more synthetic). The M2 baseline Brier
-of 0.0066 was computed in-sample; the out-of-sample M2 value must be measured
-before the gate limit is final.
+of 0.0066 was computed in-sample; the out-of-sample M2 value was required to
+be measured before the gate limit became final, and on 2026-08-30 it was:
+0.0347 on the binding population, fixing the gate limit at 0.0447.
 
 **Paired delta.** For M2-vs-candidate comparisons, define
 `delta = EER_candidate - EER_M2` and use identical bootstrap component draws
@@ -1837,21 +1840,91 @@ replicates.
 Bootstrap seed:
 `SHA-256(SELECTION_SEED || metric-schema-version || model-seed || cohort-hash || metric-context)`.
 
+#### M2 re-baselining measurement (2026-08-30)
+
+Run identity: the frozen M2 checkpoint (`e178446b...`) scored on all 68,015
+clips of the frozen composite manifest (`2c0717bb...`) with the locked
+evaluator revision (`8c3f36a3`), production windowing, deterministic CUDA
+settings, journal `journal_m2_r2.jsonl` (0 clip errors, 0 skips). Platt
+policy `m2-252-step6` fit on the 6,062-clip calibration split: A = 1.2222,
+B = -1.6236 (A > 0 as required), in-sample Brier 0.0414. Frozen operating
+thresholds from calibration: primary 5%-FPR threshold 1.7939 (realized
+weighted BF FPR 4.08%, TPR 95.00%); diagnostic 1%-FPR threshold 2.2556
+(realized 1.00%, TPR 90.42%), labeled underpowered because calibration has
+35 bona fide components, far below 1,000.
+
+Measured eval values (grouped bootstrap, 1,000 replicates, 95% percentile
+CI; effective component counts beside every number):
+
+| Metric | M2 measured | 95% CI | Components | Replaces |
+|---|---|---|---|---|
+| Piper EER | 1.84% | 0.00% to 2.56% | 18 | provisional 8.04% |
+| ElevenLabs EER | 3.28% | 0.00% to 4.30% | 18 | provisional 11.20% |
+| Google TTS EER | 4.69% | 0.75% to 5.68% | 18 | provisional 10.28% |
+| Chatterbox EER (primary endpoint) | 10.37% | 2.52% to 12.26% | 18 | ship-gate M2 reference |
+| ASVspoof DF anchor EER | 41.02% | 36.06% to 45.25% | 90 | newly measured |
+| Unseen FM (Matcha) EER | 14.98% | 2.15% to 18.36% | 18 | newly measured; under-precision, see trigger below |
+| Unseen FM (F5-TTS) EER | 11.48% | 2.19% to 12.76% | 18 | diagnostic only |
+| Macro-average core EER | 5.05% | n/a (mean of 4 cores) | n/a | reported |
+| AMI BF FPR at frozen 5%-FPR OP | 2.23% | n/a (point value at frozen threshold) | 4 (188 clips) | newly measured |
+| VoxConverse BF FPR at frozen 5%-FPR OP | 4.95% | n/a (point value at frozen threshold) | 14 (452 clips) | newly measured |
+| Out-of-sample Brier (binding population, n=2,376) | 0.0347 | n/a | n/a | newly measured |
+| Full-eval Brier (diagnostic, anchors included) | 0.1955 | n/a | n/a | reported |
+
+Per-source BF FPRs use the same inverse-component-size weighting as the
+calibration realized FPR. The ASVspoof DF anchor bona fide population sits
+at 63.26% weighted FPR at the frozen primary threshold; this is the
+documented cross-corpus confound (#253), reported for transparency and
+consumed by no gate.
+
+**Regeneration trigger evaluation (v1.3).** Half-width is computed as
+`(CI_hi - CI_lo) / 2` on the unrounded percentile bounds; this pins down a
+term the trigger left ambiguous for asymmetric intervals, and no
+classification below changes under either reading. CI half-widths of the
+eval-only generators: ElevenLabs 2.15pp and Google TTS 2.47pp, both within
+the 5.00pp precision bound, so their non-regression gates bind. Matcha-TTS 8.10pp
+exceeds the bound: the trigger fires, the P2+ unseen-FM gate does not bind,
+and the Matcha slice must be expanded or regenerated on clean post-repair
+eval identities before that gate can bind. The Matcha baseline above is
+recorded as under-precision and non-binding. F5-TTS at 5.28pp also exceeds
+the bound; no gate consumes F5-TTS (it is diagnostic-only in every phase),
+so this is a disclosure with no gate consequence.
+
+**Holdout confirmation (single touch, logged 2026-08-30).** One holdout
+scoring pass: Chatterbox EER 7.35% (CI 3.49% to 13.25%), Piper EER 0.34%,
+out-of-sample Brier 0.0412. No further holdout touches this phase.
+
+**Acceptance probe result (challenge partition): FAIL.** M2 Chatterbox EER
+on eval 10.37% (grouped-bootstrap SE 2.99pp) versus challenge 19.54% (SE
+1.17pp). The absolute delta of 9.17pp exceeds the pre-registered band of
+6.28pp (1.96 times the root sum of squared SEs), so the probe fails and the
+challenge manifest hash stays provisional. Per-source diagnostics: the
+challenge partition is entirely AMI-sourced (the VoxConverse challenge
+speakers remain deferred), and the shift is present within AMI itself
+(eval AMI-only Chatterbox EER 4.00% on 125 spoof clips, an underpowered
+exploratory number, versus 19.54% on the challenge cohort). Because this
+subsection discloses the cohort's numeric results, the cohort is unblinded:
+it is permanently retired and can never serve as a ship-decision cohort.
+Reconstruction must select a fresh challenge cohort (new speaker selection,
+new clips, new manifest hash) after the confounding investigation; the
+challenge procedure's blinding rules apply to that new cohort from scratch.
+No ship decision may consume any challenge cohort until then.
+
 #### Binding gate matrix
 
 **Non-regression gates (worst-of-3-seeds):**
 
 | Phase | Cohort | Metric | M2 baseline | Limit | Consequence |
 |---|---|---|---|---|---|
-| All | Eval | Piper EER | 8.04% | ≤10.04% | Blocks ship |
-| All | Eval | ElevenLabs EER | 11.20% | ≤13.20% | Blocks ship |
-| All | Eval | Google TTS EER | 10.28% | ≤12.28% | Blocks ship |
-| All | Eval | ASVspoof DF EER | `[TBD]` | ≤`[TBD]`+4.00pp | Blocks ship |
-| All | Eval (AMI) | BF FPR at 5%-FPR OP | `[TBD]` | ≤5.00% | Blocks ship |
-| All | Eval (VoxConverse) | BF FPR at 5%-FPR OP | `[TBD]` | ≤10.00% | Blocks ship |
-| All | Eval | Out-of-sample Brier | `[TBD]` | ≤`[TBD]`+0.0100 | Blocks ship |
-| P1 | Eval | Unseen FM (Matcha) EER | `[TBD]` | Report only | Diagnostic |
-| P2+ | Eval | Unseen FM (Matcha) EER | `[TBD]` | ≤25.00% AND gap ≤10pp | Blocks ship |
+| All | Eval | Piper EER | 1.84% | ≤3.84% | Blocks ship |
+| All | Eval | ElevenLabs EER | 3.28% | ≤5.28% | Blocks ship |
+| All | Eval | Google TTS EER | 4.69% | ≤6.69% | Blocks ship |
+| All | Eval | ASVspoof DF EER | 41.02% | ≤45.02% | Blocks ship |
+| All | Eval (AMI) | BF FPR at 5%-FPR OP | 2.23% | ≤5.00% | Blocks ship |
+| All | Eval (VoxConverse) | BF FPR at 5%-FPR OP | 4.95% | ≤10.00% | Blocks ship |
+| All | Eval | Out-of-sample Brier | 0.0347 | ≤0.0447 | Blocks ship |
+| P1 | Eval | Unseen FM (Matcha) EER | 14.98% | Report only | Diagnostic |
+| P2+ | Eval | Unseen FM (Matcha) EER | 14.98% (under-precision, non-binding) | ≤25.00% AND gap ≤10pp | Blocks ship once the Matcha slice is regenerated |
 | P2+ | Eval | Codec guard rail | n/a | No codec EER > min(2x pooled, pooled+10pp) | Blocks ship |
 
 Unseen FM gap condition: for each seed s,
