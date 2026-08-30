@@ -492,6 +492,7 @@ def test_claim_winner_waits_out_transient_lock_holder(
     pids: dict[str, int] = {}
     outcomes: list[str] = []
     errors: list[BaseException] = []
+    lock = threading.Lock()
 
     def instrumented_factory() -> Session:
         # _process_one's first session gets a hook that pauses the winner
@@ -509,22 +510,24 @@ def test_claim_winner_waits_out_transient_lock_holder(
                 if claim_committed.is_set():
                     return
                 claim_committed.set()
-                assert holder_locked.wait(timeout=10)
+                if not holder_locked.wait(timeout=10):
+                    raise RuntimeError("holder never took the row lock")
 
         return session
 
     def winner() -> None:
         try:
-            outcomes.append(
-                _process_one(
-                    cast("sessionmaker[Session]", instrumented_factory),
-                    media_root,
-                    operation_id,
-                    300,
-                )
+            outcome = _process_one(
+                cast("sessionmaker[Session]", instrumented_factory),
+                media_root,
+                operation_id,
+                300,
             )
+            with lock:
+                outcomes.append(outcome)
         except BaseException as exc:
-            errors.append(exc)
+            with lock:
+                errors.append(exc)
         finally:
             winner_done.set()
 
@@ -536,7 +539,7 @@ def test_claim_winner_waits_out_transient_lock_holder(
                     select(MediaOperation)
                     .where(MediaOperation.id == operation_id)
                     .with_for_update()
-                )
+                ).scalar_one()
                 pids["holder"] = session.execute(
                     text("SELECT pg_backend_pid()")
                 ).scalar_one()
@@ -544,7 +547,8 @@ def test_claim_winner_waits_out_transient_lock_holder(
                 assert release_holder.wait(timeout=15)
                 session.rollback()
         except BaseException as exc:
-            errors.append(exc)
+            with lock:
+                errors.append(exc)
 
     winner_thread = threading.Thread(target=winner)
     holder_thread = threading.Thread(target=holder)

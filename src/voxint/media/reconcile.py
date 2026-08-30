@@ -505,7 +505,9 @@ def _process_one(
         # Blocking on purpose: after winning the claim, any concurrent lock
         # holder is transient (a losing reconciler about to roll back, or the
         # batch sweep). SKIP LOCKED here made the winner skip its own claimed
-        # row and strand it until lease expiry (#346).
+        # row and strand it until lease expiry (#346). A wedged holder (an
+        # idle-in-transaction session) would stall this pass instead, which
+        # beats stranding the claim.
         operation = session.execute(
             select(MediaOperation)
             .where(MediaOperation.id == operation_id)
