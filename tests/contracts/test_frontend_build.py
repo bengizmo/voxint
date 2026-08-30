@@ -199,7 +199,12 @@ def test_symlink_escape_is_404(
 # --------------------------------------------------------------------------- #
 def test_runtime_npm_dependencies_are_exactly_react() -> None:
     package_json = json.loads((REPO_ROOT / "frontend" / "package.json").read_text())
-    assert set(package_json["dependencies"]) == {"react", "react-dom"}, (
+    expected = {
+        "react", "react-dom",
+        "d3-array", "d3-axis", "d3-cloud", "d3-format",
+        "d3-scale", "d3-shape", "d3-time-format",
+    }
+    assert set(package_json["dependencies"]) == expected, (
         "frontend runtime dependencies changed — if deliberate, update this "
         "contract in the same commit and record why the new dep earns its place"
     )
@@ -332,7 +337,7 @@ def test_asset_url_reads_the_loaded_map(monkeypatch: pytest.MonkeyPatch) -> None
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "island",
-    ["transcript-player", "workbench-player", "review-stepper", "corrections-editor"],
+    ["transcript-player", "workbench-player", "review-stepper", "corrections-editor", "explore"],
 )
 def test_island_registered_in_main_ts(island: str) -> None:
     text = _MAIN_TS.read_text()
@@ -344,7 +349,7 @@ def test_island_registered_in_main_ts(island: str) -> None:
 
 @pytest.mark.parametrize(
     "island",
-    ["transcript-player", "workbench-player", "review-stepper", "corrections-editor"],
+    ["transcript-player", "workbench-player", "review-stepper", "corrections-editor", "explore"],
 )
 def test_island_entry_file_exists(island: str) -> None:
     entry = _ENTRIES_DIR / f"{island}.tsx"
@@ -357,7 +362,7 @@ def test_island_entry_file_exists(island: str) -> None:
 
 @pytest.mark.parametrize(
     "island",
-    ["transcript-player", "workbench-player", "review-stepper", "corrections-editor"],
+    ["transcript-player", "workbench-player", "review-stepper", "corrections-editor", "explore"],
 )
 def test_island_is_a_vite_input(island: str) -> None:
     text = _VITE_CONFIG.read_text()

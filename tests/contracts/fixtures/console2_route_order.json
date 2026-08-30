@@ -222,6 +222,18 @@
     ]
   ],
   [
+    "/explore",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/explore/csv",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/runs",
     [
       "GET"
