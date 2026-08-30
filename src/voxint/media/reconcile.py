@@ -502,10 +502,14 @@ def _process_one(
             session.rollback()
             return "skipped"
         session.commit()
+        # Blocking on purpose: after winning the claim, any concurrent lock
+        # holder is transient (a losing reconciler about to roll back, or the
+        # batch sweep). SKIP LOCKED here made the winner skip its own claimed
+        # row and strand it until lease expiry (#346).
         operation = session.execute(
             select(MediaOperation)
             .where(MediaOperation.id == operation_id)
-            .with_for_update(skip_locked=True)
+            .with_for_update()
         ).scalar_one_or_none()
         if operation is None or operation.state in OPERATION_TERMINAL_STATES:
             return "skipped"

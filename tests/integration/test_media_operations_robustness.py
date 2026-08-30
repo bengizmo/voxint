@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
+from typing import cast
 
 import pytest
+from sqlalchemy import event, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.db.models import (
@@ -27,7 +30,7 @@ from voxint.media.operations import (
     claim_operation,
     temp_path,
 )
-from voxint.media.reconcile import reconcile_operations
+from voxint.media.reconcile import _process_one, reconcile_operations
 
 
 def _media_file(media_root: Path) -> Path:
@@ -459,4 +462,118 @@ def test_reconciler_cleans_preexisting_cross_device_temp(
 
     assert summary.completed == 1
     assert not stale_temp.exists()
+    _assert_completed_trash(session_factory, media_root, operation_id)
+
+
+def test_claim_winner_waits_out_transient_lock_holder(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """The claim winner waits for a transient row lock instead of skipping (#346).
+
+    Deterministic replay of the race behind the two-reconciler flake: after the
+    winner commits its claim (releasing its row lock), a second session briefly
+    holds the row lock, as a losing reconciler's pre-claim select does. The
+    winner's post-claim re-select must block until the holder lets go and then
+    complete the operation, never return "skipped" while holding the claim.
+    """
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    _media_file(media_root)
+    with session_factory() as session:
+        _media, operation = _expired_trash(session)
+        operation_id = operation.id
+        session.commit()
+
+    claim_committed = threading.Event()
+    holder_locked = threading.Event()
+    release_holder = threading.Event()
+    winner_done = threading.Event()
+    hook_installed = threading.Event()
+    pids: dict[str, int] = {}
+    outcomes: list[str] = []
+    errors: list[BaseException] = []
+
+    def instrumented_factory() -> Session:
+        # _process_one's first session gets a hook that pauses the winner
+        # right after its claim commit, so the holder can take the row lock
+        # in exactly the window the race needs.
+        session = session_factory()
+        if not hook_installed.is_set():
+            hook_installed.set()
+            pids["winner"] = session.execute(
+                text("SELECT pg_backend_pid()")
+            ).scalar_one()
+
+            @event.listens_for(session, "after_commit")
+            def _pause_after_claim_commit(_session: Session) -> None:
+                if claim_committed.is_set():
+                    return
+                claim_committed.set()
+                assert holder_locked.wait(timeout=10)
+
+        return session
+
+    def winner() -> None:
+        try:
+            outcomes.append(
+                _process_one(
+                    cast("sessionmaker[Session]", instrumented_factory),
+                    media_root,
+                    operation_id,
+                    300,
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            winner_done.set()
+
+    def holder() -> None:
+        try:
+            with session_factory() as session:
+                assert claim_committed.wait(timeout=10)
+                session.execute(
+                    select(MediaOperation)
+                    .where(MediaOperation.id == operation_id)
+                    .with_for_update()
+                )
+                pids["holder"] = session.execute(
+                    text("SELECT pg_backend_pid()")
+                ).scalar_one()
+                holder_locked.set()
+                assert release_holder.wait(timeout=15)
+                session.rollback()
+        except BaseException as exc:
+            errors.append(exc)
+
+    winner_thread = threading.Thread(target=winner)
+    holder_thread = threading.Thread(target=holder)
+    winner_thread.start()
+    holder_thread.start()
+    observed_blocked = False
+    try:
+        assert holder_locked.wait(timeout=10)
+        with session_factory() as control:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if winner_done.is_set():
+                    break
+                blocking = control.execute(
+                    text("SELECT pg_blocking_pids(:pid)"),
+                    {"pid": pids["winner"]},
+                ).scalar_one()
+                control.rollback()
+                if pids["holder"] in blocking:
+                    observed_blocked = True
+                    break
+                time.sleep(0.02)
+    finally:
+        release_holder.set()
+    winner_thread.join(timeout=15)
+    holder_thread.join(timeout=15)
+
+    assert not winner_thread.is_alive() and not holder_thread.is_alive()
+    assert not errors, errors
+    assert observed_blocked, "winner returned without blocking on the lock holder"
+    assert outcomes == ["completed"]
     _assert_completed_trash(session_factory, media_root, operation_id)

@@ -33,6 +33,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   recording no longer shows on the project — the newest completed run is
   the operative transcript, matching how the rest of the console resolves
   speakers.
+- **Media file operations no longer stall for up to five minutes after two
+  cleanup passes collide** (#346). When two reconciler passes raced for the
+  same pending file operation (a trash, restore, or purge), the winner could
+  skip its own claimed work, leaving the operation parked until its lease
+  expired. The winner now waits out the moment of contention and finishes
+  the job. Found via a CI flake; a deterministic regression test pins the
+  interleaving.
 - **Top-bar controls no longer overlap on narrow screens.** Below ~800px
   CSS width, the fixed-height command bar let the Table/Cards view toggle
   slip under the page action button ("+ Add media", "+ New speaker"),
