@@ -413,3 +413,30 @@ def test_cards_open_ignored_in_table_view(
     assert "All folders" not in body
     assert 'aria-label="Folder contents"' not in body
     assert "grid-table" in body
+
+
+def test_cards_top_level_has_selection_affordances(
+    client: TestClient, _seeded_folders: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    resp = client.get("/media?view=cards")
+    assert resp.status_code == 200
+    body = resp.text
+    # The unfiled item card carries its own checkbox inside the bulk form,
+    # and the section has a select-all box plus the (hidden) action bar.
+    assert 'class="media-card-check"' in body
+    assert 'name="media_id"' in body
+    assert 'data-select-all-box aria-label="Select all"' in body
+    assert "data-action-bar" in body
+
+
+def test_cards_drilldown_has_selection_affordances(
+    client: TestClient, _seeded_folders: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    f_int, _ = _seeded_folders
+    resp = client.get(f"/media?view=cards&open={f_int}")
+    assert resp.status_code == 200
+    body = resp.text
+    # Every in-folder row is selectable and the folder view has select-all.
+    assert body.count('name="media_id"') == 3
+    assert 'data-select-all-box aria-label="Select all"' in body
+    assert "data-action-bar" in body
