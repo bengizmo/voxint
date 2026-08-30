@@ -21,12 +21,12 @@ from voxint.api.speaker_stats import (
 
 class TestComputeLogOdds:
     def test_distinctive_term_ranks_high(self) -> None:
-        target = Counter({"hvac": 20, "system": 5, "the": 3, "cold": 10})
-        background = Counter({"hvac": 2, "system": 50, "the": 200, "cold": 8})
+        target = Counter({"solar": 20, "system": 5, "the": 3, "cold": 10})
+        background = Counter({"solar": 2, "system": 50, "the": 200, "cold": 8})
         result = compute_log_odds(target, background, min_count=3)
         terms = [r.term for r in result]
-        assert "hvac" in terms
-        assert result[0].term == "hvac"
+        assert "solar" in terms
+        assert result[0].term == "solar"
         assert result[0].z_score > 0
 
     def test_positive_z_scores_only(self) -> None:
@@ -37,11 +37,11 @@ class TestComputeLogOdds:
             assert stat.z_score > 0
 
     def test_min_count_filtering(self) -> None:
-        target = Counter({"hvac": 2, "system": 10})
-        background = Counter({"hvac": 1, "system": 5})
+        target = Counter({"solar": 2, "system": 10})
+        background = Counter({"solar": 1, "system": 5})
         result = compute_log_odds(target, background, min_count=3)
         terms = [r.term for r in result]
-        assert "hvac" not in terms
+        assert "solar" not in terms
 
     def test_empty_target(self) -> None:
         assert compute_log_odds(Counter(), Counter({"a": 10})) == []

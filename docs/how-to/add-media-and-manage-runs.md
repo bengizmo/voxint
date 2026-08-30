@@ -150,7 +150,7 @@ title: Interview with Jane Doe
 speakers:
   - Jane Doe
   - John Smith
-domain_pack: hvac
+domain_pack: medical
 notes: |
   Recorded at the spring conference.
   Audio is a little echoey after minute 40.

@@ -39,7 +39,7 @@ def test_parse_full_sidecar() -> None:
         speakers:
           - Jane Doe
           - John Smith
-        domain_pack: hvac
+        domain_pack: solar
         notes: |
           Recorded at the spring conference.
           Second line.
@@ -48,7 +48,7 @@ def test_parse_full_sidecar() -> None:
     )
     assert sc.title == "Interview with Jane Doe"
     assert sc.speakers == ("Jane Doe", "John Smith")
-    assert sc.domain_pack == "hvac"
+    assert sc.domain_pack == "solar"
     assert sc.notes == "Recorded at the spring conference.\nSecond line."
     assert sc.ignored_keys == ()
     assert sc.raw["title"] == "Interview with Jane Doe"

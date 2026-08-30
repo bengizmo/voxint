@@ -416,9 +416,9 @@ def test_sidecar_pair_ingests_with_all_fields_applied(
 ) -> None:
     # A pack the sidecar can name explicitly, alongside the default.
     packs = tmp_path / "packs"
-    (packs / "hvac").mkdir(parents=True)
-    (packs / "hvac" / "manifest.yaml").write_text(
-        "name: hvac\nname_seeds: [Pack Seed]\n", encoding="utf-8"
+    (packs / "solar").mkdir(parents=True)
+    (packs / "solar" / "manifest.yaml").write_text(
+        "name: solar\nname_seeds: [Pack Seed]\n", encoding="utf-8"
     )
     _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
     _drop(media_root, "talk.wav")
@@ -427,7 +427,7 @@ def test_sidecar_pair_ingests_with_all_fields_applied(
         "talk.wav.yaml",
         "title: Spring keynote\n"
         "speakers: [Jane Doe, Pack Seed]\n"
-        "domain_pack: hvac\n"
+        "domain_pack: solar\n"
         "notes: recorded on stage\n"
         "content_item_id: 42\n",
     )
@@ -444,7 +444,7 @@ def test_sidecar_pair_ingests_with_all_fields_applied(
     assert run.sidecar == {
         "title": "Spring keynote",
         "speakers": ["Jane Doe", "Pack Seed"],
-        "domain_pack": "hvac",
+        "domain_pack": "solar",
         "notes": "recorded on stage",
         "content_item_id": 42,
     }
@@ -453,7 +453,7 @@ def test_sidecar_pair_ingests_with_all_fields_applied(
     # unioned into the frozen snapshot's name_seeds (pack seeds keep priority,
     # exact-string dedupe drops the repeat of "Pack Seed").
     assert run.domain_pack is not None
-    assert run.domain_pack["name"] == "hvac"
+    assert run.domain_pack["name"] == "solar"
     assert run.domain_pack["name_seeds"] == ["Pack Seed", "Jane Doe"]
 
 

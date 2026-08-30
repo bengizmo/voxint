@@ -1,7 +1,7 @@
 """Add corpus analysis artifacts table.
 
-Revision ID: 0049
-Revises: 0048
+Revision ID: 0055
+Revises: 0054
 Create Date: 2026-08-30
 """
 
@@ -13,8 +13,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0049"
-down_revision: str = "0048"
+revision: str = "0055"
+down_revision: str = "0054"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 
