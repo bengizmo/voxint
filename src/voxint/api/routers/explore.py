@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from voxint.api.csrf import CSRF_QUOTE_SAVE, mint_csrf_token
 from voxint.api.explore_query import KWICFilters, KWICRow, corpus_stats, kwic_search, term_stats
 from voxint.api.routers.deps import (
     OperatorDep,
@@ -142,6 +143,9 @@ def explore(
             "suspect_only": filters.suspect_only,
         },
         "termStats": ts.terms[:200],
+        "csrfQuoteSave": mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_QUOTE_SAVE,
+        ),
     }
     context = {
         "request": request,

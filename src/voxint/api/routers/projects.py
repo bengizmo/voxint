@@ -25,6 +25,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from voxint.api.csrf import (
     CSRF_PROJECT_ASSIGN,
@@ -33,6 +34,7 @@ from voxint.api.csrf import (
     CSRF_PROJECT_RENAME,
     CSRF_PROJECT_UNLINK,
     CSRF_PROJECT_VOCAB,
+    CSRF_QUOTE_MANAGE,
     mint_csrf_token,
 )
 from voxint.api.project_insights import get_project_insights
@@ -45,6 +47,8 @@ from voxint.api.routers.deps import (
     require_projects_enabled,
     templates,
 )
+from voxint.api.routers.quotes import quote_to_dict
+from voxint.api.saved_quotes import list_quotes
 from voxint.api.setup_wizard import SetupValidationError, normalize_vocabulary
 from voxint.api.temporal_trends import get_temporal_trends
 from voxint.db.models import MediaFolder, Project
@@ -195,6 +199,24 @@ def _detail_context(
         "corrections_error": corrections_error,
         "error": error,
         "assigned": assigned,
+        "quote_board_props": _quote_board_props(request, session, detail),
+    }
+
+
+def _quote_board_props(
+    request: Request,
+    session: Session,
+    detail: Any,
+) -> dict[str, Any]:
+    quotes, total = list_quotes(session, detail.id, limit=200)
+    return {
+        "quotes": [quote_to_dict(q) for q in quotes],
+        "total": total,
+        "projectId": str(detail.id),
+        "projectName": detail.name,
+        "csrfToken": mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_QUOTE_MANAGE,
+        ),
     }
 
 

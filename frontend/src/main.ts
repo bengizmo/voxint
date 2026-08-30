@@ -12,6 +12,7 @@ const registry: Record<
   "corrections-editor": () => import("./entries/corrections-editor"),
   "media-editor": () => import("./entries/media-editor"),
   "explore": () => import("./entries/explore"),
+  "quote-board": () => import("./entries/quote-board"),
   "temporal-trends": () => import("./entries/temporal-trends"),
   "speaker-timeline": () => import("./entries/speaker-timeline"),
 };

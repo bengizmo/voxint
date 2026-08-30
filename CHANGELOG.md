@@ -7,6 +7,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Quote board** (#338, Phase 6). Save KWIC concordance rows as
+  project-scoped evidence quotes from the Explore page. Saved quotes appear
+  on the project detail page with inline note editing, deletion, and CSV
+  export. Deduplicated by (project, segment, search query). Migration 0056.
 - **Project temporal trends** (#337, Phase 5). Interactive D3 line chart on
   the project detail page showing term and entity frequency over recording
   dates. Adaptive calendar bucketing (day/week/month), date provenance
