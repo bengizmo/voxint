@@ -6,6 +6,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Pause/resume and restart-from-scratch pipeline controls** (#324). The run
+  detail page now has a **Pause** button for queued and running runs
+  (cooperative — the current stage finishes first, then no further stages
+  start until you resume), **Resume** and **Cancel** for paused runs, and
+  **Restart from scratch** in the Manage section for completed, failed, or
+  cancelled runs (re-queues from the first stage; prior results are preserved
+  in the stage ledger). New `PAUSED` status with amber pill; migration 0053.
+
 ### Changed
 - **Decorative search chrome removed** (#162). The inert "Search everything
   ⌘K" / "Find a person" / "Filter media" affordances in the topbar and on the
