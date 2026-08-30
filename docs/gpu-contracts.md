@@ -1504,14 +1504,17 @@ A = 4.28, B = -11.42; Brier score 0.0066.
 
 Pre-registration for the Chatterbox improvement effort (GitHub #252). This
 section is binding: no training may begin until every artifact hash, baseline
-value, and gate threshold below is committed. Protocol version 1.3
+value, and gate threshold below is committed. Protocol version 1.4
 (v1.1, 2026-08-29: two-sample acceptance probe band, pinned Brier population,
 explicit paired-delta percentile; v1.2, 2026-08-29: AMI speaker identity
 repair and re-baselining rule, domain-matched bonafide comparison
 populations; v1.3, 2026-08-30: eval-only partition sanitization, unseen-FM
-slice disclosures, pre-registered slice-regeneration trigger). Designed via
+slice disclosures, pre-registered slice-regeneration trigger; v1.4,
+2026-08-30: single-clip integrity exclusion after a fail-closed hash
+mismatch during the aborted first M2 scoring run). Designed via
 4-model consult (codex, deepseek-v4-pro, grok-4.5, kimi-k3); the v1.2 repair
-design and the v1.3 sanitization were independently reviewed.
+design, the v1.3 sanitization, and the v1.4 exclusion were independently
+reviewed.
 
 > ⚠ Values marked `[TBD]` must be filled by re-scoring the frozen M2
 > checkpoint with the grouped-bootstrap evaluator before any Phase 1 training.
@@ -1639,6 +1642,57 @@ manifests, and the used-reference maps are hash-bound in the receipts. If
 F5-TTS scoring behaves anomalously relative to the other eval-only slices,
 the fallback log is the first place to look.
 
+#### v1.4 amendment: single-clip integrity exclusion (2026-08-30)
+
+The first authoritative M2 scoring run aborted fail-closed at clip 57,126 of
+68,016: the canonical-PCM sha256 of one calibration-split Piper spoof clip,
+`ami-EN2002d-MEE073-turn-2345920-2632160--piper`, no longer matched its
+manifest row (expected `9f9da460...`, observed `6b5c6598...`; two independent
+decoders reproduce the observed digest). A full sweep of all 68,016 clips
+found exactly this one mismatch. The clip's duration matches its manifest row
+to the sample and the audio is intact-sounding speech, so the bytes appear to
+be the described synthesis with silently altered content; silent storage
+corruption and a generation-time hash-versus-write discrepancy cannot be
+distinguished from the surviving evidence. The recorded digest is consistent
+across every archived manifest generation back to the original Piper
+component manifest, so the v1.2 and v1.3 migrations are ruled out as causes.
+
+The original bytes are unrecoverable: every on-disk path to the file is a
+hardlink to a single inode, no backup exists, and Piper synthesis is
+non-deterministic (verified by regeneration), so the clip cannot be
+reproduced. Adopting the unexplained disk bytes into the manifest would
+launder an integrity failure into the frozen record, and a regenerated
+replacement would be a new, adaptively created clip. The clip is therefore
+structurally dropped, the most conservative of the three options.
+
+- The drop is a guarded migration in the evaluator repo
+  (`synthdetect_integrity_drop.py`): it verifies the frozen input-manifest
+  file sha, requires the on-disk hash to actually mismatch (it refuses to
+  drop an intact clip), removes exactly the one named row, decrements only
+  that component's clip count, revalidates the output row for row, and emits
+  a forensic audit (both digests, whole-file sha, file metadata, before and
+  after counts). The pre-drop manifest and split-hash report are archived
+  beside their successors; the referenced WAV is quarantined outside the
+  corpus root with an incident note.
+- Corpus impact: 68,016 clips become 68,015. Only the calibration split
+  changes (6,063 to 6,062 clips; one Piper spoof removed). The eval, holdout,
+  and challenge split hashes are byte-identical before and after, verified
+  mechanically. No evaluation-gate cohort loses a row; the Platt fit uses one
+  fewer calibration observation.
+- After the drop, a fresh canonical-PCM verification of all 68,015 retained
+  clips passed with zero mismatches.
+- Timing disclosure: this amendment is post-scoring-abort and pre-metric,
+  not pre-scoring. The aborted run wrote raw per-clip scores for the 57,126
+  clips preceding the failure. No metrics or aggregates were computed from
+  that journal and the maintainer did not inspect any scores. The aborted
+  journal is sealed with a recorded sha256, labeled invalid for metrics and
+  resume, and retained as evidence only. The exclusion trigger is a
+  deterministic input-integrity invariant, independent of model performance.
+- The authoritative M2 scoring run restarts from scratch against the amended
+  manifest under a new journal identity. The provisional baselines in this
+  section are carried forward as pre-registered expectations only; final
+  values come from the restarted run per the v1.2 re-baselining rule.
+
 #### Scope and precedence
 
 This protocol governs all model candidates trained under #252 (Phases 1
@@ -1657,9 +1711,9 @@ The following artifacts must be hashed and committed before Phase 1 training.
 | M2 checkpoint (`finetuned_aasist.pth`) | Reference model | `e178446b640b8e9f9cf6dd359428b2243f49e24e613e1ae952cd706216b8111e` | Baseline scoring only |
 | XLS-R 300M (`xlsr2_300m.pt`) | Frozen frontend | `b08927597f2c9eb2ebd7dcc3ac78ee4b5f6021cbac4b3a6c5a9deec445d80ed9` | Feature extraction; shared across all candidates |
 | Selection seed | Partition assignment | `voxint-synthdetect-144` | Immutable; shared with bootstrap seeding |
-| Evaluator revision | Metric computation | `258f73ed22b167bd5382682860eef86d1c25a0b1` (evaluator repo commit) | Locked after golden-test validation (735-test suite green at this revision) |
+| Evaluator revision | Metric computation | `8c3f36a3c7791848ceb2d90235e8a2bdddb72350` (evaluator repo commit) | Locked after golden-test validation (742-test suite green at this revision) |
 | ffmpeg version | Codec pipeline | `7.1`, digest-pinned container `sha256:292a972c60356abd651d9a4f9c808c13e7473f65ad400b7eb99215f4e571931d` | Locked for all codec materialization |
-| Calibration manifest | Platt fitting | `52d0fd78aa43eb3bb3f3ba96e55d81ddf41b45513cdc8bdcac4b5561c3a42739` | Calibration split only; no model selection |
+| Calibration manifest | Platt fitting | `0a6fa284c6af00dfbea31b8bdda923479c173376aea97fb4f5d9a807b024384d` | Calibration split only; no model selection |
 | Eval manifest | Iteration gates | `47a5fff1a76a053621f3129784c447217504d0063f2a8709485a1adb3d1f7560` | Phase gates; every touch logged |
 | Holdout manifest | Phase-exit confirmation | `10300125f17628686c8e7e3e9530d9c7eaaec0c002511e315fc9724121e3db11` | At most 1 touch per phase |
 | Challenge manifest | Ship decision | `528eaeaa19bb5988d1bddc7e77a8473d19d57adf2104b1668b4f5557c4414bf7` (provisional until the acceptance probe passes) | See Challenge procedure below |
@@ -1670,8 +1724,8 @@ serialize them as one JSON array with sorted keys and compact separators,
 and hash the UTF-8 bytes with SHA-256. The evaluator ships the tool that
 computes these hashes; the four values above must be reproducible from the
 frozen composite manifest alone. The frozen composite manifest (post-repair,
-post-sanitization, 68,016 clips) has file sha256
-`214e91dedb9b0014ff873ffe5b07948c0399f709d839a6d8a7ef3a32aa3589b5`.
+post-sanitization, post-v1.4-exclusion, 68,015 clips) has file sha256
+`2c0717bb68b4802290fc033964ad3746e3dbf40ba66816b3fd832234173c5851`.
 
 Codec recipes (deterministic, reproducible via the existing degradation
 executor):
