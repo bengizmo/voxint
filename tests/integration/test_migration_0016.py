@@ -137,4 +137,6 @@ def test_single_alembic_head() -> None:
     # 0051 = multi-user auth: users + auth_sessions tables, user_id FK on decisions (#9).
     # 0052 = profile_review_decisions.user_id attribution (#308).
     # 0053 = widen pipeline_runs status CHECK for operator-initiated PAUSED.
-    assert list(heads) == ["0053"]
+    # 0054 = api_keys table for the public REST API.
+    # 0055 = corpus_analysis_artifacts table for viz cache, issue #332.
+    assert list(heads) == ["0055"]

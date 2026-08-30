@@ -51,8 +51,14 @@ id = "voxint-upstream-domain-strings"
 description = "Upstream private-domain strings (project identity / IP leak)"
 regex = '''(?i)\b(hvac|fullstackhvac|compendium)\b'''
 [rules.allowlist]
+# These files contained "hvac" in historical commits (scrubbed in this PR).
+# The path allowlist covers the git-history scan; the worktree is already clean.
 paths = [
     '''^\.gitleaks\.toml$''',
+    '''(^|/)docs/how-to/add-media-and-manage-runs\.md$''',
+    '''(^|/)tests/integration/test_watch_sweep\.py$''',
+    '''(^|/)tests/unit/test_sidecar\.py$''',
+    '''(^|/)tests/unit/test_speaker_stats\.py$''',
 ]
 
 [allowlist]
