@@ -48,6 +48,12 @@
     ]
   ],
   [
+    "/explore/terms",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/favicon.ico",
     [
       "GET"

@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 from sqlalchemy import Date as SQLDate
-from sqlalchemy import and_, case, cast, func, or_, select, true
+from sqlalchemy import and_, case, cast, delete, func, or_, select, true
 from sqlalchemy.orm import Session
 
+from voxint.api.term_stats import TermStat, compute_tfidf, source_hash
 from voxint.db import search
 from voxint.db.models import (
     AdjudicationDecision,
+    CorpusAnalysisArtifact,
+    CorpusAnalysisArtifactKind,
     MediaFolder,
     MediaItem,
     MediaSourceMetadata,
@@ -22,6 +27,8 @@ from voxint.db.models import (
     Speaker,
     TranscriptSegment,
 )
+
+logger = logging.getLogger(__name__)
 
 _HEADLINE_OPTIONS = "StartSel=<mark>, StopSel=</mark>, MaxWords=15, MinWords=5, MaxFragments=1"
 
@@ -310,4 +317,207 @@ def corpus_stats(session: Session, project_id: uuid.UUID | None = None) -> Corpu
         total_runs=total_runs,
         total_speakers=total_speakers,
         total_hours=float(duration or 0.0) / 3600.0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Term statistics (issue #334): TF-IDF over the corpus, cached in
+# corpus_analysis_artifacts.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TermStatsResult:
+    terms: list[dict[str, Any]]
+    stale: bool
+
+
+def _completed_runs_base(project_id: uuid.UUID | None = None) -> Any:
+    """Base select of completed, non-archived run IDs (+ project filter)."""
+    stmt = select(PipelineRun.id, PipelineRun.updated_at).where(
+        PipelineRun.status == RunStatus.COMPLETED.value,
+        PipelineRun.archived_at.is_(None),
+    )
+    if project_id is not None:
+        stmt = (
+            stmt.join(MediaItem, MediaItem.id == PipelineRun.media_item_id)
+            .join(MediaFolder, MediaFolder.id == MediaItem.media_folder_id)
+            .where(MediaFolder.project_id == project_id)
+        )
+    return stmt
+
+
+def _corpus_fingerprint(session: Session, project_id: uuid.UUID | None = None) -> str:
+    """Fast staleness check covering both run changes AND text corrections.
+
+    Hashes (run_id, run.updated_at, max_corrected_at) so operator corrections
+    in SegmentReviewState invalidate the cache, not just new/archived runs.
+    """
+    rows = session.execute(
+        _completed_runs_base(project_id).order_by(PipelineRun.id)
+    ).all()
+    if not rows:
+        return source_hash([])
+
+    run_ids = [r.id for r in rows]
+    corr_stmt = (
+        select(
+            TranscriptSegment.pipeline_run_id,
+            func.max(SegmentReviewState.corrected_at),
+        )
+        .join(
+            SegmentReviewState,
+            SegmentReviewState.transcript_segment_id == TranscriptSegment.id,
+        )
+        .where(
+            TranscriptSegment.pipeline_run_id.in_(run_ids),
+            SegmentReviewState.corrected_text.isnot(None),
+        )
+        .group_by(TranscriptSegment.pipeline_run_id)
+    )
+    corr_by_run: dict[uuid.UUID, str] = {
+        rid: str(ts) for rid, ts in session.execute(corr_stmt).all()
+    }
+    return source_hash([
+        (str(r.id), f"{r.updated_at}:{corr_by_run.get(r.id, '')}")
+        for r in rows
+    ])
+
+
+def _corpus_documents(
+    session: Session, project_id: uuid.UUID | None = None
+) -> list[tuple[uuid.UUID, str]]:
+    """Return (run_id, concatenated effective text) for each completed run."""
+    run_ids_stmt = _completed_runs_base(project_id)
+    run_ids = [r.id for r in session.execute(run_ids_stmt).all()]
+    if not run_ids:
+        return []
+
+    effective_text = func.coalesce(
+        SegmentReviewState.corrected_text,
+        TranscriptSegment.enhanced_text,
+        TranscriptSegment.raw_text,
+    )
+    stmt = (
+        select(
+            TranscriptSegment.pipeline_run_id.label("run_id"),
+            func.string_agg(effective_text, " ").label("text"),
+        )
+        .outerjoin(
+            SegmentReviewState,
+            SegmentReviewState.transcript_segment_id == TranscriptSegment.id,
+        )
+        .where(TranscriptSegment.pipeline_run_id.in_(run_ids))
+        .group_by(TranscriptSegment.pipeline_run_id)
+    )
+    return [(row.run_id, row.text or "") for row in session.execute(stmt)]
+
+
+def _get_cached_artifact(
+    session: Session, project_id: uuid.UUID | None = None
+) -> CorpusAnalysisArtifact | None:
+    """Latest cached term_stats artifact for this scope."""
+    stmt = select(CorpusAnalysisArtifact).where(
+        CorpusAnalysisArtifact.artifact_kind == CorpusAnalysisArtifactKind.TERM_STATS.value,
+    )
+    if project_id is not None:
+        stmt = stmt.where(
+            CorpusAnalysisArtifact.scope_kind == "project",
+            CorpusAnalysisArtifact.scope_id == project_id,
+        )
+    else:
+        stmt = stmt.where(
+            CorpusAnalysisArtifact.scope_kind == "corpus",
+            CorpusAnalysisArtifact.scope_id.is_(None),
+        )
+    stmt = stmt.order_by(CorpusAnalysisArtifact.generation.desc()).limit(1)
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def _artifact_lock_key(scope_kind: str, project_id: uuid.UUID | None) -> int:
+    """Deterministic advisory-lock key for a (scope_kind, scope_id) pair."""
+    raw = f"term_stats:{scope_kind}:{project_id or ''}"
+    return int.from_bytes(raw.encode()[:8], "big") & 0x7FFFFFFF
+
+
+def _write_artifact(
+    session: Session,
+    project_id: uuid.UUID | None,
+    stats: list[TermStat],
+    fingerprint: str,
+) -> None:
+    """Serialized delete-and-insert under an advisory lock.
+
+    The advisory lock prevents concurrent requests from both deleting + both
+    inserting (creating duplicate rows when scope_id IS NULL, where the
+    unique constraint cannot help).
+    """
+    scope_kind = "project" if project_id is not None else "corpus"
+    lock_key = _artifact_lock_key(scope_kind, project_id)
+    session.execute(select(func.pg_advisory_xact_lock(lock_key)))
+
+    # Recheck after lock: the winner may have already written a fresh artifact.
+    existing = _get_cached_artifact(session, project_id)
+    if existing is not None and existing.source_hash == fingerprint:
+        return
+
+    del_stmt = delete(CorpusAnalysisArtifact).where(
+        CorpusAnalysisArtifact.artifact_kind == CorpusAnalysisArtifactKind.TERM_STATS.value,
+        CorpusAnalysisArtifact.scope_kind == scope_kind,
+    )
+    if project_id is not None:
+        del_stmt = del_stmt.where(CorpusAnalysisArtifact.scope_id == project_id)
+    else:
+        del_stmt = del_stmt.where(CorpusAnalysisArtifact.scope_id.is_(None))
+    session.execute(del_stmt)
+
+    session.add(
+        CorpusAnalysisArtifact(
+            scope_kind=scope_kind,
+            scope_id=project_id,
+            artifact_kind=CorpusAnalysisArtifactKind.TERM_STATS.value,
+            generation=1,
+            source_hash=fingerprint,
+            payload={
+                "terms": [
+                    {
+                        "term": s.term,
+                        "count": s.count,
+                        "doc_count": s.doc_count,
+                        "tfidf": s.tfidf,
+                    }
+                    for s in stats
+                ],
+            },
+        )
+    )
+    session.flush()
+
+
+def term_stats(
+    session: Session, project_id: uuid.UUID | None = None
+) -> TermStatsResult:
+    """Return term stats, computing and caching if stale or missing."""
+    fingerprint = _corpus_fingerprint(session, project_id)
+    cached = _get_cached_artifact(session, project_id)
+    if cached is not None and cached.source_hash == fingerprint:
+        return TermStatsResult(terms=cached.payload.get("terms", []), stale=False)
+
+    docs = _corpus_documents(session, project_id)
+    if not docs:
+        return TermStatsResult(terms=[], stale=False)
+
+    stats = compute_tfidf(docs)
+    _write_artifact(session, project_id, stats, fingerprint)
+    return TermStatsResult(
+        terms=[
+            {
+                "term": s.term,
+                "count": s.count,
+                "doc_count": s.doc_count,
+                "tfidf": s.tfidf,
+            }
+            for s in stats
+        ],
+        stale=False,
     )

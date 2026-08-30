@@ -1,3 +1,6 @@
+import { TermBarChart } from "./TermBarChart";
+import { WordCloud, type TermDatum } from "./WordCloud";
+
 export interface KWICRow {
   left_context: string;
   hit: string;
@@ -32,6 +35,14 @@ export interface ExploreIslandProps {
     low_confidence_only: boolean;
     suspect_only: boolean;
   };
+  termStats?: TermDatum[];
+}
+
+function searchHref(term: string): string {
+  const params = new URLSearchParams(window.location.search);
+  params.set("q", term);
+  params.delete("page");
+  return `/explore?${params.toString()}`;
 }
 
 function pageHref(page: number): string {
@@ -49,6 +60,10 @@ function speakerPaletteIndex(id: string | null): number {
 
 const integerFormatter = new Intl.NumberFormat();
 
+function handleTermClick(term: string) {
+  window.location.href = searchHref(term);
+}
+
 export function ExploreIsland({
   rows,
   total,
@@ -56,8 +71,10 @@ export function ExploreIsland({
   page,
   pageSize,
   stats,
+  termStats,
 }: ExploreIslandProps) {
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const terms = termStats ?? [];
   const statTiles = [
     [integerFormatter.format(stats.total_segments), "segments"],
     [integerFormatter.format(stats.total_runs), "recordings"],
@@ -86,10 +103,30 @@ export function ExploreIsland({
         ))}
       </div>
 
-      {!query ? (
-        <div className="py-12 text-center text-base text-[var(--ink-3)]">
-          Type a term to search across all transcripts
+      {terms.length > 0 ? (
+        <div className="explore-term-panel mb-4">
+          <h2 className="explore-term-heading">Top terms</h2>
+          <div className="explore-term-grid">
+            <div className="explore-term-cloud">
+              <WordCloud terms={terms} onTermClick={handleTermClick} />
+            </div>
+            <div className="explore-term-bars">
+              <TermBarChart terms={terms} onTermClick={handleTermClick} />
+            </div>
+          </div>
         </div>
+      ) : null}
+
+      {!query ? (
+        stats.total_runs === 0 ? (
+          <div className="py-12 text-center text-base text-[var(--ink-3)]">
+            No transcripts yet. Submit a recording to start exploring.
+          </div>
+        ) : terms.length === 0 ? (
+          <div className="py-12 text-center text-base text-[var(--ink-3)]">
+            Type a term to search across all transcripts
+          </div>
+        ) : null
       ) : total === 0 ? (
         <div className="py-12 text-center text-base text-[var(--ink-3)]">
           No matches for &apos;{query}&apos;

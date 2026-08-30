@@ -234,6 +234,12 @@
     ]
   ],
   [
+    "/explore/terms",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/runs",
     [
       "GET"

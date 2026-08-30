@@ -28,6 +28,7 @@ validate_boot(_registry, settings=settings)
 _CORE_TASK_NAMES: frozenset[str] = frozenset(
     {
         "voxint.activity_prune",
+        "voxint.compute_term_stats",
         "voxint.finish_pipeline",
         "voxint.gc_sweep",
         "voxint.generate_run_asset",
@@ -141,6 +142,7 @@ app.conf.task_routes = {
     "voxint.notify_sweep": {"queue": POST_QUEUE},
     "voxint.watch_sweep": {"queue": POST_QUEUE},
     "voxint.activity_prune": {"queue": POST_QUEUE},
+    "voxint.compute_term_stats": {"queue": POST_QUEUE},
     "voxint.media_reconcile": {"queue": POST_QUEUE},
     # Active plugins' post-queue routes (registry validates a plugin only routes a
     # task it declares). Empty ⇒ no extra keys, an equal dict.

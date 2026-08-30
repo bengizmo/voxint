@@ -13,11 +13,11 @@ from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from voxint.api.explore_query import KWICFilters, KWICRow, corpus_stats, kwic_search
+from voxint.api.explore_query import KWICFilters, KWICRow, corpus_stats, kwic_search, term_stats
 from voxint.api.routers.deps import (
     OperatorDep,
     SessionDep,
@@ -125,6 +125,7 @@ def explore(
         offset=(page - 1) * _PAGE_SIZE,
     )
     stats = corpus_stats(session, project)
+    ts = term_stats(session, project)
     explore_props = {
         "rows": [_row_to_dict(r) for r in results.rows],
         "total": results.total,
@@ -140,6 +141,7 @@ def explore(
             "low_confidence_only": filters.low_confidence_only,
             "suspect_only": filters.suspect_only,
         },
+        "termStats": ts.terms[:200],
     }
     context = {
         "request": request,
@@ -223,3 +225,15 @@ def explore_csv(
         media_type="text/csv",
         headers=headers,
     )
+
+
+@explore_router.get("/explore/terms", name="explore_terms")
+def explore_terms(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    project: uuid.UUID | None = None,
+) -> JSONResponse:
+    """Return precomputed term statistics as JSON."""
+    ts = term_stats(session, project)
+    return JSONResponse({"terms": ts.terms, "stale": ts.stale})

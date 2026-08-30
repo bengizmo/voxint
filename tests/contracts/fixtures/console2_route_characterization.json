@@ -64,6 +64,14 @@
     true
   ],
   [
+    "/explore/terms",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/favicon.ico",
     [
       "GET"
