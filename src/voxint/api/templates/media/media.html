@@ -49,10 +49,9 @@
 {% endmacro %}
 
 {# Card macro for a single media item in cards view. #}
-{% macro media_card(row, folder_id=none) %}
+{% macro media_card(row) %}
   <li>
     <input type="checkbox" name="media_id" value="{{ row.id }}" class="media-card-check"
-           {% if folder_id %}data-child-of="{{ folder_id }}"{% endif %}
            aria-label="Select {{ friendly_media_label(row.source_title, row.source_path) }}"
            {% if (row.id|string) in selected_ids %}checked{% endif %}>
     <input type="hidden" name="run_baseline" value="{{ row.id }}:{{ row.latest_run_id or 'none' }}">
@@ -178,6 +177,9 @@
 <form method="post" action="{% if trashed %}/media/restore{% elif archived %}/media/unarchive{% else %}/media/assign{% endif %}" id="bulk-form">
   <input type="hidden" name="sort" value="{{ sort }}">
   <input type="hidden" name="view" value="{{ view }}">
+  {% if open_folder_id is defined and open_folder_id %}
+  <input type="hidden" name="open" value="{{ open_folder_id }}">
+  {% endif %}
 
   <div class="gt-action-bar" data-action-bar hidden>
     <span class="gt-count" data-selected-count>0 selected</span>
@@ -209,7 +211,7 @@
   <div class="lib-toolbar">
     <nav class="view-toggle" aria-label="Sort by">
       {% for value, label in sorts %}
-      <a href="/media?sort={{ value }}&view={{ view }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
+      <a href="/media?sort={{ value }}&view={{ view }}{% if open_folder_id is defined and open_folder_id %}&open={{ open_folder_id }}{% endif %}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
       {% endfor %}
     </nav>
     <span style="flex:1"></span>
@@ -326,52 +328,112 @@
 
 {% else %}
   {# --- Cards view ---------------------------------------------------- #}
-  {% if view == "cards" %}
+  {% if active_folder is defined and active_folder %}
+  {# Drill-down: showing a single folder's items as a list. #}
+  <a class="cards-back" href="/media?sort={{ sort }}&view=cards{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11 2L5 8l6 6" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    All folders
+  </a>
+  <h2 class="cards-drilldown-header">
+    <svg width="20" height="20" viewBox="0 0 16 16" fill="var(--ink-2)" aria-hidden="true"><path d="M1.5 2A1.5 1.5 0 000 3.5v9A1.5 1.5 0 001.5 14h13a1.5 1.5 0 001.5-1.5V5a1.5 1.5 0 00-1.5-1.5H7.71L6.85 2.64A1.5 1.5 0 005.57 2H1.5z"/></svg>
+    {{ active_folder.folder_path }}
+    <span class="oc-muted" style="font-size:var(--t-sm);font-weight:400">
+      {{ active_folder.item_count }} recording{{ "s" if active_folder.item_count != 1 }}
+      · {{ format_compact_duration(active_folder.total_duration_seconds) }}
+    </span>
+  </h2>
+
   <div class="lib-toolbar" style="margin-bottom:0">
     <label style="font-size:var(--t-sm);color:var(--ink-2)">
       <input type="checkbox" data-select-all-box aria-label="Select all"> Select all
     </label>
   </div>
+
+  <div class="grid-table media-grid" role="region" aria-label="Folder contents" tabindex="0"
+       style="grid-template-columns: 2.2rem 1fr auto auto auto;">
+    <div class="gt-header">
+      <span></span>
+      <span>NAME</span>
+      <span>LENGTH</span>
+      <span>REVIEW</span>
+      <span></span>
+    </div>
+    {% for row in active_folder.items %}
+    <div class="gt-row">
+      <span>
+        <input type="checkbox" name="media_id" value="{{ row.id }}"
+               data-child-of="{{ active_folder.folder_id }}"
+               aria-label="Select {{ friendly_media_label(row.source_title, row.source_path) }}"
+               {% if (row.id|string) in selected_ids %}checked{% endif %}>
+        <input type="hidden" name="run_baseline" value="{{ row.id }}:{{ row.latest_run_id or 'none' }}">
+      </span>
+      <span>
+        {{ friendly_media_label(row.source_title, row.source_path) }}
+        {% if row.id in missing_file_ids %}<span class="chip chip-danger" title="The file at {{ row.current_path or row.source_path }} was not found on disk">File missing</span>{% endif %}
+      </span>
+      <span class="num">{{ format_duration(row.duration_seconds) }}</span>
+      <span>{{ media_status(row) }}</span>
+      <span class="gt-action">
+        {% if row.latest_run_id %}
+        <a href="/media/{{ row.id }}/editor">View →</a>
+        {% endif %}
+      </span>
+    </div>
+    {% else %}
+    <div class="gt-row"><span></span><span class="oc-muted" style="grid-column:span 4">No recordings in this folder.</span></div>
+    {% endfor %}
+  </div>
+
+  {% else %}
+  {# Top-level cards: folders as cards, ungrouped files below. #}
+  {% if folder_groups %}
+  <ul class="lib-cards">
+    {% for group in folder_groups %}
+    <li class="folder-tile">
+      <a class="media-folder-card" href="/media?sort={{ sort }}&view=cards&open={{ group.folder_id }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}">
+        <div class="mfc-icon">
+          <svg width="24" height="24" viewBox="0 0 16 16" fill="var(--ink-2)" aria-hidden="true"><path d="M1.5 2A1.5 1.5 0 000 3.5v9A1.5 1.5 0 001.5 14h13a1.5 1.5 0 001.5-1.5V5a1.5 1.5 0 00-1.5-1.5H7.71L6.85 2.64A1.5 1.5 0 005.57 2H1.5z"/></svg>
+          <span class="mfc-name">{{ group.folder_path }}</span>
+        </div>
+        <p class="mfc-stats">
+          {{ group.item_count }} recording{{ "s" if group.item_count != 1 }}
+          · {{ format_compact_duration(group.total_duration_seconds) }}
+        </p>
+        <div class="mfc-chips">
+          {% if not archived and not trashed %}{{ chip("watched") }}{% endif %}
+          {% if group.failed_count %}
+          <span class="chip chip-danger">{{ group.failed_count }} failed</span>
+          {% elif group.running_count %}
+          {{ chip("transcribing") }}
+          {% elif group.needs_review_count %}
+          <span class="chip chip-warn">{{ group.needs_review_count }} need{{ "s" if group.needs_review_count == 1 else "" }} you</span>
+          {% elif group.completed_count == group.item_count and group.item_count > 0 %}
+          {{ chip("all reviewed") }}
+          {% else %}
+          <span class="chip chip-neutral">—</span>
+          {% endif %}
+        </div>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
   {% endif %}
 
-  {% for group in folder_groups %}
-  <details class="media-card-group" open>
-    <summary>
-      <input type="checkbox" class="folder-check" data-folder-check="{{ group.folder_id }}"
-             aria-label="Select all in {{ group.folder_path }}">
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="var(--ink-2)" aria-hidden="true"><path d="M1.5 2A1.5 1.5 0 000 3.5v9A1.5 1.5 0 001.5 14h13a1.5 1.5 0 001.5-1.5V5a1.5 1.5 0 00-1.5-1.5H7.71L6.85 2.64A1.5 1.5 0 005.57 2H1.5z"/></svg>
-      {{ group.folder_path }}
-      <span class="oc-muted">
-        {{ group.item_count }} recording{{ "s" if group.item_count != 1 }}
-        · {{ format_compact_duration(group.total_duration_seconds) }}
-      </span>
-      {% if not archived and not trashed %}{{ chip("watched") }}{% endif %}
-      {% if group.failed_count %}
-      <span class="chip chip-danger">{{ group.failed_count }} failed</span>
-      {% elif group.running_count %}
-      {{ chip("transcribing") }}
-      {% elif group.needs_review_count %}
-      <span class="chip chip-warn">{{ group.needs_review_count }} need{{ "s" if group.needs_review_count == 1 else "" }} you</span>
-      {% elif group.completed_count == group.item_count and group.item_count > 0 %}
-      {{ chip("all reviewed") }}
-      {% else %}
-      <span class="chip chip-neutral">—</span>
-      {% endif %}
-    </summary>
-    <ul class="lib-cards">
-      {% for row in group.items %}
-      {{ media_card(row, group.folder_id) }}
-      {% endfor %}
-    </ul>
-  </details>
-  {% endfor %}
-
   {% if ungrouped_items %}
+  {% if folder_groups %}
+  <h2 class="cards-section-label">Unfiled</h2>
+  {% endif %}
+  <div class="lib-toolbar" style="margin-bottom:0">
+    <label style="font-size:var(--t-sm);color:var(--ink-2)">
+      <input type="checkbox" data-select-all-box aria-label="Select all"> Select all
+    </label>
+  </div>
   <ul class="lib-cards">
     {% for row in ungrouped_items %}
     {{ media_card(row) }}
     {% endfor %}
   </ul>
+  {% endif %}
   {% endif %}
 {% endif %}
 

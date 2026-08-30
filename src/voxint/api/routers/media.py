@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Final
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -128,6 +128,15 @@ def _safe_sort(sort: str | None) -> str:
 
 def _safe_view(view: str | None) -> str:
     return view if view in _VIEWS else _DEFAULT_VIEW
+
+
+def _redirect_params(
+    sort: str, view: str, open_folder: str = "", **extra: Any,
+) -> str:
+    params: dict[str, Any] = {**extra, "sort": _safe_sort(sort), "view": _safe_view(view)}
+    if open_folder and _safe_view(view) == "cards":
+        params["open"] = open_folder
+    return urlencode(params)
 
 
 class _SelectionError(Exception):
@@ -352,6 +361,7 @@ def _library_context(
     notice: dict[str, str] | None = None,
     selected_ids: frozenset[str] = frozenset(),
     attempted_folder_id: str = "",
+    open_folder: str = "",
 ) -> dict[str, Any]:
     """The full /media render context, shared by the GET page and every error
     re-render.
@@ -395,7 +405,7 @@ def _library_context(
         except (OSError, RuntimeError):
             missing.add(row.id)
     missing_file_ids = frozenset(missing)
-    return {
+    context: dict[str, Any] = {
         "request": request,
         "active_nav": "media",
         "now": datetime.now(UTC),
@@ -407,19 +417,12 @@ def _library_context(
         "sorts": SORT_LABELS,
         "view": selected_view,
         "views": _VIEWS,
-        # The archived view shows only items with an archived latest run (the bulk
-        # unarchive target set); the active view hides archived runs.
         "archived": archived,
         "trashed": trashed,
         "archived_toggle_url": archived_toggle_url,
         "trash_toggle_url": trash_toggle_url,
-        # The listing is capped; say so honestly when it is full rather than
-        # implying the library ends here.
         "truncated": len(rows) >= MEDIA_LIBRARY_LIMIT,
         "limit": MEDIA_LIBRARY_LIMIT,
-        # Upload / URL-fetch surface (P2b). Per-form server-issued ids namespace
-        # each submission's path and make a double-submit idempotent; per-form
-        # CSRF tokens are bound to their own media actions.
         "submission_id": uuid.uuid4().hex,
         "fetch_submission_id": uuid.uuid4().hex,
         "csrf_media_submit": mint_csrf_token(secret, CSRF_MEDIA_SUBMIT),
@@ -432,23 +435,23 @@ def _library_context(
         "csrf_media_trash": mint_csrf_token(secret, CSRF_MEDIA_TRASH),
         "csrf_media_restore": mint_csrf_token(secret, CSRF_MEDIA_RESTORE),
         "csrf_media_empty_trash": mint_csrf_token(secret, CSRF_MEDIA_EMPTY_TRASH),
-        # The settings-folder picker; renders whether or not projects are enabled.
         "folder_options": folder_options(session),
-        # Gate the URL-fetch form: off => rendered disabled and POST /media/fetch
-        # also refuses 403, matching the legacy /runs form and the CLI.
         "ytdlp_enabled": resolve_effective_ytdlp_enabled(
             get_app_settings(session), settings
         ),
-        # Post-redirect notice: "1" queued, "deferred" queued-but-broker-down.
         "submitted": submitted if submitted in ("1", "deferred") else None,
-        # A success/error banner for the bulk-assign and folder-panel flows.
         "notice": notice,
-        # Re-check the operator's selection + chosen target when an error
-        # re-renders, so a rejected bulk action does not drop their work.
         "selected_ids": selected_ids,
         "attempted_folder_id": attempted_folder_id,
         "missing_file_ids": missing_file_ids,
     }
+    if open_folder and selected_view == "cards":
+        for g in folder_groups:
+            if str(g.folder_id) == open_folder:
+                context["active_folder"] = g
+                context["open_folder_id"] = str(g.folder_id)
+                break
+    return context
 
 
 @router.get("/media", name="media_library")
@@ -471,10 +474,9 @@ def media_library_page(
     empty_trash_done: str | None = None,
     skipped: str | None = None,
     live_skipped: str | None = None,
+    open_folder: Annotated[str | None, Query(alias="open")] = None,
 ) -> Response:
     settings: Settings = request.app.state.settings
-    # ?archived=1 flips to the archived-only view (mirrors /runs); anything else
-    # (absent / "0" / blank) is the default active listing that hides archived runs.
     show_trashed = trashed == "1"
     show_archived = archived == "1" and not show_trashed
     notice = _success_notice(
@@ -499,6 +501,7 @@ def media_library_page(
         trashed=show_trashed,
         submitted=submitted,
         notice=notice,
+        open_folder=open_folder or "",
     )
     return templates.TemplateResponse(request, "media/media.html", context)
 
@@ -610,6 +613,7 @@ def media_assign(
     sort: Annotated[str, Form()] = DEFAULT_SORT,
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
+    open: Annotated[str, Form()] = "",
 ) -> Response:
     """Bulk-set the settings folder over a selection (ADR 0002 addendum).
 
@@ -625,8 +629,6 @@ def media_assign(
     raw_ids = media_id or []
 
     def _reject(status_code: int, text: str) -> Response:
-        # No write has been issued yet, but roll back defensively so the
-        # re-render's SELECTs run on a clean transaction.
         session.rollback()
         context = _library_context(
             request,
@@ -637,6 +639,7 @@ def media_assign(
             notice={"kind": "error", "text": text},
             selected_ids=frozenset(raw_ids),
             attempted_folder_id=media_folder_id,
+            open_folder=open,
         )
         return templates.TemplateResponse(
             request, "media/media.html", context, status_code=status_code
@@ -682,9 +685,7 @@ def media_assign(
             "was changed.",
         )
 
-    query = urlencode(
-        {"assigned": len(items), "sort": _safe_sort(sort), "view": _safe_view(view)}
-    )
+    query = _redirect_params(sort, view, open, assigned=len(items))
     return RedirectResponse(f"/media?{query}", status_code=303)
 
 
@@ -886,6 +887,7 @@ def media_rerun(
     sort: Annotated[str, Form()] = DEFAULT_SORT,
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
+    open: Annotated[str, Form()] = "",
 ) -> Response:
     """Advisory preview of a bulk re-run — resolves config, mutates NOTHING.
 
@@ -913,6 +915,7 @@ def media_rerun(
             view=view,
             notice={"kind": "error", "text": text},
             selected_ids=frozenset(raw_ids),
+            open_folder=open,
         )
         return templates.TemplateResponse(
             request, "media/media.html", context, status_code=status_code
@@ -986,6 +989,7 @@ def media_rerun_confirm(
     sort: Annotated[str, Form()] = DEFAULT_SORT,
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
+    open: Annotated[str, Form()] = "",
 ) -> Response:
     """Atomically mint a fresh run per selected file, then report per item.
 
@@ -1014,6 +1018,7 @@ def media_rerun_confirm(
             view=view,
             notice={"kind": "error", "text": text},
             selected_ids=selected,
+            open_folder=open,
         )
         return templates.TemplateResponse(
             request, "media/media.html", context, status_code=status_code
@@ -1140,6 +1145,7 @@ def _bulk_set_archived(
     sort: str,
     view: str,
     archiving: bool,
+    open: str = "",
 ) -> Response:
     """Bulk archive (``archiving=True``) or unarchive the selection's latest run.
 
@@ -1174,6 +1180,7 @@ def _bulk_set_archived(
             archived=view_archived,
             notice={"kind": "error", "text": text},
             selected_ids=frozenset(raw_ids),
+            open_folder=open,
         )
         return templates.TemplateResponse(
             request, "media/media.html", context, status_code=status_code
@@ -1247,10 +1254,11 @@ def _bulk_set_archived(
         )
 
     params: dict[str, Any] = {"sort": _safe_sort(sort), "view": _safe_view(view)}
+    if open and _safe_view(view) == "cards":
+        params["open"] = open
     if archiving:
         params["archive_done"] = done
     else:
-        # Stay in the archived view so the operator sees the restored items leave it.
         params["archived"] = "1"
         params["unarchive_done"] = done
     if skipped:
@@ -1267,11 +1275,11 @@ def media_archive(
     session: SessionDep,
     # Optional/defaulted so a missing value never 422s before _require_csrf runs.
     media_id: Annotated[list[str] | None, Form()] = None,
-    # Per-row "media_id:run_id" render-time baselines (idempotent replay).
     run_baseline: Annotated[list[str] | None, Form()] = None,
     sort: Annotated[str, Form()] = DEFAULT_SORT,
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
+    open: Annotated[str, Form()] = "",
 ) -> Response:
     """Bulk-archive the latest terminal run of each selected file (issue #5 archive,
     reversible). Hides those runs from the active library and the review queue while
@@ -1288,6 +1296,7 @@ def media_archive(
         sort=sort,
         view=view,
         archiving=True,
+        open=open,
     )
 
 
@@ -1297,11 +1306,11 @@ def media_unarchive(
     operator: OperatorDep,
     session: SessionDep,
     media_id: Annotated[list[str] | None, Form()] = None,
-    # Per-row "media_id:run_id" render-time baselines (idempotent replay).
     run_baseline: Annotated[list[str] | None, Form()] = None,
     sort: Annotated[str, Form()] = DEFAULT_SORT,
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
+    open: Annotated[str, Form()] = "",
 ) -> Response:
     """Bulk-restore the latest archived run of each selected file — it reappears in
     the active library and the review queue. Reached from the archived view, where
@@ -1317,6 +1326,7 @@ def media_unarchive(
         sort=sort,
         view=view,
         archiving=False,
+        open=open,
     )
 
 
@@ -1331,6 +1341,7 @@ def _reject_media_operation(
     view: str,
     trashed: bool,
     selected_ids: list[str] | None = None,
+    open_folder: str = "",
 ) -> Response:
     """Roll back and re-render the originating media-operation view."""
     session.rollback()
@@ -1343,6 +1354,7 @@ def _reject_media_operation(
         trashed=trashed,
         notice={"kind": "error", "text": text},
         selected_ids=frozenset(selected_ids or []),
+        open_folder=open_folder,
     )
     return templates.TemplateResponse(
         request, "media/media.html", context, status_code=status_code
@@ -1358,6 +1370,7 @@ def media_trash(
     sort: Annotated[str, Form()] = DEFAULT_SORT,
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
+    open: Annotated[str, Form()] = "",
 ) -> Response:
     """Move selected active media into the durable operation-owned trash tree."""
     _require_csrf(request, CSRF_MEDIA_TRASH, csrf_token)
@@ -1377,6 +1390,7 @@ def media_trash(
             view=view,
             trashed=False,
             selected_ids=raw_ids,
+            open_folder=open,
         )
 
     done = 0
@@ -1405,6 +1419,8 @@ def media_trash(
         "sort": _safe_sort(sort),
         "view": _safe_view(view),
     }
+    if open and _safe_view(view) == "cards":
+        params["open"] = open
     if skipped:
         params["skipped"] = skipped
     return RedirectResponse(f"/media?{urlencode(params)}", status_code=303)
@@ -1419,6 +1435,7 @@ def media_restore(
     sort: Annotated[str, Form()] = DEFAULT_SORT,
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
+    open: Annotated[str, Form()] = "",
 ) -> Response:
     """Restore selected trash items to their pre-trash paths."""
     _require_csrf(request, CSRF_MEDIA_RESTORE, csrf_token)
@@ -1438,6 +1455,7 @@ def media_restore(
             view=view,
             trashed=True,
             selected_ids=raw_ids,
+            open_folder=open,
         )
 
     done = 0
@@ -1481,6 +1499,8 @@ def media_restore(
         "sort": _safe_sort(sort),
         "view": _safe_view(view),
     }
+    if open and _safe_view(view) == "cards":
+        params["open"] = open
     if skipped:
         params["skipped"] = skipped
     return RedirectResponse(f"/media?{urlencode(params)}", status_code=303)
