@@ -452,3 +452,63 @@ def test_run_diagnostics_bundled_inactive_has_no_bundled_row() -> None:
     names = [r.name for r in results]
     assert "llm bundled" not in names
     assert "llm endpoint" not in names
+
+
+def test_run_diagnostics_master_switch_off_silences_bundled_lane() -> None:
+    # Review finding: the bundle does work only inside an llm-enabled run
+    # (enhancement gates on prefs.llm_enabled, asset jobs on
+    # resolve_effective_llm_enabled). With the master switch off, an active
+    # bundle flag is inert - so it must be neither probed nor reported.
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert (request.url.port or 0) != 8090, "inert bundle must not be probed"
+        return _healthz("cpu")
+
+    class _Ping:
+        def ping(self) -> bool:
+            return True
+
+    results = run_diagnostics(
+        _settings(
+            llm_enabled=False,
+            llm_bundled_enabled=True,
+            llm_bundled_base_url="http://127.0.0.1:8090/v1",
+            llm_bundled_model="qwen",
+        ),
+        create_engine("sqlite://"),
+        hf_token=None,
+        http_client=_http(handler),
+        redis_client=_Ping(),
+        include_hf_token=False,
+    )
+    names = [r.name for r in results]
+    assert "llm bundled" not in names
+    assert "llm endpoint" not in names
+
+
+def test_run_diagnostics_key_only_at_default_url_is_probed() -> None:
+    # A key set with the default base URL untouched IS a deliberate BYO config
+    # (byo_llm_configured keys on a stored key OR a non-default URL), so the
+    # endpoint is probed - never reported "not configured".
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "openai" in (request.url.host or ""):
+            seen.append(str(request.url))
+            return httpx.Response(200, json={"data": []})
+        return _healthz("cpu")
+
+    class _Ping:
+        def ping(self) -> bool:
+            return True
+
+    results = run_diagnostics(
+        _settings(llm_enabled=True, llm_api_key="sk-x"),
+        create_engine("sqlite://"),
+        hf_token=None,
+        http_client=_http(handler),
+        redis_client=_Ping(),
+        include_hf_token=False,
+    )
+    by_name = {r.name: r for r in results}
+    assert seen == ["https://api.openai.com/v1/models"]
+    assert by_name["llm endpoint"].detail == "reachable (HTTP 200)"

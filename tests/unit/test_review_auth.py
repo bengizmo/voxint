@@ -71,6 +71,8 @@ def test_favicon_served_authenticated(client: TestClient) -> None:
     resp = client.get("/favicon.ico", auth=CREDS)
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "image/png"
+    # private: the route is auth-gated, so a shared cache must never store it.
+    assert resp.headers["cache-control"] == "private, max-age=86400"
     assert resp.content.startswith(b"\x89PNG")
 
 

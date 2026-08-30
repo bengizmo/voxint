@@ -571,7 +571,7 @@ def _register_routes(app: FastAPI) -> None:
         return FileResponse(
             Path(__file__).parent / "static" / "favicon.png",
             media_type="image/png",
-            headers={"Cache-Control": "public, max-age=86400"},
+            headers={"Cache-Control": "private, max-age=86400"},
         )
 
     @app.get("/static/app/{asset_path:path}")

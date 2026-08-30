@@ -217,6 +217,8 @@
         {% elif group.running_count %}
         {{ chip("transcribing") }}
         {% elif group.needs_review_count %}
+        {# Folder-level chip: counts RECORDINGS, not voices, so it stays
+           noun-less and outside needs_you_chip (which owns the voice copy). #}
         <span class="chip chip-warn">{{ group.needs_review_count }} need{{ "s" if group.needs_review_count == 1 else "" }} you</span>
         {% elif group.completed_count == group.item_count and group.item_count > 0 %}
         {{ chip("all reviewed") }}

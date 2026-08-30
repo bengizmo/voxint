@@ -27,7 +27,10 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-PATTERN_SET_VERSION = 1
+# v2: _snippet grew bounded word-alignment (#318) — stored evidence snippets
+# changed shape, so re-running enrichment must recompute rather than hit the
+# unchanged-signature idempotency short-circuit and keep mid-word snippets.
+PATTERN_SET_VERSION = 2
 
 MAX_NAME_TOKENS = 4
 MIN_NAME_CHARS = 2

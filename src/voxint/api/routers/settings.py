@@ -95,7 +95,7 @@ from voxint.app_settings import (
 )
 from voxint.config import Settings, llm_budget_fits_stage_lease
 from voxint.db.models import AppSettings
-from voxint.diagnostics import check_state, run_diagnostics
+from voxint.diagnostics import LLM_NOT_CONFIGURED_DETAIL, check_state, run_diagnostics
 from voxint.domain_packs.base import DomainPackError
 from voxint.domain_packs.corrections import (
     MAX_MATCH_CHARS,
@@ -744,6 +744,15 @@ _DOCTOR_REMEDIATION: dict[str, str] = {
         " the check) — check the LLM section in Settings. Transcription and diarization"
         " still run; enhancement is simply skipped until the endpoint is reachable."
     ),
+    # The bundled lane fails differently from the BYO one: the fix is to start
+    # the bundled model service (or turn the bundle off), never to edit the BYO
+    # endpoint settings — steering the operator there would be a wrong map.
+    "llm bundled": (
+        "The bundled AI model is turned on but isn't answering — start its service"
+        " (the compose LLM overlay, or the native launcher's model services), or"
+        " turn the bundled model off in Settings. Transcription and diarization"
+        " still run; enhancement is simply skipped until it's reachable."
+    ),
     # Fallback for any diagnostics check not explicitly categorized below — a neutral
     # "look at this dependency" rather than wrongly steering the operator at the model
     # services. No current check lands here (see _doctor_category), but a future one
@@ -766,8 +775,10 @@ def _doctor_category(name: str) -> str:
         return "redis"
     if name in {"transcription", "diarization", "speaker embedding"}:
         return "models"
-    if name in {"llm endpoint", "llm bundled"}:
+    if name == "llm endpoint":
         return "llm"
+    if name == "llm bundled":
+        return "llm bundled"
     return "other"
 
 
@@ -819,16 +830,21 @@ _COMPONENT_ORDER = (
 )
 
 
-def _build_components(
-    checks: list[dict[str, Any]], settings: Settings
-) -> list[dict[str, Any]]:
+def _build_components(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Map doctor checks to the R6 component list with friendly names.
 
     Adds a synthetic "Console & API" entry (the app is serving this page, so it
     is always running). Sorts to the stable display order.
+
+    The two AI lanes (#316) key their off-states on check PRESENCE, never on the
+    env flags: ``check_llm``/``check_llm_bundled`` return no result when a lane
+    is effectively off (row-over-env resolved inside ``run_diagnostics``), so a
+    present, non-ready check always warns. Re-reading ``settings.llm_enabled``
+    here would consult env only and paint the standard UI-enabled path
+    (env off, row on) as "off" while its deliberately configured endpoint is
+    rejecting — exactly the false calm #316 removes.
     """
     by_name: dict[str, dict[str, Any]] = {c["name"]: c for c in checks}
-    llm_enabled = settings.llm_enabled
     rows: list[dict[str, Any]] = []
     for key in _COMPONENT_ORDER:
         if key == "__api__":
@@ -843,43 +859,47 @@ def _build_components(
             continue
         check = by_name.get(key)
         label = _COMPONENT_LABELS.get(key, key)
+        action_url: str | None = None
+        action_label: str | None = None
+        action_style: str | None = None
         if check is None:
             if key == "llm bundled":
-                # The bundle is inactive (not installed / not enabled): an
-                # honest "off" row, not a warning — many installs never add it.
+                # The bundle is not active for runs (not installed, not enabled,
+                # or the master LLM switch is off): an honest "off" row, not a
+                # warning — many installs never add it.
                 dot = "off"
                 state_text = "off"
             elif key == "llm endpoint":
-                # LLM work is disabled entirely; the row stays visible so the
+                # LLM work is effectively disabled; the row stays visible so the
                 # operator can discover the capability.
                 dot = "off"
                 state_text = "off -- used for polish & profiles"
+                action_url = "/settings#llm"
+                action_label = "Turn on"
+                action_style = "primary"
             else:
                 continue
         else:
             state = check["state"]
-            if key == "llm endpoint" and state == "ready" and check["detail"] == "not configured":
+            if (
+                key == "llm endpoint"
+                and state == "ready"
+                and check["detail"] == LLM_NOT_CONFIGURED_DETAIL
+            ):
                 # #316: enabled, but no deliberate BYO endpoint (the untouched
                 # install default). Not probed, not a warning — the bundled row
                 # above reports the lane that is actually in use.
                 dot = "off"
-                state_text = "not configured"
+                state_text = LLM_NOT_CONFIGURED_DETAIL
+                action_url = "/settings#llm"
+                action_label = "Set up"
+                action_style = "primary"
             elif state == "ready":
                 dot = "ok"
                 state_text = f"running · {check['detail']}" if check["detail"] else "running"
-            elif key == "llm endpoint" and not llm_enabled:
-                dot = "off"
-                state_text = "off -- used for polish & profiles"
             else:
                 dot = "warn"
                 state_text = check["detail"] or state
-        action_url: str | None = None
-        action_label: str | None = None
-        action_style: str | None = None
-        if key == "llm endpoint" and dot == "off":
-            action_url = "/settings#llm"
-            action_label = "Turn on" if state_text.startswith("off") else "Set up"
-            action_style = "primary"
         rows.append({
             "label": label,
             "dot": dot,
@@ -2119,7 +2139,7 @@ def settings_status_page(
             },
         )
     checks = _doctor_checks(request, session)
-    components = _build_components(checks, settings)
+    components = _build_components(checks)
     overall_ok = all(c["dot"] != "warn" for c in components)
     context = _sub_page_context(
         request,
