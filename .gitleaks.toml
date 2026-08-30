@@ -62,6 +62,7 @@ paths = [
     '''(^|/)docs/how-to/add-media-and-manage-runs\.md$''',
     '''(^|/)tests/integration/test_watch_sweep\.py$''',
     '''(^|/)tests/unit/test_sidecar\.py$''',
+    '''(^|/)tests/unit/test_speaker_stats\.py$''',
 ]
 
 [allowlist]
