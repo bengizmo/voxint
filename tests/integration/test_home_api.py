@@ -351,3 +351,16 @@ def test_stats_exclude_archived_runs(session_factory: sessionmaker[Session]) -> 
         assert runs_created_since(session, since=now - timedelta(hours=1)) == 1
         # Sanity: the active run really exists (guards against an over-broad filter).
         assert session.get(PipelineRun, active) is not None
+
+
+def test_home_unresolved_voices_card_links_to_review_queue(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """#315: the 'voices without a name' card must land where those voices can
+    be resolved - the review queue sorted by unresolved count - not /speakers,
+    which only lists already-known people. The note states the true scope."""
+    seed_snapshot(session_factory)
+    body = client.get("/").text
+    assert 'href="/review?sort=unresolved" aria-label="Review voices without a name"' in body
+    assert "across recordings waiting for review" in body
+    assert "across reviewed recordings" not in body

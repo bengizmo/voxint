@@ -24,9 +24,12 @@
       <span class="attention-count">{{ unresolved_voices }}</span>
       <div class="attention-body">
         <strong class="attention-label">voice{{ "s" if unresolved_voices != 1 else "" }} without a name</strong>
-        <span class="attention-note">across reviewed recordings</span>
+        <span class="attention-note">across recordings waiting for review</span>
       </div>
-      {% if unresolved_voices %}<a class="attention-arrow" href="/speakers" aria-label="Review speakers">→</a>{% endif %}
+      {# #315: link where these voices can actually be resolved — the review
+         queue sorted by unresolved count — not /speakers, which only lists
+         already-known people and never shows unnamed voices. #}
+      {% if unresolved_voices %}<a class="attention-arrow" href="/review?sort=unresolved" aria-label="Review voices without a name">→</a>{% endif %}
     </div>
     <div class="attention-card{% if failed_runs %} attention-danger{% endif %}">
       <span class="attention-count">{{ failed_runs }}</span>

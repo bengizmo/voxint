@@ -7,6 +7,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **Home "voices without a name" card dead-ended** (#315). The card's arrow
+  now opens the review queue sorted by unresolved voices (where those voices
+  can actually be named) instead of /speakers, which never lists them, and
+  its note says "across recordings waiting for review" (the old "across
+  reviewed recordings" was false).
 - **Topbar section label on review pages** (#319). The review workbench and
   its transcript page now label the topbar "review / <media name>" (they fell
   through to "home"), and the legacy transcript page crumbs to "jobs /" or
