@@ -51,6 +51,8 @@ COPY app/ /app/app/
 # Verify weight shas at build time
 ARG AASIST_SHA="e178446b640b8e9f9cf6dd359428b2243f49e24e613e1ae952cd706216b8111e"
 ARG XLSR_SHA="b08927597f2c9eb2ebd7dcc3ac78ee4b5f6021cbac4b3a6c5a9deec445d80ed9"
+RUN echo "${AASIST_SHA}  /app/weights/finetuned_aasist.pth" | sha256sum -c - \
+    && echo "${XLSR_SHA}  /app/weights/xlsr2_300m.pt" | sha256sum -c -
 ENV SYNTHDETECT_AASIST_SHA=${AASIST_SHA}
 ENV SYNTHDETECT_XLSR_SHA=${XLSR_SHA}
 
