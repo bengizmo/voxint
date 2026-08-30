@@ -1,20 +1,37 @@
-"""Pure temporal aggregation for project-level corpus trends (issue #337).
+"""Temporal aggregation and project-scoped caching (issue #337).
 
-This module deliberately has no database or framework dependencies.  Callers
-provide one :class:`RecordingInput` per canonical recording; the functions
-resolve the recording date, choose calendar-aligned buckets, and return a
-JSON-friendly payload suitable for a ``TEMPORAL_TRENDS`` analysis artifact.
+The aggregation functions are pure: callers provide one :class:`RecordingInput`
+per canonical recording and receive a JSON-friendly payload.  The orchestration
+functions at the end of the module load those inputs and cache the result in a
+``TEMPORAL_TRENDS`` analysis artifact.
 """
 
 from __future__ import annotations
 
+import hashlib
 import unicodedata
 import uuid
 from collections import Counter, defaultdict
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal, TypedDict, cast
 
-from voxint.api.term_stats import tokenize
+from sqlalchemy import delete, func, literal, select
+from sqlalchemy.dialects.postgresql import aggregate_order_by
+from sqlalchemy.orm import Session
+
+from voxint.api.project_insights import _canonical_project_runs
+from voxint.api.term_stats import source_hash, tokenize
+from voxint.db.models import (
+    CorpusAnalysisArtifact,
+    CorpusAnalysisArtifactKind,
+    MediaItem,
+    MediaSourceMetadata,
+    PipelineRun,
+    RunAssetKind,
+    RunEnrichmentAsset,
+    SegmentReviewState,
+    TranscriptSegment,
+)
 
 MAX_TERMS = 20
 MAX_ENTITIES = 20
@@ -411,3 +428,228 @@ def build_temporal_trends(recordings: list[RecordingInput]) -> TemporalTrendsPay
         "entities": len(all_entity_keys) > MAX_ENTITIES,
     }
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Project-scoped compute-on-read cache
+# ---------------------------------------------------------------------------
+
+CanonicalRun = tuple[uuid.UUID, uuid.UUID, str]
+
+
+def _temporal_lock_key(project_id: uuid.UUID) -> int:
+    """Return a deterministic signed-safe advisory-lock key for a project."""
+    digest = hashlib.sha256(f"voxint:temporal_trends:{project_id}".encode())
+    return int(digest.hexdigest()[:8], 16) & 0x7FFFFFFF
+
+
+def _temporal_fingerprint(
+    session: Session,
+    project_id: uuid.UUID,
+    canonical_runs: list[CanonicalRun],
+) -> str:
+    """Hash every mutable input consumed by temporal trend generation."""
+    run_ids = [run_id for run_id, _, _ in canonical_runs]
+    if not run_ids:
+        return source_hash([("version", ALGORITHM_VERSION), ("project", str(project_id))])
+
+    run_rows = session.execute(
+        select(PipelineRun.id, PipelineRun.updated_at)
+        .where(PipelineRun.id.in_(run_ids))
+        .order_by(PipelineRun.id)
+    ).all()
+    run_updated = {row.id: row.updated_at for row in run_rows}
+
+    correction_rows = session.execute(
+        select(
+            TranscriptSegment.pipeline_run_id,
+            func.max(SegmentReviewState.corrected_at).label("latest_corrected_at"),
+        )
+        .join(
+            SegmentReviewState,
+            SegmentReviewState.transcript_segment_id == TranscriptSegment.id,
+        )
+        .where(
+            TranscriptSegment.pipeline_run_id.in_(run_ids),
+            SegmentReviewState.corrected_text.is_not(None),
+        )
+        .group_by(TranscriptSegment.pipeline_run_id)
+    ).all()
+    corrected_at = {row.pipeline_run_id: row.latest_corrected_at for row in correction_rows}
+
+    date_rows = session.execute(
+        select(
+            PipelineRun.id.label("run_id"),
+            MediaItem.created_at,
+            MediaSourceMetadata.upload_date,
+        )
+        .join(MediaItem, MediaItem.id == PipelineRun.media_item_id)
+        .outerjoin(MediaSourceMetadata, MediaSourceMetadata.media_item_id == MediaItem.id)
+        .where(PipelineRun.id.in_(run_ids))
+        .order_by(PipelineRun.id)
+    ).all()
+    dates = {row.run_id: f"{row.upload_date or ''}:{row.created_at}" for row in date_rows}
+
+    asset_rows = session.execute(
+        select(
+            RunEnrichmentAsset.id,
+            RunEnrichmentAsset.pipeline_run_id,
+            RunEnrichmentAsset.completed_at,
+        )
+        .where(
+            RunEnrichmentAsset.pipeline_run_id.in_(run_ids),
+            RunEnrichmentAsset.asset_kind == RunAssetKind.ENTITY_MENTIONS.value,
+            RunEnrichmentAsset.superseded_by_asset_id.is_(None),
+        )
+        .order_by(RunEnrichmentAsset.pipeline_run_id, RunEnrichmentAsset.id)
+    ).all()
+    assets = source_hash(
+        [(str(row.id), f"{row.pipeline_run_id}:{row.completed_at}") for row in asset_rows]
+    )
+
+    canonical = source_hash(
+        [
+            (
+                str(run_id),
+                ":".join(
+                    (
+                        str(media_id),
+                        str(run_updated.get(run_id, "")),
+                        str(corrected_at.get(run_id, "")),
+                        dates.get(run_id, ""),
+                    )
+                ),
+            )
+            for run_id, media_id, _ in canonical_runs
+        ]
+    )
+    return source_hash(
+        [
+            ("version", ALGORITHM_VERSION),
+            ("project", str(project_id)),
+            ("canonical", canonical),
+            ("entity_assets", assets),
+        ]
+    )
+
+
+def _load_recording_inputs(
+    session: Session, canonical_runs: list[CanonicalRun]
+) -> list[RecordingInput]:
+    """Load one aggregation input per canonical run, preserving canonical order."""
+    run_ids = [run_id for run_id, _, _ in canonical_runs]
+    if not run_ids:
+        return []
+
+    metadata_rows = session.execute(
+        select(
+            PipelineRun.id.label("run_id"),
+            MediaItem.id.label("media_id"),
+            MediaItem.created_at,
+            MediaSourceMetadata.upload_date,
+        )
+        .join(MediaItem, MediaItem.id == PipelineRun.media_item_id)
+        .outerjoin(MediaSourceMetadata, MediaSourceMetadata.media_item_id == MediaItem.id)
+        .where(PipelineRun.id.in_(run_ids))
+    ).all()
+    metadata = {row.run_id: row for row in metadata_rows}
+
+    effective_text = func.coalesce(
+        SegmentReviewState.corrected_text,
+        TranscriptSegment.enhanced_text,
+        TranscriptSegment.raw_text,
+    )
+    text_rows = session.execute(
+        select(
+            TranscriptSegment.pipeline_run_id.label("run_id"),
+            func.string_agg(
+                effective_text,
+                aggregate_order_by(literal(" "), TranscriptSegment.segment_index),
+            ).label("text"),
+        )
+        .outerjoin(
+            SegmentReviewState,
+            SegmentReviewState.transcript_segment_id == TranscriptSegment.id,
+        )
+        .where(TranscriptSegment.pipeline_run_id.in_(run_ids))
+        .group_by(TranscriptSegment.pipeline_run_id)
+    ).all()
+    texts = {row.run_id: row.text or "" for row in text_rows}
+
+    asset_rows = session.execute(
+        select(RunEnrichmentAsset.pipeline_run_id, RunEnrichmentAsset.payload)
+        .where(
+            RunEnrichmentAsset.pipeline_run_id.in_(run_ids),
+            RunEnrichmentAsset.asset_kind == RunAssetKind.ENTITY_MENTIONS.value,
+            RunEnrichmentAsset.superseded_by_asset_id.is_(None),
+        )
+        .order_by(RunEnrichmentAsset.pipeline_run_id, RunEnrichmentAsset.generation.desc())
+    ).all()
+    entities: dict[uuid.UUID, dict[str, Any]] = {}
+    for asset_row in asset_rows:
+        entities.setdefault(asset_row.pipeline_run_id, asset_row.payload)
+
+    recordings: list[RecordingInput] = []
+    for run_id, media_id, _ in canonical_runs:
+        metadata_row = metadata.get(run_id)
+        if metadata_row is None:
+            continue
+        recordings.append(
+            {
+                "run_id": run_id,
+                "media_id": media_id,
+                "upload_date": metadata_row.upload_date,
+                "created_at": metadata_row.created_at,
+                "effective_text": texts.get(run_id, ""),
+                "entity_mentions": entities.get(run_id),
+            }
+        )
+    return recordings
+
+
+def compute_temporal_trends(session: Session, project_id: uuid.UUID) -> TemporalTrendsPayload:
+    """Return fresh project trends, recomputing the cached artifact if stale."""
+    session.execute(select(func.pg_advisory_xact_lock(_temporal_lock_key(project_id))))
+    canonical_runs = _canonical_project_runs(session, project_id)
+    fingerprint = _temporal_fingerprint(session, project_id, canonical_runs)
+
+    cached = session.execute(
+        select(CorpusAnalysisArtifact)
+        .where(
+            CorpusAnalysisArtifact.scope_kind == "project",
+            CorpusAnalysisArtifact.scope_id == project_id,
+            CorpusAnalysisArtifact.artifact_kind
+            == CorpusAnalysisArtifactKind.TEMPORAL_TRENDS.value,
+        )
+        .order_by(CorpusAnalysisArtifact.generation.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if cached is not None and cached.source_hash == fingerprint:
+        return cast(TemporalTrendsPayload, cached.payload)
+
+    payload = build_temporal_trends(_load_recording_inputs(session, canonical_runs))
+    session.execute(
+        delete(CorpusAnalysisArtifact).where(
+            CorpusAnalysisArtifact.scope_kind == "project",
+            CorpusAnalysisArtifact.scope_id == project_id,
+            CorpusAnalysisArtifact.artifact_kind
+            == CorpusAnalysisArtifactKind.TEMPORAL_TRENDS.value,
+        )
+    )
+    session.add(
+        CorpusAnalysisArtifact(
+            scope_kind="project",
+            scope_id=project_id,
+            artifact_kind=CorpusAnalysisArtifactKind.TEMPORAL_TRENDS.value,
+            generation=1,
+            source_hash=fingerprint,
+            payload=payload,
+        )
+    )
+    session.flush()
+    return payload
+
+
+def get_temporal_trends(session: Session, project_id: uuid.UUID) -> TemporalTrendsPayload:
+    """Read path for project temporal trends."""
+    return compute_temporal_trends(session, project_id)
