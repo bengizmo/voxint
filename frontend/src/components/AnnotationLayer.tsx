@@ -10,7 +10,9 @@ import {
 import { ApiError, apiFetch } from "../lib/api-client";
 import { writeClipboard } from "../lib/clipboard";
 import {
+  annotationZipUrl,
   annotationsExportUrl,
+  annotationsZipUrl,
   filterByTags,
   sortAnnotations,
   spansByLine,
@@ -873,6 +875,15 @@ function HighlightsPanel({
           >
             Copy all{filterTags.size > 0 ? " (filtered)" : ""}
           </button>
+          {!anyStale && (
+            <a
+              href={annotationsZipUrl(runId, filterTags)}
+              className="btn-link"
+              title="Download every matched highlight’s quote, manifest, and clips as one ZIP"
+            >
+              Download all (.zip)
+            </a>
+          )}
         </div>
       )}
       {tags.length > 0 && (
@@ -995,6 +1006,15 @@ function HighlightsPanel({
                     title="Download provenance manifest (JSON)"
                   >
                     Manifest
+                  </a>
+                )}
+                {!a.stale && (
+                  <a
+                    href={annotationZipUrl(runId, a.id)}
+                    className="btn-link"
+                    title="Download the quote, manifest, and clip (when one exists) as one ZIP"
+                  >
+                    Bundle
                   </a>
                 )}
                 {writable && (

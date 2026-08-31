@@ -17,6 +17,8 @@ from voxint.api.term_stats import TermStat, compute_tfidf, source_hash
 from voxint.db import search
 from voxint.db.models import (
     AdjudicationDecision,
+    AnnotationTag,
+    AnnotationTagLink,
     CorpusAnalysisArtifact,
     CorpusAnalysisArtifactKind,
     MediaFolder,
@@ -26,6 +28,7 @@ from voxint.db.models import (
     RunStatus,
     SegmentReviewState,
     Speaker,
+    TranscriptAnnotation,
     TranscriptSegment,
 )
 
@@ -319,6 +322,62 @@ def corpus_stats(session: Session, project_id: uuid.UUID | None = None) -> Corpu
         total_speakers=total_speakers,
         total_hours=float(duration or 0.0) / 3600.0,
     )
+
+
+@dataclass
+class TagStat:
+    """Corpus-wide (or project-scoped) count of live annotations per tag."""
+
+    tag_id: str
+    name: str
+    color: int
+    count: int
+
+
+def tag_stats(session: Session, project_id: uuid.UUID | None = None) -> list[TagStat]:
+    """Count live annotations per active tag, optionally scoped to a project.
+
+    Synchronous SQL by design (issue #331 Phase 7): one indexed join over at
+    most 8 tags per annotation, nothing like the TF-IDF cost that justified
+    caching term_stats. Archived tags, soft-deleted annotations, and archived
+    runs are excluded (the run filter keeps the rollup consistent with every
+    other Explore scope query); annotations on runs still under review DO
+    count (a highlight is evidence the moment it exists, not once the run
+    completes), so deliberately no run STATUS filter.
+    """
+    stmt = (
+        select(
+            AnnotationTag.id,
+            AnnotationTag.name,
+            AnnotationTag.color,
+            func.count(AnnotationTagLink.annotation_id).label("annotation_count"),
+        )
+        .join(AnnotationTagLink, AnnotationTagLink.tag_id == AnnotationTag.id)
+        .join(
+            TranscriptAnnotation,
+            TranscriptAnnotation.id == AnnotationTagLink.annotation_id,
+        )
+        .join(PipelineRun, PipelineRun.id == TranscriptAnnotation.pipeline_run_id)
+        .where(
+            AnnotationTag.archived_at.is_(None),
+            TranscriptAnnotation.deleted_at.is_(None),
+            PipelineRun.archived_at.is_(None),
+        )
+        .group_by(AnnotationTag.id, AnnotationTag.name, AnnotationTag.color)
+        .order_by(func.count(AnnotationTagLink.annotation_id).desc(), AnnotationTag.name.asc())
+    )
+    if project_id is not None:
+        stmt = (
+            stmt.join(MediaItem, MediaItem.id == PipelineRun.media_item_id)
+            .join(MediaFolder, MediaFolder.id == MediaItem.media_folder_id)
+            .where(MediaFolder.project_id == project_id)
+        )
+    return [
+        TagStat(
+            tag_id=str(row.id), name=row.name, color=row.color, count=int(row.annotation_count)
+        )
+        for row in session.execute(stmt).all()
+    ]
 
 
 # ---------------------------------------------------------------------------

@@ -152,6 +152,21 @@ export function annotationsExportUrl(runId: string, tagIds: Set<string>): string
   return `/review/${runId}/annotations/export.md${qs ? `?${qs}` : ""}`;
 }
 
+// The bundled quote ZIP for one highlight (issue #281): pull-quote .md +
+// provenance .json + audio clip when one exists, one archive.
+export function annotationZipUrl(runId: string, annotationId: string): string {
+  return `/review/${runId}/annotations/${annotationId}/export.zip`;
+}
+
+// The bulk bundled quote ZIP (issue #281), honoring the same OR-union `?tag=`
+// filter as the panel and the other bulk exports.
+export function annotationsZipUrl(runId: string, tagIds: Set<string>): string {
+  const params = new URLSearchParams();
+  for (const t of tagIds) params.append("tag", t);
+  const qs = params.toString();
+  return `/review/${runId}/annotations/export.zip${qs ? `?${qs}` : ""}`;
+}
+
 // OR-union tag filter for the panel: an empty filter keeps everything; otherwise a
 // row survives when it carries at least one of the selected tags.
 export function filterByTags(

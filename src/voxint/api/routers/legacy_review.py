@@ -14,16 +14,20 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import tempfile
 import uuid
-from collections.abc import Sequence
+import zipfile
+from collections.abc import Iterator, Sequence
 from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from voxint.activity import record_speaker_identified, record_speaker_merge
 from voxint.adjudication.annotations import (
@@ -98,8 +102,10 @@ from voxint.adjudication.transcript import (
 )
 from voxint.api.clip_service import (
     ClipServiceError,
+    _confined_clip_path,
     clip_download_filename,
     generate_or_adopt_clip,
+    resolve_servable_clip,
 )
 from voxint.api.csrf import (
     CSRF_ANNOTATION_TAGS,
@@ -1855,6 +1861,43 @@ def _stage_provenance_from_run(
     return stages
 
 
+def _clip_sha256(settings: Settings, stored_path: str) -> str:
+    """Digest a clip file through the same media-root confinement the serving
+    path applies (a stored path that escapes the root is never followed), read
+    incrementally rather than whole-file. Unreadable or escaping paths yield
+    the empty digest the manifest already uses for a missing file."""
+    import hashlib
+
+    try:
+        path = _confined_clip_path(settings.media_root, stored_path)
+    except ClipServiceError:
+        return ""
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(block)
+    except OSError:
+        return ""
+    return digest.hexdigest()
+
+
+def _clip_ref_from_artifact(
+    run_id: uuid.UUID, artifact: AudioArtifact, settings: Settings
+) -> ClipRef:
+    meta = artifact.meta or {}
+    return ClipRef(
+        id=artifact.id,
+        download_url=f"/runs/{run_id}/clips/{artifact.id}",
+        filename=clip_download_filename(run_id, artifact.id),
+        sha256=_clip_sha256(settings, artifact.path),
+        sample_rate=meta.get("sample_rate", 16000),
+        channels=1,
+        start_sample=meta.get("start_sample", 0),
+        end_sample=meta.get("end_sample", 0),
+    )
+
+
 def _clip_ref_for_annotation(
     session: Session,
     run_id: uuid.UUID,
@@ -1872,7 +1915,7 @@ def _clip_ref_for_annotation(
                 AudioArtifact.meta["annotation_id"].as_string()
                 == str(annotation_id),
             )
-            .order_by(AudioArtifact.created_at.desc())
+            .order_by(AudioArtifact.created_at.desc(), AudioArtifact.id.desc())
             .limit(1)
         )
         .scalars()
@@ -1880,23 +1923,38 @@ def _clip_ref_for_annotation(
     )
     if row is None:
         return None
-    meta = row.meta or {}
-    clip_path = settings.media_root / row.path
-    clip_sha256: str | None = None
-    if clip_path.is_file():
-        import hashlib
+    return _clip_ref_from_artifact(run_id, row, settings)
 
-        clip_sha256 = hashlib.sha256(clip_path.read_bytes()).hexdigest()
-    return ClipRef(
-        id=row.id,
-        download_url=f"/runs/{run_id}/clips/{row.id}",
-        filename=clip_download_filename(run_id, row.id),
-        sha256=clip_sha256 or "",
-        sample_rate=meta.get("sample_rate", 16000),
-        channels=1,
-        start_sample=meta.get("start_sample", 0),
-        end_sample=meta.get("end_sample", 0),
+
+def _clip_refs_for_run(
+    session: Session, run_id: uuid.UUID, settings: Settings
+) -> dict[str, ClipRef]:
+    """Latest non-reclaimed clip per annotation, one query for the whole run.
+
+    Keyed by the annotation id as a string (the ``meta`` JSON stores it that
+    way). Shared by the bulk manifest, the ZIP bundle, and the evidence pack.
+    """
+    clip_rows = (
+        session.execute(
+            select(AudioArtifact).where(
+                AudioArtifact.pipeline_run_id == run_id,
+                AudioArtifact.kind == ArtifactKind.AUDIO_CLIP.value,
+                AudioArtifact.reclaimed_at.is_(None),
+            )
+        )
+        .scalars()
+        .all()
     )
+    latest: dict[str, AudioArtifact] = {}
+    # (created_at, id) sort makes the "latest" pick deterministic on ties.
+    for cr in sorted(clip_rows, key=lambda cr: (cr.created_at, cr.id.hex)):
+        ann_id_str = (cr.meta or {}).get("annotation_id")
+        if ann_id_str:
+            latest[ann_id_str] = cr
+    return {
+        ann_id_str: _clip_ref_from_artifact(run_id, artifact, settings)
+        for ann_id_str, artifact in latest.items()
+    }
 
 
 def _manifest_for_resolved(
@@ -2037,51 +2095,13 @@ def export_annotations_json(
     exported_at = datetime.now(UTC)
 
     # Batch clip lookup: one query for all annotation clips in this run.
-    clip_rows = (
-        session.execute(
-            select(AudioArtifact)
-            .where(
-                AudioArtifact.pipeline_run_id == run_id,
-                AudioArtifact.kind == ArtifactKind.AUDIO_CLIP.value,
-                AudioArtifact.reclaimed_at.is_(None),
-            )
-        )
-        .scalars()
-        .all()
-    )
-    clips_by_ann: dict[str, AudioArtifact] = {}
-    for cr in clip_rows:
-        ann_id_str = (cr.meta or {}).get("annotation_id")
-        if ann_id_str and (
-            ann_id_str not in clips_by_ann
-            or cr.created_at > clips_by_ann[ann_id_str].created_at
-        ):
-            clips_by_ann[ann_id_str] = cr
+    clips_by_ann = _clip_refs_for_run(session, run_id, settings)
 
     ordered = sorted(rows, key=lambda row: resolved_order_key(resolved_map[row.id]))
     quote_entries: list[dict[str, Any]] = []
     for row in ordered:
         resolved = resolved_map[row.id]
-        ann_clip: ClipRef | None = None
-        matched_clip = clips_by_ann.get(str(row.id))
-        if matched_clip is not None:
-            meta = matched_clip.meta or {}
-            clip_path = settings.media_root / matched_clip.path
-            clip_sha256 = ""
-            if clip_path.is_file():
-                import hashlib
-
-                clip_sha256 = hashlib.sha256(clip_path.read_bytes()).hexdigest()
-            ann_clip = ClipRef(
-                id=matched_clip.id,
-                download_url=f"/runs/{run_id}/clips/{matched_clip.id}",
-                filename=clip_download_filename(run_id, matched_clip.id),
-                sha256=clip_sha256,
-                sample_rate=meta.get("sample_rate", 16000),
-                channels=1,
-                start_sample=meta.get("start_sample", 0),
-                end_sample=meta.get("end_sample", 0),
-            )
+        ann_clip = clips_by_ann.get(str(row.id))
         entry = _manifest_for_resolved(
             resolved,
             row,
@@ -2112,6 +2132,372 @@ def export_annotations_json(
     return JSONResponse(
         content=bundle,
         headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bundled quote ZIP export (issue #281)
+# ---------------------------------------------------------------------------
+
+# Past this, the archive spools to disk instead of RAM (clips are tens of MB).
+_ZIP_SPOOL_MAX_BYTES = 32 * 1024 * 1024
+_ZIP_STREAM_CHUNK = 256 * 1024
+
+
+# Member names carry the FULL annotation uuid (unlike the 8-hex attachment
+# names): a bulk archive holds one member per annotation, and truncated ids
+# could birthday-collide into duplicate ZIP entries that extractors silently
+# overwrite (review finding, 2 engines).
+def _quote_md_member_name(run_id: uuid.UUID, annotation_id: uuid.UUID) -> str:
+    return f"voxint-{run_id.hex[:8]}-quote-{annotation_id.hex}.md"
+
+
+def _manifest_member_name(run_id: uuid.UUID, annotation_id: uuid.UUID) -> str:
+    return f"voxint-{run_id.hex[:8]}-manifest-{annotation_id.hex}.json"
+
+
+def _zip_writestr(
+    archive: zipfile.ZipFile, name: str, data: bytes | memoryview[int]
+) -> None:
+    """Deflated text member with the deterministic 1980 epoch ZipInfo stamp."""
+    archive.writestr(zipfile.ZipInfo(name), bytes(data), compress_type=zipfile.ZIP_DEFLATED)
+
+
+def _zip_add_clip(
+    archive: zipfile.ZipFile,
+    session: Session,
+    run_id: uuid.UUID,
+    clip: ClipRef,
+    settings: Settings,
+    request: Request,
+) -> None:
+    """Copy one clip WAV into the archive, STORED (WAV PCM barely deflates and
+    the CPU is better spent elsewhere). FAIL CLOSED when a manifest-referenced
+    clip cannot be served (reclaimed or missing since the ref was built): a
+    "defensible package" whose manifest names a clip must contain it, so the
+    whole export carries the clip service's honest status instead of shipping
+    a bundle that silently lacks the audio (review finding)."""
+    try:
+        servable = resolve_servable_clip(
+            session, run_id, clip.id, settings, _get_media_gate(request)
+        )
+    except ClipServiceError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.message) from exc
+    try:
+        if clip.filename in archive.namelist():
+            raise HTTPException(
+                status_code=500,
+                detail="clip member name collision in the bundle; report this",
+            )
+        with archive.open(zipfile.ZipInfo(clip.filename), mode="w") as dest:
+            shutil.copyfileobj(servable.handle, dest)
+    finally:
+        servable.handle.close()
+
+
+def _zip_response(
+    spool: tempfile.SpooledTemporaryFile[bytes], filename: str
+) -> StreamingResponse:
+    size = spool.tell()
+    spool.seek(0)
+
+    def _iter_spool() -> Iterator[bytes]:
+        while True:
+            block = spool.read(_ZIP_STREAM_CHUNK)
+            if not block:
+                return
+            yield block
+
+    return StreamingResponse(
+        _iter_spool(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(size),
+        },
+        background=BackgroundTask(spool.close),
+    )
+
+
+@router.get("/review/{run_id}/annotations/{annotation_id}/export.zip")
+def export_annotation_zip(
+    run_id: uuid.UUID,
+    annotation_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+) -> StreamingResponse:
+    """One highlight as a defensible package (issue #281): the Markdown
+    pull-quote, the JSON provenance manifest, and the audio clip when one has
+    been extracted, in a single ZIP. The .md member is byte-identical to the
+    standalone export endpoint; the .json member is identical apart from its
+    ``exported_at`` timestamp, which is stamped per request (contract-tested,
+    same serializer as the standalone route). Onboarding-auth only,
+    NO claim and no CSRF — a GET download, like every other export; clip
+    GENERATION stays on its CSRF-gated POST and is never triggered from here.
+    404/409 semantics match the single manifest export."""
+    from voxint import __version__
+
+    run = _run_or_404(session, run_id)
+    try:
+        row = live_annotation_or_404(session, run_id, annotation_id)
+    except AnnotationError as exc:
+        raise _annotation_http_error(exc) from exc
+    lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+    covered = load_covered_segments(session, run_id)
+    resolved = resolve_annotation_spans(lines, covered, [stored_anchor_from_row(row)])[0]
+    tags = [t.name for t in tags_for_annotations(session, [row.id]).get(row.id, [])]
+    settings: Settings = request.app.state.settings
+    clip = _clip_ref_for_annotation(session, run_id, annotation_id, settings)
+    stages = _stage_provenance_from_run(session, run_id)
+    media_item = run.media_item
+    source_title = _run_source_title(run)
+    manifest = _manifest_for_resolved(
+        resolved,
+        row,
+        lines,
+        source_title=source_title,
+        tags=tags,
+        clip=clip,
+        media_id=media_item.id,
+        run_id=run_id,
+        media_sha256=media_item.sha256,
+        app_version=__version__,
+        stages=stages,
+        exported_at=datetime.now(UTC),
+    )
+    markdown = _pull_quote_markdown(
+        resolved, lines, source_title=source_title, tags=tags, note=row.note
+    )
+    spool = tempfile.SpooledTemporaryFile[bytes](max_size=_ZIP_SPOOL_MAX_BYTES)
+    try:
+        with zipfile.ZipFile(spool, mode="w") as archive:
+            _zip_writestr(
+                archive, _quote_md_member_name(run_id, annotation_id), markdown.encode("utf-8")
+            )
+            _zip_writestr(
+                archive,
+                _manifest_member_name(run_id, annotation_id),
+                JSONResponse(content=manifest).body,
+            )
+            if clip is not None:
+                _zip_add_clip(archive, session, run_id, clip, settings, request)
+    except BaseException:
+        # A failure between spool creation and handing it to the response
+        # would otherwise strand the (possibly disk-backed) temp file until GC.
+        spool.close()
+        raise
+    return _zip_response(spool, f"voxint-{run_id.hex[:8]}-quote-{annotation_id.hex[:8]}.zip")
+
+
+@router.get("/review/{run_id}/annotations/export.zip")
+def export_annotations_zip(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    tag: Annotated[list[uuid.UUID] | None, Query()] = None,
+) -> StreamingResponse:
+    """All (filtered) highlights as one ZIP (issue #281): a per-highlight
+    Markdown pull-quote, the run's provenance bundle (the same
+    ``voxint-{run}-manifests.json`` the standalone bulk export serves), and
+    every extracted clip. Repeated ``?tag=`` is the same OR-union filter as the
+    panel. Fails ATOMICALLY with 409 ``X-Voxint-Conflict: stale`` if ANY
+    matched highlight is stale. An empty match is a ZIP holding only the empty
+    bundle manifest (200)."""
+    from voxint import __version__
+
+    run = _run_or_404(session, run_id)
+    tag_ids = tag or []
+    _require_filter_tags_exist(session, tag_ids)
+    rows = annotations_for_run(session, run_id, tag_ids=tag_ids or None)
+    settings: Settings = request.app.state.settings
+    exported_at = datetime.now(UTC)
+    bundle_member = f"voxint-{run_id.hex[:8]}-manifests.json"
+    if not rows:
+        empty = {
+            "schema_version": 1,
+            "kind": "quote_provenance_bundle",
+            "quotes": [],
+        }
+        spool = tempfile.SpooledTemporaryFile[bytes](max_size=_ZIP_SPOOL_MAX_BYTES)
+        try:
+            with zipfile.ZipFile(spool, mode="w") as archive:
+                _zip_writestr(archive, bundle_member, JSONResponse(content=empty).body)
+        except BaseException:
+            spool.close()
+            raise
+        return _zip_response(spool, f"voxint-{run_id.hex[:8]}-quotes.zip")
+
+    lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+    covered = load_covered_segments(session, run_id)
+    resolved_map = {
+        r.annotation_id: r
+        for r in resolve_annotation_spans(
+            lines, covered, [stored_anchor_from_row(row) for row in rows]
+        )
+    }
+    tags_by_id = tags_for_annotations(session, [row.id for row in rows])
+    stages = _stage_provenance_from_run(session, run_id)
+    media_item = run.media_item
+    source_title = _run_source_title(run)
+    clips_by_ann = _clip_refs_for_run(session, run_id, settings)
+    ordered = sorted(rows, key=lambda row: resolved_order_key(resolved_map[row.id]))
+
+    # Build every member BEFORE opening the archive so a stale 409 raises
+    # cleanly (atomic, like the bulk .md/.json exports) with nothing written.
+    quote_entries: list[dict[str, Any]] = []
+    md_members: list[tuple[str, bytes]] = []
+    for row in ordered:
+        resolved = resolved_map[row.id]
+        row_tags = [t.name for t in tags_by_id.get(row.id, [])]
+        entry = _manifest_for_resolved(
+            resolved,
+            row,
+            lines,
+            source_title=source_title,
+            tags=row_tags,
+            clip=clips_by_ann.get(str(row.id)),
+            media_id=media_item.id,
+            run_id=run_id,
+            media_sha256=media_item.sha256,
+            app_version=__version__,
+            stages=stages,
+            exported_at=exported_at,
+        )
+        quote_entries.append({"quote": entry["quote"], "clip": entry["clip"]})
+        markdown = _pull_quote_markdown(
+            resolved, lines, source_title=source_title, tags=row_tags, note=row.note
+        )
+        md_members.append(
+            (_quote_md_member_name(run_id, row.id), markdown.encode("utf-8"))
+        )
+
+    bundle = build_quote_bundle(
+        exported_at=exported_at,
+        media_id=media_item.id,
+        run_id=run_id,
+        source_title=source_title,
+        media_sha256=media_item.sha256,
+        app_version=__version__,
+        stages=stages,
+        quotes=quote_entries,
+    )
+    spool = tempfile.SpooledTemporaryFile[bytes](max_size=_ZIP_SPOOL_MAX_BYTES)
+    try:
+        with zipfile.ZipFile(spool, mode="w") as archive:
+            for name, data in md_members:
+                _zip_writestr(archive, name, data)
+            _zip_writestr(archive, bundle_member, JSONResponse(content=bundle).body)
+            for row in ordered:
+                matched = clips_by_ann.get(str(row.id))
+                if matched is not None:
+                    _zip_add_clip(archive, session, run_id, matched, settings, request)
+    except BaseException:
+        spool.close()
+        raise
+    return _zip_response(spool, f"voxint-{run_id.hex[:8]}-quotes.zip")
+
+
+# ---------------------------------------------------------------------------
+# Print/PDF evidence pack (issue #331 Phase 7)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/review/{run_id}/annotations/evidence-pack")
+def evidence_pack(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    tag: Annotated[list[uuid.UUID] | None, Query()] = None,
+) -> Response:
+    """A print-optimized page of the run's highlights with their provenance:
+    quote lines with live speaker attribution and timing, tags, notes, the
+    source text hash, clip references, and the run's pipeline provenance. The
+    browser's Print / Save as PDF is the PDF engine — deliberately no
+    server-side PDF dependency.
+
+    Repeated ``?tag=`` is the panel's OR-union filter. Unlike the exports,
+    a STALE highlight renders WITH a visible warning instead of failing the
+    whole document with a 409: a human-readable evidence pack should degrade
+    honestly, not refuse to print. The stale card shows the captured quote
+    verbatim, labeled as unverified against the current transcript."""
+    from voxint import __version__
+
+    run = _run_or_404(session, run_id)
+    tag_ids = tag or []
+    _require_filter_tags_exist(session, tag_ids)
+    rows = annotations_for_run(session, run_id, tag_ids=tag_ids or None)
+    settings: Settings = request.app.state.settings
+    lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+    covered = load_covered_segments(session, run_id)
+    resolved_map = {
+        r.annotation_id: r
+        for r in resolve_annotation_spans(
+            lines, covered, [stored_anchor_from_row(row) for row in rows]
+        )
+    }
+    tags_by_id = tags_for_annotations(session, [row.id for row in rows])
+    clips_by_ann = _clip_refs_for_run(session, run_id, settings)
+    stages = _stage_provenance_from_run(session, run_id)
+    media_item = run.media_item
+
+    quotes: list[dict[str, Any]] = []
+    for row in sorted(rows, key=lambda r: resolved_order_key(resolved_map[r.id])):
+        resolved = resolved_map[row.id]
+        clipped = [] if resolved.stale else clip_lines_for_export(resolved, lines)
+        clip = clips_by_ann.get(str(row.id))
+        quotes.append(
+            {
+                "id": str(row.id),
+                # "stale" gets the changed-since-capture copy; a non-stale
+                # highlight that still resolved to no lines falls back to the
+                # captured quote WITHOUT that (wrong) explanation.
+                "stale": resolved.stale,
+                "renderable": bool(clipped),
+                "quote_lines": [
+                    {
+                        "speaker": ln.speaker,
+                        "text": ln.text,
+                        "start_seconds": ln.start_seconds,
+                        "end_seconds": ln.end_seconds,
+                    }
+                    for ln in clipped
+                ],
+                "captured_quote": row.quote_text,
+                "timing_precision": resolved.timing_precision,
+                "start_seconds": resolved.start_seconds,
+                "end_seconds": resolved.end_seconds,
+                "speakers": list(resolved.speakers),
+                "tags": [
+                    {"name": t.name, "color": t.color}
+                    for t in tags_by_id.get(row.id, [])
+                ],
+                "note": row.note,
+                "operator": row.operator,
+                "source_text_hash": row.source_text_hash,
+                "updated_at": row.updated_at,
+                "clip": (
+                    {"filename": clip.filename, "sha256": clip.sha256}
+                    if clip is not None
+                    else None
+                ),
+            }
+        )
+    context = {
+        "request": request,
+        "run": run,
+        "source_title": _run_source_title(run),
+        "media_sha256": media_item.sha256,
+        "app_version": __version__,
+        "stages": stages,
+        "generated_at": datetime.now(UTC),
+        "quotes": quotes,
+        "filtered": bool(tag_ids),
+    }
+    return templates.TemplateResponse(
+        request, "legacy_review/evidence_pack.html", context
     )
 
 
