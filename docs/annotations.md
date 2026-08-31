@@ -282,6 +282,19 @@ The highlight palette size (`HIGHLIGHT_PALETTE_SIZE`) is pinned across the
 backend caps, the `--hl-N` design tokens, and the `mark.hl-N` rules by
 `tests/contracts/test_highlight_palette_parity.py`.
 
+## Tag rollup on Explore (#331 Phase 7)
+
+The Explore page shows a "Highlight tags" panel: annotation counts per tag,
+corpus-wide or narrowed by the page's project filter. `tag_stats` in
+`src/voxint/api/explore_query.py` is one synchronous GROUP BY join, not a
+cached `corpus_analysis_artifacts` computation: at 8 tags per annotation the
+query is far below the cost that justified caching TF-IDF term stats. Archived
+tags and soft-deleted annotations are excluded; annotations on runs still under
+review count from the moment they exist. Ordering is count descending, then
+name ascending. The panel has no drill-down in v1 and renders a one-line empty
+state. `tests/integration/test_explore_tags.py` pins the exclusion, scoping,
+and ordering invariants.
+
 ## Pull-quote formatting
 
 Stored and live pull-quotes (issue #86 Landing 2) build clipped `TranscriptLine`

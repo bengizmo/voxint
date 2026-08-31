@@ -6,6 +6,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Highlight tag rollup on Explore** (#331, Phase 7 remainder). The Explore
+  page now shows how many highlights carry each tag, corpus-wide or narrowed
+  by the project filter. Computed live with one SQL query (no cache, no new
+  dependencies); archived tags and deleted highlights are excluded, and
+  highlights on runs still under review count from the moment they exist.
+
 
 ## [0.31.0] - 2026-08-31
 
