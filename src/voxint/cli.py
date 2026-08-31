@@ -2205,7 +2205,9 @@ def build_parser() -> argparse.ArgumentParser:
     user_sub = user_p.add_subparsers(dest="user_command", required=True)
     create_user_p = user_sub.add_parser("create", help="create a new user account")
     create_user_p.add_argument("username")
-    create_user_p.add_argument("--role", choices=["admin", "reviewer"], default="reviewer")
+    create_user_p.add_argument(
+        "--role", choices=["admin", "reviewer", "viewer"], default="reviewer",
+    )
     create_user_p.set_defaults(fn=_user_create)
     list_users_p = user_sub.add_parser("list", help="list user accounts")
     list_users_p.set_defaults(fn=_user_list)
@@ -2214,7 +2216,7 @@ def build_parser() -> argparse.ArgumentParser:
     delete_user_p.set_defaults(fn=_user_delete)
     set_role_p = user_sub.add_parser("set-role", help="change a user's role")
     set_role_p.add_argument("username")
-    set_role_p.add_argument("role", choices=["admin", "reviewer"])
+    set_role_p.add_argument("role", choices=["admin", "reviewer", "viewer"])
     set_role_p.set_defaults(fn=_user_set_role)
     set_password_p = user_sub.add_parser("set-password", help="change a user's password")
     set_password_p.add_argument("username")
