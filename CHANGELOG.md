@@ -6,6 +6,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **Editor speaker-rail collapse** (#370). The media-editor page nested the
+  island's `.me-layout` grid inside `.lib-two-col`, causing the speaker rail
+  to collapse to a sliver at desktop widths. Restructured: metadata cards
+  (media info, run chooser) now sit in a horizontal bar above the island,
+  and `.me-layout` owns the full page width. The stacking breakpoint drops
+  from 72rem to 48rem since the grid is no longer width-constrained by an
+  outer grid.
+- **Contradictory empty-state copy** (#370). "No runs for this media file
+  yet." appeared alongside listed failed runs. Now reads "No completed runs
+  yet." when runs exist but none completed.
+
 ### Added
 - **Viewer role** (#363). A new read-only `viewer` role: viewers can browse
   transcripts, results, and exports but cannot submit media, adjudicate,

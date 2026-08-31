@@ -331,9 +331,12 @@
     @media (max-width: 60rem) { .lib-rail, .lib-two-col { grid-template-columns: 1fr; } }
     .lib-main { min-width: 0; }
     .lib-sidebar { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+    .editor-meta { display: flex; flex-wrap: wrap; gap: var(--space-4);
+               margin-bottom: var(--space-4); }
+    .editor-meta > .card { flex: 1 1 12rem; }
     .me-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(14rem, 18rem);
                gap: var(--space-4); align-items: start; }
-    @media (max-width: 72rem) { .me-layout { grid-template-columns: 1fr; } }
+    @media (max-width: 48rem) { .me-layout { grid-template-columns: 1fr; } }
     h1 { font-size: var(--t-xl); line-height: 1.2; letter-spacing: -.012em; }
     h2 { font-size: var(--t-lg); line-height: 1.2; letter-spacing: -.008em; }
     h3 { font-size: var(--t-md); line-height: 1.25; }
