@@ -601,10 +601,8 @@ def reconcile_operations(
                 )
                 .order_by(MediaOperation.created_at.asc())
                 .limit(batch_limit)
-                .with_for_update(skip_locked=True)
             ).scalars()
         )
-        session.rollback()
 
     counts: dict[_Outcome, int] = {
         "completed": 0,
