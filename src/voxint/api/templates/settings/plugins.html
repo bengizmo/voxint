@@ -7,6 +7,7 @@
   <a href="/settings/database" role="tab">Database</a>
   <a href="/settings/plugins" role="tab" aria-current="true">Plugins</a>
   <a href="/settings/features" role="tab">Features</a>
+  {% if shell.users_enabled %}<a href="/settings/users" role="tab">Users</a>{% endif %}
   <span class="ft-spacer"></span>
   <span class="oc-muted">Some changes restart parts of Voxint -- it tells you before it does.</span>
 </nav>

@@ -1,12 +1,13 @@
 import re
 import uuid
+from datetime import UTC, datetime
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from voxint.db.models import User, UserRole
+from voxint.db.models import AuthSession, User, UserRole
 
 _PASSWORD_HASHER = PasswordHasher()
 _USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
@@ -18,6 +19,8 @@ _DUMMY_HASH: str = (
 
 
 def _validate_password(password: str) -> None:
+    if not password:
+        raise ValueError("password must not be empty")
     if len(password.encode("utf-8")) > _MAX_PASSWORD_BYTES:
         raise ValueError("password must not exceed 1024 UTF-8 bytes")
 
@@ -73,3 +76,56 @@ def authenticate(
     if user is None or user.disabled_at is not None:
         return None
     return user
+
+
+def list_users(session: Session) -> list[User]:
+    return list(session.scalars(select(User).order_by(User.username)).all())
+
+
+def _assert_not_last_admin(session: Session, user: User, action: str) -> None:
+    """Raise if ``user`` is the only active admin.
+
+    Locks all active admin rows with ``FOR UPDATE`` so two concurrent
+    demotions/disables cannot both pass the check and leave zero active
+    admins (TOCTOU). The lock is held until the caller's transaction commits
+    or rolls back. SQLite (unit tests) ignores ``with_for_update`` silently,
+    so this is safe in both engines.
+    """
+    if user.role != UserRole.ADMIN.value or user.disabled_at is not None:
+        return
+    active_admins = session.scalar(
+        select(func.count())
+        .select_from(
+            select(User.id)
+            .where(
+                User.role == UserRole.ADMIN.value,
+                User.disabled_at.is_(None),
+            )
+            .with_for_update()
+            .subquery()
+        )
+    )
+    if active_admins == 1:
+        raise ValueError(f"cannot {action} the last active admin")
+
+
+def set_role(session: Session, user: User, new_role: UserRole) -> None:
+    if new_role is not UserRole.ADMIN:
+        _assert_not_last_admin(session, user, "downgrade")
+    if user.role != new_role.value:
+        user.role = new_role.value
+        session.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
+
+
+def set_disabled(session: Session, user: User, *, disabled: bool) -> None:
+    if disabled:
+        _assert_not_last_admin(session, user, "disable")
+        user.disabled_at = datetime.now(UTC)
+        session.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
+    else:
+        user.disabled_at = None
+
+
+def reset_password(session: Session, user: User, new_password: str) -> None:
+    user.password_hash = hash_password(new_password)
+    session.execute(delete(AuthSession).where(AuthSession.user_id == user.id))

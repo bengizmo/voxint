@@ -1,0 +1,66 @@
+{# Per-user table row, used both in the full users.html page and as an htmx
+   swap target for role change and disable/enable mutations. The variable `u`
+   is one User model instance; `csrf_users` and `current_admin` come from the
+   page context. #}
+<tr id="user-{{ u.id }}">
+  <td>{{ u.username }}</td>
+  <td>
+    {% if u.username != current_admin %}
+    <form method="post" action="/settings/users/{{ u.id }}/role"
+          hx-post="/settings/users/{{ u.id }}/role"
+          hx-target="#user-{{ u.id }}" hx-swap="outerHTML">
+      <input type="hidden" name="csrf_token" value="{{ csrf_users }}">
+      <select name="role" onchange="this.form.requestSubmit()">
+        <option value="admin"{% if u.role == 'admin' %} selected{% endif %}>Admin</option>
+        <option value="reviewer"{% if u.role == 'reviewer' %} selected{% endif %}>Reviewer</option>
+      </select>
+    </form>
+    {% else %}
+    <span class="pill ready">{{ u.role }}</span> <span class="muted">(you)</span>
+    {% endif %}
+  </td>
+  <td>
+    {% if u.disabled_at is not none %}
+    <span class="pill unverified">Disabled</span>
+    {% else %}
+    <span class="pill ready">Active</span>
+    {% endif %}
+  </td>
+  <td>{{ format_clock_time(u.created_at) }}</td>
+  <td>
+    {% if u.username != current_admin %}
+    <span class="row-actions">
+      {% if u.disabled_at is not none %}
+      <form method="post" action="/settings/users/{{ u.id }}/toggle"
+            hx-post="/settings/users/{{ u.id }}/toggle"
+            hx-target="#user-{{ u.id }}" hx-swap="outerHTML"
+            style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_users }}">
+        <button type="submit" class="btn btn--sm">Enable</button>
+      </form>
+      {% else %}
+      <form method="post" action="/settings/users/{{ u.id }}/toggle"
+            hx-post="/settings/users/{{ u.id }}/toggle"
+            hx-target="#user-{{ u.id }}" hx-swap="outerHTML"
+            hx-confirm="Disable this user? They will be signed out immediately."
+            style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_users }}">
+        <button type="submit" class="btn btn--sm btn--danger">Disable</button>
+      </form>
+      {% endif %}
+      <details class="inline-details">
+        <summary class="btn btn--sm">Reset password</summary>
+        <form method="post" action="/settings/users/{{ u.id }}/reset-password"
+              class="inline-reset-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_users }}">
+          <input type="password" name="new_password" required placeholder="New password"
+                 autocomplete="new-password" minlength="1">
+          <button type="submit" class="btn btn--sm">Set</button>
+        </form>
+      </details>
+    </span>
+    {% else %}
+    <span class="muted">Use the CLI to change your own password</span>
+    {% endif %}
+  </td>
+</tr>

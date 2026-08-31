@@ -575,6 +575,13 @@ class Settings(BaseSettings):
     # the nav cutover: a full P6b rollback is a deploy revert, not a flag toggle.
     console_settings_enabled: bool = True
 
+    # The user management sub-page (Console 2.0 P1 auth, #362). Dark-shipped
+    # behind this flag (default off). Gated on multi-user mode at the template
+    # level (the nav link renders only when multi_user AND this flag are both
+    # on); the route gate is this flag alone, so a direct URL with multi-user
+    # off still 404s cleanly.
+    console_users_enabled: bool = False
+
     # The activity indicator + toasts (Console 2.0 P7, #162). Dark-ship: the
     # activity_events outbox is written (in the run-completion transaction) and
     # the /activity/events poll endpoint answers only when this is on, and the

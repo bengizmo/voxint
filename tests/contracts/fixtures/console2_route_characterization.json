@@ -1004,6 +1004,46 @@
     true
   ],
   [
+    "/settings/users",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/users/create",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/users/{user_id}/reset-password",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/users/{user_id}/role",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/users/{user_id}/toggle",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/settings/watch-folder",
     [
       "POST"

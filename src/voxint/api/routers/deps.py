@@ -335,6 +335,20 @@ def require_speakers_enabled(request: Request) -> None:
         raise HTTPException(status_code=404, detail="not found")
 
 
+def require_users_enabled(request: Request) -> None:
+    """Area gate for the user management sub-page (#362).
+
+    The ``/settings/users`` routes are always registered so the route inventory
+    is stable. Access 404s until BOTH ``voxint_multi_user`` and
+    ``console_users_enabled`` are on: the user table is dormant in single-user
+    (Basic-auth) mode, so surfacing CRUD for it would let an admin modify
+    accounts that cannot sign in.
+    """
+    settings: Settings = request.app.state.settings
+    if not (settings.voxint_multi_user and settings.console_users_enabled):
+        raise HTTPException(status_code=404, detail="not found")
+
+
 def run_source_title(run: PipelineRun) -> str:
     """A non-blank, operator-recognizable source label for a run (issue #86):
     the run's sidecar title (issue #104, operator intent), else the
@@ -400,6 +414,10 @@ def _shell_template_context(request: Request) -> dict[str, Any]:
                 and getattr(request.app.state, "activity_routed", False)
                 and settings.console_jobs_enabled
                 and getattr(request.app.state, "jobs_routed", False)
+            ),
+            "users_enabled": (
+                settings.voxint_multi_user
+                and settings.console_users_enabled
             ),
             "multi_user": settings.voxint_multi_user,
             "current_user": getattr(request.state, "current_user", None),
