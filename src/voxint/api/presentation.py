@@ -24,6 +24,7 @@ Two rules the callers rely on:
 
 import math
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import unquote
 
@@ -253,28 +254,64 @@ def humanize_status(value: str) -> str:
     return _humanize_enum(value)
 
 
-_ERROR_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"^interrupted: lease expired", re.IGNORECASE), "worker timed out"),
-    (re.compile(r"^interrupted: worker died", re.IGNORECASE), "worker restarted mid-stage"),
-    (re.compile(r"downloaded file is empty", re.IGNORECASE), "downloaded file was empty"),
-    (re.compile(r"AcquisitionError|URL acquisition", re.IGNORECASE), "download failed"),
-    (re.compile(r"FileNotFoundError|No such file", re.IGNORECASE), "file not found"),
-    (re.compile(r"ConnectionError|connect.*refused", re.IGNORECASE), "service unreachable"),
+@dataclass(frozen=True)
+class NormalizedError:
+    """A pipeline error rendered for a non-technical operator.
+
+    ``label`` is the plain-language one-liner, ``hint`` is an optional recovery
+    suggestion, and ``raw`` is the original string (for a details fold).
+    """
+
+    label: str
+    hint: str | None
+    raw: str
+
+
+_ERROR_PATTERNS: list[tuple[re.Pattern[str], str, str | None]] = [
+    (re.compile(r"^interrupted: lease expired", re.IGNORECASE),
+     "worker timed out",
+     "Try again. If it keeps timing out, check that the model service is running."),
+    (re.compile(r"^interrupted: worker died", re.IGNORECASE),
+     "worker restarted mid-stage", "The run can be retried safely."),
+    (re.compile(r"downloaded file is empty", re.IGNORECASE),
+     "downloaded file was empty", "Check that the source file exists and is not zero-length."),
+    (re.compile(r"AcquisitionError|URL acquisition", re.IGNORECASE),
+     "download failed", "Check that the URL is reachable and try again."),
+    (re.compile(r"FileNotFoundError|No such file", re.IGNORECASE),
+     "file not found", "Check that the source file still exists at the expected path."),
+    (re.compile(r"ConnectionError|connect.*refused", re.IGNORECASE),
+     "service unreachable", "A model service is down. Check that all containers are running."),
     (re.compile(
         r"(?:empty|zero[- ]duration).*audio|audio.*(?:empty|zero[- ]duration)",
         re.IGNORECASE,
-    ), "audio track was empty"),
-    (re.compile(r"cancelled before commit", re.IGNORECASE), "cancelled"),
+    ), "audio track was empty", "The file has no usable audio. Try a different recording."),
+    (re.compile(r"paused before commit", re.IGNORECASE),
+     "paused", None),
+    (re.compile(r"cancelled before commit", re.IGNORECASE),
+     "cancelled", None),
+    (re.compile(r"StageDeferError|active operation", re.IGNORECASE),
+     "waiting on another operation", "Retry after the other operation finishes."),
+    (re.compile(r"CUDA out of memory|OutOfMemoryError", re.IGNORECASE),
+     "GPU ran out of memory", "Try a shorter recording or restart the model service."),
+    (re.compile(r"torch\.cuda.*error|CUBLAS_STATUS|CUDNN", re.IGNORECASE),
+     "GPU error", "Restart the model service and retry."),
 ]
 
 
-def humanize_error(error: str | None) -> str | None:
-    """Raw pipeline error text as a plain-language label. Display only."""
+def normalize_error(error: str | None) -> NormalizedError | None:
+    """Raw pipeline error text as a structured plain-language result.
+
+    Returns ``None`` for blank/missing input. The ``label`` field is the same
+    string ``humanize_error`` would return; ``hint`` adds a recovery suggestion
+    for known patterns; ``raw`` preserves the original for a details fold.
+
+    .. versionadded:: 0.32
+    """
     if error is None:
         return None
-    for pattern, label in _ERROR_PATTERNS:
+    for pattern, label, hint in _ERROR_PATTERNS:
         if pattern.search(error):
-            return label
+            return NormalizedError(label=label, hint=hint, raw=error)
     lines = error.strip().splitlines()
     if not lines:
         return None
@@ -283,4 +320,14 @@ def humanize_error(error: str | None) -> str | None:
         return None
     if len(cleaned) > 80:
         cleaned = cleaned[:77] + "…"
-    return cleaned
+    return NormalizedError(label=cleaned, hint=None, raw=error)
+
+
+def humanize_error(error: str | None) -> str | None:
+    """Raw pipeline error text as a plain-language label. Display only.
+
+    Thin wrapper around :func:`normalize_error` that returns just the label
+    string, for templates that only need the one-liner.
+    """
+    result = normalize_error(error)
+    return result.label if result is not None else None

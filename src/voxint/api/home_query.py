@@ -51,6 +51,21 @@ class ActivityItem:
     run_id: uuid.UUID | None = None
     speaker_id: uuid.UUID | None = None
     unresolved_count: int = 0
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class GroupedActivityItem:
+    """A run-failed row representing multiple consecutive identical failures.
+
+    ``count`` is always >1 (single failures pass through as plain
+    ``ActivityItem``). ``item`` is the newest row (display data); ``run_ids``
+    holds every grouped run's id so a template can link each if needed.
+    """
+
+    item: ActivityItem
+    count: int
+    run_ids: tuple[uuid.UUID, ...]
 
 
 # One terminal-outcome entry per run, not per stage attempt: the feed reports
@@ -79,6 +94,7 @@ def _run_rows(session: Session, *, limit: int, terminal: bool) -> list[ActivityI
         PipelineRun.id,
         PipelineRun.status,
         PipelineRun.sidecar,
+        PipelineRun.error,
         MediaItem.source_path,
         MediaSourceMetadata.title.label("source_title"),
         at.label("at"),
@@ -117,6 +133,7 @@ def _run_rows(session: Session, *, limit: int, terminal: bool) -> list[ActivityI
                 source_path=row.source_path,
                 run_id=row.id,
                 unresolved_count=row.unresolved_count if terminal else 0,
+                error=row.error if terminal else None,
             )
         )
     return items
@@ -153,3 +170,46 @@ def recent_activity(session: Session, *, limit: int = 10) -> list[ActivityItem]:
     ]
     merged.sort(key=lambda i: (i.at, i.kind, str(i.run_id or i.speaker_id)), reverse=True)
     return merged[:limit]
+
+
+def group_activity(
+    items: list[ActivityItem],
+) -> list[ActivityItem | GroupedActivityItem]:
+    """Collapse consecutive ``run_failed`` rows with identical humanized errors.
+
+    Non-failure rows and failures with distinct errors pass through unchanged.
+    A group of N consecutive identical failures becomes one
+    :class:`GroupedActivityItem` carrying the count and all run IDs so the
+    template can link each.
+    """
+    from voxint.api.presentation import humanize_error
+
+    result: list[ActivityItem | GroupedActivityItem] = []
+    i = 0
+    while i < len(items):
+        item = items[i]
+        if item.kind != "run_failed":
+            result.append(item)
+            i += 1
+            continue
+        label = humanize_error(item.error)
+        run_ids = [item.run_id]
+        j = i + 1
+        while j < len(items) and items[j].kind == "run_failed":
+            if humanize_error(items[j].error) != label:
+                break
+            run_ids.append(items[j].run_id)
+            j += 1
+        count = j - i
+        if count == 1:
+            result.append(item)
+        else:
+            result.append(
+                GroupedActivityItem(
+                    item=item,
+                    count=count,
+                    run_ids=tuple(rid for rid in run_ids if rid is not None),
+                )
+            )
+        i = j
+    return result

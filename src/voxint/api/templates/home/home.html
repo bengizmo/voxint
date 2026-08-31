@@ -90,27 +90,41 @@
   <h2 class="oc-section-title">RECENT</h2>
   {% if activity %}
   <div class="recent-feed">
-    {% for item in activity %}
+    {% for entry in activity %}
+    {# Grouped failures carry a .count and .item; single items are ActivityItem directly. #}
+    {% set is_group = entry.count is defined and entry.count > 1 %}
+    {% set item = entry.item if is_group else entry %}
     <div class="recent-row">
       <span class="recent-time" title="{{ item.at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_clock_time(item.at, now=now) }}</span>
-      <span class="recent-body">
-        {% if item.kind == "run_completed" %}
-        Run finished — <a href="{% if shell.jobs_enabled %}/jobs/{{ item.run_id }}{% else %}/runs/{{ item.run_id }}{% endif %}">{{ friendly_media_label(item.title, item.source_path) }}</a>{% if item.unresolved_count %} {{ needs_you_chip(item.unresolved_count) }}{% endif %}
+      <div class="recent-body">
+        {% if is_group %}
+        {% set nerr = normalize_error(item.error) %}
+        {{ entry.count }} runs failed: {{ nerr.label if nerr else "unknown error" }}
+        {% if nerr and nerr.hint %}<br><span class="oc-muted text-sm">{{ nerr.hint }}</span>{% endif %}
+        {% elif item.kind == "run_completed" %}
+        Run finished: <a href="{% if shell.jobs_enabled %}/jobs/{{ item.run_id }}{% else %}/runs/{{ item.run_id }}{% endif %}">{{ friendly_media_label(item.title, item.source_path) }}</a>{% if item.unresolved_count %} {{ needs_you_chip(item.unresolved_count) }}{% endif %}
         {% elif item.kind == "run_failed" %}
-        Run failed — <a href="{% if shell.jobs_enabled %}/jobs/{{ item.run_id }}{% else %}/runs/{{ item.run_id }}{% endif %}">{{ friendly_media_label(item.title, item.source_path) }}</a>
-        {% elif item.kind == "run_started" %}
-        Run started — <a href="{% if shell.jobs_enabled %}/jobs/{{ item.run_id }}{% else %}/runs/{{ item.run_id }}{% endif %}">{{ friendly_media_label(item.title, item.source_path) }}</a>
-        {% elif item.kind == "speaker_enrolled" %}
-        Speaker verified — <a href="/speakers">{{ item.title }}</a>
+        {% set nerr = normalize_error(item.error) %}
+        Run failed: <a href="{% if shell.jobs_enabled %}/jobs/{{ item.run_id }}{% else %}/runs/{{ item.run_id }}{% endif %}">{{ friendly_media_label(item.title, item.source_path) }}</a>
+        {% if nerr %}<br><span class="oc-muted text-sm">{{ nerr.label }}.{% if nerr.hint %} {{ nerr.hint }}{% endif %}</span>{% endif %}
+        {% if nerr and nerr.raw != nerr.label %}
+        <details class="text-sm"><summary>Details</summary><pre class="error-raw">{{ nerr.raw }}</pre></details>
         {% endif %}
-      </span>
+        {% elif item.kind == "run_started" %}
+        Run started: <a href="{% if shell.jobs_enabled %}/jobs/{{ item.run_id }}{% else %}/runs/{{ item.run_id }}{% endif %}">{{ friendly_media_label(item.title, item.source_path) }}</a>
+        {% elif item.kind == "speaker_enrolled" %}
+        Speaker verified: <a href="/speakers">{{ item.title }}</a>
+        {% endif %}
+      </div>
       <span class="recent-action">
-        {% if item.kind == "run_completed" %}
+        {% if is_group %}
+        <a href="{% if shell.jobs_enabled %}/jobs?filter=failed{% else %}/runs?status=failed{% endif %}">View all →</a>
+        {% elif item.kind == "run_completed" %}
         <a href="/review">Review →</a>
         {% elif item.run_id %}
-        <a href="{% if shell.jobs_enabled %}/jobs/{{ item.run_id }}{% else %}/runs/{{ item.run_id }}{% endif %}">View →</a>
+        <a href="{% if shell.jobs_enabled %}/jobs/{{ item.run_id }}{% else %}/runs/{{ item.run_id }}{% endif %}">Open →</a>
         {% elif item.speaker_id %}
-        <a href="/speakers">View →</a>
+        <a href="/speakers">Open →</a>
         {% endif %}
       </span>
     </div>

@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from voxint.api.home_query import ActivityItem
 from voxint.api.presentation import (
     format_age,
     format_duration,
@@ -264,6 +265,54 @@ def test_humanize_error(error: str | None, expected: str | None) -> None:
     assert humanize_error(error) == expected
 
 
+@pytest.mark.parametrize(
+    ("error", "label", "hint"),
+    [
+        (None, None, None),
+        ("", None, None),
+        ("interrupted: lease expired", "worker timed out",
+         "Try again. If it keeps timing out, check that the model service is running."),
+        ("ConnectionError: refused", "service unreachable",
+         "A model service is down. Check that all containers are running."),
+        ("cancelled before commit", "cancelled", None),
+        ("paused before commit", "paused", None),
+        ("CUDA out of memory", "GPU ran out of memory",
+         "Try a shorter recording or restart the model service."),
+        ("torch.cuda.CudaError: device-side assert", "GPU error",
+         "Restart the model service and retry."),
+        ("StageDeferError: active operation in progress", "waiting on another operation",
+         "Retry after the other operation finishes."),
+        (
+            "RuntimeError: something unusual happened",
+            "RuntimeError: something unusual happened",
+            None,
+        ),
+    ],
+)
+def test_normalize_error(error: str | None, label: str | None, hint: str | None) -> None:
+    from voxint.api.presentation import normalize_error
+
+    result = normalize_error(error)
+    if label is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert result.label == label
+        assert result.hint == hint
+        if error is not None:
+            assert result.raw == error
+
+
+def test_normalize_error_preserves_raw() -> None:
+    from voxint.api.presentation import normalize_error
+
+    raw = "FileNotFoundError: /data/media/clip.wav"
+    result = normalize_error(raw)
+    assert result is not None
+    assert result.label == "file not found"
+    assert result.raw == raw
+
+
 def test_title_from_snapshot_reads_and_cleans() -> None:
     from voxint.api.presentation import title_from_snapshot
 
@@ -284,3 +333,68 @@ def test_title_from_snapshot_tolerates_tampered_snapshots(snapshot: object) -> N
     from voxint.api.presentation import title_from_snapshot
 
     assert title_from_snapshot(snapshot) is None
+
+
+# ---------------------------------------------------------------------------
+# group_activity (home_query) — pure function, no DB
+# ---------------------------------------------------------------------------
+
+_NOW = datetime(2026, 8, 31, 12, 0, 0, tzinfo=UTC)
+
+def _fail(title: str, error: str) -> ActivityItem:
+    return ActivityItem(
+        at=_NOW, kind="run_failed", title=title,
+        source_path=title, run_id=__import__("uuid").uuid4(),
+        error=error,
+    )
+
+
+def _start(title: str) -> ActivityItem:
+    return ActivityItem(
+        at=_NOW, kind="run_started", title=title,
+        source_path=title, run_id=__import__("uuid").uuid4(),
+    )
+
+
+def test_group_activity_collapses_consecutive_identical() -> None:
+    from voxint.api.home_query import GroupedActivityItem, group_activity
+
+    items = [
+        _fail("a", "ConnectionError: x"),
+        _fail("b", "ConnectionError: y"),
+        _start("c"),
+        _fail("d", "FileNotFoundError: z"),
+    ]
+    grouped = group_activity(items)
+    assert len(grouped) == 3
+    g = grouped[0]
+    assert isinstance(g, GroupedActivityItem)
+    assert g.count == 2
+    assert len(g.run_ids) == 2
+    assert grouped[1].kind == "run_started"  # type: ignore[union-attr]
+    assert grouped[2].kind == "run_failed"  # type: ignore[union-attr]
+
+
+def test_group_activity_no_grouping_for_different_errors() -> None:
+    from voxint.api.home_query import group_activity
+
+    items = [
+        _fail("a", "ConnectionError: x"),
+        _fail("b", "FileNotFoundError: z"),
+    ]
+    grouped = group_activity(items)
+    assert len(grouped) == 2
+
+
+def test_group_activity_empty() -> None:
+    from voxint.api.home_query import group_activity
+
+    assert group_activity([]) == []
+
+
+def test_group_activity_single_failure_not_grouped() -> None:
+    from voxint.api.home_query import GroupedActivityItem, group_activity
+
+    grouped = group_activity([_fail("a", "ConnectionError: x")])
+    assert len(grouped) == 1
+    assert not isinstance(grouped[0], GroupedActivityItem)

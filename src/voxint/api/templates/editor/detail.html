@@ -52,8 +52,15 @@
         {% endif %}
       </dd>
       {% if selected_run.error %}
+      {% set nerr = normalize_error(selected_run.error) %}
       <dt>Error</dt>
-      <dd class="text-sm">{{ selected_run.error|truncate(120) }}</dd>
+      <dd class="text-sm">
+        {{ nerr.label if nerr else selected_run.error|truncate(120) }}
+        {% if nerr and nerr.hint %}<br><span class="oc-muted">{{ nerr.hint }}</span>{% endif %}
+        {% if nerr and nerr.raw != nerr.label %}
+        <details><summary>Details</summary><pre class="error-raw">{{ nerr.raw }}</pre></details>
+        {% endif %}
+      </dd>
       {% endif %}
     </dl>
     {% set restartable = selected_run.status in ('completed', 'failed', 'cancelled') and not selected_run.archived_at %}
