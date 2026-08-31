@@ -112,8 +112,7 @@
       --font-ui: 'IBM Plex Sans', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       --font-mono: 'IBM Plex Mono', ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", monospace;
       --t-micro: .65625rem; /* 10.5px — uppercase micro-headers */
-      --t-dense: .8125rem; /* 13px — grid-tables and data lists */
-      --t-xs: .75rem; --t-sm: .78125rem; --t-base: .9375rem; --t-md: 1.0625rem;
+      --t-xs: .75rem; --t-sm: .78125rem; --t-dense: .8125rem; --t-base: .9375rem; --t-md: 1.0625rem;
       --t-lg: 1.1875rem; --t-xl: 1.5rem; --t-2xl: 2.25rem;
 
       /* Radius + restrained elevation (two soft shadows, used sparingly) */
@@ -341,9 +340,8 @@
     a { color: var(--accent-ink); text-underline-offset: 2px; }
     code, time, .num, .preview .t, .spk-badge { font-family: var(--font-mono);
            font-variant-numeric: tabular-nums; }
-    table { border-collapse: collapse; width: 100%; }
+    table { border-collapse: collapse; width: 100%; font-size: var(--t-dense); }
     th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
-    td { font-size: var(--t-dense); }
     th { color: var(--ink-2); font-size: var(--t-sm); }
     /* Tokenized controls. `:not(:where(.tp-split-word, .tp-corrected-chip))`
        keeps specificity at exactly `button` (0,0,1): high enough to beat
