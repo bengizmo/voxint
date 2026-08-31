@@ -275,6 +275,24 @@ export function MediaEditor({
     setProvOpen(false);
   }, [current?.segmentId, current?.text]);
 
+  // Focus the cursor row only after KEYBOARD-driven navigation (not pointer
+  // clicks, which should leave focus on the control the user operated).
+  const keyboardNavRef = useRef(false);
+  const prevCursorRef = useRef(cursor);
+  useEffect(() => {
+    if (cursor === prevCursorRef.current) return;
+    prevCursorRef.current = cursor;
+    if (!keyboardNavRef.current) return;
+    keyboardNavRef.current = false;
+    if (claimLost || confirmDiscardRef.current) return;
+    if (document.activeElement === editRef.current) return;
+    const frameId = requestAnimationFrame(() => {
+      if (claimLost) return;
+      playerRef.current?.focusCursorRow();
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [cursor, claimLost]);
+
   const postJson = useCallback(
     (
       path: string,
@@ -304,7 +322,10 @@ export function MediaEditor({
       setConfirmDiscard(false);
       if (walkMode) {
         const next = nextTarget(patched, index + 1);
-        if (next >= 0) goTo(next);
+        if (next >= 0) {
+          keyboardNavRef.current = true;
+          goTo(next);
+        }
       }
     } finally {
       busyRef.current = false;
@@ -613,7 +634,9 @@ export function MediaEditor({
           break;
         case REVIEW_KEY.skip:
           event.preventDefault();
+          keyboardNavRef.current = true;
           jumpNext();
+          setTimeout(() => { keyboardNavRef.current = false; }, 0);
           break;
         case REVIEW_KEY.replay:
           event.preventDefault();
@@ -626,13 +649,19 @@ export function MediaEditor({
         case REVIEW_KEY.next: {
           event.preventDefault();
           const next = Math.min(cursor + 1, segments.length - 1);
-          if (next !== cursor) goTo(next);
+          if (next !== cursor) {
+            keyboardNavRef.current = true;
+            goTo(next);
+          }
           break;
         }
         case REVIEW_KEY.previous: {
           event.preventDefault();
           const prev = Math.max(cursor - 1, 0);
-          if (prev !== cursor) goTo(prev);
+          if (prev !== cursor) {
+            keyboardNavRef.current = true;
+            goTo(prev);
+          }
           break;
         }
         case REVIEW_KEY.resetSpeaker:
@@ -728,6 +757,16 @@ export function MediaEditor({
           </p>
         )}
 
+        <p
+          className="visually-hidden"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {writable && current
+            ? `Cursor on segment at ${current.start.toFixed(1)} seconds, speaker ${current.speaker}${current.verified ? ", verified" : ""}${current.corrected ? ", edited" : ""}`
+            : ""}
+        </p>
+
         <section className="me-toolbar" aria-label="Editor controls">
           <div className="progress-wrap">
             <p aria-live="polite" aria-atomic="true">
@@ -812,7 +851,7 @@ export function MediaEditor({
           </div>
         )}
 
-        <div className="lib-two-col">
+        <div className="me-layout">
           <div className="lib-main">
             {writable && current && current.segmentId !== null && (
               <div className="me-segment-actions">

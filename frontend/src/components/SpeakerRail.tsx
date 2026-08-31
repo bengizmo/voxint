@@ -710,7 +710,7 @@ export function SpeakerRail({
   });
 
   return (
-    <div className="lib-rail" role="complementary" aria-label="Speaker rail">
+    <div className="lib-sidebar" role="complementary" aria-label="Speaker rail">
       {sortedStates.map((s) => (
         <SpeakerCard
           key={s.label}

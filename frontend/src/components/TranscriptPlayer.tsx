@@ -258,6 +258,7 @@ export interface TranscriptPlayerProps {
 // never invokes it.
 export interface TranscriptPlayerHandle {
   playSegment: (index: number) => void;
+  focusCursorRow: () => void;
 }
 
 function formatTime(seconds: number): string {
@@ -268,6 +269,7 @@ interface TranscriptRowProps {
   seg: Segment;
   index: number;
   active: boolean;
+  isCursor: boolean;
   jumpFlash: boolean;
   seek: boolean;
   seekDisabledReason: string | undefined;
@@ -280,6 +282,7 @@ interface TranscriptRowProps {
   reassignSpeakers?: { id: string; displayName: string }[];
   reassignBusy?: boolean;
   activeLineRef: React.RefObject<HTMLParagraphElement | null>;
+  cursorLineRef: React.RefObject<HTMLParagraphElement | null>;
   onActivate: (index: number) => void;
   onSplitAt?: (sourceSegmentId: string, wordIndex: number) => void;
   onReassign?: (seg: Segment, speakerId: string | null) => void;
@@ -289,6 +292,7 @@ const TranscriptRow = memo(function TranscriptRow({
   seg,
   index,
   active,
+  isCursor,
   jumpFlash,
   seek,
   seekDisabledReason,
@@ -301,6 +305,7 @@ const TranscriptRow = memo(function TranscriptRow({
   reassignSpeakers,
   reassignBusy,
   activeLineRef,
+  cursorLineRef,
   onActivate,
   onSplitAt,
   onReassign,
@@ -324,7 +329,10 @@ const TranscriptRow = memo(function TranscriptRow({
 
   return (
     <p
-      ref={active ? activeLineRef : undefined}
+      ref={(el) => {
+        if (isCursor) cursorLineRef.current = el;
+        if (active) activeLineRef.current = el;
+      }}
       data-seg-index={index}
       // Selection anchors for the annotation layer (issue #86): the
       // IMMUTABLE parent id every capture endpoint addresses, plus the
@@ -334,7 +342,8 @@ const TranscriptRow = memo(function TranscriptRow({
       data-word-start={seg.wordStart ?? undefined}
       data-word-end={seg.wordEnd ?? undefined}
       className={classes.join(" ")}
-      aria-current={active ? "true" : undefined}
+      tabIndex={isCursor ? 0 : -1}
+      aria-current={isCursor ? "step" : undefined}
       // Click-the-line-to-seek (issue #49). Only a hint when seeking is
       // disabled — the button carries the accessible affordance.
       onClick={seek ? () => onActivate(index) : undefined}
@@ -528,6 +537,7 @@ export const TranscriptPlayer = forwardRef<
   // it back on. No always-on checkbox, no status dot.
   const [following, setFollowing] = useState<boolean>(true);
   const activeLineRef = useRef<HTMLParagraphElement | null>(null);
+  const cursorLineRef = useRef<HTMLParagraphElement | null>(null);
   // Timestamp until which self-emitted scroll events are ignored (see guard).
   const scrollGuardUntil = useRef<number>(0);
   // Deep-link jump flash (issue #121): the line a ?t= jump landed on, briefly, so
@@ -741,10 +751,8 @@ export const TranscriptPlayer = forwardRef<
       playSegment: (index: number) => {
         const seg = segments[index];
         if (!seg) return;
-        // Reveal the line even when audio seek is unavailable: an outline or
-        // keyboard jump is a reading act first (mirrors a waveform-region click),
-        // so the target must scroll into view regardless of playback. When seek is
-        // trusted, `play` then advances the playhead and following keeps it in view.
+        // Reveal the line even when audio seek is unavailable: a jump is
+        // a reading act first (mirrors a waveform-region click).
         const el = listRef.current?.querySelector<HTMLElement>(
           `[data-seg-index="${index}"]`,
         );
@@ -754,9 +762,10 @@ export const TranscriptPlayer = forwardRef<
         }
         play(seg);
       },
+      focusCursorRow: () => {
+        cursorLineRef.current?.focus({ preventScroll: true });
+      },
     }),
-    // `play` closes over audioRef + seek (both stable for a given render);
-    // segments identity is what actually changes the mapping.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [segments, seek],
   );
@@ -826,6 +835,7 @@ export const TranscriptPlayer = forwardRef<
               seg={seg}
               index={i}
               active={i === activeIndex}
+              isCursor={cursorIndex != null && i === cursorIndex}
               jumpFlash={i === jumpIndex}
               seek={seek}
               seekDisabledReason={capability.reasons[0]?.message}
@@ -838,6 +848,7 @@ export const TranscriptPlayer = forwardRef<
               reassignSpeakers={reassignSpeakers}
               reassignBusy={reassignBusy}
               activeLineRef={activeLineRef}
+              cursorLineRef={cursorLineRef}
               onActivate={activateLine}
               onSplitAt={onSplitAt}
               onReassign={onReassign}
