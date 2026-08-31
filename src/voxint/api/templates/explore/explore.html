@@ -3,7 +3,7 @@
 
 {% block title %}Voxint — explore{% endblock %}
 {% block cb_breadcrumb %}explore{% endblock %}
-{% block cb_summary %}{{ stats.total_runs }} recordings · {{ "%.0f"|format(stats.total_hours) }} hours{% endblock %}
+{% block cb_summary %}{{ stats.total_runs }} recordings · {% set h = "%.0f"|format(stats.total_hours) %}{{ h }} hour{{ "s" if h != "1" else "" }}{% endblock %}
 
 {% block body %}
 <style>

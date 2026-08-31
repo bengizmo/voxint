@@ -269,7 +269,9 @@ def build_database_view(session: Session, settings: Settings) -> DatabaseView:
             available=False, size_bytes=None, tables=(), retention=retention
         )
     tables = tuple(
-        TableCount(name=str(name), estimated_rows=int(count or 0)) for name, count in rows
+        TableCount(name=str(name), estimated_rows=int(count or 0))
+        for name, count in rows
+        if int(count or 0) > 0
     )
     return DatabaseView(
         available=True,

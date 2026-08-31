@@ -63,7 +63,7 @@ def _validate_next(next_url: str | None) -> str:
 def login_page(request: Request) -> Response:
     settings: Settings = request.app.state.settings
     if not settings.voxint_multi_user:
-        raise HTTPException(status_code=404, detail="not found")
+        return RedirectResponse("/", status_code=302)
     next_url = _validate_next(request.query_params.get("next"))
     token = request.cookies.get(SESSION_COOKIE)
     if token:

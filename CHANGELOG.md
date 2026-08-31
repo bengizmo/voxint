@@ -6,6 +6,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **Explore hours pluralization** (#371). "1 hours" now reads "1 hour."
+- **/login 404 in single-user mode** (#371). GET `/login` returned a raw
+  JSON 404 when multi-user was off; now redirects to `/` with a 302.
+- **Backups copy** (#371). Database settings page now mentions the native
+  launcher's `backup` command alongside `pg_dump`, so the copy is truthful
+  for both install paths.
+- **Zero-row table estimates** (#371). Tables whose Postgres row-count
+  estimate is zero are no longer listed on the Database settings page.
+
 ### Added
 - **Evidence pack** (#331, Phase 7 remainder). A printable page of a run's
   highlights with their provenance (speakers, timing, tags, notes, source

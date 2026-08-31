@@ -306,7 +306,7 @@ class TestSingleUserContrast:
         assert resp.status_code == 200
         assert 'href="/settings"' in resp.text
 
-    def test_login_returns_404_in_single_user_mode(
+    def test_login_redirects_home_in_single_user_mode(
         self, session_factory: sessionmaker[Session]
     ) -> None:
         seed_onboarded(session_factory)
@@ -321,4 +321,5 @@ class TestSingleUserContrast:
         client.auth = ("operator", "s3cret")
 
         resp = client.get("/login")
-        assert resp.status_code == 404
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/"

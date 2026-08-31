@@ -69,10 +69,11 @@
 
 <section aria-labelledby="backup-heading">
 <h2 id="backup-heading">Backups</h2>
-<p class="muted">Voxint does not take backups for you. To back up your data, stop
-   Voxint (or ensure the database is quiet) and copy your Postgres data with the
-   standard tools, for example <code>pg_dump</code>. Keep the copy somewhere off
-   this machine.</p>
+<p class="muted">Voxint does not run scheduled backups automatically. If you
+   installed with the native launcher, run <code>voxint-native.sh backup</code>
+   to create a timestamped dump. Otherwise, use <code>pg_dump</code> directly
+   (stop Voxint or ensure the database is quiet first). Keep copies somewhere
+   off this machine.</p>
 </section>
 </div>
 {% endblock %}
