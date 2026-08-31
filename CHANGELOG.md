@@ -6,7 +6,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+
+## [0.31.0] - 2026-08-31
+
 ### Added
+- **Media editor island** (#157, Console 2.0 P3b). In-browser transcript
+  editor with memoized row rendering, editor-native claim lifecycle (claim,
+  heartbeat, release), progressive-disclosure speaker rail, translate action,
+  per-segment correction provenance, and accessibility hardening (roving
+  tabindex, aria-current, cursor announcer, prefers-reduced-motion,
+  responsive narrow viewports). E2E harness extended with editor and
+  benchmark fixtures, split and annotation reconciliation.
 - **More like this passage** (#357, Phase 7 partial). Every KWIC row on the
   Explore page expands an inline panel of the corpus passages nearest in
   meaning to that segment, re-embedded at request time over the existing
@@ -79,6 +89,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   slip under the page action button ("+ Add media", "+ New speaker"),
   which then swallowed its clicks. The bar now wraps on narrow screens so
   every control stays visible and clickable.
+- **Explore filters no longer 422 on empty selection** (#356). The HTML
+  `<select>` sends `project=&speaker=` (empty strings) when "All" is
+  selected; the explore endpoints now accept empty strings gracefully
+  instead of rejecting them as invalid UUIDs.
 
 
 ## [0.30.0] - 2026-08-30

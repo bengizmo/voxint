@@ -127,4 +127,9 @@ commits = [
     # fixture token. Scrubbed to "solar" in the same PR; the historical
     # commit is allowlisted because published history is never rewritten.
     "8948dbd60c7464b63361b672c7057cd2447a1e42",
+    # 035a4b94: stash commit from feat/252-chatterbox-finetune containing
+    # compose.darkboi.yaml backup files with internal hostname and domain-pack
+    # manifest with "hvac". Benign deployment config and demo-vertical name;
+    # files do not exist in the current worktree.
+    "035a4b94a23da5fcd9938dab476964439f8b6c74",
 ]
