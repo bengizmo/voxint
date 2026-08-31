@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -437,7 +438,10 @@ def _get_cached_artifact(
 def _artifact_lock_key(scope_kind: str, project_id: uuid.UUID | None) -> int:
     """Deterministic advisory-lock key for a (scope_kind, scope_id) pair."""
     raw = f"term_stats:{scope_kind}:{project_id or ''}"
-    return int.from_bytes(raw.encode()[:8], "big") & 0x7FFFFFFF
+    # Hash before truncating: the first 8 raw bytes are the constant prefix
+    # "term_sta", which collapsed every scope onto one lock (over-serializing,
+    # never under-locking). Same fix as semantic_layout._lock_key.
+    return int.from_bytes(hashlib.sha256(raw.encode()).digest()[:8], "big") & 0x7FFFFFFF
 
 
 def _write_artifact(
