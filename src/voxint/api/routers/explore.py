@@ -105,18 +105,20 @@ def explore(
     operator: OperatorDep,
     session: SessionDep,
     q: str = "",
-    project: uuid.UUID | None = None,
-    speaker: uuid.UUID | None = None,
+    project: str = "",
+    speaker: str = "",
     date_from: date | None = None,
     date_to: date | None = None,
     confidence: bool = False,
     suspect: bool = False,
     page: int = Query(default=1, ge=1),
 ) -> Response:
+    project_id = uuid.UUID(project) if project else None
+    speaker_id = uuid.UUID(speaker) if speaker else None
     filters = _filters(
         q=q,
-        project=project,
-        speaker=speaker,
+        project=project_id,
+        speaker=speaker_id,
         date_from=date_from,
         date_to=date_to,
         confidence=confidence,
@@ -128,8 +130,8 @@ def explore(
         limit=_PAGE_SIZE,
         offset=(page - 1) * _PAGE_SIZE,
     )
-    stats = corpus_stats(session, project)
-    ts = term_stats(session, project)
+    stats = corpus_stats(session, project_id)
+    ts = term_stats(session, project_id)
     explore_props = {
         "rows": [_row_to_dict(r) for r in results.rows],
         "total": results.total,
@@ -175,17 +177,19 @@ def explore_csv(
     operator: OperatorDep,
     session: SessionDep,
     q: str = "",
-    project: uuid.UUID | None = None,
-    speaker: uuid.UUID | None = None,
+    project: str = "",
+    speaker: str = "",
     date_from: date | None = None,
     date_to: date | None = None,
     confidence: bool = False,
     suspect: bool = False,
 ) -> StreamingResponse:
+    project_id = uuid.UUID(project) if project else None
+    speaker_id = uuid.UUID(speaker) if speaker else None
     filters = _filters(
         q=q,
-        project=project,
-        speaker=speaker,
+        project=project_id,
+        speaker=speaker_id,
         date_from=date_from,
         date_to=date_to,
         confidence=confidence,
@@ -292,8 +296,9 @@ def explore_terms(
     request: Request,
     operator: OperatorDep,
     session: SessionDep,
-    project: uuid.UUID | None = None,
+    project: str = "",
 ) -> JSONResponse:
     """Return precomputed term statistics as JSON."""
-    ts = term_stats(session, project)
+    project_id = uuid.UUID(project) if project else None
+    ts = term_stats(session, project_id)
     return JSONResponse({"terms": ts.terms, "stale": ts.stale})
