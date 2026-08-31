@@ -34,15 +34,22 @@
       <button type="submit" class="primary">Claim for review</button>
     </form>
   </div>
-  {% if not multi_user %}
+  {% if not shell.multi_user %}
   <script>
   (function() {
-    if (document.prerendering) return;
-    if (document.visibilityState !== "visible") return;
     var f = document.getElementById("claim-form");
-    if (!f || f.dataset.autoSubmitted) return;
-    f.dataset.autoSubmitted = "1";
-    f.requestSubmit();
+    if (!f) return;
+    function trySubmit() {
+      if (f.dataset.autoSubmitted) return;
+      if (document.prerendering) return;
+      if (document.visibilityState !== "visible") return;
+      f.dataset.autoSubmitted = "1";
+      f.requestSubmit();
+    }
+    trySubmit();
+    document.addEventListener("visibilitychange", trySubmit);
+    document.addEventListener("prerenderingchange", trySubmit);
+    window.addEventListener("pageshow", trySubmit);
   })();
   </script>
   {% endif %}

@@ -17,13 +17,13 @@
     <a href="/review"{% if sort == "oldest" %} aria-current="true"{% endif %}>Oldest first</a> ·
     <a href="/review?sort=unresolved"{% if sort == "unresolved" %} aria-current="true"{% endif %}>Most voices to resolve</a>
   </p>
-  <div class="grid-table" style="grid-template-columns: 1fr auto auto 14rem{% if multi_user %} auto{% endif %} auto;" role="region" aria-label="Review queue">
+  <div class="grid-table" style="grid-template-columns: 1fr auto auto 14rem{% if shell.multi_user %} auto{% endif %} auto;" role="region" aria-label="Review queue">
     <div class="gt-header">
       <span>MEDIA</span>
       <span>DURATION</span>
       <span>AGE</span>
       <span>PROGRESS</span>
-      {% if multi_user %}<span>CLAIMED BY</span>{% endif %}
+      {% if shell.multi_user %}<span>CLAIMED BY</span>{% endif %}
       <span><span class="visually-hidden">Action</span></span>
     </div>
     {% for e in entries %}
@@ -46,7 +46,7 @@
           <span class="progress-label">{{ resolved }} of {{ e.total_labels }} resolved</span>
         </div>
       </div>
-      {% if multi_user %}<span>{{ e.claimed_by or "—" }}</span>{% endif %}
+      {% if shell.multi_user %}<span>{{ e.claimed_by or "—" }}</span>{% endif %}
       <div>
         <form method="post" action="/review/{{ e.run_id }}/claim">
           <input type="hidden" name="csrf_token" value="{{ csrf_claim }}">

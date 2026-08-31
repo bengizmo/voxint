@@ -172,7 +172,9 @@ export function MediaEditor({
 
   // Heartbeat: refresh the claim TTL without rotating the token.  A stale
   // tab whose token no longer matches gets 409 and drops to claimLost.
-  // Visibility-aware: pauses while hidden, fires immediately on re-visible.
+  // The interval keeps running in background tabs (browsers throttle to
+  // ~1/min, well within the default 600s TTL).  An immediate catch-up
+  // refresh fires when the tab becomes visible again.
   useEffect(() => {
     if (!claimed || !claimCsrf) return;
 
@@ -200,28 +202,15 @@ export function MediaEditor({
       }
     };
 
-    let intervalId: ReturnType<typeof setInterval> | null = setInterval(
-      () => void doRefresh(),
-      60_000,
-    );
+    const intervalId = setInterval(() => void doRefresh(), 60_000);
 
     const onVisibility = () => {
-      if (document.visibilityState === "hidden") {
-        if (intervalId !== null) {
-          clearInterval(intervalId);
-          intervalId = null;
-        }
-      } else {
-        void doRefresh();
-        if (intervalId === null) {
-          intervalId = setInterval(() => void doRefresh(), 60_000);
-        }
-      }
+      if (document.visibilityState === "visible") void doRefresh();
     };
     document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
-      if (intervalId !== null) clearInterval(intervalId);
+      clearInterval(intervalId);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [claimed, claimCsrf, runId, mediaId]);
