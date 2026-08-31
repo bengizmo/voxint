@@ -62,7 +62,7 @@ from voxint.api.resource_status import (
 )
 from voxint.app_settings import is_onboarded
 from voxint.config import Settings
-from voxint.db.models import PipelineRun, Stage, TranslationJobStatus
+from voxint.db.models import PipelineRun, Stage, TranslationJobStatus, UserRole
 from voxint.db.session import build_engine, build_session_factory, session_scope
 from voxint.domain_packs.base import DomainPackError
 from voxint.domain_packs.corrections import operator_correction_message
@@ -250,6 +250,31 @@ def _require_admin(identity: CurrentUserDep) -> AuthContext:
 AdminDep = Annotated[AuthContext, Depends(_require_admin)]
 
 
+def _require_write_access(identity: CurrentUserDep) -> AuthContext:
+    if identity.role == UserRole.VIEWER.value:
+        raise HTTPException(status_code=403, detail="write access required")
+    return identity
+
+
+WriteDep = Annotated[AuthContext, Depends(_require_write_access)]
+
+
+def viewer_write_guard(request: Request, identity: CurrentUserDep) -> None:
+    """Blanket write gate for the console router (#363).
+
+    Runs as a router-level dependency on the ``console`` aggregator. Safe
+    methods (GET/HEAD/OPTIONS) pass through; mutation methods raise 403 for
+    viewers. Because FastAPI caches resolved dependencies per request,
+    ``_resolve_identity`` runs only once even though ``require_onboarded``
+    (on the per-area router) resolves it too.
+    """
+    if (
+        request.method in ("POST", "PUT", "PATCH", "DELETE")
+        and identity.role == UserRole.VIEWER.value
+    ):
+        raise HTTPException(status_code=403, detail="write access required")
+
+
 def require_onboarded(
     request: Request,
     operator: OperatorDep,
@@ -258,12 +283,13 @@ def require_onboarded(
     """First-run gate: redirect an un-onboarded operator to the setup wizard.
 
     Wired as a router-level dependency on EACH per-area router (routers/*.py);
-    the ``console`` aggregator and the app itself carry no gate, because on this
-    FastAPI an outer router's dependencies do not appear in a nested route's
-    dependant tree, which is where the characterization contract reads gating
-    from. Exemption stays structural — ``/healthz``, ``/static/htmx.min.js``,
-    ``/static/app/*``, and the setup wizard's ``setup_router`` register outside
-    any gated router, so there is no path allow-list to keep in sync. It depends
+    the ``console`` aggregator carries ``viewer_write_guard`` (#363) but NOT
+    this onboarding gate, because on this FastAPI an outer router's dependencies
+    do not appear in a nested route's dependant tree, which is where the
+    characterization contract reads gating from. Exemption stays structural —
+    ``/healthz``, ``/static/htmx.min.js``, ``/static/app/*``, and the setup
+    wizard's ``setup_router`` register outside any onboarding-gated router, so
+    there is no path allow-list to keep in sync. It depends
     on ``OperatorDep`` so authentication runs first: an
     unauthenticated request gets a 401 challenge, never a redirect that would leak
     onboarding state. It depends on ``SessionDep`` so FastAPI's per-request
@@ -421,6 +447,11 @@ def _shell_template_context(request: Request) -> dict[str, Any]:
             ),
             "multi_user": settings.voxint_multi_user,
             "current_user": getattr(request.state, "current_user", None),
+            "can_write": (
+                (cu := getattr(request.state, "current_user", None))
+                is not None
+                and cu.role != UserRole.VIEWER.value
+            ),
             "csrf_logout_token": (
                 mint_csrf_token(request.app.state.csrf_secret, CSRF_LOGOUT)
                 if settings.voxint_multi_user
