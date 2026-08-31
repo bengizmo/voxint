@@ -20,6 +20,7 @@ from voxint.adjudication.slots import (
     ClaimMismatchError,
     ClaimUnavailableError,
     claim_run,
+    refresh_run_claim,
     release_run,
     verify_claim,
 )
@@ -203,6 +204,7 @@ def media_detail_page(
         island_props["claimCsrf"] = mint_csrf_token(
             request.app.state.csrf_secret, CSRF_CLAIM
         )
+        island_props["multiUser"] = settings.voxint_multi_user
 
     return templates.TemplateResponse(
         request,
@@ -260,6 +262,39 @@ def editor_claim(
     })
 
 
+@router.post("/media/{media_id}/editor/refresh")
+def editor_refresh(
+    media_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    run_id: Annotated[uuid.UUID, Form()],
+    token: Annotated[uuid.UUID, Form()],
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> JSONResponse:
+    """Extend the active editor claim's TTL."""
+    _require_csrf(request, CSRF_CLAIM, csrf_token)
+    run = session.get(PipelineRun, run_id)
+    if run is None or run.media_item_id != media_id:
+        raise HTTPException(status_code=404, detail="not found")
+    _reject_if_archived(run)
+    settings: Settings = request.app.state.settings
+    try:
+        refresh_run_claim(
+            session,
+            run_id,
+            token,
+            ttl_seconds=settings.review_claim_ttl_seconds,
+        )
+    except ClaimMismatchError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+            headers={"X-Voxint-Conflict": "claim"},
+        ) from exc
+    return JSONResponse({"ok": True})
+
+
 @router.post("/media/{media_id}/editor/release")
 def editor_release(
     media_id: uuid.UUID,
@@ -267,13 +302,15 @@ def editor_release(
     session: SessionDep,
     run_id: Annotated[uuid.UUID, Form()],
     token: Annotated[uuid.UUID, Form()],
-) -> JSONResponse:
+) -> Response:
     """Release a held claim from the editor island."""
     run = session.get(PipelineRun, run_id)
     if run is None or run.media_item_id != media_id:
         raise HTTPException(status_code=404, detail="not found")
     try:
         release_run(session, run_id, token)
-    except (ClaimMismatchError, ClaimUnavailableError) as exc:
+    except ClaimMismatchError:
+        return Response(status_code=204)
+    except ClaimUnavailableError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return JSONResponse({"released": True})

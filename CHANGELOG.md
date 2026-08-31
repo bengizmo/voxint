@@ -6,6 +6,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Single-operator auto-claim** (#374). When multi-user mode is off, the
+  editor and workbench auto-claim on mount, removing the manual "Claim for
+  editing" / "Claim for review" friction. The review queue hides the
+  "Claimed by" column. A non-rotating `refresh` endpoint replaces the
+  heartbeat's previous re-claim, so a stale tab receives 409 and drops to a
+  manual "Resume editing here" action with no two-tab heartbeat fight.
+  Visibility-aware: the heartbeat pauses while the tab is hidden and fires
+  an immediate refresh on re-visible. Multi-user behavior is unchanged.
+
 ### Changed
 - **Type foundation** (#373). Base font raised from 13px to 15px for reading
   surfaces; grid-tables and HTML tables use a new dense token (13px) so they

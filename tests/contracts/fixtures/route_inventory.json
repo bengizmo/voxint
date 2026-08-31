@@ -198,6 +198,12 @@
     ]
   ],
   [
+    "/media/{media_id}/editor/refresh",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/media/{media_id}/editor/release",
     [
       "POST"
@@ -467,6 +473,12 @@
   ],
   [
     "/review/{run_id}/merge/preview",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/review/{run_id}/refresh",
     [
       "POST"
     ]
