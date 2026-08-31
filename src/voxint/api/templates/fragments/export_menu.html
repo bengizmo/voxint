@@ -1,8 +1,7 @@
-{# Export picker (issues #52, #65). Surfaces every built format with a plain-
-   language label, the reviewed/enhanced/raw text variant, and a timestamp-free
-   reading copy for the prose formats. Pure HTML: each option is a plain <a>
-   whose href carries the query, so the picker works with JavaScript off, with no
-   selector widget to rewrite hrefs.
+{# Export picker (issues #52, #65, #375). One "Download transcript" button opens
+   a compact format list with the reviewed text variant as default. An expandable
+   "Other text variants" section exposes enhanced/raw for power users. The primary
+   list uses plain <a> elements so every download works with JavaScript off.
 
    The text variant applies to txt/md/srt/vtt/json; RTTM carries raw diarization
    labels only, so it takes no variant. `timestamps=false` is honored by txt and
@@ -10,128 +9,153 @@
    `download` gives the saved file a run-named stem instead of "export.txt". #}
 {% macro export_menu(run, text_variant=none, translations=none) %}
 {% set stem = "voxint-" ~ run.id.hex[:8] %}
-{# `text_variant` (a TranscriptText) keeps the on-screen read link on whatever
-   variant the page is showing, so opening it from a raw/enhanced view does not
-   silently switch back to reviewed. Callers without a variant (the run page)
-   omit it and get the reviewed default. #}
 {% set read_variant = "&text=" ~ text_variant.value if text_variant else "" %}
-<details class="export-menu">
-  <summary>Download transcript: .txt / .md / .srt / .vtt / .json / .rttm</summary>
-  <p class="muted">
-    <strong>Reviewed</strong> is the text as you approved it in the console.
-    <strong>Enhanced</strong> is the cleaned-up version before review.
-    <strong>Raw</strong> is the exact words the transcriber produced.
-  </p>
-  <p>
-    <a href="/runs/{{ run.id }}/transcript?read=1&amp;timestamps=false{{ read_variant }}">Read on screen</a>:
-    a clean, shareable view in your browser, no download needed.
-  </p>
-  <ul>
-    <li>
-      <strong>Reading copy</strong> <code>.txt</code>: the transcript as clean
-      prose with speaker labels and no timestamps. Best for sharing or quoting.
-      <div class="export-links">
-        <a href="/review/{{ run.id }}/export.txt?text=corrected&amp;timestamps=false" download="{{ stem }}.txt">reviewed</a>
-        /
-        <a href="/review/{{ run.id }}/export.txt?text=enhanced&amp;timestamps=false" download="{{ stem }}.txt">enhanced</a>
-        /
-        <a href="/review/{{ run.id }}/export.txt?text=raw&amp;timestamps=false" download="{{ stem }}.txt">raw</a>
-      </div>
-    </li>
-    <li>
-      <strong>Timed transcript</strong> <code>.txt</code>: every line stamped with
-      its start and end time. Opens in any text editor or word processor.
-      <div class="export-links">
-        <a href="/review/{{ run.id }}/export.txt?text=corrected" download="{{ stem }}.txt">reviewed</a>
-        /
-        <a href="/review/{{ run.id }}/export.txt?text=enhanced" download="{{ stem }}.txt">enhanced</a>
-        /
-        <a href="/review/{{ run.id }}/export.txt?text=raw" download="{{ stem }}.txt">raw</a>
-      </div>
-    </li>
-    <li>
-      <strong>Markdown</strong> <code>.md</code>: a speaker heading over each
-      quoted paragraph. Drops into notes apps, wikis, and anything that reads
-      Markdown. Choose the reading copy or keep the per-paragraph times.
-      <div class="export-links">
-        reading copy:
-        <a href="/review/{{ run.id }}/export.md?text=corrected&amp;timestamps=false" download="{{ stem }}.md">reviewed</a>
-        /
-        <a href="/review/{{ run.id }}/export.md?text=enhanced&amp;timestamps=false" download="{{ stem }}.md">enhanced</a>
-        /
-        <a href="/review/{{ run.id }}/export.md?text=raw&amp;timestamps=false" download="{{ stem }}.md">raw</a>
-        &middot; with times:
-        <a href="/review/{{ run.id }}/export.md?text=corrected" download="{{ stem }}.md">reviewed</a>
-        /
-        <a href="/review/{{ run.id }}/export.md?text=enhanced" download="{{ stem }}.md">enhanced</a>
-        /
-        <a href="/review/{{ run.id }}/export.md?text=raw" download="{{ stem }}.md">raw</a>
-      </div>
-    </li>
-    <li>
-      <strong>Subtitles</strong> <code>.srt</code>: SubRip captions for video
-      players, YouTube, and most editors.
-      <div class="export-links">
-        <a href="/review/{{ run.id }}/export.srt?text=corrected" download="{{ stem }}.srt">reviewed</a>
-        /
-        <a href="/review/{{ run.id }}/export.srt?text=enhanced" download="{{ stem }}.srt">enhanced</a>
-        /
-        <a href="/review/{{ run.id }}/export.srt?text=raw" download="{{ stem }}.srt">raw</a>
-      </div>
-    </li>
-    <li>
-      <strong>Subtitles</strong> <code>.vtt</code>: WebVTT captions for web video
-      players.
-      <div class="export-links">
-        <a href="/review/{{ run.id }}/export.vtt?text=corrected" download="{{ stem }}.vtt">reviewed</a>
-        /
-        <a href="/review/{{ run.id }}/export.vtt?text=enhanced" download="{{ stem }}.vtt">enhanced</a>
-        /
-        <a href="/review/{{ run.id }}/export.vtt?text=raw" download="{{ stem }}.vtt">raw</a>
-      </div>
-    </li>
-    <li>
-      <strong>Data</strong> <code>.json</code>: structured segments (start, end,
-      speaker, text) for other tools or archiving.
-      <div class="export-links">
-        <a href="/review/{{ run.id }}/export.json?text=corrected" download="{{ stem }}.json">reviewed</a>
-        /
-        <a href="/review/{{ run.id }}/export.json?text=enhanced" download="{{ stem }}.json">enhanced</a>
-        /
-        <a href="/review/{{ run.id }}/export.json?text=raw" download="{{ stem }}.json">raw</a>
-      </div>
-    </li>
-    {# Translated downloads (issue #133): FRESH generations only — a stale
-       translation gets no link (its export would refuse with 409), so the menu
-       can never offer a download that no longer matches the transcript.
-       Translated exports always render the reviewed text; subtitle timing
-       follows the original speech, so translated captions may read fast. #}
-    {% for tr in translations or [] %}
-    <li>
-      <strong>Translated</strong> {{ tr.label }}: the reviewed transcript
-      machine-translated to {{ tr.label }}. Subtitle timing follows the original
-      speech, so translated captions may read fast.
-      <div class="export-links">
-        <a href="/review/{{ run.id }}/export.txt?lang={{ tr.code }}&amp;timestamps=false" download="{{ stem }}-{{ tr.code }}.txt">.txt</a>
-        /
-        <a href="/review/{{ run.id }}/export.md?lang={{ tr.code }}&amp;timestamps=false" download="{{ stem }}-{{ tr.code }}.md">.md</a>
-        /
-        <a href="/review/{{ run.id }}/export.srt?lang={{ tr.code }}" download="{{ stem }}-{{ tr.code }}.srt">.srt</a>
-        /
-        <a href="/review/{{ run.id }}/export.vtt?lang={{ tr.code }}" download="{{ stem }}-{{ tr.code }}.vtt">.vtt</a>
-        /
-        <a href="/review/{{ run.id }}/export.json?lang={{ tr.code }}" download="{{ stem }}-{{ tr.code }}.json">.json</a>
-      </div>
-    </li>
-    {% endfor %}
-    <li>
-      <strong>Speaker turns</strong> <code>.rttm</code>: who-spoke-when with the
-      raw diarization labels (never the assigned names), for research and scoring
-      tools.
-      <div class="export-links">
-        <a href="/review/{{ run.id }}/export.rttm" download="{{ stem }}.rttm">download</a>
-      </div>
-    </li>
-  </ul>
-</details>
+<div class="export-menu" id="export-menu" tabindex="-1">
+  <details>
+    <summary class="btn-download">Download transcript</summary>
+    <div class="export-dropdown">
+      <p class="muted text-sm">
+        Downloads the reviewed text. For enhanced or raw variants, expand
+        "Other text variants" below.
+      </p>
+      <p class="my-1">
+        <a href="/runs/{{ run.id }}/transcript?read=1&amp;timestamps=false{{ read_variant }}">Read on screen</a>
+      </p>
+      <ul class="export-format-list">
+        <li>
+          <a href="/review/{{ run.id }}/export.txt?text=corrected&amp;timestamps=false" download="{{ stem }}.txt">
+            Reading copy <code>.txt</code>
+          </a>
+          <span class="muted text-sm">Clean prose, no timestamps</span>
+        </li>
+        <li>
+          <a href="/review/{{ run.id }}/export.txt?text=corrected" download="{{ stem }}.txt">
+            Timed transcript <code>.txt</code>
+          </a>
+          <span class="muted text-sm">Every line stamped with start and end time</span>
+        </li>
+        <li>
+          <a href="/review/{{ run.id }}/export.md?text=corrected&amp;timestamps=false" download="{{ stem }}.md">
+            Markdown reading copy <code>.md</code>
+          </a>
+          <span class="muted text-sm">Speaker headings over quoted paragraphs</span>
+        </li>
+        <li>
+          <a href="/review/{{ run.id }}/export.md?text=corrected" download="{{ stem }}.md">
+            Markdown with times <code>.md</code>
+          </a>
+          <span class="muted text-sm">Per-paragraph timestamps for notes and wikis</span>
+        </li>
+        <li>
+          <a href="/review/{{ run.id }}/export.srt?text=corrected" download="{{ stem }}.srt">
+            Subtitles <code>.srt</code>
+          </a>
+          <span class="muted text-sm">SubRip captions for video players</span>
+        </li>
+        <li>
+          <a href="/review/{{ run.id }}/export.vtt?text=corrected" download="{{ stem }}.vtt">
+            Subtitles <code>.vtt</code>
+          </a>
+          <span class="muted text-sm">WebVTT captions for web video</span>
+        </li>
+        <li>
+          <a href="/review/{{ run.id }}/export.json?text=corrected" download="{{ stem }}.json">
+            Data <code>.json</code>
+          </a>
+          <span class="muted text-sm">Structured segments for other tools</span>
+        </li>
+        <li>
+          <a href="/review/{{ run.id }}/export.rttm" download="{{ stem }}.rttm">
+            Speaker turns <code>.rttm</code>
+          </a>
+          <span class="muted text-sm">Raw diarization labels for research</span>
+        </li>
+      </ul>
+      {% for tr in translations or [] %}
+      <details class="export-translated">
+        <summary class="text-sm">Translated: {{ tr.label }}</summary>
+        <ul class="export-format-list">
+          <li>
+            <a href="/review/{{ run.id }}/export.txt?lang={{ tr.code }}&amp;timestamps=false" download="{{ stem }}-{{ tr.code }}.txt">
+              Reading copy <code>.txt</code>
+            </a>
+          </li>
+          <li>
+            <a href="/review/{{ run.id }}/export.md?lang={{ tr.code }}&amp;timestamps=false" download="{{ stem }}-{{ tr.code }}.md">
+              Markdown <code>.md</code>
+            </a>
+          </li>
+          <li>
+            <a href="/review/{{ run.id }}/export.srt?lang={{ tr.code }}" download="{{ stem }}-{{ tr.code }}.srt">
+              Subtitles <code>.srt</code>
+            </a>
+          </li>
+          <li>
+            <a href="/review/{{ run.id }}/export.vtt?lang={{ tr.code }}" download="{{ stem }}-{{ tr.code }}.vtt">
+              Subtitles <code>.vtt</code>
+            </a>
+          </li>
+          <li>
+            <a href="/review/{{ run.id }}/export.json?lang={{ tr.code }}" download="{{ stem }}-{{ tr.code }}.json">
+              Data <code>.json</code>
+            </a>
+          </li>
+        </ul>
+      </details>
+      {% endfor %}
+      <details class="export-variants">
+        <summary class="text-sm">Other text variants</summary>
+        <p class="muted text-sm">
+          <strong>Reviewed</strong> is the text as you approved it.
+          <strong>Enhanced</strong> is the cleaned-up version before review.
+          <strong>Raw</strong> is the exact words the transcriber produced.
+        </p>
+        <ul class="export-format-list text-sm">
+          <li>
+            Reading copy <code>.txt</code>:
+            <a href="/review/{{ run.id }}/export.txt?text=enhanced&amp;timestamps=false" download="{{ stem }}.txt">enhanced</a>
+            /
+            <a href="/review/{{ run.id }}/export.txt?text=raw&amp;timestamps=false" download="{{ stem }}.txt">raw</a>
+          </li>
+          <li>
+            Timed <code>.txt</code>:
+            <a href="/review/{{ run.id }}/export.txt?text=enhanced" download="{{ stem }}.txt">enhanced</a>
+            /
+            <a href="/review/{{ run.id }}/export.txt?text=raw" download="{{ stem }}.txt">raw</a>
+          </li>
+          <li>
+            Markdown <code>.md</code> (reading copy):
+            <a href="/review/{{ run.id }}/export.md?text=enhanced&amp;timestamps=false" download="{{ stem }}.md">enhanced</a>
+            /
+            <a href="/review/{{ run.id }}/export.md?text=raw&amp;timestamps=false" download="{{ stem }}.md">raw</a>
+          </li>
+          <li>
+            Markdown <code>.md</code> (with times):
+            <a href="/review/{{ run.id }}/export.md?text=enhanced" download="{{ stem }}.md">enhanced</a>
+            /
+            <a href="/review/{{ run.id }}/export.md?text=raw" download="{{ stem }}.md">raw</a>
+          </li>
+          <li>
+            Subtitles <code>.srt</code>:
+            <a href="/review/{{ run.id }}/export.srt?text=enhanced" download="{{ stem }}.srt">enhanced</a>
+            /
+            <a href="/review/{{ run.id }}/export.srt?text=raw" download="{{ stem }}.srt">raw</a>
+          </li>
+          <li>
+            Subtitles <code>.vtt</code>:
+            <a href="/review/{{ run.id }}/export.vtt?text=enhanced" download="{{ stem }}.vtt">enhanced</a>
+            /
+            <a href="/review/{{ run.id }}/export.vtt?text=raw" download="{{ stem }}.vtt">raw</a>
+          </li>
+          <li>
+            Data <code>.json</code>:
+            <a href="/review/{{ run.id }}/export.json?text=enhanced" download="{{ stem }}.json">enhanced</a>
+            /
+            <a href="/review/{{ run.id }}/export.json?text=raw" download="{{ stem }}.json">raw</a>
+          </li>
+        </ul>
+      </details>
+    </div>
+  </details>
+</div>
 {% endmacro %}

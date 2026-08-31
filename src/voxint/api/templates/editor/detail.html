@@ -4,9 +4,7 @@
 
 {% block cb_breadcrumb %}media / <strong>{{ media_label|lower|replace(" ", "-") }}</strong>{% endblock %}
 {% block cb_summary %}
-{%- if progress.total > 0 -%}
-  {{ progress.verified }}/{{ progress.total }} verified
-{%- elif selected_run -%}
+{%- if selected_run -%}
   {{ selected_run.status }}
 {%- else -%}
   no runs
@@ -15,14 +13,14 @@
 
 {% block body %}
 {# Media detail page with the editor island (Console 2.0 P3a/P3b, issues
-   #156/#157). Renders run metadata, a run chooser, and — when a completed run
-   is selected — the media-editor island with a server-rendered transcript
-   table as JS-off fallback.
+   #156/#157). Renders run metadata, a run chooser, and (when a completed run
+   is selected) the media-editor island with a server-rendered transcript table
+   as JS-off fallback.
 
    Layout: the media/runs metadata sits in an inline bar above the editor.
    The island's own .me-layout grid handles the transcript + speaker-rail
    split; it is NOT nested inside .lib-two-col (that double-nesting caused
-   the rail to collapse at desktop widths — see #370). #}
+   the rail to collapse at desktop widths, see #370). #}
 
 <div class="editor-meta">
   <div class="card">
@@ -43,18 +41,57 @@
 
   {% if detail.chooser %}
   <div class="card">
-    <h3>Runs</h3>
-    <ul class="run-chooser">
-      {% for entry in detail.chooser %}
-      <li{% if selected_run and entry.id == selected_run.id %} class="active"{% endif %}>
-        <a href="/media/{{ detail.media.id }}/editor?run={{ entry.id }}{% if token %}&amp;token={{ token }}{% endif %}">
-          {{ entry.created_at.strftime("%Y-%m-%d %H:%M") }}
-          <span class="chip {{ entry.status }}">{{ entry.status }}</span>
-          {% if entry.archived %}<span class="chip">archived</span>{% endif %}
-        </a>
-      </li>
-      {% endfor %}
-    </ul>
+    <h3>{% if selected_run %}Run{% else %}Runs{% endif %}</h3>
+    {% if selected_run %}
+    <dl class="oc-meta-list">
+      <dt>Status</dt>
+      <dd>
+        <span class="chip {{ selected_run.status }}">{{ selected_run.status }}</span>
+        {% if selected_run.current_stage %}
+          <span class="muted text-sm">{{ selected_run.current_stage }}</span>
+        {% endif %}
+      </dd>
+      {% if selected_run.error %}
+      <dt>Error</dt>
+      <dd class="text-sm">{{ selected_run.error|truncate(120) }}</dd>
+      {% endif %}
+    </dl>
+    {% set restartable = selected_run.status in ('completed', 'failed', 'cancelled') and not selected_run.archived_at %}
+    {% if restartable and csrf_restart %}
+    <form method="post" action="/runs/{{ selected_run.id }}/restart" class="mt-2">
+      <input type="hidden" name="revision" value="{{ selected_run.revision }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_restart }}">
+      <button type="submit" class="text-sm"
+        onclick="return confirm('Restart from scratch? This re-processes all stages.')">
+        {% if selected_run.status == 'failed' %}Retry{% else %}Re-run{% endif %}
+      </button>
+    </form>
+    {% endif %}
+    <p class="mt-1"><a href="/jobs/{{ selected_run.id }}" class="text-sm">Run details</a></p>
+    {% endif %}
+    {% set other_runs = detail.chooser|length - (1 if selected_run else 0) %}
+    {% if other_runs > 0 %}
+    {% if selected_run %}
+    <details class="mt-2">
+      <summary class="text-sm muted">Other runs ({{ other_runs }})</summary>
+    {% endif %}
+      <ul class="run-chooser">
+        {% for entry in detail.chooser %}
+        {% if not selected_run or entry.id != selected_run.id %}
+        <li>
+          <a href="/media/{{ detail.media.id }}/editor?run={{ entry.id }}{% if token %}&amp;token={{ token }}{% endif %}">
+            {{ entry.created_at.strftime("%Y-%m-%d %H:%M") }}
+            <span class="chip {{ entry.status }}">{{ entry.status }}</span>
+            {% if entry.archived %}<span class="chip">archived</span>{% endif %}
+          </a>
+        </li>
+        {% endif %}
+        {% endfor %}
+      </ul>
+    {% if selected_run %}
+    </details>
+    {% endif %}
+    {% endif %}
   </div>
   {% endif %}
 </div>
@@ -80,7 +117,7 @@
           {% for seg in island_props.segments %}
           <tr{% if seg.verified %} class="verified"{% endif %}>
             <td class="mono">{{ "%.1f"|format(seg.start) }}s</td>
-            <td>{{ seg.speaker or seg.label or "—" }}</td>
+            <td>{{ seg.speaker or "—" }}</td>
             <td>{{ seg.text }}</td>
           </tr>
           {% endfor %}
@@ -89,9 +126,7 @@
     </div>
   </div>
 
-  <div id="export-menu" tabindex="-1">
-    {{ export_menu(selected_run) }}
-  </div>
+  {{ export_menu(selected_run) }}
 
 {% elif selected_run %}
   <div class="card">

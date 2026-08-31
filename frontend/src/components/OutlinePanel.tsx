@@ -63,10 +63,13 @@ export function OutlinePanel({
   const dropped = totalDropped(outline.diagnostics);
   const hasContext =
     outline.context.summary !== null || outline.context.topics.length > 0;
+  const entityCount = outline.mentions.length;
 
   return (
-    <section className="outline-panel my-2" aria-label="Outline">
-      <h2>Outline</h2>
+    <details className="outline-panel my-2" aria-label="Outline">
+      <summary>
+        Topics and entities{entityCount > 0 ? ` (${entityCount})` : ""}
+      </summary>
       {outline.assetStale && (
         <p className="notice text-sm" role="note">
           This outline was built from an earlier version of the transcript, so
@@ -157,6 +160,6 @@ export function OutlinePanel({
           current transcript and {dropped === 1 ? "is" : "are"} not shown.
         </p>
       )}
-    </section>
+    </details>
   );
 }
