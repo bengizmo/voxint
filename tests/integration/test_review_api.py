@@ -1257,3 +1257,184 @@ def test_verify_form_navigation_redirects_back_to_review(
     page = client.get(f"/review/{run_id}/transcript", params={"token": token})
     props = json.loads(re.search(r"data-props='([^']*)'", page.text).group(1))  # type: ignore[union-attr]
     assert props["initialProgress"]["verified"] == 1
+
+
+# ---- renew_claim + auto-claim tests (issue #374) ----
+
+
+def _single_op_client(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> TestClient:
+    settings = Settings(
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+        media_root=media_root,
+        review_claim_ttl_seconds=600,
+        csrf_secret=_CSRF_KEY,
+        voxint_multi_user=False,
+    )
+    tc = TestClient(create_app(settings=settings, session_factory=session_factory))
+    tc.auth = CREDS
+    seed_onboarded(session_factory)
+    return tc
+
+
+def test_renew_endpoint_extends_claim(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    tc = _single_op_client(session_factory, media_root)
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    token = claim_token(tc, run_id)
+    resp = tc.post(
+        f"/review/{run_id}/claim/renew",
+        data={"token": token},
+    )
+    assert resp.status_code == 204
+    with session_factory() as session:
+        from voxint.adjudication.slots import verify_claim
+        run = verify_claim(session, run_id, uuid.UUID(token))
+        assert run.review_claim_token == uuid.UUID(token)
+
+
+def test_renew_wrong_token_returns_409(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    tc = _single_op_client(session_factory, media_root)
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    claim_token(tc, run_id)
+    resp = tc.post(
+        f"/review/{run_id}/claim/renew",
+        data={"token": str(uuid.uuid4())},
+    )
+    assert resp.status_code == 409
+    assert resp.headers.get("x-voxint-conflict") == "claim"
+
+
+def test_workbench_get_auto_claims_in_single_op(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    settings = Settings(
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+        media_root=media_root,
+        review_claim_ttl_seconds=600,
+        csrf_secret=_CSRF_KEY,
+        voxint_multi_user=False,
+    )
+    test_client = TestClient(
+        create_app(settings=settings, session_factory=session_factory)
+    )
+    test_client.auth = CREDS
+    seed_onboarded(session_factory)
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    resp = test_client.get(f"/review/{run_id}", follow_redirects=False)
+    assert resp.status_code == 303
+    loc = resp.headers["location"]
+    assert "token=" in loc
+    assert f"/review/{run_id}?" in loc
+
+
+def test_workbench_get_no_auto_claim_when_token_present(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """When a token is already in the query string, no auto-claim fires."""
+    tc = _single_op_client(session_factory, media_root)
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    token = claim_token(tc, run_id)
+    resp = tc.get(f"/review/{run_id}?token={token}", follow_redirects=False)
+    assert resp.status_code == 200
+
+
+def test_queue_hides_claimed_by_column_in_single_op(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    settings = Settings(
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+        media_root=media_root,
+        review_claim_ttl_seconds=600,
+        csrf_secret=_CSRF_KEY,
+        voxint_multi_user=False,
+    )
+    test_client = TestClient(
+        create_app(settings=settings, session_factory=session_factory)
+    )
+    test_client.auth = CREDS
+    seed_onboarded(session_factory)
+    with session_factory() as session:
+        seed_run(session, media_root)
+    resp = test_client.get("/review")
+    assert resp.status_code == 200
+    assert "CLAIMED BY" not in resp.text
+
+
+def test_queue_single_op_uses_five_column_grid(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """Single-op queue hides CLAIMED BY; the grid has 5 columns, not 6."""
+    settings = Settings(
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+        media_root=media_root,
+        review_claim_ttl_seconds=600,
+        csrf_secret=_CSRF_KEY,
+        voxint_multi_user=False,
+    )
+    test_client = TestClient(
+        create_app(settings=settings, session_factory=session_factory)
+    )
+    test_client.auth = CREDS
+    seed_onboarded(session_factory)
+    with session_factory() as session:
+        seed_run(session, media_root)
+    resp = test_client.get("/review")
+    assert resp.status_code == 200
+    assert "CLAIMED BY" not in resp.text
+    assert "1fr auto auto 10rem auto;" in resp.text
+
+
+def test_claim_return_to_transcript_redirects_to_stepper(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    tc = _single_op_client(session_factory, media_root)
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    resp = tc.post(
+        f"/review/{run_id}/claim?return_to=transcript",
+        data={"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_CLAIM)},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    loc = resp.headers["location"]
+    assert f"/review/{run_id}/transcript?token=" in loc
+
+
+def test_renew_after_claim_rotation_returns_409(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """Simulates two-tab scenario: second tab claims (rotates token), first
+    tab's renew returns 409."""
+    tc = _single_op_client(session_factory, media_root)
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    first_token = claim_token(tc, run_id)
+    # Second claim rotates the token.
+    second_token = claim_token(tc, run_id)
+    assert first_token != second_token
+    # Renew with old token fails.
+    resp = tc.post(
+        f"/review/{run_id}/claim/renew",
+        data={"token": first_token},
+    )
+    assert resp.status_code == 409
+    assert resp.headers.get("x-voxint-conflict") == "claim"
+    # Renew with new token succeeds.
+    resp = tc.post(
+        f"/review/{run_id}/claim/renew",
+        data={"token": second_token},
+    )
+    assert resp.status_code == 204

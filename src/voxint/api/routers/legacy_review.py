@@ -85,6 +85,7 @@ from voxint.adjudication.slots import (
     ClaimUnavailableError,
     claim_run,
     release_run,
+    renew_claim,
     verify_claim,
 )
 from voxint.adjudication.splits import (
@@ -168,6 +169,7 @@ from voxint.db.models import (
     EnrichmentCandidate,
     PipelineRun,
     ProfileDecision,
+    RunStatus,
     SegmentReviewState,
     SegmentSplitBoundary,
     Speaker,
@@ -761,6 +763,7 @@ def claim(
     operator: OperatorDep,
     session: SessionDep,
     csrf_token: Annotated[str | None, Form()] = None,
+    return_to: str | None = None,
 ) -> RedirectResponse:
     # Claim mints the run's claim token, so — unlike the other workbench
     # mutations — it has no unguessable token of its own to gate a forged POST.
@@ -780,6 +783,12 @@ def claim(
         )
     except ClaimUnavailableError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    if return_to == "transcript":
+        return RedirectResponse(
+            f"/review/{run_id}/transcript?token={token}", status_code=303
+        )
+
     # Guided-tutorial continuity: claiming the tutorial run — while the
     # walkthrough is still active (not yet completed) — lands on the workbench
     # in `adjudicate` mode. Keyed on RUN IDENTITY, not a hidden form field, so
@@ -796,6 +805,27 @@ def claim(
             suffix = "&tutorial=adjudicate"
     return RedirectResponse(f"/review/{run_id}?token={token}{suffix}", status_code=303)
 
+@router.post("/review/{run_id}/claim/renew")
+def claim_renew(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    token: Annotated[uuid.UUID, Form()],
+) -> Response:
+    """Extend a live claim's TTL without rotating the token."""
+    _reject_if_archived(_run_or_404(session, run_id))
+    settings: Settings = request.app.state.settings
+    try:
+        renew_claim(
+            session, run_id, token, ttl_seconds=settings.review_claim_ttl_seconds
+        )
+    except (ClaimMismatchError, ClaimUnavailableError) as exc:
+        raise HTTPException(
+            status_code=409, detail=str(exc), headers=_CLAIM_CONFLICT_HEADERS
+        ) from exc
+    return Response(status_code=204)
+
 @router.get("/review/{run_id}", name="workbench")
 def workbench(
     run_id: uuid.UUID,
@@ -804,7 +834,28 @@ def workbench(
     session: SessionDep,
     token: uuid.UUID | None = None,
 ) -> Response:
+    settings: Settings = request.app.state.settings
     run = _run_or_404(session, run_id)
+
+    # Single-operator auto-claim: when multi-user is off and no token is
+    # presented, claim the run server-side and redirect with the new token
+    # so the workbench opens in edit mode without an extra click.
+    if not settings.voxint_multi_user and token is None and run.status == RunStatus.COMPLETED.value:
+        _reject_if_archived(run)
+        try:
+            new_token = claim_run(
+                session, run_id, reviewer=operator, ttl_seconds=settings.review_claim_ttl_seconds
+            )
+        except ClaimUnavailableError:
+            pass  # fall through to read-only render
+        else:
+            suffix = ""
+            if ready_tutorial_run_id(session) == run_id:
+                row = get_app_settings(session)
+                if row is not None and row.tutorial_completed_at is None:
+                    suffix = "&tutorial=adjudicate"
+            return RedirectResponse(f"/review/{run_id}?token={new_token}{suffix}", status_code=303)
+
     if token is not None:
         try:
             verify_claim(session, run_id, token)

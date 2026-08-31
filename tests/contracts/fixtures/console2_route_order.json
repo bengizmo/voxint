@@ -180,6 +180,12 @@
     ]
   ],
   [
+    "/media/{media_id}/editor/claim/renew",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/media/{media_id}/editor/release",
     [
       "POST"
@@ -397,6 +403,12 @@
   ],
   [
     "/review/{run_id}/claim",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/review/{run_id}/claim/renew",
     [
       "POST"
     ]

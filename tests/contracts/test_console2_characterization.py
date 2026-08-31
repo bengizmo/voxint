@@ -66,6 +66,7 @@ _VERIFICATION_SINKS = (
     "_require_csrf",
     "verify_csrf_token",
     "verify_claim",
+    "renew_claim",
     "_verify_annotation_claim",
     "release_run",
 )

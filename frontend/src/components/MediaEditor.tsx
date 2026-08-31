@@ -54,6 +54,7 @@ export interface MediaEditorProps {
   annotations?: AnnotationShape[];
   annotationTags?: AnnotationTagShape[];
   annotationLimits?: AnnotationLimits;
+  multiUser?: boolean;
   tagCsrf?: string | null;
   clipCsrf?: string | null;
   claimCsrf?: string | null;
@@ -85,6 +86,7 @@ export function MediaEditor({
   annotations: initialAnnotations = [],
   annotationTags: initialAnnotationTags = [],
   annotationLimits = FALLBACK_ANNOTATION_LIMITS,
+  multiUser = false,
   tagCsrf: initialTagCsrf = null,
   clipCsrf: initialClipCsrf = null,
   claimCsrf = null,
@@ -168,28 +170,26 @@ export function MediaEditor({
 
   const claimed = reviewToken !== null && !claimLost;
 
-  // Heartbeat: re-claim periodically to renew the TTL (same-operator reuse
-  // per ADR 0004 — claim_run with the same reviewer returns a fresh token).
+  // Heartbeat: renew the claim TTL without rotating the token (so two tabs
+  // held by the same reviewer no longer fight over each other's tokens).
   useEffect(() => {
-    if (!claimed || !claimCsrf) return;
+    if (!claimed) return;
     const interval = setInterval(() => {
       void (async () => {
+        const tok = reviewTokenRef.current;
+        if (!tok) return;
         try {
           const body = new URLSearchParams({
             run_id: runId,
-            csrf_token: claimCsrf,
+            token: tok,
           });
-          const res = await apiFetch(`/media/${mediaId}/editor/claim`, {
+          await apiFetch(`/media/${mediaId}/editor/claim/renew`, {
             method: "POST",
             headers: {
               "content-type": "application/x-www-form-urlencoded",
-              accept: "application/json",
             },
             body: body.toString(),
           });
-          const data = (await res.json()) as { token: string };
-          reviewTokenRef.current = data.token;
-          setReviewToken(data.token);
         } catch (err) {
           if (err instanceof ApiError && err.status === 409) {
             setClaimLost(true);
@@ -198,7 +198,14 @@ export function MediaEditor({
       })();
     }, 60_000);
     return () => clearInterval(interval);
-  }, [claimed, claimCsrf, runId, mediaId]);
+  }, [claimed, runId, mediaId]);
+
+  // Single-op auto-claim: claim on mount when no token is already held.
+  useEffect(() => {
+    if (multiUser || initialReviewToken || !claimCsrf || claimingRef.current)
+      return;
+    void claimForEditing();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Release on unload (best-effort — sendBeacon for reliability).
   useEffect(() => {

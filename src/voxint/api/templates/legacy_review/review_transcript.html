@@ -22,9 +22,17 @@
   {% if token %}
   <p class="claim-state">Claimed by you — verify and edit are enabled.</p>
   {% else %}
-  <p class="claim-state off"><span>Not claimed by this tab — verifying and editing
-    are disabled. <a href="/review/{{ run.id }}">Claim this run in the workbench</a>
-    to review.</span></p>
+  <div class="claim-state off">Not claimed by this tab — verifying and editing
+    are disabled.
+    {% if shell.can_write %}
+    <form method="post" action="/review/{{ run.id }}/claim?return_to=transcript" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_claim }}">
+      <button type="submit" class="primary">Claim to review here</button>
+    </form>
+    {% else %}
+    <a href="/review/{{ run.id }}">Open the workbench</a> to review.
+    {% endif %}
+  </div>
   {% endif %}
 </header>
 

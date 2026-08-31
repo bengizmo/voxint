@@ -11,6 +11,7 @@ from voxint.adjudication.slots import (
     ClaimUnavailableError,
     claim_run,
     release_run,
+    renew_claim,
     verify_claim,
 )
 from voxint.db.models import MediaItem, PipelineRun, RunStatus
@@ -136,3 +137,76 @@ def test_concurrent_claim_one_winner(session_factory: sessionmaker[Session]) -> 
     finally:
         s1.close()
         s2.close()
+
+
+# ---- renew_claim tests ----
+
+
+def test_renew_extends_expiry_keeps_token(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        run_id = make_run(session)
+        token = claim_run(session, run_id, reviewer="ben", ttl_seconds=TTL)
+        session.commit()
+
+    with session_factory() as session:
+        run_before = session.get(PipelineRun, run_id)
+        assert run_before is not None
+        old_expires = run_before.review_claim_expires_at
+
+    with session_factory() as session:
+        new_expires = renew_claim(session, run_id, token, ttl_seconds=TTL)
+        session.commit()
+
+    assert new_expires > old_expires  # type: ignore[operator]
+    with session_factory() as session:
+        run_after = session.get(PipelineRun, run_id)
+        assert run_after is not None
+        assert run_after.review_claim_token == token
+        assert run_after.review_claimed_by == "ben"
+
+
+def test_renew_wrong_token_raises(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        run_id = make_run(session)
+        claim_run(session, run_id, reviewer="ben", ttl_seconds=TTL)
+        session.commit()
+
+    with session_factory() as session, pytest.raises(ClaimMismatchError):
+        renew_claim(session, run_id, uuid.uuid4(), ttl_seconds=TTL)
+
+
+def test_renew_expired_token_raises(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        run_id = make_run(session)
+        token = claim_run(session, run_id, reviewer="ben", ttl_seconds=TTL)
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        run.review_claim_expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+        session.commit()
+
+    with session_factory() as session, pytest.raises(ClaimMismatchError, match="stale"):
+        renew_claim(session, run_id, token, ttl_seconds=TTL)
+
+
+def test_renew_non_completed_raises(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        run_id = make_run(session, status=RunStatus.RUNNING)
+        session.commit()
+
+    with session_factory() as session, pytest.raises(ClaimMismatchError):
+        renew_claim(session, run_id, uuid.uuid4(), ttl_seconds=TTL)
+
+
+def test_renew_then_verify_same_token(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        run_id = make_run(session)
+        token = claim_run(session, run_id, reviewer="ben", ttl_seconds=TTL)
+        session.commit()
+
+    with session_factory() as session:
+        renew_claim(session, run_id, token, ttl_seconds=TTL)
+        session.commit()
+
+    with session_factory() as session:
+        run = verify_claim(session, run_id, token)
+        assert run.review_claimed_by == "ben"

@@ -264,6 +264,14 @@
     true
   ],
   [
+    "/media/{media_id}/editor/claim/renew",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/media/{media_id}/editor/release",
     [
       "POST"
@@ -535,6 +543,14 @@
   ],
   [
     "/review/{run_id}/claim",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/review/{run_id}/claim/renew",
     [
       "POST"
     ],

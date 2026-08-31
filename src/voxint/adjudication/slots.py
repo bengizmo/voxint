@@ -108,6 +108,34 @@ def verify_claim(
     return run
 
 
+def renew_claim(
+    session: Session,
+    run_id: uuid.UUID,
+    token: uuid.UUID,
+    *,
+    ttl_seconds: int,
+) -> datetime:
+    """Extend the live claim's expiry without rotating its token.
+
+    Applied globally (all modes) so heartbeats never rotate the token —
+    two tabs held by the same reviewer no longer fight.
+    """
+    run = verify_claim(session, run_id, token, for_update=True)
+    now = datetime.now(tz=UTC)
+    expires = now + timedelta(seconds=ttl_seconds)
+    result = cast(
+        CursorResult[Any],
+        session.execute(
+            update(PipelineRun)
+            .where(PipelineRun.id == run_id, PipelineRun.revision == run.revision)
+            .values(review_claim_expires_at=expires, revision=run.revision + 1)
+        ),
+    )
+    if result.rowcount != 1:
+        raise ClaimUnavailableError(f"run {run_id} moved concurrently; retry")
+    return expires
+
+
 def release_run(session: Session, run_id: uuid.UUID, token: uuid.UUID) -> None:
     """Release a held claim; token must match (idempotent for a dead claim)."""
     run = session.execute(

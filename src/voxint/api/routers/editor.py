@@ -21,6 +21,7 @@ from voxint.adjudication.slots import (
     ClaimUnavailableError,
     claim_run,
     release_run,
+    renew_claim,
     verify_claim,
 )
 from voxint.adjudication.transcript import TranscriptText, attributed_transcript
@@ -200,6 +201,7 @@ def media_detail_page(
                 island_props["translate"] = None
 
     if island_props is not None:
+        island_props["multiUser"] = settings.voxint_multi_user
         island_props["claimCsrf"] = mint_csrf_token(
             request.app.state.csrf_secret, CSRF_CLAIM
         )
@@ -258,6 +260,30 @@ def editor_claim(
             request.app.state.csrf_secret, CSRF_CLIP_EXTRACT
         ),
     })
+
+
+@router.post("/media/{media_id}/editor/claim/renew")
+def editor_claim_renew(
+    media_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    run_id: Annotated[uuid.UUID, Form()],
+    token: Annotated[uuid.UUID, Form()],
+) -> Response:
+    """Extend a live editor claim's TTL without rotating the token."""
+    run = session.get(PipelineRun, run_id)
+    if run is None or run.media_item_id != media_id:
+        raise HTTPException(status_code=404, detail="not found")
+    _reject_if_archived(run)
+    settings: Settings = request.app.state.settings
+    try:
+        renew_claim(
+            session, run_id, token, ttl_seconds=settings.review_claim_ttl_seconds
+        )
+    except (ClaimMismatchError, ClaimUnavailableError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return Response(status_code=204)
 
 
 @router.post("/media/{media_id}/editor/release")
