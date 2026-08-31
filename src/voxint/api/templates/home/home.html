@@ -51,7 +51,7 @@
     <a class="start-btn" href="{% if shell.media_enabled %}/media{% else %}/runs#add-media{% endif %}">Upload a recording</a>
     <a class="start-btn" href="/settings#folders">Watch a folder</a>
     {% endif %}
-    {% if shell.projects_enabled %}<a class="start-btn" href="/projects">New project</a>{% endif %}
+    {% if shell.projects_enabled and shell.can_write %}<a class="start-btn" href="/projects">New project</a>{% endif %}
     <a class="start-btn" href="/speakers">Review speakers</a>
   </div>
 </section>

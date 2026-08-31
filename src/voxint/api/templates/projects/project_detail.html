@@ -326,8 +326,10 @@
 
     {% if corrections_error %}<p class="notice error" role="alert">{{ corrections_error }}</p>{% endif %}
 
+    {% if shell.can_write %}
     <div data-island="corrections-editor" data-props='{{ corrections_props|tojson }}'>
       <noscript><p class="oc-muted">Editing corrections needs JavaScript. Current rules are shown below. <a href="#" class="oc-section-link">+ add rule</a> (requires JavaScript)</p></noscript>
+    {% endif %}
       {% if detail.corrections %}
       <div class="grid-table pd-rules-grid" role="region" aria-label="Correction rules" tabindex="0"
            style="grid-template-columns: 1fr auto 1fr auto auto;">
@@ -353,7 +355,9 @@
       {% else %}
       <p class="oc-muted">Inheriting from the folder pack or global corrections.</p>
       {% endif %}
+    {% if shell.can_write %}
     </div>
+    {% endif %}
 
     {% if detail.corrections is not none and shell.can_write %}
     <form method="post" action="/projects/{{ detail.id }}/corrections" style="margin-top:var(--space-3)">
@@ -421,7 +425,7 @@
   <section class="oc-section">
     <div class="oc-section-header">
       <h2 class="oc-section-title">PROJECT SPEAKERS</h2>
-      <a href="/speakers" class="oc-section-link">+ add speaker</a>
+      {% if shell.can_write %}<a href="/speakers" class="oc-section-link">+ add speaker</a>{% endif %}
     </div>
     {% if detail.speakers %}
     <ul class="pd-sidebar-list">
