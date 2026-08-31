@@ -3,10 +3,16 @@
 Pins the wiring the pure CRUD module cannot see: CSRF on every state change,
 the run -> media -> folder -> project resolution (and its honest 422 when the
 chain is broken), the duplicate 409 off the DB unique constraint, the CSV
-export response, and the ondelete behavior (project/run/segment CASCADE)
-declared on ``saved_quotes``.
+export response, the quote-board props on the project detail page, and the
+reachable ondelete behavior (project and segment CASCADE; run teardown is
+never blocked by quotes — the run_id CASCADE itself is unreachable while
+segments exist, since ``transcript_segments.pipeline_run_id`` has no
+ondelete).
 """
 
+import html
+import json
+import re
 import uuid
 
 import pytest
@@ -39,6 +45,7 @@ def client(session_factory: sessionmaker[Session], tmp_path: object) -> TestClie
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=tmp_path,  # type: ignore[arg-type]
+        console_projects_enabled=True,
     )
     test_client = TestClient(create_app(settings=settings, session_factory=session_factory))
     test_client.auth = CREDS
@@ -209,6 +216,35 @@ def test_save_without_csrf_is_403(
     assert _quotes(session_factory) == []
 
 
+def test_manage_endpoints_without_csrf_are_403(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, segment_id, _ = _seed_project_run(session_factory)
+    quote_id = client.post(
+        "/quotes", data=_save_form(run_id, segment_id, client)
+    ).json()["id"]
+    # Missing token, and a token minted for the WRONG action, both refuse.
+    wrong_action = mint_csrf_token(client.app.state.csrf_secret, CSRF_QUOTE_SAVE)
+    assert client.request("DELETE", f"/quotes/{quote_id}").status_code == 403
+    assert (
+        client.request(
+            "DELETE", f"/quotes/{quote_id}", data={"csrf_token": wrong_action}
+        ).status_code
+        == 403
+    )
+    assert client.patch(f"/quotes/{quote_id}", data={"note": "x"}).status_code == 403
+    assert (
+        client.patch(
+            f"/quotes/{quote_id}",
+            data={"note": "x", "csrf_token": wrong_action},
+        ).status_code
+        == 403
+    )
+    rows = _quotes(session_factory)
+    assert len(rows) == 1
+    assert rows[0].note is None
+
+
 # ---- delete + note ----------------------------------------------------------
 
 
@@ -287,6 +323,34 @@ def test_csv_export_contains_the_quote(
 
 def test_csv_export_unknown_project_is_404(client: TestClient) -> None:
     assert client.get(f"/projects/{uuid.uuid4()}/quotes/csv").status_code == 404
+
+
+# ---- project page read path -------------------------------------------------
+
+
+def test_project_page_renders_the_quote_board_props(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, segment_id, project_id = _seed_project_run(session_factory)
+    assert (
+        client.post("/quotes", data=_save_form(run_id, segment_id, client)).status_code
+        == 201
+    )
+    resp = client.get(f"/projects/{project_id}")
+    assert resp.status_code == 200
+    match = re.search(
+        r'data-island="quote-board"\s+data-props="([^"]+)"', resp.text
+    )
+    assert match, "the quote-board island must render on the project page"
+    # The template writes tojson|replace('"', '&quot;') and Jinja autoescape
+    # then escapes the ampersands again, so the attribute needs two passes.
+    props = json.loads(html.unescape(html.unescape(match.group(1))))
+    assert props["total"] == 1
+    assert props["projectId"] == str(project_id)
+    assert props["csrfToken"], "the board needs a manage token to mutate"
+    (quote,) = props["quotes"]
+    assert quote["hit"] == "waterfront rezoning"
+    assert quote["run_id"] == str(run_id)
 
 
 # ---- ondelete behavior ------------------------------------------------------
