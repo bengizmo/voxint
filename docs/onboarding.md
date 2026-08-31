@@ -161,23 +161,34 @@ A terminal completion note then appears on the Settings page.
 
 ## 4. Settings page
 
-Once onboarding is complete, a **Settings** page (`/settings`, linked from the top
-nav) is the durable entry point for both flows:
+Once onboarding is complete, **Settings** (`/settings`, linked from the sidebar)
+is the durable entry point for configuration. Settings are organized into tabs:
+
+- **General** (`/settings`): appearance, feature toggles, re-run the setup
+  wizard, and the guided tutorial.
+- **Media** (`/settings/media`): media folders, automatic ingest, and sources
+  and research.
+- **AI** (`/settings/ai`): LLM enhancement (endpoint, model, and API key),
+  translation, corrections, glossary, and semantic search.
+
+Additional read-only tabs (Status, Hardware, Database, Plugins) show system
+health and configuration. All settings save in place with their own CSRF tokens.
+
+Key actions available after onboarding:
 
 - **Re-run the setup wizard** (`/setup`). It never resets existing preferences
   unless you change them.
-- **Manage LLM enhancement** (`POST /settings/llm`). Enable/disable enhancement and
-  set the endpoint, model, and **API key**, the same controls as the wizard's LLM
-  step, available any time after onboarding. A saved key wins over env
-  `LLM_API_KEY`; leave the key field blank to keep the saved one, or tick **"Remove
-  saved key"** to revert to the environment. The form carries its own CSRF token.
-- **Set up, start, replay, or complete the tutorial.** When it has not been
-  staged yet, **"Set up & start the guided tutorial →"**
+- **Manage LLM enhancement** (AI tab, `POST /settings/llm`). Enable/disable
+  enhancement and set the endpoint, model, and **API key**, the same controls as
+  the wizard's LLM step. A saved key wins over env `LLM_API_KEY`; leave the key
+  field blank to keep the saved one, or tick **"Remove saved key"** to revert to
+  the environment.
+- **Set up, start, replay, or complete the tutorial** (General tab). When it has
+  not been staged yet, **"Set up & start the guided tutorial"**
   (`POST /settings/tutorial/seed`) stages the bundled sample and enters it, with no
   CLI needed. Replay (`POST /settings/tutorial/replay`) is **non-destructive**: it
   walks the sample again but preserves your previous rulings on the tutorial run.
   Completion (`POST /settings/tutorial/complete`) records `tutorial_completed_at`.
-  All three mutations carry their own CSRF token.
 
 ## Troubleshooting
 
