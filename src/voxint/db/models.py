@@ -101,6 +101,7 @@ class OperationFileStatus(enum.StrEnum):
 class UserRole(enum.StrEnum):
     ADMIN = "admin"
     REVIEWER = "reviewer"
+    VIEWER = "viewer"
 
 
 class NotifiableEvent(enum.StrEnum):

@@ -13,6 +13,7 @@
       <select name="role" onchange="this.form.requestSubmit()">
         <option value="admin"{% if u.role == 'admin' %} selected{% endif %}>Admin</option>
         <option value="reviewer"{% if u.role == 'reviewer' %} selected{% endif %}>Reviewer</option>
+        <option value="viewer"{% if u.role == 'viewer' %} selected{% endif %}>Viewer</option>
       </select>
     </form>
     {% else %}

@@ -6,7 +6,39 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **Queue progress strikethrough** (#372). The review queue's "N of M
+  resolved" label appeared struck-through because the progress column
+  (10rem) was too narrow for the track (`min-width: 8rem`) plus the
+  label text; the overflow caused the track to visually interfere with
+  adjacent text. Widened the column to 14rem.
+- **Invisible "Set up" button on Status page** (#372). The primary
+  action button next to "Your own AI endpoint" rendered as a solid teal
+  rectangle with no visible text. Cause: `.component-row .cr-action a`
+  (specificity 0,2,1) set `color: var(--accent)`, overriding
+  `.cb-btn-primary`'s `color: var(--accent-contrast)` (0,1,0). Fixed
+  with a `:not(.cb-btn)` guard on the action link rule.
+- **Editor speaker-rail collapse** (#370). The media-editor page nested the
+  island's `.me-layout` grid inside `.lib-two-col`, causing the speaker rail
+  to collapse to a sliver at desktop widths. Restructured: metadata cards
+  (media info, run chooser) now sit in a horizontal bar above the island,
+  and `.me-layout` owns the full page width. The stacking breakpoint drops
+  from 72rem to 48rem since the grid is no longer width-constrained by an
+  outer grid.
+- **Contradictory empty-state copy** (#370). "No runs for this media file
+  yet." appeared alongside listed failed runs. Now reads "No completed runs
+  yet." when runs exist but none completed.
+
 ### Added
+- **Viewer role** (#363). A new read-only `viewer` role: viewers can browse
+  transcripts, results, and exports but cannot submit media, adjudicate,
+  correct, annotate, or change any settings. Enforced server-side with a
+  blanket write gate on all mutation routes (console and API); the gate
+  allowlists only auth routes (login/logout). Template context exposes a
+  `can_write` boolean for UI affordance hiding. CLI `user create --role`
+  and `user set-role` accept `viewer`. Migration 0057 widens the DB CHECK
+  constraint. Dark-shipped behind the existing `console_users_enabled` flag
+  (user management page only).
 - **Evidence pack** (#331, Phase 7 remainder). A printable page of a run's
   highlights with their provenance (speakers, timing, tags, notes, source
   text hash, clip references, pipeline model identity), linked from the

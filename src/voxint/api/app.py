@@ -49,6 +49,7 @@ from voxint.api.routers.deps import (
     _verify_plugin_csrf,
     require_onboarded,
     templates,
+    viewer_write_guard,
 )
 from voxint.api.routers.editor import router as editor_router
 from voxint.api.routers.explore import router as explore_router
@@ -507,14 +508,23 @@ def _register_routes(app: FastAPI) -> None:
     # Two registrars: `app` carries the onboarding-gate-EXEMPT routes (liveness,
     # the static asset routes, and the setup wizard's setup_router); `console`
     # aggregates every per-area router, and each of those declares its own
-    # router-level require_onboarded dependency (routers/deps.py). The gate
-    # rides the family router, not this aggregator, because an outer router's
-    # dependencies do not appear in a nested route's dependant tree on this
-    # FastAPI, which is where the characterization contract reads gating from.
-    # Exemption stays structural: a route is exempt iff it reaches the app
-    # outside a gated family router (the route-inventory and onboarding-gate
-    # tests guard against a slip). New console routes go on their area router.
-    console = APIRouter()
+    # router-level require_onboarded dependency (routers/deps.py).
+    #
+    # Two layers of gating:
+    # - require_onboarded rides each per-area router (not this aggregator),
+    #   because an outer router's dependencies do not appear in a nested
+    #   route's dependant tree, which is where the characterization contract
+    #   reads gating from.
+    # - viewer_write_guard rides this aggregator (#363): POST/PUT/PATCH/DELETE
+    #   → 403 for viewers. Runtime-effective but invisible to dependant-tree
+    #   introspection, so coverage is verified by the write-gate tests, not
+    #   the characterization contract.
+    #
+    # Exemption stays structural: a route is exempt from the onboarding gate
+    # iff it reaches the app outside a gated family router. setup_router
+    # carries its own viewer_write_guard. New console routes go on their area
+    # router.
+    console = APIRouter(dependencies=[Depends(viewer_write_guard)])
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -653,8 +663,9 @@ def _register_routes(app: FastAPI) -> None:
     # mounting (the route-inventory contract test additionally catches a plugin
     # colliding with a CORE route), then mount each behind a gated wrapper so
     # plugin routes run behind require_onboarded like every console route. The
-    # wrapper is needed because the `console` aggregator is ungated (P0b: the
-    # gate rides each per-area router); on main's pre-P0b layout the gated
+    # wrapper is needed because the onboarding gate rides each per-area router,
+    # not the console aggregator (viewer_write_guard rides the aggregator but
+    # require_onboarded does not); on main's pre-P0b layout the gated
     # `protected` router provided this at runtime. URLs are frozen contract, so
     # no prefix is forced. Empty registry => nothing built, nothing mounted,
     # byte-identical route table.

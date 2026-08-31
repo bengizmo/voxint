@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from voxint.api.api_app import ApiKeyDep, ApiSessionDep
+from voxint.api.api_app import ApiKeyDep, ApiSessionDep, ApiWriteDep
 from voxint.db.models import PipelineRun
 from voxint.ingest.service import (
     IngestError,
@@ -161,7 +161,7 @@ def _lifecycle_action(
 def cancel(
     run_id: uuid.UUID,
     body: LifecycleRequest,
-    identity: ApiKeyDep,
+    identity: ApiWriteDep,
     session: ApiSessionDep,
 ) -> RunResponse:
     return _lifecycle_action(session, run_id, body, cancel_run)
@@ -171,7 +171,7 @@ def cancel(
 def pause(
     run_id: uuid.UUID,
     body: LifecycleRequest,
-    identity: ApiKeyDep,
+    identity: ApiWriteDep,
     session: ApiSessionDep,
 ) -> RunResponse:
     return _lifecycle_action(session, run_id, body, pause_run)
@@ -181,7 +181,7 @@ def pause(
 def do_resume(
     run_id: uuid.UUID,
     body: LifecycleRequest,
-    identity: ApiKeyDep,
+    identity: ApiWriteDep,
     session: ApiSessionDep,
 ) -> RunResponse:
     return _lifecycle_action(session, run_id, body, resume_run)
