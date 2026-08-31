@@ -6,6 +6,7 @@
 {%- if projects %}{{ projects|length }} project{{ "s" if projects|length != 1 else "" }}{% else %}no projects yet{% endif -%}
 {% endblock %}
 {% block cb_actions %}
+{% if shell.can_write %}
 <details class="spk-create-dd"{% if error %} open{% endif %} ontoggle="if(this.open)this.querySelector('input[type=text]').focus()">
   <summary class="cb-btn cb-btn-primary">+ New project</summary>
   <form class="spk-create-form" method="post" action="/projects">
@@ -17,6 +18,7 @@
     <button type="submit" class="cb-btn cb-btn-primary">Create</button>
   </form>
 </details>
+{% endif %}
 {% endblock %}
 
 {% block body %}

@@ -28,7 +28,7 @@
           {% else %}
             <span class="muted">not set</span>
           {% endif %}
-          {% if not archived %}
+          {% if not archived and shell.can_write %}
           <form class="inline" method="post"
                 action="/speakers/{{ speaker.id }}/profile"
                 hx-post="/speakers/{{ speaker.id }}/profile"

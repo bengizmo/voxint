@@ -26,6 +26,7 @@ working rendition, not a certified translation.</p>
   {% if translation_state.job.started_at %}· started {{ translation_state.job.started_at.strftime("%Y-%m-%d %H:%M") }}
   {% else %}· queued {{ translation_state.job.created_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}
 </p>
+{% if shell.can_write %}
 <form class="inline" method="post"
       action="/runs/{{ translation_state.run_id }}/translation/{{ translation_state.job.id }}/cancel"
       hx-post="/runs/{{ translation_state.run_id }}/translation/{{ translation_state.job.id }}/cancel"
@@ -33,6 +34,7 @@ working rendition, not a certified translation.</p>
   <input type="hidden" name="csrf_token" value="{{ csrf_translation_cancel }}">
   <button type="submit">Cancel</button>
 </form>
+{% endif %}
 {% endif %}
 
 {% for entry in translation_state.translations %}
@@ -68,7 +70,7 @@ working rendition, not a certified translation.</p>
 </p>
 {% elif translation_state.source_problem %}
 <p class="muted">{{ translation_state.source_problem }}</p>
-{% elif not translation_state.job_active %}
+{% elif not translation_state.job_active and shell.can_write %}
 <form class="inline" method="post" action="/runs/{{ translation_state.run_id }}/translation/generate"
       hx-post="/runs/{{ translation_state.run_id }}/translation/generate"
       hx-target="#run-translation-{{ translation_state.run_id }}" hx-swap="outerHTML">

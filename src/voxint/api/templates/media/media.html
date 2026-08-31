@@ -13,7 +13,7 @@
   <a href="/media?sort={{ sort }}&view={{ value }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
   {% endfor %}
 </nav>
-{% if not archived and not trashed %}
+{% if not archived and not trashed and shell.can_write %}
 <div class="add-media-dd" data-dropdown>
   <button type="button" class="cb-btn cb-btn-primary" data-dropdown-toggle aria-expanded="false" aria-haspopup="true">+ Add media</button>
   <div class="add-media-menu" data-dropdown-menu hidden>
@@ -101,7 +101,7 @@
 <p class="notice {{ notice.kind }}" role="status">{{ notice.text }}</p>
 {% endif %}
 
-{% if not archived and not trashed %}
+{% if not archived and not trashed and shell.can_write %}
 {% if submitted %}
 <p class="notice" role="status">
   {% if submitted == "deferred" %}Queued for transcription. It will start when the worker is available.
@@ -181,6 +181,7 @@
   <input type="hidden" name="open" value="{{ open_folder_id }}">
   {% endif %}
 
+  {% if shell.can_write %}
   <div class="gt-action-bar" data-action-bar hidden>
     <span class="gt-count" data-selected-count>0 selected</span>
     {% if trashed %}
@@ -193,8 +194,9 @@
     <button type="submit" formaction="/media/trash" name="csrf_token" value="{{ csrf_media_trash }}" class="cb-btn cb-btn-danger" style="border:0;background:transparent">Delete...</button>
     {% endif %}
   </div>
+  {% endif %}
 
-  {% if not archived and not trashed %}
+  {% if not archived and not trashed and shell.can_write %}
   <div id="assign-panel-inline" class="add-media-panel" hidden style="margin-bottom:var(--space-3)">
     <label for="assign-folder">Assign settings folder
       <select id="assign-folder" name="media_folder_id">
@@ -452,7 +454,7 @@
 {% endif %}
 {% endif %}
 
-{% if trashed and rows %}
+{% if trashed and rows and shell.can_write %}
 <form method="post" action="/media/empty-trash" style="margin-top:var(--space-4)">
   <input type="hidden" name="csrf_token" value="{{ csrf_media_empty_trash }}">
   <p class="oc-muted">Emptying the trash permanently deletes the files from disk. This cannot be undone.</p>
