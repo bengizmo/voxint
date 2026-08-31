@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Voxint — media settings{% endblock %}
+{% block body %}
+{% from "settings/_tab_strip.html" import settings_tabs with context %}
+{{ settings_tabs("media") }}
+<div class="settings">
+<h1>Media</h1>
+{% include "settings/_folders.html" %}
+{% include "settings/_sources.html" %}
+</div>
+{% endblock %}

@@ -2042,10 +2042,12 @@ def _settings_context(
         () if settings.console_settings_enabled else collect_service_identity(settings)
     )
     # Plugin settings sections (issue #138): each active plugin's section,
-    # ordered by (order, section_id), rendered after the hand-built core
-    # sections by the section loop in settings.html. Empty registry => () =>
-    # nothing rendered, and the core sections are untouched.
+    # ordered by (order, section_id). Console 2.0 renders these on Plugins;
+    # the legacy flat page retains its original section loop.
     context["plugin_settings_sections"] = request.app.state.plugins.settings_sections()
+    context["plugins"] = settings_view.build_plugins_view(
+        request.app.state.plugins, row, settings
+    )
     # Benchmark section: most recent runs for the settings page.
     try:
         from voxint.db.models import BenchmarkRun
@@ -2068,24 +2070,60 @@ def _settings_context(
     return context
 
 def _settings_page_template(request: Request) -> str:
-    """The /settings page template for the current flag state (Console 2.0 P6,
-    #161). The flag branches CONTENT, not access: off is the current single long
-    page byte-identically; on is the regrouped hub that keeps every mutable
-    section (and its anchors) inline and links out to the read-only sub-pages.
-    Both render from the same _settings_context, so a POST error re-render lands
-    on whichever page the operator is using and loses no data."""
+    """Select the legacy page or the Console 2.0 tab owning this request.
+
+    Existing POST handlers use this helper for validation-error renders. Keeping
+    the ownership map here lets those routes and their form actions stay stable
+    while errors return to the tab containing the submitted form.
+    """
     settings: Settings = request.app.state.settings
-    return (
-        "settings/hub.html"
-        if settings.console_settings_enabled
-        else "settings/settings.html"
-    )
+    if not settings.console_settings_enabled:
+        return "settings/settings.html"
+    path = request.url.path
+    if path in {"/settings/folders", "/settings/watch-folder", "/settings/web-research"}:
+        return "settings/media.html"
+    if path in {
+        "/settings/llm",
+        "/settings/translation",
+        "/settings/corrections",
+        "/settings/glossary",
+        "/settings/semantic",
+    }:
+        return "settings/ai.html"
+    # Plugin-contributed POST paths are intentionally not known to core. Any
+    # remaining request rendered through this helper belongs to Plugins.
+    if path != "/settings" and path not in {
+        "/settings/features",
+        "/settings/tutorial/seed",
+        "/settings/tutorial/complete",
+        "/settings/tutorial/replay",
+    }:
+        return "settings/plugins.html"
+    return "settings/hub.html"
 
 
 @router.get("/settings", name="settings_page")
 def settings_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     return templates.TemplateResponse(
         request, _settings_page_template(request), _settings_context(request, session)
+    )
+
+
+@router.get("/settings/media", name="settings_media")
+def settings_media_page(
+    request: Request, operator: OperatorDep, session: SessionDep
+) -> Response:
+    return templates.TemplateResponse(
+        request, "settings/media.html", _settings_context(request, session)
+    )
+
+
+@router.get("/settings/ai", name="settings_ai")
+def settings_ai_page(
+    request: Request, operator: OperatorDep, session: SessionDep
+) -> Response:
+    return templates.TemplateResponse(
+        request, "settings/ai.html", _settings_context(request, session)
     )
 
 
@@ -2110,11 +2148,6 @@ def _app_settings_or_none(session: Session) -> AppSettings | None:
     except SQLAlchemyError:
         session.rollback()
         return None
-
-
-@router.get("/settings/features", name="settings_features")
-def settings_features_page(request: Request, operator: OperatorDep) -> Response:
-    return RedirectResponse("/settings#features", status_code=303)
 
 
 @router.get("/settings/status", name="settings_status")
@@ -2187,7 +2220,19 @@ def settings_plugins_page(
     registry: PluginRegistry = request.app.state.plugins
     row = _app_settings_or_none(session)
     view = settings_view.build_plugins_view(registry, row, settings)
-    context = _sub_page_context(request, plugins=view)
+    # Contributed settings sections are mutable and require the same context as
+    # the core tabs (CSRF plus plugin-owned state). Preserve the registry page's
+    # fail-soft behavior when the database is unavailable; forms cannot safely
+    # render then, but the in-memory installed/disabled inventory still can.
+    try:
+        context = _settings_context(request, session)
+    except SQLAlchemyError:
+        session.rollback()
+        context = _sub_page_context(
+            request, plugin_settings_sections=(), plugins=view
+        )
+    else:
+        context["plugins"] = view
     return templates.TemplateResponse(request, "settings/plugins.html", context)
 
 

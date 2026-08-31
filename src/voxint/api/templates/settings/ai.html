@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Voxint — AI settings{% endblock %}
+{% block body %}
+{% from "settings/_tab_strip.html" import settings_tabs with context %}
+{{ settings_tabs("ai") }}
+<div class="settings">
+<h1>AI</h1>
+{% include "settings/_llm.html" %}
+{% include "settings/_translation.html" %}
+{% include "settings/_corrections.html" %}
+{% include "settings/_glossary.html" %}
+{% include "settings/_semantic.html" %}
+</div>
+{% endblock %}

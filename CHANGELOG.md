@@ -7,6 +7,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Changed
+- **Settings IA: tabs** (#378). The settings hub is split into tabbed
+  sub-pages: General (appearance, features, tutorial), Media (folders,
+  sources), and AI (LLM, translation, corrections, glossary, semantic
+  search). All five existing sub-pages (Status, Hardware, Database,
+  Plugins, Users) now share a single tab strip include instead of
+  duplicating it. Old fragment links like `/settings#llm` redirect to
+  the correct tab. All POST routes unchanged. The legacy flat page
+  (flag off) is unaffected.
 - **Error normalization** (#376). Raw pipeline error strings are replaced with
   plain-language labels and recovery hints across all operator surfaces (home,
   editor, run detail, jobs). The original error is preserved in a collapsible

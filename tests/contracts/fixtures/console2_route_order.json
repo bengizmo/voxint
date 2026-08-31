@@ -648,7 +648,13 @@
     ]
   ],
   [
-    "/settings/features",
+    "/settings/media",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/settings/ai",
     [
       "GET"
     ]

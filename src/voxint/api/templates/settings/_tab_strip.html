@@ -1,0 +1,14 @@
+{% macro settings_tabs(active) -%}
+<nav class="filter-tabs" role="tablist" aria-label="Settings pages">
+  <a href="/settings" role="tab"{% if active == "general" %} aria-current="true"{% endif %}>General</a>
+  <a href="/settings/media" role="tab"{% if active == "media" %} aria-current="true"{% endif %}>Media</a>
+  <a href="/settings/ai" role="tab"{% if active == "ai" %} aria-current="true"{% endif %}>AI</a>
+  <a href="/settings/status" role="tab"{% if active == "status" %} aria-current="true"{% endif %}>Status</a>
+  <a href="/settings/hardware" role="tab"{% if active == "hardware" %} aria-current="true"{% endif %}>Hardware</a>
+  <a href="/settings/database" role="tab"{% if active == "database" %} aria-current="true"{% endif %}>Database</a>
+  <a href="/settings/plugins" role="tab"{% if active == "plugins" %} aria-current="true"{% endif %}>Plugins</a>
+  {% if shell.users_enabled %}<a href="/settings/users" role="tab"{% if active == "users" %} aria-current="true"{% endif %}>Users</a>{% endif %}
+  <span class="ft-spacer"></span>
+  <span class="oc-muted">Some changes restart parts of Voxint -- it tells you before it does.</span>
+</nav>
+{%- endmacro %}

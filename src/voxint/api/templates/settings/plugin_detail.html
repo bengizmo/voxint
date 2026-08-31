@@ -25,7 +25,7 @@
 
 {% if plugin.section %}
 {# The plugin owns this section's controls and its own CSRF-guarded form; it is
-   the same template the settings hub renders inline. #}
+   the same template the Plugins tab renders inline. #}
 {% include plugin.section.template %}
 {% else %}
 <section>
