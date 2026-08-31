@@ -220,6 +220,7 @@
     merged into {{ entry.merged_into_name }}
     {% else %}
     archived
+    {% if shell.can_write %}
     <form class="inline" method="post"
           action="/speakers/{{ entry.speaker.id }}/restore?{{ qs }}"
           hx-post="/speakers/{{ entry.speaker.id }}/restore?{{ qs }}"
@@ -227,6 +228,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_restore }}">
       <button type="submit">Restore</button>
     </form>
+    {% endif %}
     {% endif %}
   </p>
   {% endfor %}

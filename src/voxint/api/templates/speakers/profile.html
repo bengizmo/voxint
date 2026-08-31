@@ -7,7 +7,7 @@
 {%- if aggregate.verified %}{{ chip("verified by you") }}{% elif aggregate.files > 0 %}{{ chip("needs you") }}{% endif -%}
 {% endblock %}
 {% block cb_actions %}
-{% if not archived %}
+{% if not archived and shell.can_write %}
 <a href="#profile-panel" class="cb-btn cb-btn-secondary">Edit profile</a>
 <details class="cb-overflow">
   <summary class="cb-btn cb-btn-secondary">Merge ▾</summary>

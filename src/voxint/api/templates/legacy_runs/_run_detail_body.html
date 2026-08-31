@@ -44,7 +44,7 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
 </dl>
 {% if run.error %}<p class="error">{{ run.error }}</p>{% endif %}
 
-{% if run.status == "failed" %}
+{% if run.status == "failed" and shell.can_write %}
 <form method="post" action="/runs/{{ run.id }}/requeue" class="requeue">
   {# Carry the revision we rendered so a stale tab's requeue 409s (exact-revision CAS). #}
   <input type="hidden" name="revision" value="{{ run.revision }}">
@@ -66,7 +66,7 @@ pipeline.</p>
 {% endif %}
 {% endif %}
 
-{% if run.status in ("queued", "running") %}
+{% if run.status in ("queued", "running") and shell.can_write %}
 <form method="post" action="/runs/{{ run.id }}/pause" class="pause action-row">
   <input type="hidden" name="revision" value="{{ run.revision }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_pause }}">
@@ -83,7 +83,7 @@ pipeline.</p>
 </form>
 {% endif %}
 
-{% if run.status in ("queued", "running", "awaiting_adjudication") %}
+{% if run.status in ("queued", "running", "awaiting_adjudication") and shell.can_write %}
 <form method="post" action="/runs/{{ run.id }}/cancel" class="cancel action-row">
   <input type="hidden" name="revision" value="{{ run.revision }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_cancel }}">
@@ -100,7 +100,7 @@ pipeline.</p>
 </form>
 {% endif %}
 
-{% if run.status == "paused" %}
+{% if run.status == "paused" and shell.can_write %}
 <form method="post" action="/runs/{{ run.id }}/resume" class="resume action-row">
   <input type="hidden" name="revision" value="{{ run.revision }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_resume }}">
@@ -128,7 +128,7 @@ pipeline.</p>
   {% endif %}
 </p>
 
-{% if run_terminal %}
+{% if run_terminal and shell.can_write %}
 {# Archive / un-archive + derived-media deletion (issue #5). Only terminal runs
    (completed / failed / cancelled) — a live run must be cancelled first. #}
 <section class="card">
@@ -214,12 +214,18 @@ pipeline.</p>
 
 <section class="card">
 <h2>Operator notes</h2>
+{% if shell.can_write %}
 <form method="post" action="/runs/{{ run.id }}/notes" class="notes">
   <input type="hidden" name="csrf_token" value="{{ csrf_notes }}">
   <textarea name="notes" rows="4" maxlength="10000"
             placeholder="Your notes for this run (who is speaking, context, follow-ups…)">{{ run.operator_notes or "" }}</textarea>
   <button type="submit">Save notes</button>
 </form>
+{% elif run.operator_notes %}
+<p>{{ run.operator_notes }}</p>
+{% else %}
+<p class="oc-muted">No operator notes.</p>
+{% endif %}
 </section>
 
 {% include "legacy_runs/run_assets.html" %}

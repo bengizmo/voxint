@@ -28,12 +28,14 @@
   </div>
   {% else %}
   <p class="claim-state off">Not claimed by this tab — decisions are disabled.</p>
+  {% if shell.can_write %}
   <div class="card-actions">
     <form method="post" action="/review/{{ run.id }}/claim" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_claim }}">
       <button type="submit" class="primary">Claim for review</button>
     </form>
   </div>
+  {% endif %}
   {% endif %}
 </header>
 

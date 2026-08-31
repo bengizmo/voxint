@@ -48,10 +48,14 @@
       </div>
       <span>{{ e.claimed_by or "—" }}</span>
       <div>
+        {% if shell.can_write %}
         <form method="post" action="/review/{{ e.run_id }}/claim">
           <input type="hidden" name="csrf_token" value="{{ csrf_claim }}">
           <button type="submit" class="cb-btn cb-btn-primary">Review</button>
         </form>
+        {% else %}
+        <a href="/review/{{ e.run_id }}" class="cb-btn cb-btn-secondary">View</a>
+        {% endif %}
       </div>
     </div>
     {% endfor %}
