@@ -118,3 +118,20 @@ def test_source_hash_changes_on_different_input() -> None:
 def test_source_hash_empty() -> None:
     h = source_hash([])
     assert len(h) == 64
+
+
+def test_artifact_lock_key_distinct_per_scope() -> None:
+    from voxint.api.explore_query import _artifact_lock_key
+
+    project_a = uuid.uuid4()
+    project_b = uuid.uuid4()
+    keys = [
+        _artifact_lock_key("all", None),
+        _artifact_lock_key("project", project_a),
+        _artifact_lock_key("project", project_b),
+    ]
+    assert len(set(keys)) == len(keys), "each scope must get its own advisory lock"
+    for key in keys:
+        assert 0 <= key <= 0x7FFFFFFF
+    # Deterministic: the same scope always maps to the same key.
+    assert _artifact_lock_key("project", project_a) == keys[1]
