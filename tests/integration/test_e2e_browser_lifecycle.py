@@ -17,6 +17,8 @@ from pathlib import Path
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 from tools.e2e_browser_lifecycle import (
+    _EDITOR_SEGMENTS,
+    _EDITOR_SPLIT_ELIGIBLE,
     _SEED_SEGMENTS,
     Expectation,
     reconcile_run,
@@ -24,12 +26,14 @@ from tools.e2e_browser_lifecycle import (
 )
 
 from voxint.adjudication.review_state import set_correction, set_verified
+from voxint.adjudication.splits import splittable_words
 from voxint.db.models import (
     ArtifactKind,
     AudioArtifact,
     MediaItem,
     PipelineRun,
     RunStatus,
+    SegmentSplitBoundary,
     TranscriptSegment,
 )
 
@@ -47,7 +51,7 @@ def test_seed_builds_a_completed_review_run(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
     with session_factory() as session:
-        run_id = seed_browser_run(session, tmp_path)
+        run_id, _media_id = seed_browser_run(session, tmp_path)
 
     with session_factory() as session:
         run = session.get(PipelineRun, run_id)
@@ -79,7 +83,7 @@ def test_reconcile_passes_on_matching_durable_state(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
     with session_factory() as session:
-        run_id = seed_browser_run(session, tmp_path)
+        run_id, _media_id = seed_browser_run(session, tmp_path)
 
     with session_factory() as session:
         segs = _segments(session, run_id)
@@ -103,7 +107,7 @@ def test_reconcile_flags_under_and_over_verification(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
     with session_factory() as session:
-        run_id = seed_browser_run(session, tmp_path)
+        run_id, _media_id = seed_browser_run(session, tmp_path)
 
     with session_factory() as session:
         segs = _segments(session, run_id)
@@ -130,7 +134,7 @@ def test_reconcile_flags_over_verification(
     # The browser verified a segment the expectation did NOT list — the fail-closed
     # claim is "over- and under-verification both fail" (codex+kimi review).
     with session_factory() as session:
-        run_id = seed_browser_run(session, tmp_path)
+        run_id, _media_id = seed_browser_run(session, tmp_path)
 
     with session_factory() as session:
         segs = _segments(session, run_id)
@@ -155,7 +159,7 @@ def test_reconcile_flags_unexpected_correction(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
     with session_factory() as session:
-        run_id = seed_browser_run(session, tmp_path)
+        run_id, _media_id = seed_browser_run(session, tmp_path)
 
     with session_factory() as session:
         segs = _segments(session, run_id)
@@ -178,7 +182,7 @@ def test_reconcile_flags_wrong_correction_text(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
     with session_factory() as session:
-        run_id = seed_browser_run(session, tmp_path)
+        run_id, _media_id = seed_browser_run(session, tmp_path)
 
     with session_factory() as session:
         segs = _segments(session, run_id)
@@ -206,3 +210,184 @@ def test_reconcile_reports_missing_run(
     with session_factory() as session:
         problems = reconcile_run(session, uuid.uuid4(), expect)
     assert any("no transcript segments" in p for p in problems)
+
+
+# --- Editor fixture tests (Phase 6a, #157) ---
+
+
+def test_seed_editor_fixture_builds_30_segments(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory() as session:
+        run_id, media_id = seed_browser_run(session, tmp_path, fixture="editor")
+
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        assert run.status == RunStatus.COMPLETED.value
+
+        media = session.get(MediaItem, media_id)
+        assert media is not None
+        assert media.duration_seconds == pytest.approx(5.0 * len(_EDITOR_SEGMENTS))
+
+        segs = _segments(session, run_id)
+        assert len(segs) == len(_EDITOR_SEGMENTS)
+        labels = {s.diarization_label for s in segs}
+        assert labels == {"S0", "S1", "S2", "S3"}
+
+
+def test_seed_returns_media_id(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory() as session:
+        run_id, media_id = seed_browser_run(session, tmp_path)
+
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        media = session.get(MediaItem, media_id)
+        assert media is not None
+        assert run.media_item_id == media_id
+
+
+def test_editor_fixture_split_eligible_segments_are_splittable(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory() as session:
+        run_id, _media_id = seed_browser_run(session, tmp_path, fixture="editor")
+
+    with session_factory() as session:
+        segs = _segments(session, run_id)
+        for seg in segs:
+            words = splittable_words(seg)
+            if seg.segment_index in _EDITOR_SPLIT_ELIGIBLE:
+                assert words is not None, (
+                    f"segment {seg.segment_index} marked split-eligible "
+                    f"but splittable_words returned None"
+                )
+                assert len(words) >= 2
+            else:
+                if seg.segment_index == 0:
+                    assert words is None
+
+
+def test_reconcile_flags_unexpected_splits(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    import uuid as uuid_mod
+
+    with session_factory() as session:
+        run_id, _media_id = seed_browser_run(session, tmp_path)
+
+    with session_factory() as session:
+        segs = _segments(session, run_id)
+        session.add(
+            SegmentSplitBoundary(
+                id=uuid_mod.uuid4(),
+                pipeline_run_id=run_id,
+                parent_segment_id=segs[2].id,
+                word_index=2,
+                operator="e2e-test",
+            )
+        )
+        session.commit()
+
+    expect = Expectation.from_dict(
+        {
+            "verified_segment_indexes": [],
+            "corrections": {},
+            "progress": {"verified": 0, "total": len(_SEED_SEGMENTS)},
+        }
+    )
+    with session_factory() as session:
+        problems = reconcile_run(session, run_id, expect)
+    assert any("unexpected splits" in p and "2" in p for p in problems)
+
+
+def test_reconcile_flags_missing_splits(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory() as session:
+        run_id, _media_id = seed_browser_run(session, tmp_path)
+
+    expect = Expectation.from_dict(
+        {
+            "verified_segment_indexes": [],
+            "corrections": {},
+            "progress": {"verified": 0, "total": len(_SEED_SEGMENTS)},
+            "split_parent_indexes": [2],
+        }
+    )
+    with session_factory() as session:
+        problems = reconcile_run(session, run_id, expect)
+    assert any("expected splits" in p and "2" in p for p in problems)
+
+
+def test_reconcile_passes_with_expected_splits(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    import uuid as uuid_mod
+
+    with session_factory() as session:
+        run_id, _media_id = seed_browser_run(session, tmp_path)
+
+    with session_factory() as session:
+        segs = _segments(session, run_id)
+        session.add(
+            SegmentSplitBoundary(
+                id=uuid_mod.uuid4(),
+                pipeline_run_id=run_id,
+                parent_segment_id=segs[2].id,
+                word_index=2,
+                operator="e2e-test",
+            )
+        )
+        session.commit()
+
+    expect = Expectation.from_dict(
+        {
+            "verified_segment_indexes": [],
+            "corrections": {},
+            "progress": {"verified": 0, "total": len(_SEED_SEGMENTS)},
+            "split_parent_indexes": [2],
+        }
+    )
+    with session_factory() as session:
+        assert reconcile_run(session, run_id, expect) == []
+
+
+def test_reconcile_flags_wrong_annotation_count(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory() as session:
+        run_id, _media_id = seed_browser_run(session, tmp_path)
+
+    expect = Expectation.from_dict(
+        {
+            "verified_segment_indexes": [],
+            "corrections": {},
+            "progress": {"verified": 0, "total": len(_SEED_SEGMENTS)},
+            "expected_annotations": 3,
+        }
+    )
+    with session_factory() as session:
+        problems = reconcile_run(session, run_id, expect)
+    assert any("annotation count=0" in p and "expected 3" in p for p in problems)
+
+
+def test_reconcile_passes_with_zero_annotations_expected(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory() as session:
+        run_id, _media_id = seed_browser_run(session, tmp_path)
+
+    expect = Expectation.from_dict(
+        {
+            "verified_segment_indexes": [],
+            "corrections": {},
+            "progress": {"verified": 0, "total": len(_SEED_SEGMENTS)},
+            "expected_annotations": 0,
+        }
+    )
+    with session_factory() as session:
+        assert reconcile_run(session, run_id, expect) == []

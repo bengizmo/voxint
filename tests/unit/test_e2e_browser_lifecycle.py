@@ -15,9 +15,15 @@ from pathlib import Path
 
 import pytest
 from tools.e2e_browser_lifecycle import (
+    _CORRECTED_SEGMENT_INDEX,
+    _EDITOR_SEGMENTS,
+    _EDITOR_SPLIT_ELIGIBLE,
+    FIXTURE_CHOICES,
     GITKEEP,
     Expectation,
     _admin_url,
+    _benchmark_segments,
+    _faithful_word_timings,
     _guarded,
     _silent_wav_bytes,
     assert_disposable_db,
@@ -224,3 +230,126 @@ def test_cmd_reconcile_exits_when_no_expectation_given() -> None:
     with pytest.raises(SystemExit) as exc:
         cmd_reconcile(args)
     assert exc.value.code == 1
+
+
+# --- Phase 6a: editor fixture + extended reconciliation ---
+
+
+def test_editor_segments_has_four_speakers() -> None:
+    labels = {label for label, _, _ in _EDITOR_SEGMENTS}
+    assert labels == {"S0", "S1", "S2", "S3"}
+
+
+def test_editor_segments_has_varied_confidence() -> None:
+    confs = [c for _, _, c in _EDITOR_SEGMENTS]
+    assert any(c is not None and c < 0.6 for c in confs)
+    assert any(c is None for c in confs)
+    assert any(c is not None and c >= 0.6 for c in confs)
+
+
+def test_benchmark_segments_produces_2000() -> None:
+    segs = _benchmark_segments()
+    assert len(segs) == 2000
+
+
+def test_benchmark_segments_custom_count() -> None:
+    segs = _benchmark_segments(count=50)
+    assert len(segs) == 50
+
+
+def test_fixture_choices_tuple() -> None:
+    assert FIXTURE_CHOICES == ("review", "editor", "benchmark")
+
+
+def test_parser_seed_fixture_flag() -> None:
+    for fixture in FIXTURE_CHOICES:
+        args = build_parser().parse_args(
+            ["seed", "--database-url", _DISPOSABLE, "--fixture", fixture]
+        )
+        assert args.fixture == fixture
+
+
+def test_parser_seed_fixture_default() -> None:
+    args = build_parser().parse_args(["seed", "--database-url", _DISPOSABLE])
+    assert args.fixture == "review"
+
+
+def test_expectation_from_dict_with_splits() -> None:
+    expect = Expectation.from_dict(
+        {
+            "verified_segment_indexes": [],
+            "corrections": {},
+            "progress": {"verified": 0, "total": 5},
+            "split_parent_indexes": [2, 4],
+        }
+    )
+    assert expect.split_parent_indexes == frozenset({2, 4})
+
+
+def test_expectation_from_dict_with_annotations() -> None:
+    expect = Expectation.from_dict(
+        {
+            "verified_segment_indexes": [],
+            "corrections": {},
+            "progress": {"verified": 0, "total": 5},
+            "expected_annotations": 3,
+        }
+    )
+    assert expect.expected_annotations == 3
+
+
+def test_expectation_from_dict_defaults_editor_fields() -> None:
+    expect = Expectation.from_dict({"progress": {"verified": 0, "total": 3}})
+    assert expect.split_parent_indexes == frozenset()
+    assert expect.expected_annotations is None
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"split_parent_indexes": "nope", "progress": {"verified": 0, "total": 1}},
+        {"split_parent_indexes": [True], "progress": {"verified": 0, "total": 1}},
+        {"split_parent_indexes": [-1], "progress": {"verified": 0, "total": 1}},
+        {"split_parent_indexes": [1, 1], "progress": {"verified": 0, "total": 1}},
+        {"expected_annotations": True, "progress": {"verified": 0, "total": 1}},
+        {"expected_annotations": -1, "progress": {"verified": 0, "total": 1}},
+        {"expected_annotations": "3", "progress": {"verified": 0, "total": 1}},
+    ],
+)
+def test_expectation_from_dict_rejects_malformed_editor_fields(
+    data: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError):
+        Expectation.from_dict(data)
+
+
+def test_faithful_word_timings_reconstructs_text() -> None:
+    text = "hello world foo bar"
+    words = _faithful_word_timings(text, 0.0, 4.0)
+    assert len(words) == 4
+    joined = "".join(str(w["word"]) for w in words)
+    assert joined == text
+
+
+def test_faithful_word_timings_monotonic_starts() -> None:
+    words = _faithful_word_timings("a b c d e", 10.0, 15.0)
+    starts = [float(w["start"]) for w in words]  # type: ignore[arg-type]
+    assert starts == sorted(starts)
+    assert all(float(w["start"]) >= 10.0 for w in words)  # type: ignore[arg-type]
+    assert all(float(w["end"]) <= 15.0 for w in words)  # type: ignore[arg-type]
+
+
+def test_split_eligible_excludes_corrected_index() -> None:
+    assert _CORRECTED_SEGMENT_INDEX not in _EDITOR_SPLIT_ELIGIBLE
+
+
+def test_split_eligible_indexes_within_editor_range() -> None:
+    assert all(0 <= i < len(_EDITOR_SEGMENTS) for i in _EDITOR_SPLIT_ELIGIBLE)
+
+
+def test_seed_browser_run_rejects_unknown_fixture() -> None:
+    with pytest.raises(ValueError, match="unknown fixture"):
+        from unittest.mock import MagicMock
+
+        seed = __import__("tools.e2e_browser_lifecycle", fromlist=["seed_browser_run"])
+        seed.seed_browser_run(MagicMock(), MagicMock(), fixture="bogus")

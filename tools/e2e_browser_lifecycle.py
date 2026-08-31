@@ -64,7 +64,9 @@ from voxint.db.models import (
     PipelineRun,
     RunStatus,
     SegmentReviewState,
+    SegmentSplitBoundary,
     Speaker,
+    TranscriptAnnotation,
     TranscriptSegment,
 )
 from voxint.domain_packs.corrections import parse_corrections
@@ -104,6 +106,129 @@ _E2E_CORRECTIONS: tuple[dict[str, str], ...] = (
     {"id": "ghost", "match": "quarterly synergies", "replace": "Q3 results"},
 )
 _CORRECTED_SEGMENT_INDEX = 0
+
+# ---------------------------------------------------------------------------
+# Editor fixture (30 segments, 4 speakers) — Phase 6a (#157).
+# A meeting between S0 (moderator), S1-S3 (participants). Varied confidence,
+# long texts for split testing, correction provenance on segment 0 (same
+# "everyone" → "everybody" rule fires). Used by `--fixture editor`.
+# ---------------------------------------------------------------------------
+_EDITOR_SEGMENTS: tuple[tuple[str, str, float | None], ...] = (
+    ("S0", "Welcome everyone, let us get started with the weekly sync.", 0.93),
+    ("S1", "Thanks for having me.", 0.89),
+    ("S0", "First item on the agenda is the progress report from last week.", 0.91),
+    ("S2", "I can cover that.", 0.38),
+    (  # long, split-eligible
+        "S2",
+        "We shipped the database migration on Tuesday and ran the backfill"
+        " overnight which completed without errors by Wednesday morning.",
+        0.87,
+    ),
+    ("S1", "That was faster than expected.", 0.44),
+    ("S3", "I have a question about the migration.", 0.92),
+    (  # long, split-eligible
+        "S3",
+        "Did we validate the row counts after the backfill finished"
+        " or did we just check the exit code?",
+        0.85,
+    ),
+    (
+        "S2",
+        "We validated both the row counts and ran a checksum"
+        " comparison against the source tables.",
+        0.90,
+    ),
+    ("S0", "Good.", 0.96),
+    ("S1", "Moving on.", None),
+    ("S0", "Next item is the deployment timeline for the new feature.", 0.88),
+    (  # long, split-eligible
+        "S3",
+        "We are targeting Thursday for staging and Friday for production"
+        " if the smoke tests pass.",
+        0.82,
+    ),
+    ("S1", "I think we should add an extra day of buffer.", 0.35),
+    ("S2", "Agreed.", 0.91),
+    ("S0", "Let us plan for Thursday staging and Monday production then.", 0.94),
+    ("S3", "Works for me.", 0.87),
+    ("S1", "Same here.", 0.42),
+    ("S0", "Third item is the customer feedback from the beta program.", 0.89),
+    (  # long, split-eligible
+        "S2",
+        "The main feedback themes were around the onboarding flow and the"
+        " search functionality both of which came up in multiple sessions.",
+        0.86,
+    ),
+    (  # long, split-eligible
+        "S3",
+        "The search complaints were specifically about relevance ranking"
+        " and missing results for partial matches.",
+        0.83,
+    ),
+    ("S1", "We saw similar patterns in the support tickets.", 0.39),
+    ("S0", "What is the proposed fix?", 0.95),
+    (  # long, split-eligible
+        "S2",
+        "We are planning to switch from exact match to fuzzy matching"
+        " with a relevance threshold.",
+        0.88,
+    ),
+    ("S3", "That should cover most of the reported cases.", 0.84),
+    ("S1", "Can we get metrics on the impact?", None),
+    (
+        "S0",
+        "Yes let us track the search success rate before and after the change.",
+        0.92,
+    ),
+    ("S2", "I will set up the dashboard this week.", 0.30),
+    ("S3", "I can help with the A B testing framework if needed.", 0.41),
+    ("S0", "Great, that wraps up the agenda for today.", 0.97),
+)
+
+# Indexes of editor segments that carry word timings (split-eligible).
+# Must NOT include _CORRECTED_SEGMENT_INDEX (correction trace blocks splitting).
+_EDITOR_SPLIT_ELIGIBLE: frozenset[int] = frozenset({4, 7, 12, 19, 20, 23})
+
+FIXTURE_CHOICES = ("review", "editor", "benchmark")
+
+_FIXTURE_SEGMENTS: dict[str, tuple[tuple[str, str, float | None], ...]] = {
+    "review": _SEED_SEGMENTS,
+    "editor": _EDITOR_SEGMENTS,
+}
+
+
+def _benchmark_segments(count: int = 2000) -> tuple[tuple[str, str, float | None], ...]:
+    """Generate ``count`` segments by cycling the editor fixture with varied confidence."""
+    base = _EDITOR_SEGMENTS
+    result: list[tuple[str, str, float | None]] = []
+    for i in range(count):
+        _label, text, conf = base[i % len(base)]
+        speaker = f"S{i % 6}"
+        if conf is not None:
+            conf = round(max(0.1, min(0.99, conf + (i % 7 - 3) * 0.05)), 2)
+        result.append((speaker, f"[{i}] {text}", conf))
+    return tuple(result)
+
+
+def _faithful_word_timings(
+    raw_text: str, start: float, end: float
+) -> list[dict[str, object]]:
+    """Deterministic word timings faithful to ``raw_text``.
+
+    Splits on whitespace and distributes time evenly. The joined word texts
+    reconstruct ``raw_text`` exactly (leading space on each token after the
+    first preserves inter-word whitespace), satisfying ``splittable_words``.
+    """
+    tokens = raw_text.split(" ")
+    duration = end - start
+    step = duration / len(tokens)
+    words: list[dict[str, object]] = []
+    for i, tok in enumerate(tokens):
+        w_start = round(start + i * step, 4)
+        w_end = round(start + (i + 1) * step, 4)
+        word_text = f" {tok}" if i > 0 else tok
+        words.append({"word": word_text, "start": w_start, "end": w_end})
+    return words
 
 
 def fail(msg: str) -> None:
@@ -220,17 +345,28 @@ def _silent_wav_bytes(seconds: float) -> bytes:
     return buf.getvalue()
 
 
-def seed_browser_run(session: Session, media_root: Path) -> uuid.UUID:
-    """A COMPLETED run shaped for the review loop: audio + varied-confidence text.
+def seed_browser_run(
+    session: Session,
+    media_root: Path,
+    *,
+    fixture: str = "review",
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """A COMPLETED run shaped for the review/editor loop.
 
-    Mirrors ``tests/integration/test_review_api.py::_seed_run_with_confidences``
-    but adds what the browser lane needs and the enrichment seed lacks: a
-    PREPROCESSED_AUDIO artifact (playback source) and ``duration_seconds`` set on
-    the media item (without it ``playback_capability`` gates seeking off). LLM is
-    left off (``complete_onboarding`` is the caller's job) — this lane exercises
-    the transcript loop, not enrichment.
+    Returns ``(run_id, media_id)``. ``fixture`` selects the segment set:
+    ``"review"`` (5 segments, backward compat), ``"editor"`` (30 segments,
+    4 speakers, split-eligible text), or ``"benchmark"`` (2000 segments).
     """
-    duration = _SEGMENT_SECONDS * len(_SEED_SEGMENTS)
+    if fixture not in FIXTURE_CHOICES:
+        raise ValueError(
+            f"unknown fixture {fixture!r}; must be one of {FIXTURE_CHOICES}"
+        )
+    segments = (
+        _benchmark_segments() if fixture == "benchmark"
+        else _FIXTURE_SEGMENTS[fixture]
+    )
+    seg_seconds = 0.5 if fixture == "benchmark" else _SEGMENT_SECONDS
+    duration = seg_seconds * len(segments)
     media = MediaItem(
         source_path=f"e2e/{uuid.uuid4().hex}.wav",
         duration_seconds=duration,
@@ -254,7 +390,7 @@ def seed_browser_run(session: Session, media_root: Path) -> uuid.UUID:
     # seeded envelope is byte-faithful — never hand-rolled. Self-check: the seed rule
     # MUST materially fire, or the lane would assert a marker that never renders.
     correction_rules = parse_corrections([dict(c) for c in _E2E_CORRECTIONS])
-    corrected_raw = _SEED_SEGMENTS[_CORRECTED_SEGMENT_INDEX][1]
+    corrected_raw = segments[_CORRECTED_SEGMENT_INDEX][1]
     corrected = apply_corrections(
         corrected_raw,
         correction_rules,
@@ -288,20 +424,17 @@ def seed_browser_run(session: Session, media_root: Path) -> uuid.UUID:
         )
     )
 
-    for index, (label, seg_text, confidence) in enumerate(_SEED_SEGMENTS):
+    for index, (label, seg_text, confidence) in enumerate(segments):
         segment = TranscriptSegment(
             pipeline_run_id=run.id,
             segment_index=index,
-            start_seconds=float(index) * _SEGMENT_SECONDS,
-            end_seconds=float(index) * _SEGMENT_SECONDS + _SEGMENT_SECONDS,
+            start_seconds=float(index) * seg_seconds,
+            end_seconds=float(index) * seg_seconds + seg_seconds,
             raw_text=seg_text,
             diarization_label=label,
             confidence=confidence,
         )
         if index == _CORRECTED_SEGMENT_INDEX:
-            # Persist enhanced_text + the versioned trace envelope exactly as
-            # enhance_match does on a raw-pass correction. raw_text stays untouched
-            # (the console's compare/reset reads it), so effective≠raw is visible.
             segment.enhanced_text = corrected.text
             segment.correction_trace = {
                 "version": CORRECTOR_VERSION,
@@ -309,6 +442,10 @@ def seed_browser_run(session: Session, media_root: Path) -> uuid.UUID:
                 "entries": [entry.to_mapping() for entry in corrected.trace],
             }
             segment.corrector_version = CORRECTOR_VERSION
+        if fixture == "editor" and index in _EDITOR_SPLIT_ELIGIBLE:
+            segment.words = _faithful_word_timings(
+                seg_text, segment.start_seconds, segment.end_seconds
+            )
         session.add(segment)
         # A matching diarization turn per segment (issue #57): the waveform
         # strip paints TURNS, so without these the seeded strip would render
@@ -326,7 +463,7 @@ def seed_browser_run(session: Session, media_root: Path) -> uuid.UUID:
             )
         )
     session.commit()
-    return run.id
+    return run.id, media.id
 
 
 def _admin_url(url: str) -> str:
@@ -382,6 +519,7 @@ def _reset_schema_and_migrate(url: str) -> None:
 def cmd_seed(args: argparse.Namespace) -> None:
     url = _guarded(args.database_url)
     media_root = Path(args.media_root)
+    fixture = getattr(args, "fixture", "review")
     if args.create_db:
         _create_database(url)
     _reset_schema_and_migrate(url)
@@ -390,11 +528,14 @@ def cmd_seed(args: argparse.Namespace) -> None:
     with factory() as session:
         complete_onboarding(session, llm_enabled_default=False)
         session.commit()
-        run_id = seed_browser_run(session, media_root)
+        run_id, media_id = seed_browser_run(session, media_root, fixture=fixture)
     engine.dispose()
-    print(f"ok: seeded COMPLETED review run with {len(_SEED_SEGMENTS)} segments")
-    # Machine-readable line for the skill to capture.
+    seg_count = len(_benchmark_segments()) if fixture == "benchmark" else len(
+        _FIXTURE_SEGMENTS.get(fixture, _SEED_SEGMENTS)
+    )
+    print(f"ok: seeded COMPLETED {fixture} run with {seg_count} segments")
     print(f"RUN_ID={run_id}")
+    print(f"MEDIA_ID={media_id}")
     print("SEED PASS")
 
 
@@ -445,11 +586,20 @@ class Expectation:
     verified (all others must NOT be). ``corrections`` — segment_index → exact
     corrected text (a segment absent here must carry no correction). ``progress``
     — the ``(verified, total)`` N-of-M counter the console showed.
+
+    Editor-specific (Phase 6a, #157 — all optional, backward compatible):
+
+    ``split_parent_indexes`` — segment_index values expected to have at least
+    one ``SegmentSplitBoundary``; segments NOT listed here must have none.
+    ``expected_annotations`` — exact ``TranscriptAnnotation`` count for the run
+    (``None`` skips the check; default ``None``).
     """
 
     verified_indexes: frozenset[int]
     corrections: dict[int, str]
     progress: tuple[int, int]
+    split_parent_indexes: frozenset[int] = frozenset()
+    expected_annotations: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> Expectation:
@@ -476,6 +626,20 @@ class Expectation:
         prog = data.get("progress", {})
         if not isinstance(prog, dict) or "verified" not in prog or "total" not in prog:
             raise ValueError("progress must be an object with 'verified' and 'total'")
+        raw_splits = data.get("split_parent_indexes", [])
+        if not isinstance(raw_splits, list):
+            raise ValueError("split_parent_indexes must be a list of integers")
+        split_idxs = [_strict_index(i, "a split parent index") for i in raw_splits]
+        if len(set(split_idxs)) != len(split_idxs):
+            raise ValueError("split_parent_indexes contains duplicates")
+        raw_annot = data.get("expected_annotations")
+        if raw_annot is not None and (
+            isinstance(raw_annot, bool) or not isinstance(raw_annot, int) or raw_annot < 0
+        ):
+            raise ValueError(
+                "expected_annotations must be a non-negative integer"
+                f" or null, got {raw_annot!r}"
+            )
         return cls(
             verified_indexes=frozenset(indexes),
             corrections=corrections,
@@ -483,6 +647,8 @@ class Expectation:
                 _strict_index(prog["verified"], "progress.verified"),
                 _strict_index(prog["total"], "progress.total"),
             ),
+            split_parent_indexes=frozenset(split_idxs),
+            expected_annotations=raw_annot,
         )
 
 
@@ -537,6 +703,42 @@ def reconcile_run(session: Session, run_id: uuid.UUID, expect: Expectation) -> l
     got_progress = verified_progress(session, run_id)
     if got_progress != expect.progress:
         problems.append(f"progress={got_progress}, expected {expect.progress}")
+
+    split_rows = (
+        session.query(SegmentSplitBoundary)
+        .filter(SegmentSplitBoundary.pipeline_run_id == run_id)
+        .all()
+    )
+    split_parent_ids = {row.parent_segment_id for row in split_rows}
+    seg_id_to_index = {seg.id: seg.segment_index for seg in segments}
+    unmappable = split_parent_ids - seg_id_to_index.keys()
+    if unmappable:
+        problems.append(
+            f"split rows reference parent segment IDs not in this run: "
+            f"{sorted(str(s) for s in unmappable)}"
+        )
+    got_split_indexes = {seg_id_to_index[sid] for sid in split_parent_ids if sid in seg_id_to_index}
+    missing_splits = expect.split_parent_indexes - got_split_indexes
+    if missing_splits:
+        problems.append(f"expected splits on segments {sorted(missing_splits)} but none found")
+    extra_splits = got_split_indexes - expect.split_parent_indexes
+    if extra_splits:
+        problems.append(f"unexpected splits on segments {sorted(extra_splits)}")
+
+    if expect.expected_annotations is not None:
+        got_annot = (
+            session.query(TranscriptAnnotation)
+            .filter(
+                TranscriptAnnotation.pipeline_run_id == run_id,
+                TranscriptAnnotation.deleted_at.is_(None),
+            )
+            .count()
+        )
+        if got_annot != expect.expected_annotations:
+            problems.append(
+                f"annotation count={got_annot}, expected {expect.expected_annotations}"
+            )
+
     return problems
 
 
@@ -650,6 +852,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--create-db",
         action="store_true",
         help="create the database + vector extension first (fresh host)",
+    )
+    p_seed.add_argument(
+        "--fixture",
+        choices=FIXTURE_CHOICES,
+        default="review",
+        help="segment fixture: review (5 segs), editor (30 segs), benchmark (2000 segs)",
     )
     p_seed.set_defaults(func=cmd_seed)
 
