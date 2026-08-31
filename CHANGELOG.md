@@ -15,6 +15,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   duplicating it. Old fragment links like `/settings#llm` redirect to
   the correct tab. All POST routes unchanged. The legacy flat page
   (flag off) is unaffected.
+- **Run detail restructure** (#377). The run detail page (shared by `/runs`
+  and `/jobs`) puts the summary card first (status, readable stage name,
+  error with recovery hint, and the primary action). The Manage card moves
+  up, right after notices. Technical details (source path, revision, pipeline
+  models, glossary, detected language, stage ledger) fold into a collapsed
+  section. Speaker timeline shows readable durations. "Restart from scratch"
+  becomes "Run again from the beginning".
 - **Error normalization** (#376). Raw pipeline error strings are replaced with
   plain-language labels and recovery hints across all operator surfaces (home,
   editor, run detail, jobs). The original error is preserved in a collapsible
