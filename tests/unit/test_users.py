@@ -376,3 +376,47 @@ def test_reset_password_rejects_oversized(session: Session) -> None:
 
     with pytest.raises(ValueError):
         reset_password(session, user, "a" * 1025)
+
+
+# ---- viewer role (#363) ----
+
+
+def test_create_user_with_viewer_role(session: Session) -> None:
+    create_user(session, username="admin", password="secret")
+    user = create_user(
+        session, username="view", password="secret", role=UserRole.VIEWER
+    )
+    assert user.role == UserRole.VIEWER.value
+
+
+def test_set_role_to_viewer(session: Session) -> None:
+    create_user(session, username="admin", password="secret")
+    user = create_user(session, username="reviewer", password="secret")
+    set_role(session, user, UserRole.VIEWER)
+    assert user.role == UserRole.VIEWER.value
+
+
+def test_set_role_viewer_to_reviewer(session: Session) -> None:
+    create_user(session, username="admin", password="secret")
+    user = create_user(
+        session, username="view", password="secret", role=UserRole.VIEWER
+    )
+    set_role(session, user, UserRole.REVIEWER)
+    assert user.role == UserRole.REVIEWER.value
+
+
+def test_last_admin_cannot_become_viewer(session: Session) -> None:
+    user = create_user(session, username="admin", password="secret")
+    with pytest.raises(ValueError):
+        set_role(session, user, UserRole.VIEWER)
+    assert user.role == UserRole.ADMIN.value
+
+
+def test_viewer_authenticates(session: Session) -> None:
+    create_user(session, username="admin", password="secret")
+    create_user(
+        session, username="view", password="viewpw", role=UserRole.VIEWER
+    )
+    user = authenticate(session, username="view", password="viewpw")
+    assert user is not None
+    assert user.role == UserRole.VIEWER.value
