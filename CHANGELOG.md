@@ -6,6 +6,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **Editor content reorder** (#375). The outline panel (topics and entities)
+  moves below the transcript and starts collapsed with a count badge, putting
+  the work surface first. Transcript rows show one speaker display name
+  instead of duplicating the raw diarization label and display name. The
+  export section collapses into a single "Download transcript" button with a
+  compact format picker (reviewed text default; other variants in a nested
+  disclosure). The breadcrumb shows run status instead of duplicating the
+  live progress counter. A new Run card shows status, error, and
+  Retry/Re-run actions directly on the editor page.
+
 ### Added
 - **Single-operator auto-claim** (#374). When multi-user mode is off, the
   editor and workbench auto-claim on mount, removing the manual "Claim for

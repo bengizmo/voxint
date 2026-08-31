@@ -547,13 +547,22 @@
     details.match-why { margin: .2rem 0 .4rem; }
     details.match-why summary { cursor: pointer; font-size: .85rem; color: var(--ink-2); }
     details.match-why p { margin: .3rem 0 0; font-size: .85rem; }
-    /* Export picker (issue #52) */
-    details.export-menu { margin: 1rem 0; }
-    details.export-menu summary { cursor: pointer; font-weight: 600; }
-    details.export-menu ul { list-style: none; padding: 0; margin: .6rem 0 0; }
-    details.export-menu li { padding: .5rem 0; border-top: 1px solid var(--line); }
-    details.export-menu li:first-child { border-top: 0; }
-    .export-links { margin-top: .25rem; font-size: .9rem; }
+    /* Export picker (issues #52, #375) */
+    .export-menu { margin: 1rem 0; }
+    .export-menu > details > summary { cursor: pointer; font-weight: 600;
+                 display: inline-block; padding: .4rem .8rem;
+                 border: 1px solid var(--line); border-radius: var(--r-md);
+                 background: var(--surface-2); }
+    .export-dropdown { margin-top: .5rem; }
+    .export-format-list { list-style: none; padding: 0; margin: .4rem 0 0; }
+    .export-format-list li { display: flex; flex-wrap: wrap; align-items: baseline;
+                 gap: .25rem .6rem; padding: .35rem 0;
+                 border-top: 1px solid var(--line); }
+    .export-format-list li:first-child { border-top: 0; }
+    .export-variants { margin-top: .6rem; }
+    .export-variants > summary { cursor: pointer; color: var(--ink-2); }
+    .export-translated { margin-top: .4rem; }
+    .export-translated > summary { cursor: pointer; color: var(--ink-2); }
     .embedding-row { display: flex; gap: .8rem; align-items: baseline; flex-wrap: wrap;
                      padding: .25rem 0; font-size: .9rem; }
     /* Per-speaker identity accent (issue #50) — supplemental to the raw-label text.

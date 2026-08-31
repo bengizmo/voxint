@@ -29,6 +29,7 @@ from voxint.api.csrf import (
     CSRF_ANNOTATION_TAGS,
     CSRF_CLAIM,
     CSRF_CLIP_EXTRACT,
+    CSRF_RESTART,
     CSRF_TRANSLATION_GENERATE,
     mint_csrf_token,
 )
@@ -206,6 +207,12 @@ def media_detail_page(
         )
         island_props["multiUser"] = settings.voxint_multi_user
 
+    csrf_restart = (
+        mint_csrf_token(request.app.state.csrf_secret, CSRF_RESTART)
+        if selected_run_obj is not None
+        else None
+    )
+
     return templates.TemplateResponse(
         request,
         "editor/detail.html",
@@ -217,6 +224,7 @@ def media_detail_page(
             "island_props": island_props,
             "token": token if claim_valid else None,
             "progress": {"verified": verified_n, "total": total},
+            "csrf_restart": csrf_restart,
             "active_nav": "media",
         },
     )

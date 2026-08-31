@@ -738,13 +738,6 @@ export function MediaEditor({
 
   return (
     <>
-      <OutlinePanel
-        outline={outline}
-        segments={segments}
-        capability={capability}
-        onJump={goTo}
-      />
-
       <div ref={annotationRootRef}>
         {claimLost && (
           <p role="alert" className="notice text-sm">
@@ -1117,6 +1110,13 @@ export function MediaEditor({
             onLabelsChanged={onLabelsChanged}
           />
         </div>
+
+        <OutlinePanel
+          outline={outline}
+          segments={segments}
+          capability={capability}
+          onJump={goTo}
+        />
 
         <KeymapHelp
           open={helpOpen}
