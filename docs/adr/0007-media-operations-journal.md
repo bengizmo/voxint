@@ -83,8 +83,10 @@ that a second concurrent request for the same item fails at insert. This covers
 
 **2b. Claim lease (stale executor detection).**
 Each operation carries `claimed_by` (a per-process or per-request token) and
-`lease_expires_at`. The executor sets these at insert and renews them during
-long-running filesystem work. The reconciler steals an expired lease by a CAS on
+`lease_expires_at`. The executor sets these at insert. Nothing renews the lease
+during long-running filesystem work yet: a pass that outlives its lease is
+stealable mid-flight, and adding renewal plus per-action rechecks is tracked in
+issue #353. The reconciler steals an expired lease by a CAS on
 `claimed_by` that also checks `lease_expires_at < now()`. A dead executor
 (crashed process, killed request) does not wedge the row: once its lease
 expires, the reconciler takes over. This mirrors the `StageRun` lease pattern

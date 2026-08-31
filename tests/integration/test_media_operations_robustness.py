@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
+from typing import cast
 
 import pytest
+from sqlalchemy import event, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.db.models import (
+    OPERATION_TERMINAL_STATES,
     MediaItem,
     MediaOperation,
     MediaOperationFile,
@@ -27,7 +31,7 @@ from voxint.media.operations import (
     claim_operation,
     temp_path,
 )
-from voxint.media.reconcile import reconcile_operations
+from voxint.media.reconcile import _process_one, reconcile_operations
 
 
 def _media_file(media_root: Path) -> Path:
@@ -460,3 +464,219 @@ def test_reconciler_cleans_preexisting_cross_device_temp(
     assert summary.completed == 1
     assert not stale_temp.exists()
     _assert_completed_trash(session_factory, media_root, operation_id)
+
+
+def test_claim_winner_waits_out_transient_lock_holder(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """The claim winner waits for a transient row lock instead of skipping (#346).
+
+    Deterministic replay of the race behind the two-reconciler flake: after the
+    winner commits its claim (releasing its row lock), a second session briefly
+    holds the row lock, as a losing reconciler's pre-claim select does. The
+    winner's post-claim re-select must block until the holder lets go and then
+    complete the operation, never return "skipped" while holding the claim.
+    """
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    _media_file(media_root)
+    with session_factory() as session:
+        _media, operation = _expired_trash(session)
+        operation_id = operation.id
+        session.commit()
+
+    claim_committed = threading.Event()
+    holder_locked = threading.Event()
+    release_holder = threading.Event()
+    winner_done = threading.Event()
+    hook_installed = threading.Event()
+    pids: dict[str, int] = {}
+    outcomes: list[str] = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def instrumented_factory() -> Session:
+        # _process_one's first session gets a hook that pauses the winner
+        # right after its claim commit, so the holder can take the row lock
+        # in exactly the window the race needs.
+        session = session_factory()
+        if not hook_installed.is_set():
+            hook_installed.set()
+
+            @event.listens_for(session, "after_commit")
+            def _pause_after_claim_commit(_session: Session) -> None:
+                if claim_committed.is_set():
+                    return
+                claim_committed.set()
+                if not holder_locked.wait(timeout=10):
+                    raise RuntimeError("holder never took the row lock")
+
+        return session
+
+    def winner() -> None:
+        try:
+            outcome = _process_one(
+                cast("sessionmaker[Session]", instrumented_factory),
+                media_root,
+                operation_id,
+                300,
+            )
+            with lock:
+                outcomes.append(outcome)
+        except BaseException as exc:
+            with lock:
+                errors.append(exc)
+        finally:
+            winner_done.set()
+
+    def holder() -> None:
+        try:
+            with session_factory() as session:
+                assert claim_committed.wait(timeout=10)
+                session.execute(
+                    select(MediaOperation)
+                    .where(MediaOperation.id == operation_id)
+                    .with_for_update()
+                ).scalar_one()
+                pids["holder"] = session.execute(
+                    text("SELECT pg_backend_pid()")
+                ).scalar_one()
+                holder_locked.set()
+                assert release_holder.wait(timeout=15)
+                session.rollback()
+        except BaseException as exc:
+            with lock:
+                errors.append(exc)
+
+    winner_thread = threading.Thread(target=winner)
+    holder_thread = threading.Thread(target=holder)
+    winner_thread.start()
+    holder_thread.start()
+    observed_blocked = False
+    try:
+        assert holder_locked.wait(timeout=10)
+        # Ask from the holder's side: its open transaction pins its
+        # connection, so its backend pid is stable. The winner's is not: the
+        # claim commit releases its pooled connection, and the re-select may
+        # run on a different backend (seen as a CI-only flake).
+        with session_factory() as control:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if winner_done.is_set():
+                    break
+                blocked_count = control.execute(
+                    text(
+                        "SELECT count(*) FROM pg_stat_activity "
+                        "WHERE :holder_pid = ANY(pg_blocking_pids(pid))"
+                    ),
+                    {"holder_pid": pids["holder"]},
+                ).scalar_one()
+                control.rollback()
+                if blocked_count:
+                    observed_blocked = True
+                    break
+                time.sleep(0.02)
+    finally:
+        release_holder.set()
+    winner_thread.join(timeout=15)
+    holder_thread.join(timeout=15)
+
+    assert not winner_thread.is_alive() and not holder_thread.is_alive()
+    assert not errors, errors
+    assert observed_blocked, "winner returned without blocking on the lock holder"
+    assert outcomes == ["completed"]
+    _assert_completed_trash(session_factory, media_root, operation_id)
+
+
+def test_claim_winner_skips_after_lease_stolen_during_wait(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """A winner whose claim was stolen while it waited skips, touching nothing.
+
+    Companion to the blocking post-claim re-select (#346): blocking means the
+    winner can wake after an arbitrarily long wait. If that wait outlived the
+    lease and another reconciler stole the claim, the woken winner holds a
+    dead token and must not run the operation's filesystem work against the
+    new owner's in-flight pass. DB_APPLIED is the discriminating state: its
+    replay unlinks the origin before any claim-guarded CAS, so a stale winner
+    that proceeds does observable damage.
+    """
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    source = _media_file(media_root)
+    with session_factory() as session:
+        media, operation = _expired_trash(session)
+        operation.origin_digest = sha256_file(source)
+        operation.state = OperationState.DB_APPLIED.value
+        assert operation.destination_path is not None
+        destination = media_root / operation.destination_path
+        destination.parent.mkdir(parents=True)
+        destination.hardlink_to(source)
+        media.current_path = operation.destination_path
+        media.trashed_at = datetime.now(tz=UTC)
+        operation_id = operation.id
+        session.commit()
+
+    claim_committed = threading.Event()
+    stolen = threading.Event()
+    hook_installed = threading.Event()
+    outcomes: list[str] = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def instrumented_factory() -> Session:
+        session = session_factory()
+        if not hook_installed.is_set():
+            hook_installed.set()
+
+            @event.listens_for(session, "after_commit")
+            def _pause_after_claim_commit(_session: Session) -> None:
+                if claim_committed.is_set():
+                    return
+                claim_committed.set()
+                if not stolen.wait(timeout=10):
+                    raise RuntimeError("thief never stole the claim")
+
+        return session
+
+    def winner() -> None:
+        try:
+            outcome = _process_one(
+                cast("sessionmaker[Session]", instrumented_factory),
+                media_root,
+                operation_id,
+                300,
+            )
+            with lock:
+                outcomes.append(outcome)
+        except BaseException as exc:
+            with lock:
+                errors.append(exc)
+
+    winner_thread = threading.Thread(target=winner)
+    winner_thread.start()
+    try:
+        assert claim_committed.wait(timeout=10)
+        # While the winner is paused between its claim commit and its
+        # re-select, expire its lease and steal the claim, exactly as a
+        # concurrent reconciler does after a >lease-duration stall.
+        with session_factory() as thief:
+            current = thief.get(MediaOperation, operation_id)
+            assert current is not None
+            current.lease_expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+            thief.flush()
+            assert claim_operation(thief, operation_id, "reconciler:thief", 300)
+            thief.commit()
+    finally:
+        stolen.set()
+    winner_thread.join(timeout=15)
+
+    assert not winner_thread.is_alive()
+    assert not errors, errors
+    assert outcomes == ["skipped"]
+    assert source.is_file(), "stale winner must not touch the filesystem"
+    with session_factory() as session:
+        operation = session.get(MediaOperation, operation_id)
+        assert operation is not None
+        assert operation.claimed_by == "reconciler:thief"
+        assert operation.state not in OPERATION_TERMINAL_STATES
