@@ -234,6 +234,18 @@
     ]
   ],
   [
+    "/explore/segments/{segment_id}/similar",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/explore/meaning-map",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/explore/terms",
     [
       "GET"

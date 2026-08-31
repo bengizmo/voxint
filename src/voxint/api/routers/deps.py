@@ -32,7 +32,7 @@ from typing import Annotated, Any, cast
 from fastapi import Depends, HTTPException, Request
 from fastapi.templating import Jinja2Templates
 from jinja2 import BaseLoader, ChoiceLoader, FileSystemLoader, PrefixLoader
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.api.auth import (
     SESSION_COOKIE,
@@ -138,6 +138,16 @@ def asset_url(entry_name: str) -> str | None:
     return _APP_ASSET_URLS.get(entry_name)
 
 
+def get_session_factory(request: Request) -> sessionmaker[Session]:
+    """The app's (lazily built) session factory, for routes that manage their
+    own transaction semantics (e.g. a REPEATABLE READ read snapshot)."""
+    factory = request.app.state.session_factory
+    if factory is None:
+        factory = build_session_factory(build_engine(request.app.state.settings.database_url))
+        request.app.state.session_factory = factory
+    return cast(sessionmaker[Session], factory)
+
+
 def _get_session(request: Request) -> Iterator[Session]:
     # Delegates the commit-on-success / rollback-on-exception body to the single
     # session_scope contextmanager rather than duplicating it: FastAPI resumes a
@@ -146,11 +156,7 @@ def _get_session(request: Request) -> Iterator[Session]:
     # needs to drive session_scope's commit/rollback. Mutations that commit
     # before publishing (POST /submit, /runs/{id}/requeue) make the trailing
     # commit here a harmless no-op — nothing is left pending.
-    factory = request.app.state.session_factory
-    if factory is None:
-        factory = build_session_factory(build_engine(request.app.state.settings.database_url))
-        request.app.state.session_factory = factory
-    with session_scope(factory) as session:
+    with session_scope(get_session_factory(request)) as session:
         yield session
 
 

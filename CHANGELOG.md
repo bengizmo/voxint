@@ -7,6 +7,19 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **More like this passage** (#357, Phase 7 partial). Every KWIC row on the
+  Explore page expands an inline panel of the corpus passages nearest in
+  meaning to that segment, re-embedded at request time over the existing
+  MiniLM index (exact cosine scan, no new dependencies). The originating
+  paragraph and its overlap span are excluded; other passages from the same
+  recording are kept but capped. Honest off/unavailable/indexing states.
+- **Semantic meaning map** (#357, Phase 7 partial). Collapsible canvas
+  scatter on the Explore page: every indexed passage placed by a
+  deterministic 2D PCA projection of its embedding (pure numpy, not UMAP),
+  colored by recording, with hover previews and click-to-jump transcript
+  links. Computed on read and cached as a `semantic_layout` corpus-analysis
+  artifact (the unused `umap_layout` kind was renamed before first use);
+  corpora over 3,000 passages are sampled evenly across recordings.
 - **Quote board** (#338, Phase 6). Save KWIC concordance rows as
   project-scoped evidence quotes from the Explore page. Saved quotes appear
   on the project detail page with inline note editing, deletion, and CSV

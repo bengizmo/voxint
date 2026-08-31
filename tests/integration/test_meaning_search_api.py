@@ -160,16 +160,16 @@ class TestRankedPassages:
 
 class TestJumpUrl:
     def test_jump_url_preserves_fractional_start(self) -> None:
-        from voxint.api.meaning_query import _jump_url
+        from voxint.api.meaning_query import jump_url
 
         rid = uuid.uuid4()
         # Integer starts stay clean; a fractional start is NOT truncated, because
         # a truncated ?t= can resolve to the PREVIOUS contiguous transcript line
         # (the island matches half-open [start, end)).
-        assert _jump_url(rid, 0.0) == f"/runs/{rid}/transcript?t=0"
-        assert _jump_url(rid, 10.0) == f"/runs/{rid}/transcript?t=10"
-        assert _jump_url(rid, 10.9) == f"/runs/{rid}/transcript?t=10.9"
-        assert _jump_url(rid, 12.5) == f"/runs/{rid}/transcript?t=12.5"
+        assert jump_url(rid, 0.0) == f"/runs/{rid}/transcript?t=0"
+        assert jump_url(rid, 10.0) == f"/runs/{rid}/transcript?t=10"
+        assert jump_url(rid, 10.9) == f"/runs/{rid}/transcript?t=10.9"
+        assert jump_url(rid, 12.5) == f"/runs/{rid}/transcript?t=12.5"
 
 
 class TestPreview:
