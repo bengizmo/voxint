@@ -6,6 +6,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **Type foundation** (#373). Base font raised from 13px to 15px for reading
+  surfaces; grid-tables and data lists use a new dense token (13px) so they
+  keep their compact density.
+
 ### Added
 - **Evidence pack** (#331, Phase 7 remainder). A printable page of a run's
   highlights with their provenance (speakers, timing, tags, notes, source
