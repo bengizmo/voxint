@@ -42,7 +42,14 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
   <dt>Created</dt><dd>{{ run.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</dd>
   <dt>Updated</dt><dd>{{ run.updated_at.strftime("%Y-%m-%d %H:%M:%S") }}</dd>
 </dl>
-{% if run.error %}<p class="error">{{ run.error }}</p>{% endif %}
+{% if run.error %}
+{% set nerr = normalize_error(run.error) %}
+<p class="error">{{ nerr.label if nerr else run.error }}</p>
+{% if nerr and nerr.hint %}<p class="oc-muted text-sm">{{ nerr.hint }}</p>{% endif %}
+{% if nerr and nerr.raw != nerr.label %}
+<details class="text-sm"><summary>Raw error</summary><pre class="error-raw">{{ nerr.raw }}</pre></details>
+{% endif %}
+{% endif %}
 
 {% if run.status == "failed" %}
 <form method="post" action="/runs/{{ run.id }}/requeue" class="requeue">

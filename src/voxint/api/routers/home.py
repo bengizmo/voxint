@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 
 from voxint.adjudication.resolver import adjudication_queue
-from voxint.api.home_query import recent_activity
+from voxint.api.home_query import group_activity, recent_activity
 from voxint.api.routers.deps import (
     OperatorDep,
     SessionDep,
@@ -73,6 +73,6 @@ def home(
         "review_backlog": len(queue),
         "unresolved_voices": sum(entry.unresolved_labels for entry in queue),
         "failed_runs": status_counts.get(RunStatus.FAILED.value, 0),
-        "activity": recent_activity(session),
+        "activity": group_activity(recent_activity(session)),
     }
     return templates.TemplateResponse(request, "home/home.html", context)

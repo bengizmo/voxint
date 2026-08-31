@@ -52,6 +52,7 @@ from voxint.api.presentation import (
     humanize_error,
     humanize_stage,
     humanize_status,
+    normalize_error,
     title_from_snapshot,
 )
 from voxint.api.resource_status import (
@@ -478,6 +479,7 @@ templates.env.globals["format_compact_duration"] = format_compact_duration
 templates.env.globals["humanize_stage"] = humanize_stage
 templates.env.globals["humanize_status"] = humanize_status
 templates.env.globals["humanize_error"] = humanize_error
+templates.env.globals["normalize_error"] = normalize_error
 templates.env.globals["language_label"] = language_label
 templates.env.globals["run_source_title"] = run_source_title
 # Hardware-telemetry display helpers (W3): bytes -> GiB number, used-VRAM %.
