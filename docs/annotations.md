@@ -214,7 +214,16 @@ manifest), and `GET /review/{run_id}/annotations/export.json` (all filtered
 manifests as a bundle). The JSON manifest (#122) carries per-line speaker
 attribution, timecodes, clip integrity digest, per-stage model identity from
 the pipeline run, and input-media SHA-256; the bulk route places run-level
-provenance at the envelope level. Run-scoped writes require the active review claim
+provenance at the envelope level. The bundled ZIP routes (#281), `GET
+/review/{run_id}/annotations/{annotation_id}/export.zip` and `GET
+/review/{run_id}/annotations/export.zip`, package the pull-quote Markdown, the
+provenance manifest (per-quote single, the run bundle in bulk), and every
+extracted clip into one archive; the `.md` and `.json` members are
+byte-identical to the standalone endpoints (contract-tested in
+`tests/integration/test_export_zip.py`), a highlight without a clip simply
+omits that member, and the 404/409-stale semantics (atomic in bulk) match the
+standalone exports. Clip generation never happens from the ZIP path; only the
+CSRF-gated clip POST cuts audio. Run-scoped writes require the active review claim
 token; a lost claim is a 409 marked `X-Voxint-Conflict: claim`. Creates carry a
 client nonce;
 replaying the same nonce with the same fingerprint returns the original row

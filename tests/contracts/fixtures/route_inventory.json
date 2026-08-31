@@ -340,6 +340,12 @@
     ]
   ],
   [
+    "/review/{run_id}/annotations/export.zip",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/review/{run_id}/annotations/export/live.md",
     [
       "POST"
@@ -371,6 +377,12 @@
   ],
   [
     "/review/{run_id}/annotations/{annotation_id}/export.md",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/review/{run_id}/annotations/{annotation_id}/export.zip",
     [
       "GET"
     ]
