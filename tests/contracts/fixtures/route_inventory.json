@@ -48,6 +48,18 @@
     ]
   ],
   [
+    "/explore/meaning-map",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/explore/segments/{segment_id}/similar",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/explore/terms",
     [
       "GET"
@@ -250,6 +262,12 @@
     ]
   ],
   [
+    "/projects/{project_id}/quotes/csv",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/projects/{project_id}/rename",
     [
       "POST"
@@ -259,6 +277,24 @@
     "/projects/{project_id}/vocabulary",
     [
       "POST"
+    ]
+  ],
+  [
+    "/quotes",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/quotes/{quote_id}",
+    [
+      "DELETE"
+    ]
+  ],
+  [
+    "/quotes/{quote_id}",
+    [
+      "PATCH"
     ]
   ],
   [

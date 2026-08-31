@@ -64,6 +64,22 @@
     true
   ],
   [
+    "/explore/meaning-map",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/explore/segments/{segment_id}/similar",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/explore/terms",
     [
       "GET"
@@ -334,6 +350,14 @@
     true
   ],
   [
+    "/projects/{project_id}/quotes/csv",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/projects/{project_id}/rename",
     [
       "POST"
@@ -345,6 +369,30 @@
     "/projects/{project_id}/vocabulary",
     [
       "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/quotes",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/quotes/{quote_id}",
+    [
+      "DELETE"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/quotes/{quote_id}",
+    [
+      "PATCH"
     ],
     "onboarding",
     true

@@ -7,6 +7,35 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **More like this passage** (#357, Phase 7 partial). Every KWIC row on the
+  Explore page expands an inline panel of the corpus passages nearest in
+  meaning to that segment, re-embedded at request time over the existing
+  MiniLM index (exact cosine scan, no new dependencies). The originating
+  paragraph and its overlap span are excluded; other passages from the same
+  recording are kept but capped. Honest off/unavailable/indexing states.
+- **Semantic meaning map** (#357, Phase 7 partial). Collapsible canvas
+  scatter on the Explore page: every indexed passage placed by a
+  deterministic 2D PCA projection of its embedding (pure numpy, not UMAP),
+  colored by recording, with hover previews and click-to-jump transcript
+  links. Computed on read and cached as a `semantic_layout` corpus-analysis
+  artifact (the unused `umap_layout` kind was renamed before first use);
+  corpora over 3,000 passages are sampled evenly across recordings.
+- **Quote board** (#338, Phase 6). Save KWIC concordance rows as
+  project-scoped evidence quotes from the Explore page. Saved quotes appear
+  on the project detail page with inline note editing, deletion, and CSV
+  export. Deduplicated by (project, segment, search query). Migration 0056.
+- **Project temporal trends** (#337, Phase 5). Interactive D3 line chart on
+  the project detail page showing term and entity frequency over recording
+  dates. Adaptive calendar bucketing (day/week/month), date provenance
+  tracking (source upload date preferred, ingestion date fallback), top-20
+  series with selectable top-5 display, responsive SVG, and keyboard-
+  accessible data points. Compute-on-read with advisory-locked fingerprint
+  short-circuit, stored as a TEMPORAL_TRENDS corpus analysis artifact.
+- **Run speaker timeline** (#337, Phase 5). Visual speaker timeline on the
+  run detail page showing who spoke when as colored horizontal lanes. Built
+  from diarization turns with canonical label_states() resolution, sub-50ms
+  interval merging, overlap hatching, unresolved/excluded visual treatment,
+  and keyboard-focusable blocks linking to transcript timestamps.
 - **Explore page: corpus-wide evidence browser** (#331, #333, #334). New
   top-level "Explore" section with KWIC concordance search across every
   finished transcript (speaker, project, date, confidence, and suspect
@@ -26,6 +55,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   honest notes when some or all recordings have no enrichment yet.
 
 ### Fixed
+- **Explore term-stats advisory lock now varies per scope** (#338 follow-up).
+  The lock key was built from the first 8 bytes of the raw key string, which
+  are the constant prefix "term_sta", so every scope serialized on one
+  advisory lock. Now hashed (sha256) before truncation, matching the meaning
+  map's lock. Over-serialization only; behavior was never incorrect.
 - **Project speaker counts no longer double-count re-runs** (#336). The
   project page's speaker list now counts each recording once (its newest
   completed run) instead of once per historical run. Membership follows the
@@ -33,6 +67,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   recording no longer shows on the project — the newest completed run is
   the operative transcript, matching how the rest of the console resolves
   speakers.
+- **Media file operations no longer stall for up to five minutes after two
+  cleanup passes collide** (#346). When two reconciler passes raced for the
+  same pending file operation (a trash, restore, or purge), the winner could
+  skip its own claimed work, leaving the operation parked until its lease
+  expired. The winner now waits out the moment of contention and finishes
+  the job. Found via a CI flake; a deterministic regression test pins the
+  interleaving.
 - **Top-bar controls no longer overlap on narrow screens.** Below ~800px
   CSS width, the fixed-height command bar let the Table/Cards view toggle
   slip under the page action button ("+ Add media", "+ New speaker"),

@@ -218,7 +218,7 @@ def rank_candidates(
     return kept
 
 
-def _jump_url(run_id: uuid.UUID, start_seconds: float) -> str:
+def jump_url(run_id: uuid.UUID, start_seconds: float) -> str:
     """The transcript deep link at the passage start (the island scrolls to ?t=).
 
     Preserves sub-second precision: truncating to whole seconds can push the
@@ -271,7 +271,7 @@ def _preview(chunk_text: str, phrases: list[str]) -> Markup:
     )
 
 
-def _base_columns() -> list[Any]:
+def base_columns() -> list[Any]:
     return [
         SegmentEmbedding.id,
         SegmentEmbedding.pipeline_run_id,
@@ -287,7 +287,7 @@ def _base_columns() -> list[Any]:
     ]
 
 
-def _with_run_joins(stmt: Select[Any]) -> Select[Any]:
+def with_run_joins(stmt: Select[Any]) -> Select[Any]:
     """Join a ``segment_embeddings`` select to its run + media, hiding archived."""
     return (
         stmt.join(PipelineRun, PipelineRun.id == SegmentEmbedding.pipeline_run_id)
@@ -300,7 +300,7 @@ def _with_run_joins(stmt: Select[Any]) -> Select[Any]:
     )
 
 
-def _make_candidate(row: Any, *, exact_quote: bool = False) -> Candidate:
+def make_candidate(row: Any, *, exact_quote: bool = False) -> Candidate:
     return Candidate(
         id=row.id,
         run_id=row.pipeline_run_id,
@@ -378,13 +378,13 @@ def search_passages(
         # Vector arm: exact cosine nearest-neighbour, deterministic on ties.
         distance = SegmentEmbedding.embedding.cosine_distance(query_vector)
         vector_stmt = (
-            _with_run_joins(select(*_base_columns(), distance.label("distance")))
+            with_run_joins(select(*base_columns(), distance.label("distance")))
             .order_by(distance.asc(), SegmentEmbedding.id.asc())
             .limit(candidate_limit)
         )
         for rank, row in enumerate(session.execute(vector_stmt), start=1):
             candidates[row.id] = replace(
-                _make_candidate(row), vector_rank=rank, distance=row.distance
+                make_candidate(row), vector_rank=rank, distance=row.distance
             )
 
         # Lexical arm: simple-config FTS, with the mandatory @@ predicate so the
@@ -392,13 +392,13 @@ def search_passages(
         tsq = simple_ts_query(stripped)
         chunk_vector = simple_ts_vector(SegmentEmbedding.chunk_text)
         lexical_stmt = (
-            _with_run_joins(select(*_base_columns()))
+            with_run_joins(select(*base_columns()))
             .where(chunk_vector.bool_op("@@")(tsq))
             .order_by(simple_ts_rank(chunk_vector, tsq).desc(), SegmentEmbedding.id.asc())
             .limit(candidate_limit)
         )
         for rank, row in enumerate(session.execute(lexical_stmt), start=1):
-            existing = candidates.get(row.id) or _make_candidate(row)
+            existing = candidates.get(row.id) or make_candidate(row)
             candidates[row.id] = replace(existing, lexical_rank=rank)
 
         # Exact-quote arm: literal substring hits, ALL of them (a literal can
@@ -409,9 +409,9 @@ def search_passages(
                 func.strpos(func.lower(SegmentEmbedding.chunk_text), phrase.lower()) > 0
                 for phrase in phrases
             ]
-            quote_stmt = _with_run_joins(select(*_base_columns())).where(or_(*conditions))
+            quote_stmt = with_run_joins(select(*base_columns())).where(or_(*conditions))
             for row in session.execute(quote_stmt):
-                existing = candidates.get(row.id) or _make_candidate(row)
+                existing = candidates.get(row.id) or make_candidate(row)
                 candidates[row.id] = replace(existing, exact_quote=True)
 
     ranked = rank_candidates(
@@ -428,7 +428,7 @@ def search_passages(
             start_seconds=c.start_seconds,
             end_seconds=c.end_seconds,
             snippet=_preview(c.chunk_text, phrases),
-            jump_url=_jump_url(c.run_id, c.start_seconds),
+            jump_url=jump_url(c.run_id, c.start_seconds),
             score=c.rrf_score(),
             exact_quote=c.exact_quote,
         )

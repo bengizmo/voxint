@@ -246,7 +246,43 @@
     ]
   ],
   [
+    "/explore/segments/{segment_id}/similar",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/explore/meaning-map",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/explore/terms",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/quotes",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/quotes/{quote_id}",
+    [
+      "DELETE"
+    ]
+  ],
+  [
+    "/quotes/{quote_id}",
+    [
+      "PATCH"
+    ]
+  ],
+  [
+    "/projects/{project_id}/quotes/csv",
     [
       "GET"
     ]

@@ -502,12 +502,30 @@ def _process_one(
             session.rollback()
             return "skipped"
         session.commit()
+        # Blocking on purpose: after winning the claim, any concurrent lock
+        # holder is transient (a losing reconciler about to roll back, or the
+        # batch sweep). SKIP LOCKED here made the winner skip its own claimed
+        # row and strand it until lease expiry (#346). A wedged holder (an
+        # idle-in-transaction session) would stall this pass instead, which
+        # beats stranding the claim.
+        # populate_existing: the identity map would otherwise hand back the
+        # pre-commit instance and these checks would read stale attributes,
+        # not the row this FOR UPDATE just locked.
         operation = session.execute(
             select(MediaOperation)
             .where(MediaOperation.id == operation_id)
-            .with_for_update(skip_locked=True)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         ).scalar_one_or_none()
-        if operation is None or operation.state in OPERATION_TERMINAL_STATES:
+        if (
+            operation is None
+            or operation.state in OPERATION_TERMINAL_STATES
+            # Ownership can be gone by the time the lock is granted: if the
+            # wait outlived the lease, another reconciler stole the claim.
+            # Proceeding with a dead token would run the pre-CAS filesystem
+            # mutations against the new owner's in-flight work.
+            or operation.claimed_by != claim_token
+        ):
             return "skipped"
         if _newer_operation_exists(session, operation):
             return _fail(

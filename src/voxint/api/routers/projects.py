@@ -25,6 +25,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from voxint.api.csrf import (
     CSRF_PROJECT_ASSIGN,
@@ -33,6 +34,7 @@ from voxint.api.csrf import (
     CSRF_PROJECT_RENAME,
     CSRF_PROJECT_UNLINK,
     CSRF_PROJECT_VOCAB,
+    CSRF_QUOTE_MANAGE,
     mint_csrf_token,
 )
 from voxint.api.project_insights import get_project_insights
@@ -45,7 +47,10 @@ from voxint.api.routers.deps import (
     require_projects_enabled,
     templates,
 )
+from voxint.api.routers.quotes import quote_to_dict
+from voxint.api.saved_quotes import list_quotes
 from voxint.api.setup_wizard import SetupValidationError, normalize_vocabulary
+from voxint.api.temporal_trends import get_temporal_trends
 from voxint.db.models import MediaFolder, Project
 from voxint.domain_packs.corrections import (
     MAX_MATCH_CHARS,
@@ -164,6 +169,7 @@ def _detail_context(
     else:
         vocabulary_text = "\n".join(detail.vocabulary) if detail.vocabulary else ""
     insights = get_project_insights(session, detail.id)
+    temporal_trends = get_temporal_trends(session, detail.id)
     # Pre-build a set of "row,col" strings for efficient Jinja2 coverage lookup
     insights_coverage_set: set[str] = set()
     if insights and insights.get("coverage", {}).get("cells"):
@@ -176,6 +182,7 @@ def _detail_context(
         "now": datetime.now(UTC),
         "detail": detail,
         "insights": insights,
+        "temporal_trends": temporal_trends,
         "coverage_set": insights_coverage_set,
         "csrf_rename": mint_csrf_token(secret, CSRF_PROJECT_RENAME),
         "csrf_assign": mint_csrf_token(secret, CSRF_PROJECT_ASSIGN),
@@ -192,6 +199,24 @@ def _detail_context(
         "corrections_error": corrections_error,
         "error": error,
         "assigned": assigned,
+        "quote_board_props": _quote_board_props(request, session, detail),
+    }
+
+
+def _quote_board_props(
+    request: Request,
+    session: Session,
+    detail: Any,
+) -> dict[str, Any]:
+    quotes, total = list_quotes(session, detail.id, limit=200)
+    return {
+        "quotes": [quote_to_dict(q) for q in quotes],
+        "total": total,
+        "projectId": str(detail.id),
+        "projectName": detail.name,
+        "csrfToken": mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_QUOTE_MANAGE,
+        ),
     }
 
 

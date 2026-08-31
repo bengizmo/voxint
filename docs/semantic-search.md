@@ -39,6 +39,45 @@ The vector and lexical arms are combined with reciprocal rank fusion, and one
 recording cannot flood the results because passages are capped per run. Meaning
 search has no "older" pager: it is a ranked answer, not a chronological feed.
 
+## More like this passage
+
+Every concordance row on the Explore page has a **More like this** button
+(the `≈` icon). It expands a panel of the passages closest in meaning to that
+row's segment, each with the recording, the speaker, the time, and a link into
+the transcript. Use it to chase a theme: find one good quote by keyword, then
+let the index surface where else the corpus talks the same way.
+
+How it resolves: the segment's effective text (the operator's correction when
+one exists, otherwise the enhanced or raw transcript) is embedded at request
+time with the same in-process MiniLM path a Meaning query uses, then ranked by
+exact cosine distance over the index. A very short segment (under 15 words) is
+too little text for a reliable vector, so the stored vector of its surrounding
+paragraph stands in. The originating paragraph is excluded from the results,
+other passages from the same recording are kept but capped at two, and at most
+ten passages are shown. No similarity score is displayed: the distance is not a
+calibrated relevance scale, and showing one would imply a precision the model
+does not have.
+
+## The meaning map
+
+The Explore page also has a collapsible **meaning map**: every indexed passage
+becomes one dot, placed so that passages using similar language sit near each
+other. Dots are colored by recording. Hover shows the passage; clicking selects
+it and shows a transcript link below the map.
+
+The layout is a 2D projection (PCA over the stored MiniLM vectors) computed on
+first view and cached as a corpus-analysis artifact; it recomputes when the
+indexed corpus changes. Read it as an orientation aid, not a measurement:
+proximity suggests related wording, the axes have no fixed meaning, and adding
+or re-processing recordings moves every dot. Corpora larger than 3,000 passages
+are sampled evenly across recordings, and the map says so when it happens. A
+corpus with fewer than five indexed passages shows an honest "not enough
+passages yet" state instead of a misleading scatter of dots.
+
+Both features read the same index and respect the same switches below: turning
+semantic search off disables them, and an unindexed corpus reports itself as
+still indexing rather than returning nothing.
+
 ## On by default
 
 Two independent flags govern it, both default on. Set them per instance from
