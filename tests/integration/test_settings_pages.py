@@ -94,7 +94,7 @@ def test_flag_on_hub_contains_only_general_sections_and_all_tabs(
         "/settings/plugins",
     ):
         assert link in body
-    assert body.count('aria-current="true"') == 1
+    assert body.count('role="tab" aria-current="true"') == 1
     assert 'href="/settings" role="tab" aria-current="true">General</a>' in body
 
 
@@ -160,7 +160,7 @@ def test_removed_features_get_route_is_not_registered(
     session_factory: sessionmaker[Session],
 ) -> None:
     client = _client(session_factory)
-    assert client.get("/settings/features").status_code == 404
+    assert client.get("/settings/features").status_code == 405
 
 
 # --------------------------------------------------------------------------- #

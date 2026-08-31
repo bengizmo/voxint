@@ -201,7 +201,7 @@ def test_settings_store_key_redirects_303(
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/settings"
+    assert resp.headers["location"] == "/settings/ai#llm"
     row = _row(session_factory)
     assert row is not None and row.llm_api_key == STORED_SENTINEL and row.llm_enabled
 
@@ -253,7 +253,7 @@ def test_settings_html_never_echoes_stored_key(
 ) -> None:
     client = make_client(session_factory, media_root, onboarded=True, llm_api_key="")
     _seed_stored_key(session_factory, STORED_SENTINEL)
-    body = client.get("/settings").text
+    body = client.get("/settings/ai").text
     assert STORED_SENTINEL not in body
     assert "stored" in body
 
@@ -342,7 +342,7 @@ def test_settings_endpoint_inputs_blank_when_inheriting_env(
         llm_api_key=ENV_SENTINEL, llm_base_url=ENV_BASE, llm_model=ENV_MODEL,
     )
     _seed_stored_key(session_factory, STORED_SENTINEL)  # row exists, endpoint NULL
-    body = client.get("/settings").text
+    body = client.get("/settings/ai").text
     assert f'value="{ENV_BASE}"' not in body  # env value never pinned into the input
     assert f'value="{ENV_MODEL}"' not in body
     assert f'placeholder="{ENV_BASE}"' in body  # shown as the default hint
@@ -361,7 +361,7 @@ def test_settings_endpoint_inputs_show_override(
         row.llm_base_url = "https://row.example/v1"
         row.llm_model = "row-model"
         session.commit()
-    body = client.get("/settings").text
+    body = client.get("/settings/ai").text
     assert 'value="https://row.example/v1"' in body
     assert 'value="row-model"' in body
 

@@ -224,7 +224,7 @@ def test_plugin_settings_section_renders(
 ) -> None:
     _install(monkeypatch, (RenderPlugin,), plugin_templates)
     client = _client(session_factory)
-    body = client.get("/settings").text
+    body = client.get("/settings/plugins").text
     # The plugin's own settings section rendered after the core sections.
     assert "FAKE-SECTION-MARKER" in body
 

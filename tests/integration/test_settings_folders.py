@@ -126,7 +126,7 @@ def test_folders_section_renders_on_settings(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
     client, _ = make_client(session_factory, media_root)
-    body = client.get("/settings").text
+    body = client.get("/settings/media").text
     assert 'id="folders"' in body and 'id="folder-panel"' in body
     assert 'action="/settings/folders"' in body
 
@@ -339,7 +339,7 @@ def test_stale_pack_renders_as_unavailable(
     client, _ = make_client(session_factory, media_root)
     # Seed a folder mapped to a pack the (default) registry does not offer.
     _seed_folder(session_factory, "pods", pack="ghostpack")
-    body = client.get("/settings").text
+    body = client.get("/settings/media").text
     assert "ghostpack (unavailable)" in body  # honest, not a false "Default"
 
 
@@ -355,7 +355,7 @@ def test_registry_failure_disables_pack_selection(
     # Seed a folder + pack directly (the route's validator can't run with a broken
     # registry) so the render must handle a stored pack under total registry failure.
     _seed_folder(session_factory, "pods", pack="somepack")
-    body = client.get("/settings").text
+    body = client.get("/settings/media").text
     assert "Domain packs can't be listed" in body
     assert "disabled" in body  # the select is disabled
     # The stored pack is still shown honestly, not silently replaced by "Default".
@@ -469,7 +469,7 @@ def test_non_hx_mutation_redirects(
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert resp.headers["location"].startswith("/settings?")
+    assert resp.headers["location"].startswith("/settings/media?")
 
 
 # ------------------------------------------------------------------ concurrency
@@ -573,7 +573,7 @@ def test_registered_missing_folder_is_flagged(
     client, _ = make_client(session_factory, media_root)
     _add(client, "gone")
     (media_root / "gone").rmdir()  # remove it on disk after registering
-    body = client.get("/settings").text
+    body = client.get("/settings/media").text
     assert "no longer on disk" in body
 
 
