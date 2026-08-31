@@ -2792,6 +2792,15 @@ def settings_users_create(
     from voxint.users import create_user
 
     _require_csrf(request, CSRF_USERS, csrf_token)
+    if role not in ("admin", "reviewer"):
+        return templates.TemplateResponse(
+            request,
+            "settings/users.html",
+            _users_context(
+                request, session, admin,
+                users_error="Choose Admin or Reviewer.",
+            ),
+        )
     if password != password_confirm:
         return templates.TemplateResponse(
             request,
@@ -2849,15 +2858,11 @@ def settings_users_role(
         raise HTTPException(status_code=404, detail="user not found")
     if user.username == admin.username:
         raise HTTPException(status_code=403, detail="cannot change your own role")
+    if role not in ("admin", "reviewer"):
+        raise HTTPException(status_code=422, detail="invalid role")
     try:
         set_role(session, user, UserRole(role))
     except ValueError as exc:
-        if request.headers.get("HX-Request"):
-            return templates.TemplateResponse(
-                request,
-                "settings/_users_row.html",
-                _users_context(request, session, admin, u=user),
-            )
         return templates.TemplateResponse(
             request,
             "settings/users.html",
@@ -2897,12 +2902,6 @@ def settings_users_toggle(
     try:
         set_disabled(session, user, disabled=not currently_disabled)
     except ValueError as exc:
-        if request.headers.get("HX-Request"):
-            return templates.TemplateResponse(
-                request,
-                "settings/_users_row.html",
-                _users_context(request, session, admin, u=user),
-            )
         return templates.TemplateResponse(
             request,
             "settings/users.html",

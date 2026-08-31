@@ -77,8 +77,9 @@ def test_verify_password_rejects_tampered_hash() -> None:
     assert not verify_password("secret", password_hash[:-1] + "x")
 
 
-def test_empty_password_round_trip() -> None:
-    assert verify_password("", hash_password(""))
+def test_empty_password_rejected() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        hash_password("")
 
 
 def test_create_user_hashes_password(session: Session) -> None:

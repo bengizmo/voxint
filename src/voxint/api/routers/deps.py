@@ -339,11 +339,13 @@ def require_users_enabled(request: Request) -> None:
     """Area gate for the user management sub-page (#362).
 
     The ``/settings/users`` routes are always registered so the route inventory
-    is stable. Access 404s until ``console_users_enabled`` is on. Same shape as
-    :func:`require_media_enabled`.
+    is stable. Access 404s until BOTH ``voxint_multi_user`` and
+    ``console_users_enabled`` are on: the user table is dormant in single-user
+    (Basic-auth) mode, so surfacing CRUD for it would let an admin modify
+    accounts that cannot sign in.
     """
     settings: Settings = request.app.state.settings
-    if not settings.console_users_enabled:
+    if not (settings.voxint_multi_user and settings.console_users_enabled):
         raise HTTPException(status_code=404, detail="not found")
 
 

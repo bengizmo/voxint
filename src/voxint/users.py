@@ -19,6 +19,8 @@ _DUMMY_HASH: str = (
 
 
 def _validate_password(password: str) -> None:
+    if not password:
+        raise ValueError("password must not be empty")
     if len(password.encode("utf-8")) > _MAX_PASSWORD_BYTES:
         raise ValueError("password must not exceed 1024 UTF-8 bytes")
 
@@ -80,23 +82,36 @@ def list_users(session: Session) -> list[User]:
     return list(session.scalars(select(User).order_by(User.username)).all())
 
 
-def set_role(session: Session, user: User, new_role: UserRole) -> None:
-    if (
-        user.role == UserRole.ADMIN.value
-        and user.disabled_at is None
-        and new_role is not UserRole.ADMIN
-    ):
-        active_admins = session.scalar(
-            select(func.count())
-            .select_from(User)
+def _assert_not_last_admin(session: Session, user: User, action: str) -> None:
+    """Raise if ``user`` is the only active admin.
+
+    Locks all active admin rows with ``FOR UPDATE`` so two concurrent
+    demotions/disables cannot both pass the check and leave zero active
+    admins (TOCTOU). The lock is held until the caller's transaction commits
+    or rolls back. SQLite (unit tests) ignores ``with_for_update`` silently,
+    so this is safe in both engines.
+    """
+    if user.role != UserRole.ADMIN.value or user.disabled_at is not None:
+        return
+    active_admins = session.scalar(
+        select(func.count())
+        .select_from(
+            select(User.id)
             .where(
                 User.role == UserRole.ADMIN.value,
                 User.disabled_at.is_(None),
             )
+            .with_for_update()
+            .subquery()
         )
-        if active_admins == 1:
-            raise ValueError("cannot downgrade the last active admin")
+    )
+    if active_admins == 1:
+        raise ValueError(f"cannot {action} the last active admin")
 
+
+def set_role(session: Session, user: User, new_role: UserRole) -> None:
+    if new_role is not UserRole.ADMIN:
+        _assert_not_last_admin(session, user, "downgrade")
     if user.role != new_role.value:
         user.role = new_role.value
         session.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
@@ -104,17 +119,7 @@ def set_role(session: Session, user: User, new_role: UserRole) -> None:
 
 def set_disabled(session: Session, user: User, *, disabled: bool) -> None:
     if disabled:
-        if user.role == UserRole.ADMIN.value and user.disabled_at is None:
-            active_admins = session.scalar(
-                select(func.count())
-                .select_from(User)
-                .where(
-                    User.role == UserRole.ADMIN.value,
-                    User.disabled_at.is_(None),
-                )
-            )
-            if active_admins == 1:
-                raise ValueError("cannot disable the last active admin")
+        _assert_not_last_admin(session, user, "disable")
         user.disabled_at = datetime.now(UTC)
         session.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
     else:
