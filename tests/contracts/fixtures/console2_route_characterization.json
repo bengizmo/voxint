@@ -438,6 +438,14 @@
     true
   ],
   [
+    "/review/{run_id}/annotations/evidence-pack",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/review/{run_id}/annotations/export.json",
     [
       "GET"

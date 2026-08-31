@@ -2366,6 +2366,104 @@ def export_annotations_zip(
     return _zip_response(spool, f"voxint-{run_id.hex[:8]}-quotes.zip")
 
 
+# ---------------------------------------------------------------------------
+# Print/PDF evidence pack (issue #331 Phase 7)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/review/{run_id}/annotations/evidence-pack")
+def evidence_pack(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    tag: Annotated[list[uuid.UUID] | None, Query()] = None,
+) -> Response:
+    """A print-optimized page of the run's highlights with their provenance:
+    quote lines with live speaker attribution and timing, tags, notes, the
+    source text hash, clip references, and the run's pipeline provenance. The
+    browser's Print / Save as PDF is the PDF engine — deliberately no
+    server-side PDF dependency.
+
+    Repeated ``?tag=`` is the panel's OR-union filter. Unlike the exports,
+    a STALE highlight renders WITH a visible warning instead of failing the
+    whole document with a 409: a human-readable evidence pack should degrade
+    honestly, not refuse to print. The stale card shows the captured quote
+    verbatim, labeled as unverified against the current transcript."""
+    from voxint import __version__
+
+    run = _run_or_404(session, run_id)
+    tag_ids = tag or []
+    _require_filter_tags_exist(session, tag_ids)
+    rows = annotations_for_run(session, run_id, tag_ids=tag_ids or None)
+    settings: Settings = request.app.state.settings
+    lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+    covered = load_covered_segments(session, run_id)
+    resolved_map = {
+        r.annotation_id: r
+        for r in resolve_annotation_spans(
+            lines, covered, [stored_anchor_from_row(row) for row in rows]
+        )
+    }
+    tags_by_id = tags_for_annotations(session, [row.id for row in rows])
+    clips_by_ann = _clip_refs_for_run(session, run_id, settings)
+    stages = _stage_provenance_from_run(session, run_id)
+    media_item = run.media_item
+
+    quotes: list[dict[str, Any]] = []
+    for row in sorted(rows, key=lambda r: resolved_order_key(resolved_map[r.id])):
+        resolved = resolved_map[row.id]
+        clipped = [] if resolved.stale else clip_lines_for_export(resolved, lines)
+        clip = clips_by_ann.get(str(row.id))
+        quotes.append(
+            {
+                "id": str(row.id),
+                "stale": resolved.stale or not clipped,
+                "quote_lines": [
+                    {
+                        "speaker": ln.speaker,
+                        "text": ln.text,
+                        "start_seconds": ln.start_seconds,
+                        "end_seconds": ln.end_seconds,
+                    }
+                    for ln in clipped
+                ],
+                "captured_quote": row.quote_text,
+                "timing_precision": resolved.timing_precision,
+                "start_seconds": resolved.start_seconds,
+                "end_seconds": resolved.end_seconds,
+                "speakers": list(resolved.speakers),
+                "tags": [
+                    {"name": t.name, "color": t.color}
+                    for t in tags_by_id.get(row.id, [])
+                ],
+                "note": row.note,
+                "operator": row.operator,
+                "source_text_hash": row.source_text_hash,
+                "updated_at": row.updated_at,
+                "clip": (
+                    {"filename": clip.filename, "sha256": clip.sha256}
+                    if clip is not None
+                    else None
+                ),
+            }
+        )
+    context = {
+        "request": request,
+        "run": run,
+        "source_title": _run_source_title(run),
+        "media_sha256": media_item.sha256,
+        "app_version": __version__,
+        "stages": stages,
+        "generated_at": datetime.now(UTC),
+        "quotes": quotes,
+        "filtered": bool(tag_ids),
+    }
+    return templates.TemplateResponse(
+        request, "legacy_review/evidence_pack.html", context
+    )
+
+
 @router.post("/review/{run_id}/annotations/{annotation_id}/clips")
 def extract_annotation_clip(
     run_id: uuid.UUID,

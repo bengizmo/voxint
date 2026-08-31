@@ -291,6 +291,23 @@ The highlight palette size (`HIGHLIGHT_PALETTE_SIZE`) is pinned across the
 backend caps, the `--hl-N` design tokens, and the `mark.hl-N` rules by
 `tests/contracts/test_highlight_palette_parity.py`.
 
+## Evidence pack (#331 Phase 7)
+
+`GET /review/{run_id}/annotations/evidence-pack` renders a print-optimized
+page of the run's highlights with their provenance: quote lines with live
+speaker attribution and timing, tags, notes, the source text hash, clip
+references, and the run's per-stage model identity, under a document header
+carrying the source title, run id, media SHA-256, app version, and generation
+time. The browser's Print / Save as PDF is the PDF engine; there is
+deliberately no server-side PDF dependency. `?tag=` is the panel's OR-union
+filter, and a filtered page says so in its header.
+
+One deliberate divergence from the exports, pinned in
+`tests/integration/test_evidence_pack.py`: a STALE highlight renders with a
+visible "re-anchor before citing" warning and its captured quote, instead of
+failing the whole document with a 409. A human-readable evidence pack degrades
+honestly; the machine-readable exports stay atomic.
+
 ## Tag rollup on Explore (#331 Phase 7)
 
 The Explore page shows a "Highlight tags" panel: annotation counts per tag,

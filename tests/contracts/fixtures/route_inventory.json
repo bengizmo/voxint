@@ -328,6 +328,12 @@
     ]
   ],
   [
+    "/review/{run_id}/annotations/evidence-pack",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/review/{run_id}/annotations/export.json",
     [
       "GET"

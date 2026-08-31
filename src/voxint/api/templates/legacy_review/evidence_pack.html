@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Voxint — evidence pack: {{ source_title }}{% endblock %}
+{% block cb_breadcrumb %}review / <strong>{{ source_title }}</strong> / evidence pack{% endblock %}
+{% block body %}
+{# Print/PDF evidence pack (issue #331 Phase 7). Pure server render, no island:
+   the browser's Print / Save as PDF is the PDF engine, so this page must read
+   correctly on paper. base.html already forces light tokens under print and
+   hides the shell chrome; the block below adds the document-level print rules. #}
+<style>
+  .evidence-pack { max-width: 52rem; }
+  .evidence-head dl { display: grid; grid-template-columns: max-content 1fr;
+    gap: 0.15rem 0.75rem; margin: 0.5rem 0; }
+  .evidence-head dt { color: var(--ink-3); }
+  .evidence-head dd { margin: 0; overflow-wrap: anywhere; }
+  .evidence-card { border: 1px solid var(--line); border-radius: var(--r-md);
+    padding: 0.75rem 1rem; margin: 0.75rem 0; background: var(--surface); }
+  .evidence-card blockquote { margin: 0.35rem 0; padding-left: 0.75rem;
+    border-left: 3px solid var(--line); }
+  .evidence-card .speaker { font-weight: 600; }
+  .evidence-meta { font-size: var(--t-micro, 0.75rem); color: var(--ink-3);
+    overflow-wrap: anywhere; }
+  .evidence-stale { border: 1px solid var(--warn, #b45309);
+    border-radius: var(--r-sm, 4px); padding: 0.35rem 0.6rem; margin: 0.35rem 0; }
+  .evidence-print-btn { margin: 0.5rem 0; }
+  @media print {
+    .evidence-print-btn, .evidence-back { display: none; }
+    .evidence-card { break-inside: avoid; border-color: #bbb; }
+    @page { margin: 2cm; }
+  }
+</style>
+<div class="evidence-pack">
+  <p class="evidence-back"><a href="/review/{{ run.id }}/transcript">← Back to the transcript</a></p>
+  <header class="evidence-head">
+    <h1>Evidence pack: {{ source_title }}</h1>
+    <p class="evidence-print-btn">
+      <button type="button" onclick="window.print()">Print / Save as PDF</button>
+    </p>
+    <dl>
+      <dt>Recording</dt><dd>{{ source_title }}</dd>
+      <dt>Run</dt><dd>{{ run.id }}</dd>
+      {% if media_sha256 %}<dt>Source media SHA-256</dt><dd>{{ media_sha256 }}</dd>{% endif %}
+      <dt>Voxint version</dt><dd>{{ app_version }}</dd>
+      <dt>Generated</dt><dd>{{ generated_at.strftime("%Y-%m-%d %H:%M UTC") }}</dd>
+      {% if filtered %}<dt>Filter</dt><dd>Tag-filtered subset (not every highlight on this run)</dd>{% endif %}
+    </dl>
+    {% if stages %}
+    <details class="evidence-provenance">
+      <summary>Pipeline provenance</summary>
+      <dl>
+        {% for stage, prov in stages.items() %}
+        {% for role, model in prov.roles.items() %}
+        <dt>{{ stage }} / {{ role }}</dt>
+        <dd>{{ model.model or "not recorded" }}{% if model.engine %} ({{ model.engine }}){% endif %}{% if model.revision %} @ {{ model.revision }}{% endif %}</dd>
+        {% endfor %}
+        {% endfor %}
+      </dl>
+    </details>
+    {% endif %}
+  </header>
+
+  {% if not quotes %}
+  <p>No highlights on this run{% if filtered %} match the tag filter{% endif %}.
+    Select transcript text in the review console to add one.</p>
+  {% endif %}
+
+  {% for q in quotes %}
+  <article class="evidence-card" id="quote-{{ q.id }}">
+    {% if q.stale %}
+    <p class="evidence-stale" role="note"><strong>Stale — re-anchor before citing.</strong>
+      The transcript text this highlight covered has changed since it was
+      captured. The quote below is the captured copy, unverified against the
+      current transcript.</p>
+    <blockquote>{{ q.captured_quote }}</blockquote>
+    {% else %}
+    {% for ln in q.quote_lines %}
+    <blockquote>
+      {% if ln.speaker %}<span class="speaker">{{ ln.speaker }}:</span>{% endif %}
+      {{ ln.text }}
+      {% if ln.start_seconds is not none and ln.end_seconds is not none %}
+      <span class="evidence-meta">[{{ "%.2f"|format(ln.start_seconds) }}–{{ "%.2f"|format(ln.end_seconds) }}s]</span>
+      {% endif %}
+    </blockquote>
+    {% endfor %}
+    {% endif %}
+    {% if q.tags %}
+    <p><span class="evidence-meta">Tags:</span>
+      {% for t in q.tags %}<span class="tag-pill hl-{{ t.color }}">{{ t.name }}</span>{% endfor %}</p>
+    {% endif %}
+    {% if q.note %}<p><span class="evidence-meta">Note:</span> {{ q.note }}</p>{% endif %}
+    <p class="evidence-meta">
+      Highlight {{ q.id }}
+      {% if q.start_seconds is not none and q.end_seconds is not none %}
+      · {% if q.timing_precision != "word" %}≈ {% endif %}{{ "%.2f"|format(q.start_seconds) }}–{{ "%.2f"|format(q.end_seconds) }}s
+      {% endif %}
+      {% if q.speakers %} · {{ q.speakers|join(", ") }}{% endif %}
+      · captured by {{ q.operator }}
+      <br>Source text hash {{ q.source_text_hash }}
+      {% if q.clip %}<br>Audio clip {{ q.clip.filename }}{% if q.clip.sha256 %} (SHA-256 {{ q.clip.sha256 }}){% endif %}{% endif %}
+    </p>
+  </article>
+  {% endfor %}
+</div>
+{% endblock %}
