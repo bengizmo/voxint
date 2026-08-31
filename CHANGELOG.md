@@ -57,6 +57,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   dependencies); archived tags and deleted highlights are excluded, and
   highlights on runs still under review count from the moment they exist.
 
+### Fixed
+- **Copy and behavior bug batch** (#371). Explore header now pluralizes
+  correctly ("1 hour" not "1 hours"). `/login` redirects to `/` with a 302
+  when multi-user mode is off (was a raw 404). Backups copy on the Database
+  settings page now mentions the native launcher's backup command alongside
+  `pg_dump`. Database largest-tables estimates suppress zero-row entries
+  (Postgres stats lag makes those misleading).
+
 
 ## [0.31.0] - 2026-08-31
 
