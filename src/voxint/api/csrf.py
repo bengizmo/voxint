@@ -160,6 +160,12 @@ CSRF_PROJECT_CORRECTIONS = "project-corrections"
 # onto /media with their own action tokens, distinct from the legacy /submit and
 # /fetch forms' CSRF_SUBMIT/CSRF_FETCH so a token minted on one surface is not
 # valid on the other.
+# Quote board (issue #338, Phase 6). Saving a KWIC row from Explore and
+# managing (delete/edit) quotes on the project page are independent mutations
+# under separate tokens: a save token from the Explore page must not be
+# replayable on the project page to delete a different quote.
+CSRF_QUOTE_SAVE = "quote-save"
+CSRF_QUOTE_MANAGE = "quote-manage"
 CSRF_MEDIA_SUBMIT = "media-submit"
 CSRF_MEDIA_FETCH = "media-fetch"
 # Media library organization (issue #154, Console 2.0 P2b). Per-action tokens:
