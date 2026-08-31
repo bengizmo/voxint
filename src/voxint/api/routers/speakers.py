@@ -63,6 +63,7 @@ from voxint.db.models import (
     ResearchJob,
     ResearchJobStatus,
     Speaker,
+    UserRole,
 )
 from voxint.enrichment.queries import (
     CandidateState,
@@ -658,11 +659,14 @@ def decide_profile_candidate(
         # 303 re-renders the whole page.
         if not request.headers.get("HX-Request"):
             return RedirectResponse(f"/speakers/{speaker.id}", status_code=303)
+        cu = getattr(request.state, "current_user", None)
+        shell_ctx = {"can_write": cu is not None and cu.role != UserRole.VIEWER.value}
         research_html = templates.env.get_template("speakers/research.html").render(
             research=_research_state(
                 session, request.app.state.settings, speaker, include_aliases=True
             ),
             research_qs=_research_qs(request),
+            shell=shell_ctx,
             **_research_csrf(request),
         )
         panel_html = templates.env.get_template("speakers/profile_panel.html").render(
@@ -684,6 +688,7 @@ def _profile_panel_context(
     """Context for the profile-panel fragment (page include, htmx re-render,
     and the research-decision out-of-band refresh)."""
     secret = request.app.state.csrf_secret
+    cu = getattr(request.state, "current_user", None)
     return {
         "speaker": speaker,
         "profile": profile_for(session, speaker.id),
@@ -691,6 +696,9 @@ def _profile_panel_context(
         "archived": speaker.deleted_at is not None,
         "profile_error": error,
         "csrf_profile_edit": mint_csrf_token(secret, CSRF_SPEAKER_PROFILE_EDIT),
+        "shell": {
+            "can_write": cu is not None and cu.role != UserRole.VIEWER.value,
+        },
     }
 
 
