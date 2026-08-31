@@ -43,6 +43,31 @@ multi-tab browsing and back/forward navigation.
    ships.** The cache-control that currently keys on `/review` moves to cover
    every token-bearing response, so the editor's token never leaks into a cache.
 
+### Single-operator mode (amended by #374)
+
+When `voxint_multi_user` is off the console auto-acquires a claim on mount
+via the existing POST endpoints (never GET), removing the manual "Claim for
+editing" / "Claim for review" friction. Auto-acquire fires once per page
+lifecycle; a lost claim (409) drops to a manual "Resume editing here" action
+with no auto-retry loop. Multi-user mode retains fully manual first acquire.
+
+The review queue hides the "Claimed by" column in single-operator mode.
+
+### Heartbeat refresh (amended by #374)
+
+The heartbeat now calls a non-rotating `refresh` endpoint that extends the
+TTL without issuing a new token. A stale tab whose token was rotated by a
+newer claim receives 409 on its next refresh and drops to claim-lost state.
+This breaks the two-tab heartbeat fight that would occur if both tabs
+re-claimed via `claim_run` (same-reviewer reuse always succeeds there).
+
+### Implementation note on decision 3
+
+Decision 3 says same-operator claims are "reused, not rotated."
+`claim_run()` actually mints a new UUID on every call (the old token dies);
+what is "reused" is the claim slot, not the token. The refresh endpoint
+preserves the token on renewal; `claim_run` rotates it on ownership change.
+
 ## Consequences
 
 - Opening the editor is cheap and side-effect free, which is what makes the

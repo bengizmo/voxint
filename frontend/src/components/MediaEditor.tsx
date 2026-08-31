@@ -57,6 +57,7 @@ export interface MediaEditorProps {
   tagCsrf?: string | null;
   clipCsrf?: string | null;
   claimCsrf?: string | null;
+  multiUser?: boolean;
   labelStates?: LabelStateShape[];
   translate?: {
     csrf: string;
@@ -88,6 +89,7 @@ export function MediaEditor({
   tagCsrf: initialTagCsrf = null,
   clipCsrf: initialClipCsrf = null,
   claimCsrf = null,
+  multiUser = false,
   labelStates: initialLabelStates = [],
   translate = null,
 }: MediaEditorProps): React.JSX.Element {
@@ -168,37 +170,58 @@ export function MediaEditor({
 
   const claimed = reviewToken !== null && !claimLost;
 
-  // Heartbeat: re-claim periodically to renew the TTL (same-operator reuse
-  // per ADR 0004 — claim_run with the same reviewer returns a fresh token).
+  // Heartbeat: refresh the claim TTL without rotating the token.  A stale
+  // tab whose token no longer matches gets 409 and drops to claimLost.
+  // The interval keeps running in background tabs (browsers throttle to
+  // ~1/min, well within the default 600s TTL).  An immediate catch-up
+  // refresh fires when the tab becomes visible again.
   useEffect(() => {
     if (!claimed || !claimCsrf) return;
-    const interval = setInterval(() => {
-      void (async () => {
-        try {
-          const body = new URLSearchParams({
-            run_id: runId,
-            csrf_token: claimCsrf,
-          });
-          const res = await apiFetch(`/media/${mediaId}/editor/claim`, {
-            method: "POST",
-            headers: {
-              "content-type": "application/x-www-form-urlencoded",
-              accept: "application/json",
-            },
-            body: body.toString(),
-          });
-          const data = (await res.json()) as { token: string };
-          reviewTokenRef.current = data.token;
-          setReviewToken(data.token);
-        } catch (err) {
-          if (err instanceof ApiError && err.status === 409) {
-            setClaimLost(true);
-          }
+
+    const doRefresh = async () => {
+      const tok = reviewTokenRef.current;
+      if (!tok) return;
+      try {
+        const body = new URLSearchParams({
+          run_id: runId,
+          token: tok,
+          csrf_token: claimCsrf,
+        });
+        await apiFetch(`/media/${mediaId}/editor/refresh`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            accept: "application/json",
+          },
+          body: body.toString(),
+        });
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409) {
+          setClaimLost(true);
         }
-      })();
-    }, 60_000);
-    return () => clearInterval(interval);
+      }
+    };
+
+    const intervalId = setInterval(() => void doRefresh(), 60_000);
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void doRefresh();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [claimed, claimCsrf, runId, mediaId]);
+
+  // Single-operator auto-claim on mount: skip the manual "Claim for editing"
+  // click when there is only one operator and no handoff token is present.
+  useEffect(() => {
+    if (multiUser || initialReviewToken || !claimCsrf) return;
+    void claimForEditing();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only
+  }, []);
 
   // Release on unload (best-effort — sendBeacon for reliability).
   useEffect(() => {

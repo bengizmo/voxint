@@ -10,6 +10,7 @@ from voxint.adjudication.slots import (
     ClaimMismatchError,
     ClaimUnavailableError,
     claim_run,
+    refresh_run_claim,
     release_run,
     verify_claim,
 )
@@ -136,3 +137,99 @@ def test_concurrent_claim_one_winner(session_factory: sessionmaker[Session]) -> 
     finally:
         s1.close()
         s2.close()
+
+
+# --- refresh_run_claim tests (#374) ---
+
+
+def test_refresh_extends_expiry_same_token(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session)
+        token = claim_run(session, run_id, reviewer="ben", ttl_seconds=TTL)
+        session.commit()
+
+    with session_factory() as session:
+        before = session.get(PipelineRun, run_id)
+        assert before is not None
+        old_expiry = before.review_claim_expires_at
+        old_rev = before.revision
+        session.expunge(before)
+
+    with session_factory() as session:
+        refresh_run_claim(session, run_id, token, ttl_seconds=TTL)
+        session.commit()
+
+    with session_factory() as session:
+        after = session.get(PipelineRun, run_id)
+        assert after is not None
+        assert after.review_claim_token == token
+        assert after.review_claim_expires_at is not None
+        assert old_expiry is not None
+        assert after.review_claim_expires_at > old_expiry
+        assert after.revision == old_rev
+
+
+def test_refresh_rejects_stale_token(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session)
+        first = claim_run(session, run_id, reviewer="ben", ttl_seconds=TTL)
+        session.commit()
+    with session_factory() as session:
+        second = claim_run(session, run_id, reviewer="ben", ttl_seconds=TTL)
+        session.commit()
+    assert first != second
+    with session_factory() as session, pytest.raises(ClaimMismatchError):
+        refresh_run_claim(session, run_id, first, ttl_seconds=TTL)
+
+
+def test_refresh_rejects_expired_claim(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session)
+        token = claim_run(session, run_id, reviewer="ben", ttl_seconds=TTL)
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        run.review_claim_expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+        session.commit()
+
+    with session_factory() as session, pytest.raises(ClaimMismatchError):
+        refresh_run_claim(session, run_id, token, ttl_seconds=TTL)
+
+
+def test_refresh_rejects_non_completed_run(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session)
+        token = claim_run(session, run_id, reviewer="ben", ttl_seconds=TTL)
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        run.status = RunStatus.RUNNING.value
+        session.commit()
+
+    with session_factory() as session, pytest.raises(ClaimMismatchError):
+        refresh_run_claim(session, run_id, token, ttl_seconds=TTL)
+
+
+def test_two_claims_then_refresh_first_token_fails(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Tab A claims, Tab B claims (rotates), Tab A's refresh gets 409."""
+    with session_factory() as session:
+        run_id = make_run(session)
+        token_a = claim_run(session, run_id, reviewer="ben", ttl_seconds=TTL)
+        session.commit()
+    with session_factory() as session:
+        token_b = claim_run(session, run_id, reviewer="ben", ttl_seconds=TTL)
+        session.commit()
+    assert token_a != token_b
+    with session_factory() as session, pytest.raises(ClaimMismatchError):
+        refresh_run_claim(session, run_id, token_a, ttl_seconds=TTL)
+    with session_factory() as session:
+        refresh_run_claim(session, run_id, token_b, ttl_seconds=TTL)
+        session.commit()

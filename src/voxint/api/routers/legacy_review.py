@@ -84,6 +84,7 @@ from voxint.adjudication.slots import (
     ClaimMismatchError,
     ClaimUnavailableError,
     claim_run,
+    refresh_run_claim,
     release_run,
     verify_claim,
 )
@@ -796,6 +797,35 @@ def claim(
             suffix = "&tutorial=adjudicate"
     return RedirectResponse(f"/review/{run_id}?token={token}{suffix}", status_code=303)
 
+
+@router.post("/review/{run_id}/refresh")
+def refresh(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    token: Annotated[uuid.UUID, Form()],
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> JSONResponse:
+    """Extend the active workbench claim's TTL."""
+    _require_csrf(request, CSRF_CLAIM, csrf_token)
+    settings: Settings = request.app.state.settings
+    try:
+        refresh_run_claim(
+            session,
+            run_id,
+            token,
+            ttl_seconds=settings.review_claim_ttl_seconds,
+        )
+    except ClaimMismatchError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+            headers=_CLAIM_CONFLICT_HEADERS,
+        ) from exc
+    return JSONResponse({"ok": True})
+
+
 @router.get("/review/{run_id}", name="workbench")
 def workbench(
     run_id: uuid.UUID,
@@ -825,10 +855,12 @@ def release(
     operator: OperatorDep,
     session: SessionDep,
     token: Annotated[uuid.UUID, Form()],
-) -> RedirectResponse:
+) -> Response:
     try:
         release_run(session, run_id, token)
-    except (ClaimMismatchError, ClaimUnavailableError) as exc:
+    except ClaimMismatchError:
+        return Response(status_code=204)
+    except ClaimUnavailableError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return RedirectResponse("/review", status_code=303)
 
@@ -2818,4 +2850,3 @@ def update_annotation_tag(
     except AnnotationError as exc:
         raise _annotation_http_error(exc) from exc
     return JSONResponse(_tag_shape(tag))
-

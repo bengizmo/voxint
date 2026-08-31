@@ -29,11 +29,30 @@
   {% else %}
   <p class="claim-state off">Not claimed by this tab — decisions are disabled.</p>
   <div class="card-actions">
-    <form method="post" action="/review/{{ run.id }}/claim" class="inline">
+    <form method="post" action="/review/{{ run.id }}/claim" class="inline" id="claim-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_claim }}">
       <button type="submit" class="primary">Claim for review</button>
     </form>
   </div>
+  {% if not shell.multi_user %}
+  <script>
+  (function() {
+    var f = document.getElementById("claim-form");
+    if (!f) return;
+    function trySubmit() {
+      if (f.dataset.autoSubmitted) return;
+      if (document.prerendering) return;
+      if (document.visibilityState !== "visible") return;
+      f.dataset.autoSubmitted = "1";
+      f.requestSubmit();
+    }
+    trySubmit();
+    document.addEventListener("visibilitychange", trySubmit);
+    document.addEventListener("prerenderingchange", trySubmit);
+    window.addEventListener("pageshow", trySubmit);
+  })();
+  </script>
+  {% endif %}
   {% endif %}
 </header>
 

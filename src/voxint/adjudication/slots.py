@@ -108,6 +108,41 @@ def verify_claim(
     return run
 
 
+def refresh_run_claim(
+    session: Session,
+    run_id: uuid.UUID,
+    token: uuid.UUID,
+    *,
+    ttl_seconds: int,
+) -> None:
+    """Extend the TTL of an active claim without rotating the token.
+
+    Used by the heartbeat: a stale tab whose token no longer matches gets
+    ClaimMismatchError (409 upstream) and drops to claim-lost state.
+    Unlike claim_run this never issues a new token and never bumps revision.
+    """
+    now = datetime.now(tz=UTC)
+    result = cast(
+        CursorResult[Any],
+        session.execute(
+            update(PipelineRun)
+            .where(
+                PipelineRun.id == run_id,
+                PipelineRun.review_claim_token == token,
+                PipelineRun.review_claim_expires_at > now,
+                PipelineRun.status == RunStatus.COMPLETED.value,
+            )
+            .values(
+                review_claim_expires_at=now + timedelta(seconds=ttl_seconds),
+            )
+        ),
+    )
+    if result.rowcount != 1:
+        raise ClaimMismatchError(
+            f"claim on run {run_id} is stale or expired; re-claim"
+        )
+
+
 def release_run(session: Session, run_id: uuid.UUID, token: uuid.UUID) -> None:
     """Release a held claim; token must match (idempotent for a dead claim)."""
     run = session.execute(
