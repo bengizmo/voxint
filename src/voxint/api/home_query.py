@@ -56,12 +56,11 @@ class ActivityItem:
 
 @dataclass(frozen=True)
 class GroupedActivityItem:
-    """A run-failed row that may represent multiple consecutive identical failures.
+    """A run-failed row representing multiple consecutive identical failures.
 
-    ``count`` is 1 for a single failure or >1 when identical failures are
-    collapsed. ``items`` holds the individual rows (oldest first) for access
-    to each run link; if not needed, the first item's fields carry the display
-    data.
+    ``count`` is always >1 (single failures pass through as plain
+    ``ActivityItem``). ``item`` is the newest row (display data); ``run_ids``
+    holds every grouped run's id so a template can link each if needed.
     """
 
     item: ActivityItem

@@ -73,6 +73,6 @@ def home(
         "review_backlog": len(queue),
         "unresolved_voices": sum(entry.unresolved_labels for entry in queue),
         "failed_runs": status_counts.get(RunStatus.FAILED.value, 0),
-        "activity": group_activity(recent_activity(session)),
+        "activity": group_activity(recent_activity(session, limit=30))[:10],
     }
     return templates.TemplateResponse(request, "home/home.html", context)
