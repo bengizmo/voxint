@@ -431,6 +431,8 @@ def _folder_panel_context(
     is_setup = action_prefix == "/setup/folders"
     if is_setup:
         nav_prefix, nav_suffix, nav_base = "/setup?step=media&path=", "", "/setup"
+    elif settings.console_settings_enabled:
+        nav_prefix, nav_suffix, nav_base = "/settings/media?path=", "#folders", "/settings/media"
     else:
         nav_prefix, nav_suffix, nav_base = "/settings?path=", "#folders", "/settings"
     root = settings.media_root.resolve()
@@ -2102,6 +2104,14 @@ def _settings_page_template(request: Request) -> str:
     return "settings/hub.html"
 
 
+def _settings_redirect(request: Request, anchor: str, tab: str) -> str:
+    """Success-redirect URL for a settings POST, tab-aware when Console 2.0 is on."""
+    settings: Settings = request.app.state.settings
+    if settings.console_settings_enabled:
+        return f"/settings/{tab}#{anchor}" if tab else f"/settings#{anchor}"
+    return f"/settings#{anchor}"
+
+
 @router.get("/settings", name="settings_page")
 def settings_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     return templates.TemplateResponse(
@@ -2292,7 +2302,7 @@ def settings_llm(
     if error is not None:
         return _rerender(error)
     session.commit()
-    return RedirectResponse("/settings", status_code=303)
+    return RedirectResponse(_settings_redirect(request, "llm", "ai"), status_code=303)
 
 @router.post("/settings/features")
 def settings_features(
@@ -2344,7 +2354,7 @@ def settings_features(
             ),
         )
     session.commit()
-    return RedirectResponse("/settings", status_code=303)
+    return RedirectResponse(_settings_redirect(request, "features", ""), status_code=303)
 
 @router.post("/settings/semantic")
 def settings_semantic(
@@ -2383,7 +2393,7 @@ def settings_semantic(
             ),
         )
     session.commit()
-    return RedirectResponse("/settings", status_code=303)
+    return RedirectResponse(_settings_redirect(request, "semantic-search", "ai"), status_code=303)
 
 @router.post("/settings/translation")
 def settings_translation(
@@ -2422,7 +2432,7 @@ def settings_translation(
             ),
         )
     session.commit()
-    return RedirectResponse("/settings", status_code=303)
+    return RedirectResponse(_settings_redirect(request, "translation", "ai"), status_code=303)
 
 @router.post("/settings/corrections")
 def settings_corrections(
@@ -2508,7 +2518,7 @@ def settings_corrections(
     session.commit()
     if wants_json:
         return JSONResponse({"ok": True, "corrections": normalized})
-    return RedirectResponse("/settings", status_code=303)
+    return RedirectResponse(_settings_redirect(request, "corrections", "ai"), status_code=303)
 
 @router.post("/settings/glossary")
 def settings_glossary(
@@ -2552,7 +2562,7 @@ def settings_glossary(
     row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
     row.vocabulary = terms
     session.commit()
-    return RedirectResponse("/settings#glossary", status_code=303)
+    return RedirectResponse(_settings_redirect(request, "glossary", "ai"), status_code=303)
 
 @router.post("/settings/watch-folder")
 def settings_watch_folder(
@@ -2591,7 +2601,7 @@ def settings_watch_folder(
         None if watch_folder_enabled == "inherit" else (watch_folder_enabled == "on")
     )
     session.commit()
-    return RedirectResponse("/settings", status_code=303)
+    return RedirectResponse(_settings_redirect(request, "watch-folder", "media"), status_code=303)
 
 @router.post("/settings/web-research")
 def settings_web_research(
@@ -2637,7 +2647,7 @@ def settings_web_research(
             ),
         )
     session.commit()
-    return RedirectResponse("/settings", status_code=303)
+    return RedirectResponse(_settings_redirect(request, "sources", "media"), status_code=303)
 
 # ---- Settings → Media folders + domain packs (issue #63) ---------------
 # The same folder browser as the wizard, mounted on the protected router with
@@ -2681,7 +2691,8 @@ def settings_folders(
         session.commit()
     else:
         session.rollback()
-    redirect = "/settings?" + urlencode({"path": path}) + "#folders"
+    base = "/settings/media?" if settings.console_settings_enabled else "/settings?"
+    redirect = base + urlencode({"path": path}) + "#folders"
 
     def _error_page(message: str) -> Response:
         return templates.TemplateResponse(

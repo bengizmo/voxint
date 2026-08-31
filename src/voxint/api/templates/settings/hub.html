@@ -36,10 +36,13 @@
 (function () {
   var tabs = {
     llm: "ai", translation: "ai", corrections: "ai", glossary: "ai",
-    "semantic-search": "ai", folders: "media", sources: "media"
+    "semantic-search": "ai", folders: "media", sources: "media",
+    "watch-folder": "media"
   };
   {% for section in plugin_settings_sections %}
-  tabs[{{ section.section_id | tojson }}] = "plugins";
+  if (!tabs[{{ section.section_id | tojson }}]) {
+    tabs[{{ section.section_id | tojson }}] = "plugins";
+  }
   {% endfor %}
   var anchor = window.location.hash.slice(1);
   if (tabs[anchor]) {
