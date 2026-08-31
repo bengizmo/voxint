@@ -112,7 +112,7 @@
       --font-ui: 'IBM Plex Sans', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       --font-mono: 'IBM Plex Mono', ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", monospace;
       --t-micro: .65625rem; /* 10.5px — uppercase micro-headers */
-      --t-xs: .75rem; --t-sm: .78125rem; --t-base: .8125rem; --t-md: 1.0625rem;
+      --t-xs: .75rem; --t-sm: .78125rem; --t-dense: .8125rem; --t-base: .9375rem; --t-md: 1.0625rem;
       --t-lg: 1.1875rem; --t-xl: 1.5rem; --t-2xl: 2.25rem;
 
       /* Radius + restrained elevation (two soft shadows, used sparingly) */
@@ -343,7 +343,7 @@
     a { color: var(--accent-ink); text-underline-offset: 2px; }
     code, time, .num, .preview .t, .spk-badge { font-family: var(--font-mono);
            font-variant-numeric: tabular-nums; }
-    table { border-collapse: collapse; width: 100%; }
+    table { border-collapse: collapse; width: 100%; font-size: var(--t-dense); }
     th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
     th { color: var(--ink-2); font-size: var(--t-sm); }
     /* Tokenized controls. `:not(:where(.tp-split-word, .tp-corrected-chip))`
@@ -817,7 +817,7 @@
                 letter-spacing: .06em; color: var(--ink-3); padding: var(--space-2) var(--space-3);
                 border-bottom: 1px solid var(--line); white-space: nowrap; }
     .grid-table .gt-row { display: contents; }
-    .grid-table .gt-row > * { padding: 7px var(--space-3);
+    .grid-table .gt-row > * { padding: 7px var(--space-3); font-size: var(--t-dense);
                 border-bottom: 1px solid var(--line-subtle); }
     .grid-table .gt-row:hover > * { background: var(--surface-2); }
     .grid-table .gt-row .num { text-align: right; font-family: var(--font-mono);

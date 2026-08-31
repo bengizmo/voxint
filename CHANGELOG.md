@@ -6,6 +6,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **Type foundation** (#373). Base font raised from 13px to 15px for reading
+  surfaces; grid-tables and HTML tables use a new dense token (13px) so they
+  keep their compact density.
+
 ### Fixed
 - **Queue progress strikethrough** (#372). The review queue's "N of M
   resolved" label appeared struck-through because the progress column
