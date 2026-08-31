@@ -2792,7 +2792,7 @@ def settings_users_create(
     from voxint.users import create_user
 
     _require_csrf(request, CSRF_USERS, csrf_token)
-    if role not in ("admin", "reviewer"):
+    if role not in ("admin", "reviewer", "viewer"):
         return templates.TemplateResponse(
             request,
             "settings/users.html",
@@ -2858,7 +2858,7 @@ def settings_users_role(
         raise HTTPException(status_code=404, detail="user not found")
     if user.username == admin.username:
         raise HTTPException(status_code=403, detail="cannot change your own role")
-    if role not in ("admin", "reviewer"):
+    if role not in ("admin", "reviewer", "viewer"):
         raise HTTPException(status_code=422, detail="invalid role")
     try:
         set_role(session, user, UserRole(role))

@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from voxint.api.api_app import ApiKeyDep, ApiSessionDep
+from voxint.api.api_app import ApiSessionDep, ApiWriteDep
 from voxint.config import Settings
 from voxint.db.models import PipelineRun
 from voxint.ingest.service import (
@@ -49,7 +49,7 @@ def _publish_result(
 def upload_media(
     request: Request,
     file: UploadFile,
-    identity: ApiKeyDep,
+    identity: ApiWriteDep,
     session: ApiSessionDep,
 ) -> SubmissionResponse:
     idempotency_key = request.headers.get("idempotency-key", "")
@@ -92,7 +92,7 @@ def upload_media(
 def fetch_media(
     request: Request,
     body: FetchRequest,
-    identity: ApiKeyDep,
+    identity: ApiWriteDep,
     session: ApiSessionDep,
 ) -> SubmissionResponse:
     idempotency_key = request.headers.get("idempotency-key", "")

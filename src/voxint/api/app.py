@@ -49,6 +49,7 @@ from voxint.api.routers.deps import (
     _verify_plugin_csrf,
     require_onboarded,
     templates,
+    viewer_write_guard,
 )
 from voxint.api.routers.editor import router as editor_router
 from voxint.api.routers.explore import router as explore_router
@@ -514,7 +515,7 @@ def _register_routes(app: FastAPI) -> None:
     # Exemption stays structural: a route is exempt iff it reaches the app
     # outside a gated family router (the route-inventory and onboarding-gate
     # tests guard against a slip). New console routes go on their area router.
-    console = APIRouter()
+    console = APIRouter(dependencies=[Depends(viewer_write_guard)])
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
