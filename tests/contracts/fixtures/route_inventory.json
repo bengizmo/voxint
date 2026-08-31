@@ -734,6 +734,36 @@
     ]
   ],
   [
+    "/settings/users",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/settings/users/create",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/settings/users/{user_id}/reset-password",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/settings/users/{user_id}/role",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/settings/users/{user_id}/toggle",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/settings/watch-folder",
     [
       "POST"

@@ -28,7 +28,8 @@ from sqlalchemy.orm import Session
 from starlette.responses import RedirectResponse
 
 from voxint.api import settings_view
-from voxint.api.csrf import CSRF_SETTINGS, CSRF_SETUP, mint_csrf_token
+from voxint.api.auth import AuthContext
+from voxint.api.csrf import CSRF_SETTINGS, CSRF_SETUP, CSRF_USERS, mint_csrf_token
 from voxint.api.host_metrics import HostMetricsSnapshot, collect_host_metrics_or_empty
 from voxint.api.languages import LANGUAGE_NAMES
 from voxint.api.resource_status import (
@@ -39,11 +40,13 @@ from voxint.api.resource_status import (
 )
 from voxint.api.routers import deps
 from voxint.api.routers.deps import (
+    AdminDep,
     OperatorDep,
     SessionDep,
     _require_admin,
     _require_csrf,
     require_onboarded,
+    require_users_enabled,
     templates,
 )
 from voxint.api.service_identity import collect_service_identity
@@ -2710,3 +2713,243 @@ def tutorial_replay(
     clear_tutorial_completion(session)
     session.commit()
     return RedirectResponse(f"/runs/{run_id}?tutorial=run", status_code=303)
+
+
+# ---- User management (issue #362) ----------------------------------------
+# Admin-only sub-page at /settings/users, dark-shipped behind
+# console_users_enabled. All routes sit on the existing `router` (already
+# admin-gated + onboarding-gated at router level) with an additional
+# per-route require_users_enabled gate so they 404 cleanly when the flag
+# is off.
+
+def _users_context(
+    request: Request,
+    session: Session,
+    admin: AuthContext,
+    **overrides: Any,
+) -> dict[str, Any]:
+    from voxint.users import list_users
+
+    return {
+        "request": request,
+        "active_nav": "settings",
+        "users": list_users(session),
+        "csrf_users": mint_csrf_token(request.app.state.csrf_secret, CSRF_USERS),
+        "current_admin": admin.username,
+        "users_error": None,
+        "users_success": None,
+        **overrides,
+    }
+
+
+def _users_redirect(message: str | None = None) -> RedirectResponse:
+    url = "/settings/users"
+    if message:
+        url += "?ok=" + message
+    return RedirectResponse(url, status_code=303)
+
+
+@router.get(
+    "/settings/users",
+    name="settings_users",
+    dependencies=[Depends(require_users_enabled)],
+)
+def settings_users_page(
+    request: Request,
+    admin: AdminDep,
+    session: SessionDep,
+) -> Response:
+    ok_message = request.query_params.get("ok")
+    return templates.TemplateResponse(
+        request,
+        "settings/users.html",
+        _users_context(
+            request,
+            session,
+            admin,
+            users_success=ok_message,
+        ),
+    )
+
+
+@router.post(
+    "/settings/users/create",
+    dependencies=[Depends(require_users_enabled)],
+)
+def settings_users_create(
+    request: Request,
+    admin: AdminDep,
+    session: SessionDep,
+    username: Annotated[str, Form(max_length=64)] = "",
+    password: Annotated[str, Form()] = "",
+    password_confirm: Annotated[str, Form()] = "",
+    role: Annotated[str, Form()] = "reviewer",
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    from sqlalchemy.exc import IntegrityError
+
+    from voxint.db.models import UserRole
+    from voxint.users import create_user
+
+    _require_csrf(request, CSRF_USERS, csrf_token)
+    if password != password_confirm:
+        return templates.TemplateResponse(
+            request,
+            "settings/users.html",
+            _users_context(
+                request, session, admin,
+                users_error="Passwords do not match.",
+            ),
+        )
+    try:
+        create_user(
+            session, username=username, password=password, role=UserRole(role),
+        )
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request,
+            "settings/users.html",
+            _users_context(
+                request, session, admin,
+                users_error=str(exc),
+            ),
+        )
+    except IntegrityError:
+        session.rollback()
+        return templates.TemplateResponse(
+            request,
+            "settings/users.html",
+            _users_context(
+                request, session, admin,
+                users_error=f"User {username!r} already exists.",
+            ),
+        )
+    session.commit()
+    return _users_redirect(f"Created user {username}.")
+
+
+@router.post(
+    "/settings/users/{user_id}/role",
+    dependencies=[Depends(require_users_enabled)],
+)
+def settings_users_role(
+    user_id: uuid.UUID,
+    request: Request,
+    admin: AdminDep,
+    session: SessionDep,
+    role: Annotated[str, Form()] = "reviewer",
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    from voxint.db.models import User, UserRole
+    from voxint.users import set_role
+
+    _require_csrf(request, CSRF_USERS, csrf_token)
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    if user.username == admin.username:
+        raise HTTPException(status_code=403, detail="cannot change your own role")
+    try:
+        set_role(session, user, UserRole(role))
+    except ValueError as exc:
+        if request.headers.get("HX-Request"):
+            return templates.TemplateResponse(
+                request,
+                "settings/_users_row.html",
+                _users_context(request, session, admin, u=user),
+            )
+        return templates.TemplateResponse(
+            request,
+            "settings/users.html",
+            _users_context(request, session, admin, users_error=str(exc)),
+        )
+    session.commit()
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(
+            request,
+            "settings/_users_row.html",
+            _users_context(request, session, admin, u=user),
+        )
+    return _users_redirect(f"Changed {user.username} role to {role}.")
+
+
+@router.post(
+    "/settings/users/{user_id}/toggle",
+    dependencies=[Depends(require_users_enabled)],
+)
+def settings_users_toggle(
+    user_id: uuid.UUID,
+    request: Request,
+    admin: AdminDep,
+    session: SessionDep,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    from voxint.db.models import User
+    from voxint.users import set_disabled
+
+    _require_csrf(request, CSRF_USERS, csrf_token)
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    if user.username == admin.username:
+        raise HTTPException(status_code=403, detail="cannot disable yourself")
+    currently_disabled = user.disabled_at is not None
+    try:
+        set_disabled(session, user, disabled=not currently_disabled)
+    except ValueError as exc:
+        if request.headers.get("HX-Request"):
+            return templates.TemplateResponse(
+                request,
+                "settings/_users_row.html",
+                _users_context(request, session, admin, u=user),
+            )
+        return templates.TemplateResponse(
+            request,
+            "settings/users.html",
+            _users_context(request, session, admin, users_error=str(exc)),
+        )
+    session.commit()
+    verb = "Enabled" if currently_disabled else "Disabled"
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(
+            request,
+            "settings/_users_row.html",
+            _users_context(request, session, admin, u=user),
+        )
+    return _users_redirect(f"{verb} user {user.username}.")
+
+
+@router.post(
+    "/settings/users/{user_id}/reset-password",
+    dependencies=[Depends(require_users_enabled)],
+)
+def settings_users_reset_password(
+    user_id: uuid.UUID,
+    request: Request,
+    admin: AdminDep,
+    session: SessionDep,
+    new_password: Annotated[str, Form()] = "",
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    from voxint.db.models import User
+    from voxint.users import reset_password
+
+    _require_csrf(request, CSRF_USERS, csrf_token)
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    if user.username == admin.username:
+        raise HTTPException(
+            status_code=403,
+            detail="use the CLI to change your own password",
+        )
+    try:
+        reset_password(session, user, new_password)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request,
+            "settings/users.html",
+            _users_context(request, session, admin, users_error=str(exc)),
+        )
+    session.commit()
+    return _users_redirect(f"Reset password for {user.username}.")

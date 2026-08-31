@@ -191,6 +191,12 @@ CSRF_MEDIA_UNARCHIVE = "media-unarchive"
 CSRF_MEDIA_TRASH = "media-trash"
 CSRF_MEDIA_RESTORE = "media-restore"
 CSRF_MEDIA_EMPTY_TRASH = "media-empty-trash"
+# User management (issue #362). Per-action tokens: creating a user, changing a
+# role, toggling disabled state, and resetting a password are independent
+# mutations with different blast radii, but they all live on one settings
+# sub-page under the same admin gate, so one shared action is acceptable
+# (mirrors CSRF_SETTINGS' single-flow rationale for the settings sections).
+CSRF_USERS = "users"
 
 
 _CSRF_SECRET_FILENAME = ".csrf_secret"

@@ -732,6 +732,36 @@
     ]
   ],
   [
+    "/settings/users",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/settings/users/create",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/settings/users/{user_id}/role",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/settings/users/{user_id}/toggle",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/settings/users/{user_id}/reset-password",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/speakers",
     [
       "GET"

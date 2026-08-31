@@ -1756,11 +1756,10 @@ def _user_create(args: argparse.Namespace) -> int:
 
 def _user_list(args: argparse.Namespace) -> int:
     del args
-    from sqlalchemy import select
     from sqlalchemy.exc import SQLAlchemyError
 
-    from voxint.db.models import User
     from voxint.db.session import build_session_factory, session_scope
+    from voxint.users import list_users
 
     engine, code = _engine_or_report()
     if engine is None:
@@ -1769,7 +1768,7 @@ def _user_list(args: argparse.Namespace) -> int:
     try:
         try:
             with session_scope(factory) as session:
-                users = session.scalars(select(User).order_by(User.username)).all()
+                users = list_users(session)
                 rows = [
                     (
                         user.username,
@@ -1793,13 +1792,12 @@ def _user_list(args: argparse.Namespace) -> int:
 
 
 def _user_delete(args: argparse.Namespace) -> int:
-    from datetime import UTC, datetime
-
-    from sqlalchemy import delete, func, select
+    from sqlalchemy import select
     from sqlalchemy.exc import SQLAlchemyError
 
-    from voxint.db.models import AuthSession, User, UserRole
+    from voxint.db.models import User
     from voxint.db.session import build_session_factory, session_scope
+    from voxint.users import set_disabled
 
     engine, code = _engine_or_report()
     if engine is None:
@@ -1812,20 +1810,10 @@ def _user_delete(args: argparse.Namespace) -> int:
                 if user is None:
                     print(f"error: user {args.username!r} not found")
                     return 1
-                if user.role == UserRole.ADMIN.value and user.disabled_at is None:
-                    active_admins = session.scalar(
-                        select(func.count())
-                        .select_from(User)
-                        .where(
-                            User.role == UserRole.ADMIN.value,
-                            User.disabled_at.is_(None),
-                        )
-                    )
-                    if active_admins == 1:
-                        print("error: cannot disable the last active admin")
-                        return 1
-                user.disabled_at = datetime.now(UTC)
-                session.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
+                set_disabled(session, user, disabled=True)
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 1
         except SQLAlchemyError:
             print("error: database operation failed")
             return 2
@@ -1836,11 +1824,12 @@ def _user_delete(args: argparse.Namespace) -> int:
 
 
 def _user_set_role(args: argparse.Namespace) -> int:
-    from sqlalchemy import delete, func, select
+    from sqlalchemy import select
     from sqlalchemy.exc import SQLAlchemyError
 
-    from voxint.db.models import AuthSession, User, UserRole
+    from voxint.db.models import User, UserRole
     from voxint.db.session import build_session_factory, session_scope
+    from voxint.users import set_role
 
     engine, code = _engine_or_report()
     if engine is None:
@@ -1854,25 +1843,10 @@ def _user_set_role(args: argparse.Namespace) -> int:
                     print(f"error: user {args.username!r} not found")
                     return 1
                 new_role = UserRole(args.role)
-                if (
-                    user.role == UserRole.ADMIN.value
-                    and new_role is UserRole.REVIEWER
-                    and user.disabled_at is None
-                ):
-                    active_admins = session.scalar(
-                        select(func.count())
-                        .select_from(User)
-                        .where(
-                            User.role == UserRole.ADMIN.value,
-                            User.disabled_at.is_(None),
-                        )
-                    )
-                    if active_admins == 1:
-                        print("error: cannot downgrade the last active admin")
-                        return 1
-                if user.role != new_role.value:
-                    user.role = new_role.value
-                    session.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
+                set_role(session, user, new_role)
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 1
         except SQLAlchemyError:
             print("error: database operation failed")
             return 2
@@ -1883,20 +1857,15 @@ def _user_set_role(args: argparse.Namespace) -> int:
 
 
 def _user_set_password(args: argparse.Namespace) -> int:
-    from sqlalchemy import delete, select
+    from sqlalchemy import select
     from sqlalchemy.exc import SQLAlchemyError
 
-    from voxint.db.models import AuthSession, User
+    from voxint.db.models import User
     from voxint.db.session import build_session_factory, session_scope
-    from voxint.users import hash_password
+    from voxint.users import reset_password
 
     password = _read_confirmed_password()
     if password is None:
-        return 1
-    try:
-        password_hash = hash_password(password)
-    except ValueError as exc:
-        print(f"error: {exc}")
         return 1
 
     engine, code = _engine_or_report()
@@ -1910,8 +1879,10 @@ def _user_set_password(args: argparse.Namespace) -> int:
                 if user is None:
                     print(f"error: user {args.username!r} not found")
                     return 1
-                user.password_hash = password_hash
-                session.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
+                reset_password(session, user, password)
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 1
         except SQLAlchemyError:
             print("error: database operation failed")
             return 2

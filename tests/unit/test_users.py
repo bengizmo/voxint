@@ -1,17 +1,22 @@
+import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import CheckConstraint, create_engine
+from sqlalchemy import CheckConstraint, create_engine, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from voxint.db.models import Base, User
+from voxint.db.models import AuthSession, Base, User
 from voxint.users import (
     UserRole,
     authenticate,
     create_user,
     hash_password,
+    list_users,
+    reset_password,
+    set_disabled,
+    set_role,
     verify_password,
 )
 
@@ -34,7 +39,9 @@ def session() -> Iterator[Session]:
     for constraint in postgres_only_checks:
         User.__table__.constraints.remove(constraint)
     try:
-        Base.metadata.create_all(engine, tables=[User.__table__])
+        Base.metadata.create_all(
+            engine, tables=[User.__table__, AuthSession.__table__]
+        )
     finally:
         for constraint in postgres_only_checks:
             User.__table__.append_constraint(constraint)
@@ -159,3 +166,212 @@ def test_authenticate_rejects_disabled_user(session: Session) -> None:
     session.flush()
 
     assert authenticate(session, username="reviewer", password="secret") is None
+
+
+def test_list_users_empty(session: Session) -> None:
+    assert list_users(session) == []
+
+
+def test_list_users_ordered_by_username(session: Session) -> None:
+    create_user(session, username="charlie", password="secret")
+    create_user(session, username="alice", password="secret")
+    create_user(session, username="bob", password="secret")
+
+    assert [user.username for user in list_users(session)] == [
+        "alice",
+        "bob",
+        "charlie",
+    ]
+
+
+def test_set_role_changes_role(session: Session) -> None:
+    create_user(session, username="admin", password="secret")
+    user = create_user(session, username="reviewer", password="secret")
+
+    set_role(session, user, UserRole.ADMIN)
+
+    assert user.role == UserRole.ADMIN.value
+
+
+def test_set_role_purges_sessions_on_change(session: Session) -> None:
+    create_user(session, username="admin", password="secret")
+    user = create_user(session, username="reviewer", password="secret")
+    auth_session = AuthSession(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        token_hash=b"fake-hash-bytes",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    session.add(auth_session)
+    session.flush()
+
+    set_role(session, user, UserRole.ADMIN)
+
+    count = session.scalar(
+        select(func.count())
+        .select_from(AuthSession)
+        .where(AuthSession.user_id == user.id)
+    )
+    assert count == 0
+
+
+def test_set_role_noop_same_role(session: Session) -> None:
+    user = create_user(session, username="admin", password="secret")
+    auth_session = AuthSession(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        token_hash=b"fake-hash-bytes",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    session.add(auth_session)
+    session.flush()
+
+    set_role(session, user, UserRole.ADMIN)
+
+    count = session.scalar(
+        select(func.count())
+        .select_from(AuthSession)
+        .where(AuthSession.user_id == user.id)
+    )
+    assert count == 1
+
+
+def test_set_role_refuses_last_admin_downgrade(session: Session) -> None:
+    user = create_user(session, username="admin", password="secret")
+
+    with pytest.raises(ValueError):
+        set_role(session, user, UserRole.REVIEWER)
+
+    assert user.role == UserRole.ADMIN.value
+
+
+def test_set_role_allows_downgrade_with_two_admins(session: Session) -> None:
+    user = create_user(session, username="admin-one", password="secret")
+    create_user(
+        session,
+        username="admin-two",
+        password="secret",
+        role=UserRole.ADMIN,
+    )
+
+    set_role(session, user, UserRole.REVIEWER)
+
+    assert user.role == UserRole.REVIEWER.value
+
+
+def test_set_disabled_disables_user(session: Session) -> None:
+    create_user(session, username="admin", password="secret")
+    user = create_user(session, username="reviewer", password="secret")
+    auth_session = AuthSession(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        token_hash=b"fake-hash-bytes",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    session.add(auth_session)
+    session.flush()
+
+    set_disabled(session, user, disabled=True)
+
+    assert user.disabled_at is not None
+    count = session.scalar(
+        select(func.count())
+        .select_from(AuthSession)
+        .where(AuthSession.user_id == user.id)
+    )
+    assert count == 0
+
+
+def test_set_disabled_refuses_last_admin(session: Session) -> None:
+    user = create_user(session, username="admin", password="secret")
+
+    with pytest.raises(ValueError):
+        set_disabled(session, user, disabled=True)
+
+    assert user.disabled_at is None
+
+
+def test_set_disabled_allows_with_two_admins(session: Session) -> None:
+    user = create_user(session, username="admin-one", password="secret")
+    create_user(
+        session,
+        username="admin-two",
+        password="secret",
+        role=UserRole.ADMIN,
+    )
+
+    set_disabled(session, user, disabled=True)
+
+    assert user.disabled_at is not None
+
+
+def test_set_disabled_enables_user(session: Session) -> None:
+    create_user(session, username="admin", password="secret")
+    user = create_user(session, username="reviewer", password="secret")
+    user.disabled_at = datetime.now(UTC)
+    session.flush()
+
+    set_disabled(session, user, disabled=False)
+
+    assert user.disabled_at is None
+
+
+def test_set_disabled_enable_does_not_purge_sessions(session: Session) -> None:
+    create_user(session, username="admin", password="secret")
+    user = create_user(session, username="reviewer", password="secret")
+    user.disabled_at = datetime.now(UTC)
+    auth_session = AuthSession(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        token_hash=b"fake-hash-bytes",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    session.add(auth_session)
+    session.flush()
+
+    set_disabled(session, user, disabled=False)
+
+    count = session.scalar(
+        select(func.count())
+        .select_from(AuthSession)
+        .where(AuthSession.user_id == user.id)
+    )
+    assert count == 1
+
+
+def test_reset_password_updates_hash(session: Session) -> None:
+    user = create_user(session, username="admin", password="old-password")
+    old_hash = user.password_hash
+
+    reset_password(session, user, "new-password")
+
+    assert user.password_hash != old_hash
+    assert verify_password("new-password", user.password_hash)
+
+
+def test_reset_password_purges_sessions(session: Session) -> None:
+    user = create_user(session, username="admin", password="old-password")
+    auth_session = AuthSession(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        token_hash=b"fake-hash-bytes",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    session.add(auth_session)
+    session.flush()
+
+    reset_password(session, user, "new-password")
+
+    count = session.scalar(
+        select(func.count())
+        .select_from(AuthSession)
+        .where(AuthSession.user_id == user.id)
+    )
+    assert count == 0
+
+
+def test_reset_password_rejects_oversized(session: Session) -> None:
+    user = create_user(session, username="admin", password="secret")
+
+    with pytest.raises(ValueError):
+        reset_password(session, user, "a" * 1025)

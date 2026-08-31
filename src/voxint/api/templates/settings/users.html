@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Voxint — users{% endblock %}
+{% block body %}
+<nav class="filter-tabs" role="tablist" aria-label="Settings pages">
+  <a href="/settings/status" role="tab">Status</a>
+  <a href="/settings/hardware" role="tab">Hardware</a>
+  <a href="/settings/database" role="tab">Database</a>
+  <a href="/settings/plugins" role="tab">Plugins</a>
+  <a href="/settings/features" role="tab">Features</a>
+  {% if shell.users_enabled %}<a href="/settings/users" role="tab" aria-current="true">Users</a>{% endif %}
+  <span class="ft-spacer"></span>
+</nav>
+
+<div class="settings">
+<h1>Users</h1>
+<p><a href="/settings">← Settings</a></p>
+
+{% if users_error %}
+<p class="notice" role="alert">{{ users_error }}</p>
+{% endif %}
+{% if users_success %}
+<p class="notice notice--ok" role="status">{{ users_success }}</p>
+{% endif %}
+
+<section aria-labelledby="users-heading">
+<h2 id="users-heading">User accounts</h2>
+<p class="muted">Manage who can sign in. Admins have full access including this
+   page; reviewers can review and correct transcripts but cannot change settings
+   or manage users.</p>
+
+{% if users %}
+<div class="table-wrap" id="users-table">
+<table>
+  <thead><tr>
+    <th scope="col">Username</th>
+    <th scope="col">Role</th>
+    <th scope="col">Status</th>
+    <th scope="col">Created</th>
+    <th scope="col">Actions</th>
+  </tr></thead>
+  <tbody>
+    {% for u in users %}
+    {% include "settings/_users_row.html" %}
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No user accounts yet.</p>
+{% endif %}
+</section>
+
+<section aria-labelledby="create-heading">
+<h2 id="create-heading">Create user</h2>
+<form method="post" action="/settings/users/create" class="stacked-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_users }}">
+  <div class="form-field">
+    <label for="new-username">Username</label>
+    <input type="text" id="new-username" name="username" required
+           pattern="[a-z0-9][a-z0-9_.\-]*" maxlength="64"
+           autocomplete="off" spellcheck="false"
+           placeholder="lowercase letters, numbers, dots, dashes">
+  </div>
+  <div class="form-field">
+    <label for="new-password">Password</label>
+    <input type="password" id="new-password" name="password" required
+           autocomplete="new-password" minlength="1">
+  </div>
+  <div class="form-field">
+    <label for="new-password-confirm">Confirm password</label>
+    <input type="password" id="new-password-confirm" name="password_confirm" required
+           autocomplete="new-password" minlength="1">
+  </div>
+  <div class="form-field">
+    <label for="new-role">Role</label>
+    <select id="new-role" name="role">
+      <option value="reviewer" selected>Reviewer — can review and correct transcripts</option>
+      <option value="admin">Admin — full access including settings and user management</option>
+    </select>
+  </div>
+  <button type="submit" class="btn">Create user</button>
+</form>
+</section>
+</div>
+{% endblock %}
