@@ -145,6 +145,15 @@ def _require_api_admin(identity: ApiKeyDep) -> AuthContext:
 ApiAdminDep = Annotated[AuthContext, Depends(_require_api_admin)]
 
 
+def _require_api_write_access(identity: ApiKeyDep) -> AuthContext:
+    if identity.role == "viewer":
+        raise HTTPException(status_code=403, detail="write access required")
+    return identity
+
+
+ApiWriteDep = Annotated[AuthContext, Depends(_require_api_write_access)]
+
+
 # ---------------------------------------------------------------------------
 # Sub-app factory
 # ---------------------------------------------------------------------------

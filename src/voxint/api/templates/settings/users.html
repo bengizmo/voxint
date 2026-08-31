@@ -26,7 +26,8 @@
 <h2 id="users-heading">User accounts</h2>
 <p class="muted">Manage who can sign in. Admins have full access including this
    page; reviewers can review and correct transcripts but cannot change settings
-   or manage users.</p>
+   or manage users; viewers can browse transcripts and results but cannot make
+   changes.</p>
 
 {% if users %}
 <div class="table-wrap" id="users-table">
@@ -75,6 +76,7 @@
     <label for="new-role">Role</label>
     <select id="new-role" name="role">
       <option value="reviewer" selected>Reviewer — can review and correct transcripts</option>
+      <option value="viewer">Viewer — read-only access to transcripts and results</option>
       <option value="admin">Admin — full access including settings and user management</option>
     </select>
   </div>

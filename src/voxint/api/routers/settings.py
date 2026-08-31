@@ -48,6 +48,7 @@ from voxint.api.routers.deps import (
     require_onboarded,
     require_users_enabled,
     templates,
+    viewer_write_guard,
 )
 from voxint.api.service_identity import collect_service_identity
 from voxint.api.setup_wizard import (
@@ -125,7 +126,7 @@ from voxint.tutorial.seed import seed_tutorial_run
 
 logger = logging.getLogger(__name__)
 
-setup_router = APIRouter()
+setup_router = APIRouter(dependencies=[Depends(viewer_write_guard)])
 router = APIRouter(dependencies=[Depends(require_onboarded), Depends(_require_admin)])
 
 # Bounded, non-secret operator guidance for a failed UI-triggered tutorial seed
@@ -2792,13 +2793,13 @@ def settings_users_create(
     from voxint.users import create_user
 
     _require_csrf(request, CSRF_USERS, csrf_token)
-    if role not in ("admin", "reviewer"):
+    if role not in ("admin", "reviewer", "viewer"):
         return templates.TemplateResponse(
             request,
             "settings/users.html",
             _users_context(
                 request, session, admin,
-                users_error="Choose Admin or Reviewer.",
+                users_error="Choose Admin, Reviewer, or Viewer.",
             ),
         )
     if password != password_confirm:
@@ -2858,7 +2859,7 @@ def settings_users_role(
         raise HTTPException(status_code=404, detail="user not found")
     if user.username == admin.username:
         raise HTTPException(status_code=403, detail="cannot change your own role")
-    if role not in ("admin", "reviewer"):
+    if role not in ("admin", "reviewer", "viewer"):
         raise HTTPException(status_code=422, detail="invalid role")
     try:
         set_role(session, user, UserRole(role))
