@@ -55,6 +55,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   honest notes when some or all recordings have no enrichment yet.
 
 ### Fixed
+- **Explore term-stats advisory lock now varies per scope** (#338 follow-up).
+  The lock key was built from the first 8 bytes of the raw key string, which
+  are the constant prefix "term_sta", so every scope serialized on one
+  advisory lock. Now hashed (sha256) before truncation, matching the meaning
+  map's lock. Over-serialization only; behavior was never incorrect.
 - **Project speaker counts no longer double-count re-runs** (#336). The
   project page's speaker list now counts each recording once (its newest
   completed run) instead of once per historical run. Membership follows the
