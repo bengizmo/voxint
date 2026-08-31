@@ -7,6 +7,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **Queue progress strikethrough** (#372). The review queue's "N of M
+  resolved" label appeared struck-through because the progress column
+  (10rem) was too narrow for the track (`min-width: 8rem`) plus the
+  label text; the overflow caused the track to visually interfere with
+  adjacent text. Widened the column to 14rem.
+- **Invisible "Set up" button on Status page** (#372). The primary
+  action button next to "Your own AI endpoint" rendered as a solid teal
+  rectangle with no visible text. Cause: `.component-row .cr-action a`
+  (specificity 0,2,1) set `color: var(--accent)`, overriding
+  `.cb-btn-primary`'s `color: var(--accent-contrast)` (0,1,0). Fixed
+  with a `:not(.cb-btn)` guard on the action link rule.
 - **Editor speaker-rail collapse** (#370). The media-editor page nested the
   island's `.me-layout` grid inside `.lib-two-col`, causing the speaker rail
   to collapse to a sliver at desktop widths. Restructured: metadata cards

@@ -1010,8 +1010,8 @@
     .component-row .cr-state { flex: 1; font-size: var(--t-sm);
                 color: var(--ink-2); }
     .component-row .cr-action { font-size: var(--t-sm); white-space: nowrap; }
-    .component-row .cr-action a { color: var(--accent); text-decoration: none; }
-    .component-row .cr-action a:hover { text-decoration: underline; }
+    .component-row .cr-action a:not(.cb-btn) { color: var(--accent); text-decoration: none; }
+    .component-row .cr-action a:not(.cb-btn):hover { text-decoration: underline; }
 
     .gauge-row { margin-bottom: var(--space-4); }
     .gauge-row:last-child { margin-bottom: 0; }
