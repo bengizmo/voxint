@@ -1,35 +1,47 @@
-"""Media detail and editor page (Console 2.0 P3a, issue #156).
+"""Media detail and editor page (Console 2.0 P3a/P3b, issues #156/#157).
 
-``GET /media/{media_id}`` is the media detail page that will host the editor
-island (#157). Until the island ships, it renders a server-side transcript
-fallback with run metadata, a run chooser, and progress state. The existing
-``/review/{run_id}/*`` endpoints remain the only mutation surface; the editor
-island will call them directly.
+``GET /media/{media_id}/editor`` serves the media-editor island: run metadata,
+a run chooser, and — for a completed run — the editor with transcript, speaker
+rail, annotations, and waveform. The existing ``/review/{run_id}/*`` endpoints
+are the mutation surface; the island calls them directly.
 """
 
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
 
 from voxint.adjudication.resolver import label_states
 from voxint.adjudication.review_state import verified_progress
-from voxint.adjudication.slots import ClaimMismatchError, verify_claim
+from voxint.adjudication.slots import (
+    ClaimMismatchError,
+    ClaimUnavailableError,
+    claim_run,
+    release_run,
+    verify_claim,
+)
 from voxint.adjudication.transcript import TranscriptText, attributed_transcript
 from voxint.api.csrf import (
     CSRF_ANNOTATION_TAGS,
+    CSRF_CLAIM,
     CSRF_CLIP_EXTRACT,
+    CSRF_TRANSLATION_GENERATE,
     mint_csrf_token,
 )
 from voxint.api.editor_query import media_detail
+from voxint.api.languages import language_label
 from voxint.api.playback import playback_capability
 from voxint.api.presentation import friendly_media_label
 from voxint.api.routers.deps import (
+    _TRANSLATION_ACTIVE_STATUSES,
     OperatorDep,
     SessionDep,
     _get_media_gate,
+    _reject_if_archived,
+    _require_csrf,
     require_media_enabled,
     require_onboarded,
     templates,
@@ -40,8 +52,16 @@ from voxint.api.transcript_view import (
     _run_label_universe,
     _transcript_island_props,
 )
+from voxint.app_settings import get_app_settings, resolve_effective_translation_target_language
 from voxint.config import Settings
 from voxint.db.models import PipelineRun, RunStatus
+from voxint.enrichment.translation_jobs import (
+    active_or_last_job as active_or_last_translation_job,
+)
+from voxint.enrichment.translation_jobs import (
+    normalized_language,
+    translation_gates_open,
+)
 from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import active_speakers
 
@@ -104,6 +124,7 @@ def media_detail_page(
             island_props = _transcript_island_props(
                 session, run_id, lines, palette, capability, settings
             )
+            island_props["mediaId"] = str(media_id)
             island_props["reviewToken"] = str(token) if claim_valid else None
             island_props["initialProgress"] = {
                 "verified": verified_n,
@@ -129,6 +150,7 @@ def media_detail_page(
                     "speakerId": str(s.speaker_id) if s.speaker_id else None,
                     "speakerName": s.speaker_name,
                     "cosineConfidence": s.cosine_confidence,
+                    "cosineSpeakerId": str(s.cosine_speaker_id) if s.cosine_speaker_id else None,
                     "cosineSpeakerName": s.cosine_speaker_name,
                     "cosineGrounded": s.cosine_grounded,
                     "llmHintName": s.llm_hint_name,
@@ -151,6 +173,37 @@ def media_detail_page(
                     request.app.state.csrf_secret, CSRF_CLIP_EXTRACT
                 )
 
+            translate_row = get_app_settings(session)
+            if translation_gates_open(settings, translate_row):
+                detected = normalized_language(selected_run_obj.detected_language)
+                preferred = normalized_language(
+                    resolve_effective_translation_target_language(translate_row, settings)
+                )
+                translate_job = active_or_last_translation_job(session, run_id)
+                default_target = (
+                    preferred if preferred is not None and preferred != detected else None
+                )
+                island_props["translate"] = {
+                    "csrf": mint_csrf_token(
+                        request.app.state.csrf_secret, CSRF_TRANSLATION_GENERATE
+                    ),
+                    "defaultTarget": default_target,
+                    "defaultTargetLabel": (
+                        language_label(default_target) if default_target else None
+                    ),
+                    "active": translate_job is not None
+                    and translate_job.status in _TRANSLATION_ACTIVE_STATUSES,
+                    "runAnchor": f"/runs/{run_id}#run-translation-{run_id}",
+                    "transcriptUrl": f"/runs/{run_id}/transcript",
+                }
+            else:
+                island_props["translate"] = None
+
+    if island_props is not None:
+        island_props["claimCsrf"] = mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_CLAIM
+        )
+
     return templates.TemplateResponse(
         request,
         "editor/detail.html",
@@ -165,3 +218,62 @@ def media_detail_page(
             "active_nav": "media",
         },
     )
+
+
+@router.post("/media/{media_id}/editor/claim")
+def editor_claim(
+    media_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    run_id: Annotated[uuid.UUID, Form()],
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> JSONResponse:
+    """Claim a run for editing from the editor island (ADR 0004).
+
+    CSRF-gated (no prior token exists to guard the POST). Returns the
+    claim token as JSON so the island can adopt it without a page reload.
+    """
+    _require_csrf(request, CSRF_CLAIM, csrf_token)
+    run = session.get(PipelineRun, run_id)
+    if run is None or run.media_item_id != media_id:
+        raise HTTPException(status_code=404, detail="not found")
+    _reject_if_archived(run)
+    settings: Settings = request.app.state.settings
+    try:
+        token = claim_run(
+            session,
+            run_id,
+            reviewer=operator,
+            ttl_seconds=settings.review_claim_ttl_seconds,
+        )
+    except ClaimUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return JSONResponse({
+        "token": str(token),
+        "tagCsrf": mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_ANNOTATION_TAGS
+        ),
+        "clipCsrf": mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_CLIP_EXTRACT
+        ),
+    })
+
+
+@router.post("/media/{media_id}/editor/release")
+def editor_release(
+    media_id: uuid.UUID,
+    operator: OperatorDep,
+    session: SessionDep,
+    run_id: Annotated[uuid.UUID, Form()],
+    token: Annotated[uuid.UUID, Form()],
+) -> JSONResponse:
+    """Release a held claim from the editor island."""
+    run = session.get(PipelineRun, run_id)
+    if run is None or run.media_item_id != media_id:
+        raise HTTPException(status_code=404, detail="not found")
+    try:
+        release_run(session, run_id, token)
+    except (ClaimMismatchError, ClaimUnavailableError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return JSONResponse({"released": True})

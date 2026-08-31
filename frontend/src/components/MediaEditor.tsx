@@ -6,7 +6,7 @@ import {
   type AnnotationShape,
   type AnnotationTagShape,
 } from "../lib/annotations";
-import { apiFetch } from "../lib/api-client";
+import { ApiError, apiFetch } from "../lib/api-client";
 import {
   type SegmentPatchResult,
   nextTarget,
@@ -30,7 +30,7 @@ import {
   REVIEW_KEY,
   SAVE_EDIT_LABEL,
 } from "./keymap";
-import { type LabelStateShape, SpeakerRail } from "./SpeakerRail";
+import { type LabelStateShape, type LabelsResult, SpeakerRail } from "./SpeakerRail";
 import {
   type Segment,
   type SplitWord,
@@ -39,6 +39,7 @@ import {
 } from "./TranscriptPlayer";
 
 export interface MediaEditorProps {
+  mediaId: string;
   runId: string;
   mediaUrl: string;
   segments: Segment[];
@@ -55,17 +56,27 @@ export interface MediaEditorProps {
   annotationLimits?: AnnotationLimits;
   tagCsrf?: string | null;
   clipCsrf?: string | null;
+  claimCsrf?: string | null;
   labelStates?: LabelStateShape[];
+  translate?: {
+    csrf: string;
+    defaultTarget: string | null;
+    defaultTargetLabel: string | null;
+    active: boolean;
+    runAnchor: string;
+    transcriptUrl: string;
+  } | null;
 }
 
 
 export function MediaEditor({
+  mediaId,
   runId,
   mediaUrl,
   segments: initialSegments,
   capability,
   lowConfidenceThreshold,
-  reviewToken,
+  reviewToken: initialReviewToken,
   initialProgress,
   peaksUrl,
   turns,
@@ -74,14 +85,21 @@ export function MediaEditor({
   annotations: initialAnnotations = [],
   annotationTags: initialAnnotationTags = [],
   annotationLimits = FALLBACK_ANNOTATION_LIMITS,
-  tagCsrf = null,
-  clipCsrf = null,
+  tagCsrf: initialTagCsrf = null,
+  clipCsrf: initialClipCsrf = null,
+  claimCsrf = null,
   labelStates: initialLabelStates = [],
+  translate = null,
 }: MediaEditorProps): React.JSX.Element {
   const [segments, setSegments] = useState<Segment[]>(initialSegments);
   const [progress, setProgress] = useState(initialProgress);
   const [editText, setEditText] = useState("");
   const { busy, busyRef, setBusy } = useBusyGuard();
+  const [reviewToken, setReviewToken] = useState<string | null>(
+    initialReviewToken,
+  );
+  const [tagCsrf, setTagCsrf] = useState(initialTagCsrf);
+  const [clipCsrf, setClipCsrf] = useState(initialClipCsrf);
   const [claimLost, setClaimLost] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
@@ -99,6 +117,116 @@ export function MediaEditor({
   const helpOpenRef = useRef(false);
   helpOpenRef.current = helpOpen;
   const [assignStatus, setAssignStatus] = useState<string | null>(null);
+  const [provOpen, setProvOpen] = useState(false);
+  const [translatePhase, setTranslatePhase] = useState<
+    "idle" | "starting" | "started" | "error"
+  >(translate?.active ? "started" : "idle");
+  const [translateError, setTranslateError] = useState<string | null>(null);
+  const translateBusyRef = useRef(false);
+  const [claiming, setClaiming] = useState(false);
+  const claimingRef = useRef(false);
+  const reviewTokenRef = useRef(reviewToken);
+  reviewTokenRef.current = reviewToken;
+
+  const claimForEditing = useCallback(async () => {
+    if (!claimCsrf || claimingRef.current) return;
+    claimingRef.current = true;
+    setClaiming(true);
+    try {
+      const body = new URLSearchParams({
+        run_id: runId,
+        csrf_token: claimCsrf,
+      });
+      const res = await apiFetch(`/media/${mediaId}/editor/claim`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          accept: "application/json",
+        },
+        body: body.toString(),
+      });
+      const data = (await res.json()) as {
+        token: string;
+        tagCsrf: string;
+        clipCsrf: string;
+      };
+      reviewTokenRef.current = data.token;
+      setReviewToken(data.token);
+      setTagCsrf(data.tagCsrf);
+      setClipCsrf(data.clipCsrf);
+      setClaimLost(false);
+      const p = new URLSearchParams(window.location.search);
+      p.set("token", data.token);
+      window.history.replaceState(null, "", `?${p}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : "Could not claim.");
+    } finally {
+      claimingRef.current = false;
+      setClaiming(false);
+    }
+  }, [claimCsrf, runId, mediaId]);
+
+  const claimed = reviewToken !== null && !claimLost;
+
+  // Heartbeat: re-claim periodically to renew the TTL (same-operator reuse
+  // per ADR 0004 — claim_run with the same reviewer returns a fresh token).
+  useEffect(() => {
+    if (!claimed || !claimCsrf) return;
+    const interval = setInterval(() => {
+      void (async () => {
+        try {
+          const body = new URLSearchParams({
+            run_id: runId,
+            csrf_token: claimCsrf,
+          });
+          const res = await apiFetch(`/media/${mediaId}/editor/claim`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/x-www-form-urlencoded",
+              accept: "application/json",
+            },
+            body: body.toString(),
+          });
+          const data = (await res.json()) as { token: string };
+          reviewTokenRef.current = data.token;
+          setReviewToken(data.token);
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 409) {
+            setClaimLost(true);
+          }
+        }
+      })();
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [claimed, claimCsrf, runId, mediaId]);
+
+  // Release on unload (best-effort — sendBeacon for reliability).
+  useEffect(() => {
+    if (!claimed) return;
+    const onUnload = () => {
+      const tok = reviewTokenRef.current;
+      if (!tok) return;
+      const body = new URLSearchParams({
+        run_id: runId,
+        token: tok,
+      });
+      navigator.sendBeacon(
+        `/media/${mediaId}/editor/release`,
+        body,
+      );
+    };
+    window.addEventListener("beforeunload", onUnload);
+    window.addEventListener("pagehide", onUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onUnload);
+      window.removeEventListener("pagehide", onUnload);
+    };
+  }, [claimed, runId, mediaId]);
+
+  const editTextRef = useRef(editText);
+  editTextRef.current = editText;
+  const confirmDiscardRef = useRef(confirmDiscard);
+  confirmDiscardRef.current = confirmDiscard;
 
   const playerRef = useRef<TranscriptPlayerHandle>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -126,6 +254,15 @@ export function MediaEditor({
   );
   const applyResult = useSegmentPatch(segments, setSegments, setProgress);
 
+  const onLabelsChanged = useCallback(
+    (result: LabelsResult) => {
+      setSegments(result.segments);
+      setProgress(result.progress);
+      void reloadAnnotationsRef.current?.();
+    },
+    [setSegments, setProgress],
+  );
+
   const current =
     cursor >= 0 && cursor < segments.length ? segments[cursor] : null;
   const focusParentId = current?.sourceSegmentId ?? null;
@@ -135,7 +272,26 @@ export function MediaEditor({
     setEditText(current?.text ?? "");
     setConfirmDiscard(false);
     setAssignStatus(null);
+    setProvOpen(false);
   }, [current?.segmentId, current?.text]);
+
+  // Focus the cursor row only after KEYBOARD-driven navigation (not pointer
+  // clicks, which should leave focus on the control the user operated).
+  const keyboardNavRef = useRef(false);
+  const prevCursorRef = useRef(cursor);
+  useEffect(() => {
+    if (cursor === prevCursorRef.current) return;
+    prevCursorRef.current = cursor;
+    if (!keyboardNavRef.current) return;
+    keyboardNavRef.current = false;
+    if (claimLost || confirmDiscardRef.current) return;
+    if (document.activeElement === editRef.current) return;
+    const frameId = requestAnimationFrame(() => {
+      if (claimLost) return;
+      playerRef.current?.focusCursorRow();
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [cursor, claimLost]);
 
   const postJson = useCallback(
     (
@@ -166,7 +322,10 @@ export function MediaEditor({
       setConfirmDiscard(false);
       if (walkMode) {
         const next = nextTarget(patched, index + 1);
-        if (next >= 0) goTo(next);
+        if (next >= 0) {
+          keyboardNavRef.current = true;
+          goTo(next);
+        }
       }
     } finally {
       busyRef.current = false;
@@ -209,10 +368,14 @@ export function MediaEditor({
     }
   }, [current, cursor, postJson, runId, editText, applyResult, segments, busyRef, setBusy]);
 
+  const currentRef = useRef(current);
+  currentRef.current = current;
+
   const splitAt = useCallback(
     async (sourceSegmentId: string, wordIndex: number) => {
       if (busyRef.current) return;
-      if (current && editText !== (current.text ?? "") && !confirmDiscard) {
+      const cur = currentRef.current;
+      if (cur && editTextRef.current !== (cur.text ?? "") && !confirmDiscardRef.current) {
         setConfirmDiscard(true);
         return;
       }
@@ -246,7 +409,7 @@ export function MediaEditor({
         setBusy(false);
       }
     },
-    [postForm, runId, current, editText, confirmDiscard, busyRef, setBusy, setCursor],
+    [postForm, runId, busyRef, setBusy, setCursor],
   );
 
   const reassignChild = useCallback(
@@ -384,6 +547,44 @@ export function MediaEditor({
     };
   }, [splitMode, writable, focusParentId, isSplitParent, runId, current?.corrected]);
 
+  const startTranslate = useCallback(async () => {
+    if (translateBusyRef.current) return;
+    if (!translate || !translate.defaultTarget) return;
+    translateBusyRef.current = true;
+    setTranslatePhase("starting");
+    try {
+      const body = new URLSearchParams({
+        csrf_token: translate.csrf,
+        target_language: translate.defaultTarget,
+      });
+      const res = await apiFetch(`/runs/${runId}/translation/generate`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body,
+      });
+      const data = (await res.json()) as {
+        started: boolean;
+        error: string | null;
+      };
+      if (data.started) {
+        setTranslatePhase("started");
+      } else {
+        setTranslateError(data.error ?? "Translation could not start.");
+        setTranslatePhase("error");
+      }
+    } catch (err) {
+      setTranslateError(
+        err instanceof ApiError ? err.detail : "Translation could not start.",
+      );
+      setTranslatePhase("error");
+    } finally {
+      translateBusyRef.current = false;
+    }
+  }, [translate, runId]);
+
   const onAnnotationClaimLost = useCallback(() => setClaimLost(true), []);
 
   const {
@@ -433,7 +634,9 @@ export function MediaEditor({
           break;
         case REVIEW_KEY.skip:
           event.preventDefault();
+          keyboardNavRef.current = true;
           jumpNext();
+          setTimeout(() => { keyboardNavRef.current = false; }, 0);
           break;
         case REVIEW_KEY.replay:
           event.preventDefault();
@@ -446,13 +649,19 @@ export function MediaEditor({
         case REVIEW_KEY.next: {
           event.preventDefault();
           const next = Math.min(cursor + 1, segments.length - 1);
-          if (next !== cursor) goTo(next);
+          if (next !== cursor) {
+            keyboardNavRef.current = true;
+            goTo(next);
+          }
           break;
         }
         case REVIEW_KEY.previous: {
           event.preventDefault();
           const prev = Math.max(cursor - 1, 0);
-          if (prev !== cursor) goTo(prev);
+          if (prev !== cursor) {
+            keyboardNavRef.current = true;
+            goTo(prev);
+          }
           break;
         }
         case REVIEW_KEY.resetSpeaker:
@@ -517,11 +726,46 @@ export function MediaEditor({
         {claimLost && (
           <p role="alert" className="notice text-sm">
             Your claim expired or was taken over. Everything you already saved is
-            safe — copy any unsaved edit from the box first, then{" "}
-            <a href={`/review/${runId}`}>re-claim in the workbench</a> and reopen
-            this page to continue.
+            safe. Copy any unsaved edit from the box below, then{" "}
+            <button
+              type="button"
+              onClick={() => void claimForEditing()}
+              disabled={claiming}
+              className="underline"
+            >
+              {claiming ? "Re-claiming…" : "re-claim to continue editing"}
+            </button>
+            .
           </p>
         )}
+        {!reviewToken && !claimLost && claimCsrf && (
+          <div className="notice text-sm">
+            Read-only view.{" "}
+            <button
+              type="button"
+              onClick={() => void claimForEditing()}
+              disabled={claiming}
+              className="btn-primary"
+            >
+              {claiming ? "Claiming…" : "Claim for editing"}
+            </button>
+          </div>
+        )}
+        {error && !writable && (
+          <p role="alert" className="notice text-sm">
+            {error}
+          </p>
+        )}
+
+        <p
+          className="visually-hidden"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {writable && current
+            ? `Cursor on segment at ${current.start.toFixed(1)} seconds, speaker ${current.speaker}${current.verified ? ", verified" : ""}${current.corrected ? ", edited" : ""}`
+            : ""}
+        </p>
 
         <section className="me-toolbar" aria-label="Editor controls">
           <div className="progress-wrap">
@@ -568,18 +812,46 @@ export function MediaEditor({
               {annotationToolbar}
             </div>
           )}
+          {translate &&
+            (translatePhase === "idle" ? (
+              translate.defaultTarget ? (
+                <button
+                  type="button"
+                  onClick={() => void startTranslate()}
+                  className="text-sm"
+                >
+                  Translate to {translate.defaultTargetLabel}
+                </button>
+              ) : (
+                <a href={translate.runAnchor} className="text-sm">
+                  Translate this recording
+                </a>
+              )
+            ) : translatePhase === "starting" ? (
+              <span className="muted text-sm">Starting translation…</span>
+            ) : translatePhase === "started" ? (
+              <span className="muted text-sm">
+                A translation is queued or running; the result appears on the{" "}
+                <a href={translate.transcriptUrl}>transcript page</a>.
+              </span>
+            ) : (
+              <span role="alert" className="text-sm">
+                {translateError}{" "}
+                <a href={translate.runAnchor}>Open the run page</a>
+              </span>
+            ))}
         </section>
 
         {done && (
           <div className="review-done card-actions">
-            <a className="btn-primary" href={`/runs/${runId}/transcript`}>
-              Open the transcript to export
+            <a className="btn-primary" href="#export-menu">
+              Download transcript
             </a>
-            <a href="/review">Back to Review</a>
+            <a href="/media">Back to the library</a>
           </div>
         )}
 
-        <div className="lib-two-col">
+        <div className="me-layout">
           <div className="lib-main">
             {writable && current && current.segmentId !== null && (
               <div className="me-segment-actions">
@@ -596,7 +868,53 @@ export function MediaEditor({
                   {current.corrected && (
                     <span className="spk-badge ml-2">edited</span>
                   )}
+                  {current.corrections?.status === "shown" && (
+                    <button
+                      type="button"
+                      onClick={() => setProvOpen((on) => !on)}
+                      aria-expanded={provOpen}
+                      aria-controls="editor-provenance-body"
+                      className="tp-corrected-chip ml-2"
+                    >
+                      corrected by domain pack (
+                      {current.corrections.entries.length}) {provOpen ? "▾" : "▸"}
+                    </button>
+                  )}
+                  {current.corrections?.status === "unavailable" && (
+                    <span className="muted text-sm ml-2" role="note">
+                      correction provenance unavailable
+                      {current.corrections.recordedVersion != null
+                        ? ` (recorded by corrector v${current.corrections.recordedVersion}; this console reads a different version)`
+                        : ""}
+                    </span>
+                  )}
                 </p>
+                {current.corrections?.status === "shown" && (
+                  <ul
+                    id="editor-provenance-body"
+                    hidden={!provOpen}
+                    className="review-provenance-list text-sm my-1"
+                  >
+                    {current.corrections.entries.map((entry, i) => (
+                      <li key={`${entry.id}-${i}`}>
+                        {entry.resolved ? (
+                          <>
+                            <code>{entry.match}</code> →{" "}
+                            <code>{entry.replace}</code>{" "}
+                            <span className="muted">
+                              ({entry.pack} · rule <code>{entry.id}</code>)
+                            </span>
+                          </>
+                        ) : (
+                          <span className="muted">
+                            unresolved rule <code>{entry.id}</code> (
+                            <code>{entry.from}</code> → <code>{entry.to}</code>)
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 <textarea
                   ref={editRef}
                   value={editText}
@@ -755,15 +1073,9 @@ export function MediaEditor({
                     }
                   : null
               }
-              onSplitAt={
-                writable ? (id, wi) => void splitAt(id, wi) : undefined
-              }
+              onSplitAt={writable ? splitAt : undefined}
               reassignSpeakers={writable ? speakers : undefined}
-              onReassign={
-                writable
-                  ? (seg, speakerId) => void reassignChild(seg, speakerId)
-                  : undefined
-              }
+              onReassign={writable ? reassignChild : undefined}
               reassignBusy={busy}
               annotationSpans={annotationSpans}
               staleLocators={annotationStaleLines}
@@ -778,8 +1090,8 @@ export function MediaEditor({
             writable={writable}
             labelStates={initialLabelStates}
             speakers={speakers}
-            onClaimLost={() => setClaimLost(true)}
-            onLabelsChanged={() => {}}
+            onClaimLost={onAnnotationClaimLost}
+            onLabelsChanged={onLabelsChanged}
           />
         </div>
 

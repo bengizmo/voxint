@@ -326,9 +326,14 @@
     .lib-cards > li { background: var(--surface); border: 1px solid var(--line);
                border-radius: var(--r-lg); box-shadow: var(--shadow-1);
                padding: var(--card-pad); }
-    .lib-rail { display: grid; grid-template-columns: minmax(0, 1fr) 20rem;
+    .lib-rail, .lib-two-col { display: grid; grid-template-columns: minmax(0, 1fr) 20rem;
                gap: var(--space-6); align-items: start; }
-    @media (max-width: 60rem) { .lib-rail { grid-template-columns: 1fr; } }
+    @media (max-width: 60rem) { .lib-rail, .lib-two-col { grid-template-columns: 1fr; } }
+    .lib-main { min-width: 0; }
+    .lib-sidebar { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+    .me-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(14rem, 18rem);
+               gap: var(--space-4); align-items: start; }
+    @media (max-width: 72rem) { .me-layout { grid-template-columns: 1fr; } }
     h1 { font-size: var(--t-xl); line-height: 1.2; letter-spacing: -.012em; }
     h2 { font-size: var(--t-lg); line-height: 1.2; letter-spacing: -.008em; }
     h3 { font-size: var(--t-md); line-height: 1.25; }
@@ -1315,7 +1320,10 @@
     /* Reduced motion: null the button and task-card hover transitions. Placed
        here, AFTER the .task-link rule, so it wins the equal-specificity tie (a
        media query adds no specificity, so source order decides). */
-    @media (prefers-reduced-motion: reduce) { button, .task-link { transition: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      button, .task-link, .gauge-fill { transition: none; }
+      html { scroll-behavior: auto; }
+    }
     /* Responsive + accessibility polish (issue #64). Baseline usability beyond a
        desktop screen for the single operator: a keyboard skip-link + main landmark,
        a visible focus ring, wide tables that scroll inside their own container

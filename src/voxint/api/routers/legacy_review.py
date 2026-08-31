@@ -127,6 +127,7 @@ from voxint.api.routers.deps import run_source_title as _run_source_title
 from voxint.api.speaker_colors import speaker_palette
 from voxint.api.transcript_view import (
     _load_run_rule_index,
+    _run_island_segments,
     _run_label_universe,
     _run_reconcile_response,
     _segment_child_ranges,
@@ -536,6 +537,7 @@ def _label_state_shape(s: LabelState) -> dict[str, Any]:
         "speakerId": str(s.speaker_id) if s.speaker_id else None,
         "speakerName": s.speaker_name,
         "cosineConfidence": s.cosine_confidence,
+        "cosineSpeakerId": str(s.cosine_speaker_id) if s.cosine_speaker_id else None,
         "cosineSpeakerName": s.cosine_speaker_name,
         "cosineGrounded": s.cosine_grounded,
         "llmHintName": s.llm_hint_name,
@@ -557,11 +559,16 @@ def _labels_response(
 ) -> Response:
     """Post-mutation response: htmx gets the refreshed label list, a plain
     form POST gets a redirect back to the workbench, JSON accept gets the
-    updated label states for the editor island."""
+    updated label states + refreshed segments for the editor island."""
     if "application/json" in request.headers.get("accept", ""):
         settings: Settings = request.app.state.settings
         states = label_states(session, run.id, gates=gates_from_settings(settings))
-        return JSONResponse([_label_state_shape(s) for s in states])
+        verified_n, total = verified_progress(session, run.id)
+        return JSONResponse({
+            "labels": [_label_state_shape(s) for s in states],
+            "segments": _run_island_segments(session, run.id),
+            "progress": {"verified": verified_n, "total": total},
+        })
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
             request,
