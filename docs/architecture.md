@@ -713,20 +713,22 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   merge tombstones as the label path; `attributed_transcript` overlays it, so the
   HTML page and every export agree. Deliberate v1 limit: speaker search and the
   queue stay label-scoped (a segment-only speaker does not surface there).
-- **Export picker** (issues #52, #65): every built transcript format is reachable
-  from the workbench and the transcript page through one shared Jinja fragment
-  (`fragments/export_menu.html`): TXT, Markdown (`.md`), SubRip (`.srt`), WebVTT
-  (`.vtt`), JSON, and RTTM, each with a plain-language label. Pure HTML (no
-  island): each option is a plain `<a>` whose href carries the query, so the menu
-  works with JavaScript off. The reviewed (`corrected`, operator-effective) /
-  enhanced / raw text variant is selectable for the transcript-line formats (RTTM
-  carries raw diarization labels only, so it takes no variant). TXT and Markdown
-  both offer a **timestamp-free** reading copy (`?timestamps=false`), a
+- **Export picker** (issues #52, #65, #375): every built transcript format is
+  reachable from the workbench, the transcript page, and the editor through one
+  shared Jinja fragment (`fragments/export_menu.html`): TXT, Markdown (`.md`),
+  SubRip (`.srt`), WebVTT (`.vtt`), JSON, and RTTM. Pure HTML (no island): each
+  option is a plain `<a>` whose href carries the query, so the menu works with
+  JavaScript off. A single "Download transcript" `<details>` button opens a
+  compact format list defaulting to the reviewed (`corrected`) text variant. The
+  enhanced and raw variants are in a nested "Other text variants" disclosure,
+  keeping the primary list short while preserving every combination. TXT and
+  Markdown both offer a **timestamp-free** reading copy (`?timestamps=false`), a
   `timestamps=...` keyword the CLI mirrors (`voxint export --no-timestamps`); an
   integration test asserts the download is byte-identical to the CLI for both
   settings. The flag is inert for SRT/VTT (cue timing is structural) and JSON
-  (keys are a frozen contract). The picker makes the reading copy the prominent
-  first choice and offers a **Read on screen** link.
+  (keys are a frozen contract). The picker offers a **Read on screen** link above
+  the format list. RTTM carries raw diarization labels only, so it takes no
+  variant.
 - **Read mode + Markdown** (issue #65): a server-rendered on-screen reading view
   (`GET /runs/{id}/transcript?read=1`, no island) and a `.md` export both render
   from the same `attributed_transcript` seam through one grouping helper,
@@ -903,9 +905,11 @@ subsystem and adds no page routing.
   workbench label cards. The
   color is rendered identically on every surface as a `spk-N` class → a CSS
   left-border accent (light/dark variants in `base.html`), and it is
-  **supplemental only**: a raw-label badge (`.spk-badge`) is the primary,
-  non-color identity cue everywhere (accessibility: never color alone), which
-  also disambiguates the palette's by-design repeat past eight speakers.
+  **supplemental only**: the speaker's display name (`<strong>` prefix on each
+  transcript row) is the primary, non-color identity cue (accessibility: never
+  color alone). The raw diarization label (`.spk-badge`) is shown on the
+  workbench and label cards but not on the editor transcript rows, where it
+  duplicated the display name.
 
 ## Worker orchestration (P3)
 

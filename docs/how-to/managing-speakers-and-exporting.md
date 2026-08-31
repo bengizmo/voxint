@@ -156,13 +156,14 @@ Two links let you adjust the view:
 
 ### Download a file
 
-Use the **Download transcript** menu. It offers six formats. Pick the one that
-matches what you are going to do with the file.
+Click **Download transcript** to open the format picker. It lists every format
+with a short description, and each link downloads the reviewed text by default
+(the text as you approved it in the console).
 
-For every format except `.rttm`, you choose which wording to save:
+If you need the enhanced or raw wording instead, expand **Other text variants**
+at the bottom of the picker:
 
-- **Reviewed** is the text as you approved it in the console, the same text you
-  see while reviewing. This is the everyday choice.
+- **Reviewed** is the text as you approved it, the everyday choice.
 - **Enhanced** is the cleaned-up wording from before you reviewed it.
 - **Raw** is the exact words the transcriber produced.
 
