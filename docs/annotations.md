@@ -214,7 +214,21 @@ manifest), and `GET /review/{run_id}/annotations/export.json` (all filtered
 manifests as a bundle). The JSON manifest (#122) carries per-line speaker
 attribution, timecodes, clip integrity digest, per-stage model identity from
 the pipeline run, and input-media SHA-256; the bulk route places run-level
-provenance at the envelope level. Run-scoped writes require the active review claim
+provenance at the envelope level. The bundled ZIP routes (#281), `GET
+/review/{run_id}/annotations/{annotation_id}/export.zip` and `GET
+/review/{run_id}/annotations/export.zip`, package the pull-quote Markdown, the
+provenance manifest (per-quote single, the run bundle in bulk), and every
+extracted clip into one archive; the `.md` members are byte-identical to the
+standalone endpoints and the `.json` members identical apart from their
+per-request `exported_at` stamp (contract-tested in
+`tests/integration/test_export_zip.py`; member names carry the full annotation
+uuid so a bulk archive cannot birthday-collide truncated ids into duplicate
+entries). The 404/409-stale semantics (atomic in bulk) match the standalone
+exports, and a manifest-referenced clip that cannot be served fails the whole
+export with the clip service's honest status rather than shipping a bundle
+that silently lacks its audio. A highlight that never had a clip simply omits
+that member. Clip generation never happens from the ZIP path; only the
+CSRF-gated clip POST cuts audio. Run-scoped writes require the active review claim
 token; a lost claim is a 409 marked `X-Voxint-Conflict: claim`. Creates carry a
 client nonce;
 replaying the same nonce with the same fingerprint returns the original row
@@ -281,6 +295,38 @@ highlight's Copy is disabled until the operator refreshes or re-anchors it.
 The highlight palette size (`HIGHLIGHT_PALETTE_SIZE`) is pinned across the
 backend caps, the `--hl-N` design tokens, and the `mark.hl-N` rules by
 `tests/contracts/test_highlight_palette_parity.py`.
+
+## Evidence pack (#331 Phase 7)
+
+`GET /review/{run_id}/annotations/evidence-pack` renders a print-optimized
+page of the run's highlights with their provenance: quote lines with live
+speaker attribution and timing, tags, notes, the source text hash, clip
+references, and the run's per-stage model identity, under a document header
+carrying the source title, run id, media SHA-256, app version, and generation
+time. The browser's Print / Save as PDF is the PDF engine; there is
+deliberately no server-side PDF dependency. `?tag=` is the panel's OR-union
+filter, and a filtered page says so in its header.
+
+One deliberate divergence from the exports, pinned in
+`tests/integration/test_evidence_pack.py`: a STALE highlight renders with a
+visible "re-anchor before citing" warning and its captured quote, instead of
+failing the whole document with a 409. A human-readable evidence pack degrades
+honestly; the machine-readable exports stay atomic.
+
+## Tag rollup on Explore (#331 Phase 7)
+
+The Explore page shows a "Highlight tags" panel: annotation counts per tag,
+corpus-wide or narrowed by the page's project filter. `tag_stats` in
+`src/voxint/api/explore_query.py` is one synchronous GROUP BY join, not a
+cached `corpus_analysis_artifacts` computation: at 8 tags per annotation the
+query is far below the cost that justified caching TF-IDF term stats. Archived
+tags, soft-deleted annotations, and archived runs are excluded (the run filter
+keeps the rollup consistent with every other Explore scope query); annotations
+on runs still under review count from the moment they exist, so there is
+deliberately no run status filter. Ordering is count descending, then
+name ascending. The panel has no drill-down in v1 and renders a one-line empty
+state. `tests/integration/test_explore_tags.py` pins the exclusion, scoping,
+and ordering invariants.
 
 ## Pull-quote formatting
 

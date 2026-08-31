@@ -38,7 +38,15 @@ export interface ExploreIslandProps {
     suspect_only: boolean;
   };
   termStats?: TermDatum[];
+  tagStats?: TagStat[];
   csrfQuoteSave?: string;
+}
+
+export interface TagStat {
+  tag_id: string;
+  name: string;
+  color: number;
+  count: number;
 }
 
 function searchHref(term: string): string {
@@ -297,10 +305,12 @@ export function ExploreIsland({
   stats,
   filters,
   termStats,
+  tagStats,
   csrfQuoteSave,
 }: ExploreIslandProps) {
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const terms = termStats ?? [];
+  const tags = tagStats ?? [];
   const statTiles = [
     [integerFormatter.format(stats.total_segments), "segments"],
     [integerFormatter.format(stats.total_runs), "recordings"],
@@ -353,6 +363,23 @@ export function ExploreIsland({
           </div>
         </div>
       ) : null}
+
+      <div className="explore-term-panel mb-4">
+        <h2 className="explore-term-heading">Highlight tags</h2>
+        {tags.length > 0 ? (
+          <TermBarChart
+            terms={tags.map((t) => ({
+              term: t.name,
+              count: t.count,
+              doc_count: 0,
+              tfidf: 0,
+            }))}
+            ariaLabel="Highlight tags by annotation count"
+          />
+        ) : (
+          <p className="text-sm text-[var(--ink-3)]">No highlight tags yet.</p>
+        )}
+      </div>
 
       <MeaningMap projectId={filters.project_id} />
 
