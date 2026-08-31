@@ -218,11 +218,16 @@ provenance at the envelope level. The bundled ZIP routes (#281), `GET
 /review/{run_id}/annotations/{annotation_id}/export.zip` and `GET
 /review/{run_id}/annotations/export.zip`, package the pull-quote Markdown, the
 provenance manifest (per-quote single, the run bundle in bulk), and every
-extracted clip into one archive; the `.md` and `.json` members are
-byte-identical to the standalone endpoints (contract-tested in
-`tests/integration/test_export_zip.py`), a highlight without a clip simply
-omits that member, and the 404/409-stale semantics (atomic in bulk) match the
-standalone exports. Clip generation never happens from the ZIP path; only the
+extracted clip into one archive; the `.md` members are byte-identical to the
+standalone endpoints and the `.json` members identical apart from their
+per-request `exported_at` stamp (contract-tested in
+`tests/integration/test_export_zip.py`; member names carry the full annotation
+uuid so a bulk archive cannot birthday-collide truncated ids into duplicate
+entries). The 404/409-stale semantics (atomic in bulk) match the standalone
+exports, and a manifest-referenced clip that cannot be served fails the whole
+export with the clip service's honest status rather than shipping a bundle
+that silently lacks its audio. A highlight that never had a clip simply omits
+that member. Clip generation never happens from the ZIP path; only the
 CSRF-gated clip POST cuts audio. Run-scoped writes require the active review claim
 token; a lost claim is a 409 marked `X-Voxint-Conflict: claim`. Creates carry a
 client nonce;
@@ -315,8 +320,10 @@ corpus-wide or narrowed by the page's project filter. `tag_stats` in
 `src/voxint/api/explore_query.py` is one synchronous GROUP BY join, not a
 cached `corpus_analysis_artifacts` computation: at 8 tags per annotation the
 query is far below the cost that justified caching TF-IDF term stats. Archived
-tags and soft-deleted annotations are excluded; annotations on runs still under
-review count from the moment they exist. Ordering is count descending, then
+tags, soft-deleted annotations, and archived runs are excluded (the run filter
+keeps the rollup consistent with every other Explore scope query); annotations
+on runs still under review count from the moment they exist, so there is
+deliberately no run status filter. Ordering is count descending, then
 name ascending. The panel has no drill-down in v1 and renders a one-line empty
 state. `tests/integration/test_explore_tags.py` pins the exclusion, scoping,
 and ordering invariants.

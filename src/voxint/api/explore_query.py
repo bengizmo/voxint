@@ -339,9 +339,11 @@ def tag_stats(session: Session, project_id: uuid.UUID | None = None) -> list[Tag
 
     Synchronous SQL by design (issue #331 Phase 7): one indexed join over at
     most 8 tags per annotation, nothing like the TF-IDF cost that justified
-    caching term_stats. Archived tags and soft-deleted annotations are
-    excluded; annotations on runs still under review DO count (a highlight is
-    evidence the moment it exists, not once the run completes).
+    caching term_stats. Archived tags, soft-deleted annotations, and archived
+    runs are excluded (the run filter keeps the rollup consistent with every
+    other Explore scope query); annotations on runs still under review DO
+    count (a highlight is evidence the moment it exists, not once the run
+    completes), so deliberately no run STATUS filter.
     """
     stmt = (
         select(
@@ -355,20 +357,18 @@ def tag_stats(session: Session, project_id: uuid.UUID | None = None) -> list[Tag
             TranscriptAnnotation,
             TranscriptAnnotation.id == AnnotationTagLink.annotation_id,
         )
+        .join(PipelineRun, PipelineRun.id == TranscriptAnnotation.pipeline_run_id)
         .where(
             AnnotationTag.archived_at.is_(None),
             TranscriptAnnotation.deleted_at.is_(None),
+            PipelineRun.archived_at.is_(None),
         )
         .group_by(AnnotationTag.id, AnnotationTag.name, AnnotationTag.color)
         .order_by(func.count(AnnotationTagLink.annotation_id).desc(), AnnotationTag.name.asc())
     )
     if project_id is not None:
         stmt = (
-            stmt.join(
-                PipelineRun,
-                PipelineRun.id == TranscriptAnnotation.pipeline_run_id,
-            )
-            .join(MediaItem, MediaItem.id == PipelineRun.media_item_id)
+            stmt.join(MediaItem, MediaItem.id == PipelineRun.media_item_id)
             .join(MediaFolder, MediaFolder.id == MediaItem.media_folder_id)
             .where(MediaFolder.project_id == project_id)
         )

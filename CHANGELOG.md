@@ -16,8 +16,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - **Bundled quote export** (#281). One click downloads a highlight's Markdown
   pull-quote, JSON provenance manifest, and audio clip (when one has been
   extracted) as a single ZIP, per highlight or for every highlight matching
-  the current tag filter. The bundled files are byte-identical to the
-  standalone exports. No new dependencies (stdlib zipfile).
+  the current tag filter. The bundled files match the standalone exports
+  byte for byte (the manifest differs only in its export timestamp). No new
+  dependencies (stdlib zipfile).
 - **Highlight tag rollup on Explore** (#331, Phase 7 remainder). The Explore
   page now shows how many highlights carry each tag, corpus-wide or narrowed
   by the project filter. Computed live with one SQL query (no cache, no new

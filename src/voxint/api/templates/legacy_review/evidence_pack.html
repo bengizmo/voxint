@@ -44,7 +44,9 @@
       {% if filtered %}<dt>Filter</dt><dd>Tag-filtered subset (not every highlight on this run)</dd>{% endif %}
     </dl>
     {% if stages %}
-    <details class="evidence-provenance">
+    {# open by default: a closed details element is EXCLUDED from browser
+       print/PDF output, and the provenance is the point of the pack. #}
+    <details class="evidence-provenance" open>
       <summary>Pipeline provenance</summary>
       <dl>
         {% for stage, prov in stages.items() %}
@@ -70,6 +72,10 @@
       The transcript text this highlight covered has changed since it was
       captured. The quote below is the captured copy, unverified against the
       current transcript.</p>
+    <blockquote>{{ q.captured_quote }}</blockquote>
+    {% elif not q.renderable %}
+    <p class="evidence-stale" role="note"><strong>Could not resolve against the
+      current transcript.</strong> The quote below is the captured copy.</p>
     <blockquote>{{ q.captured_quote }}</blockquote>
     {% else %}
     {% for ln in q.quote_lines %}

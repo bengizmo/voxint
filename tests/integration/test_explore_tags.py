@@ -36,6 +36,7 @@ def _seed_run(
     *,
     project_name: str | None = None,
     status: RunStatus = RunStatus.COMPLETED,
+    archived: bool = False,
 ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID | None]:
     """One media item + run (+ optional project/folder). Returns (run, seg, project)."""
     project_id: uuid.UUID | None = None
@@ -53,6 +54,10 @@ def _seed_run(
     session.add(media)
     session.flush()
     run = PipelineRun(media_item_id=media.id, status=status.value)
+    if archived:
+        from datetime import UTC, datetime
+
+        run.archived_at = datetime.now(UTC)
     session.add(run)
     session.flush()
     seg = TranscriptSegment(
@@ -165,6 +170,19 @@ def test_tag_stats_counts_non_completed_runs(session_factory: sessionmaker[Sessi
         _add_annotation(session, run_id, seg_id, [tag])
         session.commit()
         assert [(s.name, s.count) for s in tag_stats(session)] == [("Early", 1)]
+
+
+def test_tag_stats_excludes_archived_runs(session_factory: sessionmaker[Session]) -> None:
+    """Consistency with every other Explore scope query: an archived run's
+    annotations leave the rollup (no run STATUS filter, only archived_at)."""
+    with session_factory() as session:
+        live_run, live_seg, _ = _seed_run(session)
+        archived_run, archived_seg, _ = _seed_run(session, archived=True)
+        tag = _add_tag(session, "Scoped")
+        _add_annotation(session, live_run, live_seg, [tag])
+        _add_annotation(session, archived_run, archived_seg, [tag])
+        session.commit()
+        assert [(s.name, s.count) for s in tag_stats(session)] == [("Scoped", 1)]
 
 
 def test_tag_stats_project_scoping(session_factory: sessionmaker[Session]) -> None:
