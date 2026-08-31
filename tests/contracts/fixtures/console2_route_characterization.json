@@ -438,6 +438,14 @@
     true
   ],
   [
+    "/review/{run_id}/annotations/evidence-pack",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/review/{run_id}/annotations/export.json",
     [
       "GET"
@@ -447,6 +455,14 @@
   ],
   [
     "/review/{run_id}/annotations/export.md",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/review/{run_id}/annotations/export.zip",
     [
       "GET"
     ],
@@ -495,6 +511,14 @@
   ],
   [
     "/review/{run_id}/annotations/{annotation_id}/export.md",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/review/{run_id}/annotations/{annotation_id}/export.zip",
     [
       "GET"
     ],

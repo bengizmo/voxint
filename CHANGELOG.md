@@ -6,6 +6,25 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Evidence pack** (#331, Phase 7 remainder). A printable page of a run's
+  highlights with their provenance (speakers, timing, tags, notes, source
+  text hash, clip references, pipeline model identity), linked from the
+  review transcript. Print or save it as a PDF from the browser; no PDF
+  library added. Stale highlights print with a visible warning instead of
+  blocking the document.
+- **Bundled quote export** (#281). One click downloads a highlight's Markdown
+  pull-quote, JSON provenance manifest, and audio clip (when one has been
+  extracted) as a single ZIP, per highlight or for every highlight matching
+  the current tag filter. The bundled files match the standalone exports
+  byte for byte (the manifest differs only in its export timestamp). No new
+  dependencies (stdlib zipfile).
+- **Highlight tag rollup on Explore** (#331, Phase 7 remainder). The Explore
+  page now shows how many highlights carry each tag, corpus-wide or narrowed
+  by the project filter. Computed live with one SQL query (no cache, no new
+  dependencies); archived tags and deleted highlights are excluded, and
+  highlights on runs still under review count from the moment they exist.
+
 
 ## [0.31.0] - 2026-08-31
 

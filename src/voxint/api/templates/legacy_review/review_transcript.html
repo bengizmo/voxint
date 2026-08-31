@@ -29,7 +29,9 @@
 </header>
 
 <p class="muted"><a href="/runs/{{ run.id }}/transcript">Read the full transcript</a>
-  (you can switch between versions there).</p>
+  (you can switch between versions there).
+  <a href="/review/{{ run.id }}/annotations/evidence-pack">Evidence pack</a>
+  (a printable page of this run's highlights with their provenance).</p>
 
 {% if not lines %}
 <p>No transcript segments for this run.</p>

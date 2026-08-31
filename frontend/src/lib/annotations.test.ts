@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  annotationZipUrl,
   annotationsExportUrl,
+  annotationsZipUrl,
   filterByTags,
   sortAnnotations,
   spansByLine,
@@ -191,6 +193,29 @@ describe("annotationsExportUrl", () => {
   it("appends a repeated ?tag= param per selected tag (OR-union)", () => {
     const url = annotationsExportUrl("run-1", new Set(["t1", "t2"]));
     expect(url.startsWith("/review/run-1/annotations/export.md?")).toBe(true);
+    const params = new URLSearchParams(url.split("?")[1]);
+    expect(params.getAll("tag").sort()).toEqual(["t1", "t2"]);
+  });
+});
+
+describe("annotationZipUrl", () => {
+  it("addresses one highlight's bundle", () => {
+    expect(annotationZipUrl("run-1", "ann-1")).toBe(
+      "/review/run-1/annotations/ann-1/export.zip",
+    );
+  });
+});
+
+describe("annotationsZipUrl", () => {
+  it("is the bare route when no tag filter is active", () => {
+    expect(annotationsZipUrl("run-1", new Set())).toBe(
+      "/review/run-1/annotations/export.zip",
+    );
+  });
+
+  it("carries the same repeated ?tag= OR-union filter as the other bulk exports", () => {
+    const url = annotationsZipUrl("run-1", new Set(["t1", "t2"]));
+    expect(url.startsWith("/review/run-1/annotations/export.zip?")).toBe(true);
     const params = new URLSearchParams(url.split("?")[1]);
     expect(params.getAll("tag").sort()).toEqual(["t1", "t2"]);
   });

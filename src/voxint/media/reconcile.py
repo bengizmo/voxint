@@ -21,7 +21,12 @@ from voxint.db.models import (
     OperationState,
     OperationType,
 )
-from voxint.media.executor import _fsync_directory, _safe_unlink, execute_operation
+from voxint.media.executor import (
+    _fsync_directory,
+    _lease_still_held,
+    _safe_unlink,
+    execute_operation,
+)
 from voxint.media.integrity import sha256_file
 from voxint.media.operations import (
     TRASH_TREE,
@@ -265,6 +270,9 @@ def _pointer_then_complete(
         session.rollback()
         return _fail_after_conflict(session, operation.id, claim_token)
     session.commit()
+    if not _lease_still_held(session, operation.id, claim_token):
+        logger.warning("lease lost before cleanup for operation %s", operation.id)
+        return "skipped"
     if origin is not None and _safe_unlink(origin):
         _fsync_directory(origin.parent)
     if temporary is not None:
@@ -285,6 +293,9 @@ def _clean_and_complete(
     origin: Path | None,
     temporary: Path | None,
 ) -> _Outcome:
+    if not _lease_still_held(session, operation.id, claim_token):
+        logger.warning("lease lost before cleanup for operation %s", operation.id)
+        return "skipped"
     if origin is not None and _safe_unlink(origin):
         _fsync_directory(origin.parent)
     if temporary is not None:
@@ -380,6 +391,8 @@ def _apply_table(
             return _fail(session, operation, state, claim_token, "pointer_dangling")
         if origin_exists and not dest_exists:
             if temp_exists and temporary is not None:
+                if not _lease_still_held(session, operation.id, claim_token):
+                    return "skipped"
                 _safe_unlink(temporary)
             execute_operation(session, media_root, operation, claim_token)
             session.expire_all()
@@ -402,6 +415,8 @@ def _apply_table(
             return _fail(session, operation, state, claim_token, "destination_exists")
         if not origin_exists and not dest_exists:
             if temp_exists and temporary is not None:
+                if not _lease_still_held(session, operation.id, claim_token):
+                    return "skipped"
                 _safe_unlink(temporary)
             return _retry(session, operation, state, claim_token, "origin_missing")
         if digest_matches:
@@ -413,6 +428,8 @@ def _apply_table(
     if state == OperationState.FS_APPLIED.value:
         if pointer == PointerClass.OTHER:
             if temporary is not None:
+                if not _lease_still_held(session, operation.id, claim_token):
+                    return "skipped"
                 _safe_unlink(temporary)
             return _fail(session, operation, state, claim_token, "superseded")
         if pointer == PointerClass.DESTINATION:
@@ -434,6 +451,8 @@ def _apply_table(
         if temp_exists and temporary is not None:
             temp_digest = sha256_file(temporary)
             if expected_digest is None or temp_digest != expected_digest:
+                if not _lease_still_held(session, operation.id, claim_token):
+                    return "skipped"
                 _safe_unlink(temporary)
                 return _fail(session, operation, state, claim_token, "temp_corrupt")
             assert destination is not None
@@ -601,10 +620,8 @@ def reconcile_operations(
                 )
                 .order_by(MediaOperation.created_at.asc())
                 .limit(batch_limit)
-                .with_for_update(skip_locked=True)
             ).scalars()
         )
-        session.rollback()
 
     counts: dict[_Outcome, int] = {
         "completed": 0,
