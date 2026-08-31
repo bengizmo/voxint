@@ -58,7 +58,7 @@ def test_shell_context_requires_flag_and_route() -> None:
             "multi_user": False,
             "current_user": None,
             "csrf_logout_token": "",
-            "can_write": True,
+            "can_write": False,
         }
     }
     # Flag on, no /projects route registered yet (today's reality): stays dark.
@@ -74,7 +74,7 @@ def test_shell_context_requires_flag_and_route() -> None:
             "multi_user": False,
             "current_user": None,
             "csrf_logout_token": "",
-            "can_write": True,
+            "can_write": False,
         }
     }
     # A stale app with no stamp at all fails closed too.
@@ -88,7 +88,7 @@ def test_shell_context_requires_flag_and_route() -> None:
             "multi_user": False,
             "current_user": None,
             "csrf_logout_token": "",
-            "can_write": True,
+            "can_write": False,
         }
     }
     assert _shell_template_context(
@@ -103,7 +103,7 @@ def test_shell_context_requires_flag_and_route() -> None:
             "multi_user": False,
             "current_user": None,
             "csrf_logout_token": "",
-            "can_write": True,
+            "can_write": False,
         }
     }
 

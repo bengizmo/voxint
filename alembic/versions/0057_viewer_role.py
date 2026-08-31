@@ -27,6 +27,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Precondition: no user rows with role='viewer' may exist; reassign them
+    # first (e.g. ``voxint user set-role <name> reviewer``) or the narrowed
+    # CHECK will reject existing data and the transaction will roll back.
     op.drop_constraint("users_role_check", "users", type_="check")
     op.create_check_constraint(
         "users_role_check",

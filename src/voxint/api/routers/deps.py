@@ -283,12 +283,13 @@ def require_onboarded(
     """First-run gate: redirect an un-onboarded operator to the setup wizard.
 
     Wired as a router-level dependency on EACH per-area router (routers/*.py);
-    the ``console`` aggregator and the app itself carry no gate, because on this
-    FastAPI an outer router's dependencies do not appear in a nested route's
-    dependant tree, which is where the characterization contract reads gating
-    from. Exemption stays structural — ``/healthz``, ``/static/htmx.min.js``,
-    ``/static/app/*``, and the setup wizard's ``setup_router`` register outside
-    any gated router, so there is no path allow-list to keep in sync. It depends
+    the ``console`` aggregator carries ``viewer_write_guard`` (#363) but NOT
+    this onboarding gate, because on this FastAPI an outer router's dependencies
+    do not appear in a nested route's dependant tree, which is where the
+    characterization contract reads gating from. Exemption stays structural —
+    ``/healthz``, ``/static/htmx.min.js``, ``/static/app/*``, and the setup
+    wizard's ``setup_router`` register outside any onboarding-gated router, so
+    there is no path allow-list to keep in sync. It depends
     on ``OperatorDep`` so authentication runs first: an
     unauthenticated request gets a 401 challenge, never a redirect that would leak
     onboarding state. It depends on ``SessionDep`` so FastAPI's per-request
@@ -447,8 +448,9 @@ def _shell_template_context(request: Request) -> dict[str, Any]:
             "multi_user": settings.voxint_multi_user,
             "current_user": getattr(request.state, "current_user", None),
             "can_write": (
-                getattr(request.state, "current_user", None) is None
-                or request.state.current_user.role != UserRole.VIEWER.value
+                (cu := getattr(request.state, "current_user", None))
+                is not None
+                and cu.role != UserRole.VIEWER.value
             ),
             "csrf_logout_token": (
                 mint_csrf_token(request.app.state.csrf_secret, CSRF_LOGOUT)
