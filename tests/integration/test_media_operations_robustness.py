@@ -680,3 +680,106 @@ def test_claim_winner_skips_after_lease_stolen_during_wait(
         assert operation is not None
         assert operation.claimed_by == "reconciler:thief"
         assert operation.state not in OPERATION_TERMINAL_STATES
+
+
+def test_lease_expired_skips_cleanup_in_pointer_then_complete(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """An expired lease aborts the origin unlink in _pointer_then_complete.
+
+    When the lease expires between the DB_APPLIED commit and the origin unlink,
+    the reconciler must skip the cleanup and leave the origin for the next pass.
+    Using lease_duration_seconds=-1 ensures the lease is expired by the time
+    _lease_still_held checks it, without threading.
+    """
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    source = _media_file(media_root)
+    with session_factory() as session:
+        _media, operation = _expired_trash(session)
+        operation.origin_digest = sha256_file(source)
+        operation.state = OperationState.FS_APPLIED.value
+        assert operation.destination_path is not None
+        destination = media_root / operation.destination_path
+        destination.parent.mkdir(parents=True)
+        destination.hardlink_to(source)
+        operation_id = operation.id
+        session.commit()
+
+    outcome = _process_one(session_factory, media_root, operation_id, -1)
+
+    assert outcome == "skipped"
+    assert source.is_file(), "origin must not be unlinked when lease is expired"
+    with session_factory() as session:
+        op = session.get(MediaOperation, operation_id)
+        assert op is not None
+        assert op.state == OperationState.DB_APPLIED.value
+
+
+def test_lease_expired_skips_cleanup_in_clean_and_complete(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """An expired lease aborts the origin unlink in _clean_and_complete.
+
+    Reached via the FS_APPLIED + pointer-at-destination path. The lease guard
+    fires before any unlink, returning "skipped" with state unchanged.
+    """
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    source = _media_file(media_root)
+    with session_factory() as session:
+        _media, operation = _expired_trash(session)
+        operation.origin_digest = sha256_file(source)
+        operation.state = OperationState.FS_APPLIED.value
+        assert operation.destination_path is not None
+        destination = media_root / operation.destination_path
+        destination.parent.mkdir(parents=True)
+        destination.hardlink_to(source)
+        _media.current_path = operation.destination_path
+        operation_id = operation.id
+        session.commit()
+
+    outcome = _process_one(session_factory, media_root, operation_id, -1)
+
+    assert outcome == "skipped"
+    assert source.is_file(), "origin must not be unlinked when lease is expired"
+    with session_factory() as session:
+        op = session.get(MediaOperation, operation_id)
+        assert op is not None
+        assert op.state == OperationState.FS_APPLIED.value
+
+
+def test_second_pass_completes_after_lease_expired_skip(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """A stale first pass skips cleanup; a fresh second pass converges.
+
+    End-to-end two-pass convergence: the first reconciler has an expired lease,
+    commits the pointer/state update but skips the origin unlink. A second pass
+    with a fresh lease picks up the DB_APPLIED operation and completes it.
+    """
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    source = _media_file(media_root)
+    with session_factory() as session:
+        _media, operation = _expired_trash(session)
+        operation.origin_digest = sha256_file(source)
+        operation.state = OperationState.FS_APPLIED.value
+        assert operation.destination_path is not None
+        destination = media_root / operation.destination_path
+        destination.parent.mkdir(parents=True)
+        destination.hardlink_to(source)
+        operation_id = operation.id
+        session.commit()
+
+    first = _process_one(session_factory, media_root, operation_id, -1)
+    assert first == "skipped"
+    assert source.is_file()
+
+    summary = reconcile_operations(session_factory, media_root)
+    assert summary.completed == 1
+    assert not source.is_file(), "second pass must unlink the origin"
+    with session_factory() as session:
+        op = session.get(MediaOperation, operation_id)
+        assert op is not None
+        assert op.state == OperationState.COMPLETED.value
