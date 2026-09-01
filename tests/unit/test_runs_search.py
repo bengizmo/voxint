@@ -9,6 +9,7 @@ from markupsafe import Markup
 
 from voxint.api.runs_query import (
     Cursor,
+    LifecycleView,
     ReviewFilter,
     SearchFilters,
     _escape_like,
@@ -98,6 +99,9 @@ class TestEscapeLike:
 
 
 class TestRunsUrl:
+    def test_lifecycle_view_is_preserved(self) -> None:
+        assert runs_url(lifecycle=LifecycleView.ACTIVE) == "/runs?view=active"
+
     def test_all_params_round_trip(self) -> None:
         speaker = uuid.uuid4()
         filters = SearchFilters(

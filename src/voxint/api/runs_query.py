@@ -56,6 +56,15 @@ class ReviewFilter(enum.StrEnum):
     CLAIMED = "claimed"  # a reviewer currently holds a live claim
 
 
+class LifecycleView(enum.StrEnum):
+    """Tab-level lifecycle classification for the /runs canonical surface."""
+
+    NEEDS_ATTENTION = "needs_attention"  # awaiting adjudication or unresolved labels
+    ACTIVE = "active"  # queued, running, or paused
+    FAILED = "failed"  # failed
+    ALL = "all"  # no lifecycle predicate (default)
+
+
 class InvalidCursorError(ValueError):
     """The pagination cursor is malformed or corrupt."""
 
@@ -237,6 +246,7 @@ def parse_review_filter(raw: str | None) -> ReviewFilter | None:
 
 def runs_url(
     *,
+    lifecycle: LifecycleView | None = None,
     status: RunStatus | None = None,
     review: ReviewFilter | None = None,
     filters: SearchFilters | None = None,
@@ -245,6 +255,10 @@ def runs_url(
 ) -> str:
     """Build a ``/runs`` URL preserving the active filters (+ optional cursor)."""
     params: list[tuple[str, str]] = []
+    # ALL is the canonical default, so omitting it preserves the same active
+    # view without adding a redundant query parameter.
+    if lifecycle is not None and lifecycle is not LifecycleView.ALL:
+        params.append(("view", lifecycle.value))
     if status is not None:
         params.append(("status", status.value))
     if review is not None:
@@ -391,6 +405,7 @@ def list_runs(
     review: ReviewFilter | None,
     cursor: Cursor | None,
     page_size: int,
+    lifecycle: LifecycleView | None = None,
     filters: SearchFilters | None = None,
     archived: bool = False,
 ) -> RunsPage:
@@ -460,6 +475,31 @@ def list_runs(
         stmt = stmt.where(PipelineRun.archived_at.is_not(None))
     else:
         stmt = stmt.where(PipelineRun.archived_at.is_(None))
+
+    # Lifecycle tabs are the broad first cut. The existing status/review
+    # predicates below remain independent and narrow this set with AND.
+    if lifecycle is LifecycleView.NEEDS_ATTENTION:
+        stmt = stmt.where(
+            or_(
+                PipelineRun.status == RunStatus.AWAITING_ADJUDICATION.value,
+                and_(
+                    PipelineRun.status == RunStatus.COMPLETED.value,
+                    unresolved_label_exists(PipelineRun.id),
+                ),
+            )
+        )
+    elif lifecycle is LifecycleView.ACTIVE:
+        stmt = stmt.where(
+            PipelineRun.status.in_(
+                (
+                    RunStatus.QUEUED.value,
+                    RunStatus.RUNNING.value,
+                    RunStatus.PAUSED.value,
+                )
+            )
+        )
+    elif lifecycle is LifecycleView.FAILED:
+        stmt = stmt.where(PipelineRun.status == RunStatus.FAILED.value)
 
     if status is not None:
         stmt = stmt.where(PipelineRun.status == status.value)

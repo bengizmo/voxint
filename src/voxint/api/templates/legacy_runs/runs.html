@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "fragments/_chips.html" import chip, needs_you_chip %}
 {% block title %}Voxint — runs{% endblock %}
 
 {% block cb_breadcrumb %}runs /{% if show_archived %} <span class="oc-muted">archived</span>{% endif %}{% endblock %}
@@ -6,7 +7,8 @@
 {%- if show_archived -%}
   Archived runs. <a href="{{ archived_toggle_url }}">Back to active</a>
 {%- else -%}
-  Newest first. <a href="{{ archived_toggle_url }}">View archived</a>
+  {{ pipeline_summary }}
+  · <a href="{{ settings_status_url }}">Pipeline status</a>
 {%- endif -%}
 {% endblock %}
 {% block cb_actions %}
@@ -18,9 +20,6 @@
 {% endblock %}
 
 {% block body %}
-{# Add-media affordance (issue #117 Phase C): a named section the dashboard "Add
-   audio" task card links to (/runs#add-media). Both ways in live here — an upload
-   and, when enabled, a URL fetch — so elevating one never demotes the other. #}
 {% if not shell.media_enabled %}
 <section id="add-media" class="oc-section">
   <h2 class="oc-section-title">ADD MEDIA</h2>
@@ -35,8 +34,6 @@
 
   {% if ytdlp_enabled %}
   <form method="post" action="/fetch" class="upload">
-    {# Independent submission id from the upload form's, so the two never collide
-       on a shared source_path; a double-submit of this form stays idempotent. #}
     <input type="hidden" name="submission_id" value="{{ fetch_submission_id }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_fetch }}">
     <label>Fetch from URL
@@ -44,8 +41,6 @@
     </label>
     <button type="submit">Fetch &amp; transcribe</button>
   </form>
-  {# Passive, honest notice — NOT a status badge (the app can't prove every private
-     destination is blocked). See docs/operations.md "URL ingestion & egress security". #}
   <p class="oc-muted">Fetching a URL lets the downloader contact other sites, including
   ones a link redirects to. If you fetch links you don't fully trust, run the
   restricted URL-download overlay (<code>compose.ytdlp-egress.yaml</code>) — see the
@@ -56,95 +51,118 @@
 </section>
 {% endif %}
 
+{% for d in degraded %}
+<div class="degraded-banner" role="alert">
+  <div class="db-text">
+    <strong>{{ d.consequence }}</strong> {{ d.detail }}
+  </div>
+  <a class="cb-btn cb-btn-secondary" href="/settings">Turn on in Settings</a>
+</div>
+{% endfor %}
+
 <section class="oc-section" aria-label="Runs">
   <h2 class="oc-section-title">RUNS</h2>
 
-  {# Search-mode toggle (issue #121): the exact keyword browse (this page) versus the
-     ranked semantic "Meaning" search. The current query term carries across both tabs
-     so switching modes never loses the operator's words. #}
-  <nav class="filter-tabs" aria-label="Search mode">
-    <a href="/runs{% if filters.q %}?q={{ filters.q|urlencode }}{% endif %}" aria-current="page">Exact</a>
-    <a href="/search{% if filters.q %}?q={{ filters.q|urlencode }}{% endif %}">Meaning</a>
-  </nav>
+  <nav class="filter-tabs" aria-label="Lifecycle view">
+    {% for view_val, view_label, view_url in view_tabs %}
+    <a href="{{ view_url }}"
+       {% if view_val == active_view %}aria-current="page"{% endif %}>{{ view_label }}</a>
+    {% endfor %}
+    <span class="ft-spacer"></span>
+    {% if not show_archived %}
+    <a href="{{ archived_toggle_url }}" style="font-size:var(--t-sm);color:var(--accent);text-decoration:none">Archived →</a>
+    {% endif %}
+  </div>
 
-  <form method="get" action="/runs" class="filters">
-    {# Preserve the archived view across a filter submit (issue #5). #}
-    {% if show_archived %}<input type="hidden" name="archived" value="1">{% endif %}
-    <label>Status
-      <select name="status">
-        <option value="">all</option>
-        {% for s in statuses %}
-        <option value="{{ s.value }}"{% if status == s %} selected{% endif %}>{{ s.value }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Review
-      <select name="review">
-        <option value="">all</option>
-        {% for r in reviews %}
-        <option value="{{ r.value }}"{% if review == r %} selected{% endif %}>{{ r.value }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Transcript
-      <input type="search" name="q" value="{{ filters.q or "" }}"
-             placeholder='words, "a phrase", -excluded, this OR that'>
-    </label>
-    <label>Speaker
-      <select name="speaker">
-        <option value="">all</option>
-        {% for sp in facet_speakers %}
-        <option value="{{ sp.id }}"{% if filters.speaker_id == sp.id %} selected{% endif %}>
-          {{- sp.display_name }}{% if sp.deleted_at %} (archived){% endif -%}
-        </option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Source
-      <input type="text" name="source" value="{{ filters.source or "" }}" placeholder="path contains…">
-    </label>
-    {# Detected language (issue #124): the code whisper stamped on each run, so a
-       label like "Spanish (es)". Options are only languages some run carries. #}
-    <label>Detected language
-      <select name="language">
-        <option value="">all</option>
-        {% for lang in facet_languages %}
-        <option value="{{ lang.code }}"{% if filters.language == lang.code %} selected{% endif %}>{{ lang.label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>From (UTC)
-      <input type="date" name="created_from"
-             value="{{ filters.created_from.isoformat() if filters.created_from else "" }}">
-    </label>
-    <label>To (UTC)
-      <input type="date" name="created_to"
-             value="{{ filters.created_to.isoformat() if filters.created_to else "" }}">
-    </label>
-    <button type="submit">Filter</button>
-  </form>
+  {# Collapsible filter bar: closed by default, auto-opens when any filter is active. #}
+  {% set has_active_filters = status or review or filters.q or filters.speaker_id or filters.source or filters.created_from or filters.created_to or filters.language %}
+  <details class="runs-filters" {% if has_active_filters %}open{% endif %}>
+    <summary>Filter{% if has_active_filters %} (active){% endif %}</summary>
+    <form method="get" action="/runs" class="filters">
+      {% if show_archived %}<input type="hidden" name="archived" value="1">{% endif %}
+      {% if active_view != LifecycleView.ALL %}<input type="hidden" name="view" value="{{ active_view.value }}">{% endif %}
+      <label>Status
+        <select name="status">
+          <option value="">all</option>
+          {% for s in statuses %}
+          <option value="{{ s.value }}"{% if status == s %} selected{% endif %}>{{ s.value }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Review
+        <select name="review">
+          <option value="">all</option>
+          {% for r in reviews %}
+          <option value="{{ r.value }}"{% if review == r %} selected{% endif %}>{{ r.value }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Filter</button>
+      {% if has_active_filters %}
+      <a href="{{ clear_url }}" class="oc-muted" style="font-size:var(--t-sm)">Clear</a>
+      {% endif %}
+      {% set has_more_filters = filters.q or filters.speaker_id or filters.source or filters.created_from or filters.created_to or filters.language %}
+      <details class="runs-more-filters"{% if has_more_filters %} open{% endif %}>
+        <summary>More filters{% if has_more_filters %} (active){% endif %}</summary>
+        <div class="filters" style="margin-top: .5rem;">
+          <label>Transcript
+            <input type="search" name="q" value="{{ filters.q or "" }}"
+                   placeholder='words, "a phrase", -excluded, this OR that'>
+          </label>
+          <label>Speaker
+            <select name="speaker">
+              <option value="">all</option>
+              {% for sp in facet_speakers %}
+              <option value="{{ sp.id }}"{% if filters.speaker_id == sp.id %} selected{% endif %}>
+                {{- sp.display_name }}{% if sp.deleted_at %} (archived){% endif -%}
+              </option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Source
+            <input type="text" name="source" value="{{ filters.source or "" }}" placeholder="path contains…">
+          </label>
+          <label>Detected language
+            <select name="language">
+              <option value="">all</option>
+              {% for lang in facet_languages %}
+              <option value="{{ lang.code }}"{% if filters.language == lang.code %} selected{% endif %}>{{ lang.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>From
+            <input type="date" name="created_from"
+                   value="{{ filters.created_from.isoformat() if filters.created_from else "" }}">
+          </label>
+          <label>To
+            <input type="date" name="created_to"
+                   value="{{ filters.created_to.isoformat() if filters.created_to else "" }}">
+          </label>
+        </div>
+      </details>
+    </form>
+  </details>
 
   {% if not page.items %}
-  <p class="oc-muted">No runs match these filters{% if filters.q %} and search{% endif %}.</p>
+  <p class="oc-muted">No runs match{% if has_active_filters %} these filters{% endif %}{% if active_view != LifecycleView.ALL %} in this view{% endif %}.</p>
   {% else %}
-  <div class="grid-table" style="grid-template-columns: auto auto auto 1fr auto auto;" role="region" aria-label="Runs">
+  <div class="grid-table" style="grid-template-columns: 1fr auto auto auto auto auto;" role="region" aria-label="Runs">
     <div class="gt-header">
-      <span>RUN</span>
+      <span>MEDIA</span>
       <span>STATUS</span>
       <span>REVIEW</span>
-      <span>MEDIA</span>
       <span>LANGUAGE</span>
       <span>CREATED</span>
+      <span></span>
     </div>
     {% for it in page.items %}
-    <div class="gt-row">
-      {# The friendly title in the Media column carries identity; the run id is a
-         uuid with no friendlier form, so it stays a small muted "open" link with
-         the short hex available on hover (issue #56). #}
-      <span><a href="/runs/{{ it.run_id }}" title="run {{ it.run_id }}"
-               class="oc-muted">open <code>{{ it.run_id.hex[:8] }}</code></a></span>
-      {# Humanized LABEL only — the pill's CSS class stays the raw enum so it
-         keeps its colour (same display-only invariant as the dashboard). #}
+    <div class="gt-row{% if it.status == 'running' %} is-machine-active{% elif it.unresolved_count > 0 and it.status == 'completed' %} is-needs-human{% endif %}">
+      <span>
+        <a href="/runs/{{ it.run_id }}" class="media-title" style="color:var(--ink);text-decoration:none"
+           title="{{ it.source_path }}">{{ friendly_media_label(it.title, it.source_path) }}</a>
+        {% if it.folder_path %}<br><span class="oc-muted" style="font-size:var(--t-sm)">{{ it.folder_path }}</span>{% endif %}
+        <br><span class="run-id-secondary oc-muted" style="font-size:var(--t-sm)"><code>{{ it.run_id.hex[:8] }}</code></span>
+      </span>
       <span>
         <span class="pill {{ it.status }}">{{ humanize_status(it.status) }}</span>
         {% if it.archived %}<span class="pill skipped">archived</span>{% endif %}
@@ -152,26 +170,27 @@
       <span>
         {% if it.status == "completed" %}
           {% if it.label_count == 0 %}<span class="pill muted">no speakers</span>
-          {% elif it.unresolved_count > 0 %}<span class="pill unresolved">needs ruling ({{ it.unresolved_count }})</span>
-          {% else %}<span class="pill human">resolved</span>{% endif %}
+          {% elif it.unresolved_count > 0 %}{{ needs_you_chip(it.unresolved_count) }}
+          {% else %}{{ chip("reviewed") }}{% endif %}
+        {% elif it.status == "failed" and it.error %}
+        <span class="oc-muted" style="font-size:var(--t-sm)">{{ humanize_error(it.error) or "—" }}</span>
         {% else %}<span class="oc-muted">—</span>{% endif %}
         {% if it.claim_live %}<span class="pill grounded">claimed{% if it.claimed_by %} · {{ it.claimed_by }}{% endif %}</span>{% endif %}
       </span>
-      <span>
-        {# Friendly label: acquisition-metadata title (issue #36) else a cleaned
-           filename; the raw path stays muted beneath as ground truth (issue #56). #}
-        <span class="media-title" title="{{ it.source_path }}">{{ friendly_media_label(it.title, it.source_path) }}</span>
-        <br><code class="oc-muted" style="font-size:var(--t-sm)">{{ it.source_path }}</code>
-      </span>
-      {# Whisper's detected language (issue #124); "—" = not recorded (a run not
-         yet transcribed, or one that predates the stamp). #}
       <span>{% if it.language %}{{ language_label(it.language) }}{% else %}<span class="oc-muted">—</span>{% endif %}</span>
       <span><span title="{{ it.created_at.strftime("%Y-%m-%d %H:%M UTC") }}">{{ format_age(it.created_at, now=now) }}</span></span>
+      <span class="gt-action">
+        {% if it.status == "completed" and it.unresolved_count > 0 %}
+        <a href="/review">Review →</a>
+        {% elif it.status == "failed" %}
+        <a href="/runs/{{ it.run_id }}">Retry →</a>
+        {% else %}
+        <a href="/runs/{{ it.run_id }}">View →</a>
+        {% endif %}
+      </span>
     </div>
     {% if it.snippet %}
     <div class="gt-row">
-      {# snippet.html is server-escaped with only our <mark> injected — see
-         runs_query._render_headline; transcript text itself is never trusted. #}
       <span class="oc-muted" style="grid-column: 1 / -1; padding: 0 var(--space-3) var(--space-2);">
         ⏱ {{ "%d:%02d" | format(it.snippet.start_seconds // 60, it.snippet.start_seconds % 60) }}
         — {{ it.snippet.html }}
@@ -186,4 +205,35 @@
   <p><a href="{{ next_url }}" class="oc-muted">Older →</a></p>
   {% endif %}
 </section>
+
+{% if aux_jobs %}
+<details class="runs-aux-jobs">
+  <summary class="oc-section-title" style="cursor:pointer">OTHER JOBS <span class="oc-muted" style="font-weight:400;font-size:var(--t-sm)">({{ aux_jobs|length }})</span></summary>
+  <p class="oc-muted">Recent asset, translation, voice sample, and research
+  jobs. These run alongside the pipeline and never block it.</p>
+  <div class="grid-table" style="grid-template-columns: auto auto auto auto auto;">
+    <div class="gt-header">
+      <span>KIND</span>
+      <span>DETAIL</span>
+      <span>STATUS</span>
+      <span>TARGET</span>
+      <span>CREATED</span>
+    </div>
+    {% for job in aux_jobs %}
+    <div class="gt-row">
+      <span>{{ job.family }}</span>
+      <span>{{ job.detail or "—" }}</span>
+      <span>{{ chip(job.status) }}</span>
+      <span>
+        {% if job.family == "research" and job.speaker_id %}<a href="/speakers/{{ job.speaker_id }}/research">speaker {{ job.speaker_id.hex[:8] }}</a>
+        {% elif job.pipeline_run_id %}<a href="/runs/{{ job.pipeline_run_id }}">run {{ job.pipeline_run_id.hex[:8] }}</a>
+        {% elif job.speaker_id %}speaker {{ job.speaker_id.hex[:8] }}
+        {% else %}—{% endif %}
+      </span>
+      <span class="num">{{ format_age(job.created_at, now=now) }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
 {% endblock %}

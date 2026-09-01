@@ -78,6 +78,7 @@ from voxint.api.routers.deps import (
 from voxint.api.runs_query import (
     Cursor,
     InvalidCursorError,
+    LifecycleView,
     ReviewFilter,
     list_runs,
     parse_review_filter,
@@ -88,7 +89,12 @@ from voxint.api.runs_query import (
 )
 from voxint.api.speaker_colors import speaker_palette
 from voxint.api.speaker_timeline import build_speaker_timeline
-from voxint.api.stats_query import DEFAULT_WINDOW, collect_stats, render_prometheus
+from voxint.api.stats_query import (
+    DEFAULT_WINDOW,
+    collect_stats,
+    render_prometheus,
+    run_status_counts,
+)
 from voxint.api.transcript_view import (
     _run_label_universe,
     _transcript_island_props,
@@ -599,6 +605,7 @@ def runs(
     request: Request,
     operator: OperatorDep,
     session: SessionDep,
+    view: str | None = None,
     status: str | None = None,
     review: str | None = None,
     cursor: str | None = None,
@@ -610,11 +617,17 @@ def runs(
     language: str | None = None,
     archived: str | None = None,
 ) -> Response:
+    # Local import avoids a module cycle: jobs imports this module's run-detail
+    # context builder while /runs reuses its canonical summary formatter.
+    from voxint.api.jobs_query import jobs_badge_count, recent_aux_jobs
+    from voxint.api.routers.jobs import _detect_degraded, _pipeline_summary
+
     settings: Settings = request.app.state.settings
     # ?archived=1 flips to the archived-only view (issue #5); anything else
     # (absent / "0" / blank) is the default listing that hides archived runs.
     show_archived = archived == "1"
     try:
+        active_view = LifecycleView(view or LifecycleView.ALL.value)
         status_filter = parse_status_filter(status)
         review_filter = parse_review_filter(review)
         search_filters = parse_search_filters(
@@ -637,6 +650,7 @@ def runs(
             raise HTTPException(status_code=400, detail="invalid cursor") from exc
     page = list_runs(
         session,
+        lifecycle=active_view,
         status=status_filter,
         review=review_filter,
         cursor=parsed_cursor,
@@ -646,6 +660,7 @@ def runs(
     )
     next_url = (
         runs_url(
+            lifecycle=active_view,
             status=status_filter,
             review=review_filter,
             filters=search_filters,
@@ -661,6 +676,26 @@ def runs(
         {
             "request": request,
             "page": page,
+            "active_view": active_view,
+            "view_tabs": tuple(
+                (
+                    lv,
+                    label,
+                    runs_url(
+                        lifecycle=lv,
+                        status=status_filter,
+                        review=review_filter,
+                        filters=search_filters,
+                        archived=show_archived,
+                    ),
+                )
+                for lv, label in (
+                    (LifecycleView.NEEDS_ATTENTION, "Needs attention"),
+                    (LifecycleView.ACTIVE, "Active"),
+                    (LifecycleView.FAILED, "Failed"),
+                    (LifecycleView.ALL, "All"),
+                )
+            ),
             "status": status_filter,
             "review": review_filter,
             "statuses": list(RunStatus),
@@ -670,6 +705,7 @@ def runs(
             # Toggle target: the same listing in the opposite archive view,
             # preserving the active status/review/search facets.
             "archived_toggle_url": runs_url(
+                lifecycle=active_view,
                 status=status_filter,
                 review=review_filter,
                 filters=search_filters,
@@ -681,6 +717,16 @@ def runs(
                 archived=show_archived,
                 include=search_filters.language,
             ),
+            "LifecycleView": LifecycleView,
+            "clear_url": runs_url(
+                lifecycle=active_view, archived=show_archived
+            ),
+            "pipeline_summary": _pipeline_summary(
+                run_status_counts(session), jobs_badge_count(session)
+            ),
+            "degraded": _detect_degraded(request),
+            "aux_jobs": recent_aux_jobs(session),
+            "settings_status_url": str(request.url_for("settings_status")),
             "next_url": next_url,
             # Server-issued per-render ids: each namespaces its form's path and
             # makes a double-submit idempotent (see POST /submit, POST /fetch).
