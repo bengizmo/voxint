@@ -72,7 +72,12 @@
     {% if not show_archived %}
     <a href="{{ archived_toggle_url }}" style="font-size:var(--t-sm);color:var(--accent);text-decoration:none">Archived →</a>
     {% endif %}
-  </div>
+  </nav>
+
+  <nav class="filter-tabs" aria-label="Search mode">
+    <a href="/runs{% if filters.q %}?q={{ filters.q|urlencode }}{% endif %}" aria-current="page">Exact</a>
+    <a href="/search{% if filters.q %}?q={{ filters.q|urlencode }}{% endif %}">Meaning</a>
+  </nav>
 
   {# Collapsible filter bar: closed by default, auto-opens when any filter is active. #}
   {% set has_active_filters = status or review or filters.q or filters.speaker_id or filters.source or filters.created_from or filters.created_to or filters.language %}
