@@ -540,15 +540,6 @@ class Settings(BaseSettings):
     # only by URL for now; the sidebar's Media link is repointed in a later phase.
     console_media_enabled: bool = False
 
-    # The Jobs area (Console 2.0 P5, #160). Unlike Media/Projects, the /jobs and
-    # /jobs/{run_id} pages carry NO area gate: they are registered AND reachable
-    # directly under the default (dark-ship — the flag is rollout control, not
-    # authorization). This flag gates only *discovery*: the sidebar's Jobs entry
-    # points at /jobs when it is on, and at /runs (today's shared placeholder)
-    # when off. The /runs retirement (redirects, tutorial remap, version bump) is
-    # a later coordinated slice, blocked on the Media area repointing off /runs.
-    console_jobs_enabled: bool = False
-
     # The speakers area rebuild (Console 2.0 P4, #159). /speakers is ALREADY a
     # live page, so this flag branches CONTENT, not access: off = the legacy
     # roster renders byte-identically; on = the new overview replaces it and
@@ -587,13 +578,6 @@ class Settings(BaseSettings):
     # the /activity/events poll endpoint answers only when this is on, and the
     # shell mounts the toast region + Jobs badge only then. Off by default; the
     # flag is rollout control, and this slice ships with it off (no version bump).
-    #
-    # Depends on Jobs discovery: the badge lives on the sidebar Jobs entry and
-    # the toast links point at /jobs, so surfacing activity while
-    # console_jobs_enabled is off would point that entry at the /runs placeholder
-    # while the badge targets /jobs. shell.activity_enabled therefore ANDs this
-    # flag with shell.jobs_enabled (see _shell_template_context), so activation
-    # implies Jobs is already discovered.
     console_activity_enabled: bool = False
 
     # Transcript semantic-search embedding spine (#121). The additive embedding

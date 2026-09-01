@@ -74,7 +74,7 @@ def test_completed_emits_one_row(session_factory: sessionmaker[Session]) -> None
         row = rows[0]
         assert row.kind == ActivityKind.RUN_COMPLETED.value
         assert row.occurrence_key == f"run:{rid}:completed"
-        assert row.href == f"/jobs/{rid}"
+        assert row.href == f"/runs/{rid}"
         # friendly_media_label falls back to the cleaned filename.
         assert row.title == "recording.wav"
 
@@ -167,7 +167,7 @@ def test_events_since_and_high_water(session_factory: sessionmaker[Session]) -> 
                 occurrence_key=f"k-{i}",
                 pipeline_run_id=rid,
                 title=f"t{i}",
-                href=f"/jobs/{rid}",
+                href=f"/runs/{rid}",
             )
         session.commit()
     with session_factory() as session:
@@ -197,7 +197,7 @@ def test_prune_keeps_newest_n(session_factory: sessionmaker[Session]) -> None:
                 occurrence_key=f"k-{i}",
                 pipeline_run_id=rid,
                 title=f"t{i}",
-                href=f"/jobs/{rid}",
+                href=f"/runs/{rid}",
             )
         session.commit()
     with session_factory() as session:
@@ -220,7 +220,7 @@ def test_prune_below_cap_is_noop(session_factory: sessionmaker[Session]) -> None
                 occurrence_key=f"k-{i}",
                 pipeline_run_id=rid,
                 title=f"t{i}",
-                href=f"/jobs/{rid}",
+                href=f"/runs/{rid}",
             )
         session.commit()
     with session_factory() as session:
@@ -245,7 +245,7 @@ def test_prune_keep_below_one_is_noop(session_factory: sessionmaker[Session]) ->
             occurrence_key="k-0",
             pipeline_run_id=rid,
             title="t",
-            href=f"/jobs/{rid}",
+            href=f"/runs/{rid}",
         )
         session.commit()
     with session_factory() as session:
@@ -265,7 +265,7 @@ def test_retained_floor(session_factory: sessionmaker[Session]) -> None:
                 occurrence_key=f"k-{i}",
                 pipeline_run_id=rid,
                 title=f"t{i}",
-                href=f"/jobs/{rid}",
+                href=f"/runs/{rid}",
             )
         session.commit()
     with session_factory() as session:
@@ -291,7 +291,7 @@ def test_record_speaker_identified_one_row(session_factory: sessionmaker[Session
         assert rows[0].kind == ActivityKind.SPEAKER_IDENTIFIED.value
         assert rows[0].occurrence_key == f"decision:{did}:identified"
         assert rows[0].title == "Alice"
-        assert rows[0].href == f"/jobs/{rid}"
+        assert rows[0].href == f"/runs/{rid}"
 
 
 def test_record_speaker_identified_idempotent_replay(

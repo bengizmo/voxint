@@ -1,10 +1,14 @@
-"""The Jobs area pages end to end against real Postgres (Console 2.0 P5, #160).
+"""Jobs compatibility redirects (#382, S13).
 
-Pins the dark-ship wiring the unit/query tests cannot see: both pages are
-reachable directly regardless of the flag (no area gate), the recent-runs table
-and stage strip render, the sidebar Jobs entry follows ``console_jobs_enabled``
-(off keeps it on the ``/runs`` placeholder, on repoints it at ``/jobs`` with
-``aria-current``), and ``/jobs/{id}`` renders the shared run-detail sections.
+After the canonical /runs surface replaced the Jobs pages, /jobs and
+/jobs/{run_id} redirect with 303 so old bookmarks and links keep working.
+The query-vocabulary mapping preserves intent: /jobs?filter=failed lands on
+/runs?view=failed, not just /runs.
+
+Tests that exercised the old page content (pipeline board, run table, detail
+sections) are removed: the canonical /runs surface carries those now. Helpers
+imported from jobs.py (_detect_degraded, _pipeline_summary) are still tested
+via the /runs page and their unit tests here.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
 from voxint.config import Settings
-from voxint.db.models import MediaItem, PipelineRun, RunStatus, Stage
+from voxint.db.models import MediaItem, PipelineRun, RunStatus
 
 CREDS = ("reviewer", "s3cret")
 
@@ -27,16 +31,16 @@ CREDS = ("reviewer", "s3cret")
 def _client(
     session_factory: sessionmaker[Session],
     tmp_path: Path,
-    *,
-    jobs_enabled: bool = False,
 ) -> TestClient:
     settings = Settings(
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=tmp_path,
-        console_jobs_enabled=jobs_enabled,
     )
-    client = TestClient(create_app(settings=settings, session_factory=session_factory))
+    client = TestClient(
+        create_app(settings=settings, session_factory=session_factory),
+        follow_redirects=False,
+    )
     client.auth = CREDS
     seed_onboarded(session_factory)
     return client
@@ -46,14 +50,13 @@ def _make_run(
     session_factory: sessionmaker[Session],
     *,
     status: RunStatus,
-    current_stage: str | None = None,
 ) -> uuid.UUID:
     with session_factory() as session:
         media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
         session.add(media)
         session.flush()
         run = PipelineRun(
-            media_item_id=media.id, status=status.value, current_stage=current_stage
+            media_item_id=media.id, status=status.value,
         )
         session.add(run)
         session.commit()
@@ -61,176 +64,135 @@ def _make_run(
 
 
 @pytest.fixture()
-def client_flag_off(
+def client(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> TestClient:
-    return _client(session_factory, tmp_path, jobs_enabled=False)
+    return _client(session_factory, tmp_path)
 
 
-@pytest.fixture()
-def client_flag_on(
-    session_factory: sessionmaker[Session], tmp_path: Path
-) -> TestClient:
-    return _client(session_factory, tmp_path, jobs_enabled=True)
+# ---- /jobs redirect tests ----
 
 
-def test_jobs_page_reachable_directly_with_flag_off(
-    client_flag_off: TestClient,
-) -> None:
-    """Dark-ship: /jobs is registered and reachable directly even when the flag
-    is off — the flag is rollout control, not authorization."""
-    resp = client_flag_off.get("/jobs")
-    assert resp.status_code == 200
-    assert "pipeline-board" in resp.text
+def test_jobs_redirects_to_runs(client: TestClient) -> None:
+    """GET /jobs → 303 /runs."""
+    resp = client.get("/jobs")
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/runs"
 
 
-def test_jobs_page_requires_auth(session_factory: sessionmaker[Session], tmp_path: Path) -> None:
+def test_jobs_filter_all_redirects_to_runs(client: TestClient) -> None:
+    """/jobs?filter=all → /runs (the 'all' filter is the default)."""
+    resp = client.get("/jobs?filter=all")
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/runs"
+
+
+def test_jobs_filter_active_maps_to_view(client: TestClient) -> None:
+    """/jobs?filter=active → /runs?view=active."""
+    resp = client.get("/jobs?filter=active")
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/runs?view=active"
+
+
+def test_jobs_filter_needs_review_maps_to_needs_attention(client: TestClient) -> None:
+    """/jobs?filter=needs_review → /runs?view=needs_attention."""
+    resp = client.get("/jobs?filter=needs_review")
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/runs?view=needs_attention"
+
+
+def test_jobs_filter_failed_maps_to_view(client: TestClient) -> None:
+    """/jobs?filter=failed → /runs?view=failed."""
+    resp = client.get("/jobs?filter=failed")
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/runs?view=failed"
+
+
+def test_jobs_unknown_filter_falls_through(client: TestClient) -> None:
+    """An unknown filter value redirects to /runs with no query params."""
+    resp = client.get("/jobs?filter=bogus")
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/runs"
+
+
+def test_jobs_requires_auth(session_factory: sessionmaker[Session], tmp_path: Path) -> None:
     """Like every console page, /jobs is behind operator auth."""
     settings = Settings(
         voxint_user=CREDS[0], voxint_password=CREDS[1], media_root=tmp_path
     )
-    client = TestClient(create_app(settings=settings, session_factory=session_factory))
+    client = TestClient(
+        create_app(settings=settings, session_factory=session_factory),
+        follow_redirects=False,
+    )
     seed_onboarded(session_factory)
     assert client.get("/jobs").status_code == 401
 
 
-def test_jobs_page_lists_recent_runs(
-    client_flag_off: TestClient, session_factory: sessionmaker[Session]
+# ---- /jobs/{run_id} redirect tests ----
+
+
+def test_job_detail_redirects_to_run_detail(
+    client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
-    """The recent-runs table links each run to its /jobs/{id} detail page."""
+    """GET /jobs/{run_id} → 303 /runs/{run_id}."""
     run_id = _make_run(session_factory, status=RunStatus.COMPLETED)
-    resp = client_flag_off.get("/jobs")
-    assert resp.status_code == 200
-    assert f"/jobs/{run_id}" in resp.text
+    resp = client.get(f"/jobs/{run_id}")
+    assert resp.status_code == 303
+    assert resp.headers["location"] == f"/runs/{run_id}"
 
 
-def test_jobs_strip_reconciles_with_status_counts(
-    client_flag_off: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    """The stage strip totals equal the queued/running status counts the page
-    headline (and voxint stats) report — the acceptance criterion for #160."""
-    from voxint.api.jobs_query import stage_activity
-    from voxint.api.stats_query import run_status_counts
-
-    _make_run(session_factory, status=RunStatus.QUEUED, current_stage=Stage.TRANSCRIBE.value)
-    _make_run(session_factory, status=RunStatus.QUEUED, current_stage=None)
-
-    assert client_flag_off.get("/jobs").status_code == 200
-    with session_factory() as session:
-        activity = stage_activity(session)
-        counts = run_status_counts(session)
-    assert sum(a.queued for a in activity) == counts.get(RunStatus.QUEUED.value, 0) == 2
+def test_job_detail_invalid_uuid_is_422(client: TestClient) -> None:
+    """A non-UUID path segment returns 422 (FastAPI UUID validation)."""
+    resp = client.get("/jobs/not-a-uuid")
+    assert resp.status_code == 422
 
 
-def test_job_detail_renders_run_sections(
-    client_flag_off: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    """/jobs/{id} absorbs the run-detail page; its forms post to the legacy
-    /runs/{id}/... action endpoints (reused, not aliased)."""
-    run_id = _make_run(session_factory, status=RunStatus.FAILED)
-    resp = client_flag_off.get(f"/jobs/{run_id}")
-    assert resp.status_code == 200
-    # V3: run id is in the command bar breadcrumb, not an <h1>.
-    assert f"<strong>{run_id.hex[:8]}</strong>" in resp.text
-    # The requeue form (rendered for a FAILED run) posts to the legacy endpoint.
-    assert f'action="/runs/{run_id}/requeue"' in resp.text
+# ---- sidebar nav tests ----
 
 
-def test_job_detail_unknown_run_is_404(client_flag_off: TestClient) -> None:
-    assert client_flag_off.get(f"/jobs/{uuid.uuid4()}").status_code == 404
-
-
-def test_job_detail_suppresses_the_tutorial_banner(
-    session_factory: sessionmaker[Session], tmp_path: Path
-) -> None:
-    """The one intentional behavioral delta of the extraction: /runs/{id} shows
-    the guided-tour banner in tutorial mode, /jobs/{id} suppresses it (the page
-    is dark-shipped and not in the tutorial's route map)."""
-    from voxint.tutorial.seed import seed_tutorial_run
-
-    settings = Settings(
-        voxint_user=CREDS[0], voxint_password=CREDS[1], media_root=tmp_path
-    )
-    client = TestClient(create_app(settings=settings, session_factory=session_factory))
-    client.auth = CREDS
-    seed_onboarded(session_factory)
-    with session_factory() as session:
-        run_id = seed_tutorial_run(
-            session, media_root=settings.media_root, settings=settings
-        )
-        session.commit()
-
-    banner = 'aria-label="Guided tutorial"'
-    on_runs = client.get(f"/runs/{run_id}?tutorial=run")
-    assert on_runs.status_code == 200
-    assert banner in on_runs.text
-    on_jobs = client.get(f"/jobs/{run_id}?tutorial=run")
-    assert on_jobs.status_code == 200
-    assert banner not in on_jobs.text
-
-
-def test_sidebar_jobs_entry_points_at_runs_when_flag_off(
-    client_flag_off: TestClient,
-) -> None:
-    """With the flag off (shipped default) the icon rail Jobs entry still points
-    at the /runs placeholder, and no /jobs nav link."""
-    home = client_flag_off.get("/")
+def test_sidebar_jobs_entry_always_points_at_runs(client: TestClient) -> None:
+    """The sidebar Jobs entry always points at /runs (no flag branch)."""
+    home = client.get("/", follow_redirects=True)
     assert home.status_code == 200
     assert 'href="/runs"' in home.text
     assert 'aria-label="Jobs"' in home.text
-    assert '<a href="/jobs"' not in home.text
 
 
-def test_sidebar_jobs_entry_points_at_jobs_when_flag_on(
-    client_flag_on: TestClient,
+# ---- follow-through redirect tests ----
+
+
+@pytest.mark.parametrize(
+    "filter_param,expected_view",
+    [
+        ("active", "active"),
+        ("needs_review", "needs_attention"),
+        ("failed", "failed"),
+    ],
+)
+def test_jobs_filter_redirects_render_200(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+    filter_param: str,
+    expected_view: str,
 ) -> None:
-    """With the flag on, the icon rail Jobs entry repoints at /jobs; the entry
-    carries aria-current on the Jobs page itself."""
-    home = client_flag_on.get("/")
-    assert home.status_code == 200
-    assert 'href="/jobs"' in home.text
-    assert 'aria-label="Jobs"' in home.text
-    # On /jobs, the entry is the current page.
-    jobs = client_flag_on.get("/jobs")
-    assert 'href="/jobs"' in jobs.text
-    assert 'aria-current="page"' in jobs.text
-
-
-def test_running_run_shows_elapsed_duration(
-    client_flag_off: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    """#244 Delta 2: running runs show elapsed time, not '...'."""
-    _make_run(session_factory, status=RunStatus.RUNNING, current_stage=Stage.TRANSCRIBE.value)
-    resp = client_flag_off.get("/jobs")
+    """Each /jobs?filter=X redirect lands on a valid /runs?view=Y page (200)."""
+    settings = Settings(
+        voxint_user=CREDS[0], voxint_password=CREDS[1], media_root=tmp_path
+    )
+    follow_client = TestClient(
+        create_app(settings=settings, session_factory=session_factory),
+        follow_redirects=True,
+    )
+    follow_client.auth = CREDS
+    seed_onboarded(session_factory)
+    resp = follow_client.get(f"/jobs?filter={filter_param}")
     assert resp.status_code == 200
-    import re
-    assert re.search(r"\d+[smh]", resp.text), "expected a duration token in the page"
 
 
-def test_failed_run_shows_humanized_error(
-    client_flag_off: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    """#244 Delta 7: failed runs show plain-language error, not raw exception."""
-    with session_factory() as session:
-        media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
-        session.add(media)
-        session.flush()
-        run = PipelineRun(
-            media_item_id=media.id,
-            status=RunStatus.FAILED.value,
-            error="interrupted: lease expired",
-        )
-        session.add(run)
-        session.commit()
-    resp = client_flag_off.get("/jobs")
-    assert resp.status_code == 200
-    assert "worker timed out" in resp.text
-    assert "interrupted: lease expired" not in resp.text
+# ---- helper unit tests (kept from the old file) ----
 
 
-def test_pipeline_summary_includes_gpu_busy(
-    session_factory: sessionmaker[Session], tmp_path: Path
-) -> None:
+def test_pipeline_summary_includes_gpu_busy() -> None:
     """#244 Delta 8: GPU busy appears in the pipeline summary."""
     from voxint.api.resource_status import GpuActivity, ResourceStripView
     from voxint.api.routers.jobs import _pipeline_summary
@@ -245,13 +207,11 @@ def test_pipeline_summary_includes_gpu_busy(
         unavailable_services=(),
         collected_age_seconds=1.0,
     )
-    summary = _pipeline_summary({"running": 1}, 0, resource_strip=strip)
+    summary = _pipeline_summary({"running": 1}, resource_strip=strip)
     assert "GPU busy" in summary
 
 
-def test_pipeline_summary_no_gpu_when_idle(
-    session_factory: sessionmaker[Session], tmp_path: Path
-) -> None:
+def test_pipeline_summary_no_gpu_when_idle() -> None:
     """GPU busy is omitted when GPUs are idle."""
     from voxint.api.resource_status import GpuActivity, ResourceStripView
     from voxint.api.routers.jobs import _pipeline_summary
@@ -266,57 +226,15 @@ def test_pipeline_summary_no_gpu_when_idle(
         unavailable_services=(),
         collected_age_seconds=1.0,
     )
-    summary = _pipeline_summary({"running": 1}, 0, resource_strip=strip)
+    summary = _pipeline_summary({"running": 1}, resource_strip=strip)
     assert "GPU busy" not in summary
 
 
-def test_collapse_stages_with_degraded(
-    session_factory: sessionmaker[Session],
+def test_legacy_transcript_crumb_uses_runs(
+    client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
-    """#244 Delta 4: degraded services mark their display stages."""
-    from voxint.api.jobs_query import StageActivity
-    from voxint.api.routers.jobs import _collapse_stages
-
-    raw = [StageActivity(stage="transcribe", queued=2, active=0)]
-    result = _collapse_stages(raw, degraded_stages=frozenset({"transcribe"}))
-    transcribe = next(s for s in result if s.key == "transcribe")
-    assert transcribe.is_degraded is True
-    assert transcribe.queued == 2
-
-    not_degraded = [s for s in result if s.key != "transcribe"]
-    assert all(not s.is_degraded for s in not_degraded)
-
-
-def test_collapse_stages_with_wait_estimate(
-    session_factory: sessionmaker[Session],
-) -> None:
-    """#244 Delta 6: queued stages get a wait estimate from averages."""
-    from voxint.api.jobs_query import StageActivity
-    from voxint.api.routers.jobs import _collapse_stages
-
-    raw = [StageActivity(stage="transcribe", queued=3, active=1)]
-    result = _collapse_stages(
-        raw, stage_avg_seconds={"transcribe": 120.0}
-    )
-    transcribe = next(s for s in result if s.key == "transcribe")
-    assert transcribe.wait_estimate_seconds == pytest.approx(360.0)
-
-    enrich = next(s for s in result if s.key == "enrich")
-    assert enrich.wait_estimate_seconds is None
-
-
-def test_legacy_transcript_crumb_follows_shell_flag(
-    client_flag_off: TestClient,
-    client_flag_on: TestClient,
-    session_factory: sessionmaker[Session],
-) -> None:
-    """#319: the legacy transcript page crumbs to its canonical parent - the run
-    browser the shell exposes ('jobs /' when jobs is on, 'runs /' when off) -
-    instead of falling through to the 'home' default."""
+    """The transcript page always uses 'runs' in the breadcrumb."""
     run_id = _make_run(session_factory, status=RunStatus.COMPLETED)
-
-    off = client_flag_off.get(f"/runs/{run_id}/transcript").text
-    assert f'class="cb-breadcrumb">runs / <strong>{run_id.hex[:8]}</strong>' in off
-
-    on = client_flag_on.get(f"/runs/{run_id}/transcript").text
-    assert f'class="cb-breadcrumb">jobs / <strong>{run_id.hex[:8]}</strong>' in on
+    resp = client.get(f"/runs/{run_id}/transcript", follow_redirects=True)
+    assert resp.status_code == 200
+    assert f'class="cb-breadcrumb">runs / <strong>{run_id.hex[:8]}</strong>' in resp.text

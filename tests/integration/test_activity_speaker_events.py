@@ -118,7 +118,7 @@ def test_label_assign_emits_one(
     rows = _speaker_events(session_factory, run_id)
     assert len(rows) == 1
     assert rows[0].title == "Alice Anderson"
-    assert rows[0].href == f"/jobs/{run_id}"
+    assert rows[0].href == f"/runs/{run_id}"
 
 
 def test_label_reassert_same_speaker_no_reemit(

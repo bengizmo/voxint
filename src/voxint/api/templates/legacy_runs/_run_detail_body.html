@@ -1,8 +1,5 @@
-{# Shared run-detail body (issue #160). Rendered identically by
-   legacy_runs/run_detail.html (/runs/{id}) and jobs/job_detail.html
-   (/jobs/{id}) so the two surfaces never drift. Every form posts to the
-   existing /runs/{id}/... action endpoints; the Jobs page reuses the legacy
-   mutation surface rather than minting /jobs/{id}/... aliases.
+{# Run-detail body (issue #160). Every form posts to the existing
+   /runs/{id}/... action endpoints.
 
    The page heading and primary navigation (Audio / Transcript / Review) live
    in the wrapper templates' command-bar blocks, not in this partial. #}
