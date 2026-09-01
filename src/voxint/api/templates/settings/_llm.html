@@ -1,6 +1,7 @@
-{# Settings → LLM transcript enhancement (issues #10/#46): the tri-state
-   endpoint/key form. Self-contained — renders from _settings_context, POSTs to
-   /settings/llm with its own CSRF token. #}
+{# Settings → LLM transcript enhancement (issues #10/#46, restyled #379): the
+   switch + endpoint/key form. The LLM toggle is a binary on/off (non-nullable),
+   NOT a tri-state — no badge or reset. Self-contained — renders from
+   _settings_context. #}
 <section id="llm" aria-labelledby="llm-heading">
 <h2 id="llm-heading">LLM transcript enhancement <span class="muted">(optional)</span></h2>
 <p class="muted">When enabled, Voxint sends transcript segments to an OpenAI-compatible
@@ -25,11 +26,18 @@
   <p class="notice">The configured LLM run budget doesn't fit the transcription stage
      lease, so enhancement can't be enabled until that's adjusted.</p>
 {% endif %}
-<form method="post" action="/settings/llm" autocomplete="off">
-  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
-  <div class="field">
-    <label><input type="checkbox" name="enabled" value="true"{% if llm_enabled %} checked{% endif %}>
-      Enable LLM enhancement</label>
+  <div class="switch-row">
+    <div class="switch-header">
+      <label class="switch-label" for="sw-llm-enabled">Enable LLM enhancement</label>
+    </div>
+    <div class="switch-control">
+      <input type="checkbox" id="sw-llm-enabled" name="enabled" value="true"
+             role="switch"
+             {% if llm_enabled %}checked{% endif %}
+             aria-describedby="sw-llm-help">
+    </div>
+    <p class="muted switch-help" id="sw-llm-help">Turn on to let Voxint improve
+       transcripts and surface speaker names with the LLM.</p>
   </div>
   <div class="field">
     <label for="llm_base_url">Endpoint base URL <span class="muted">(blank = use the installation setting)</span></label>
@@ -55,6 +63,4 @@
       Remove saved key (revert to environment)</label>
   </div>
   {% endif %}
-  <button type="submit">Save LLM settings</button>
-</form>
 </section>

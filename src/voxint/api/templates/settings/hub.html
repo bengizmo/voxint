@@ -26,7 +26,15 @@
 </section>
 
 {% include "settings/_appearance.html" %}
-{% include "settings/_features.html" %}
+
+<form method="post" action="/settings">
+  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+  {% include "settings/_features.html" %}
+  <div class="switch-save">
+    <button type="submit">Save settings</button>
+  </div>
+</form>
+
 {% include "settings/_benchmark.html" %}
 {% include "settings/_tutorial.html" %}
 </div>

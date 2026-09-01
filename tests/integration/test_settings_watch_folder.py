@@ -62,8 +62,10 @@ def test_toggle_section_renders_beside_folders(
     client, _ = make_client(session_factory, media_root)
     body = client.get("/settings/media").text
     assert 'id="watch-folder"' in body
-    assert 'action="/settings/watch-folder"' in body
-    assert 'name="watch_folder_enabled"' in body
+    # The watch-folder switch is inside the tab-level media form (#379).
+    assert 'action="/settings/media"' in body
+    assert 'id="sw-watch_folder_enabled"' in body
+    assert 'role="switch"' in body
 
 
 def test_toggle_on_off_inherit_write_the_tristate(

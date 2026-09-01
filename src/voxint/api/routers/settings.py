@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, cast
@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import Engine, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.datastructures import FormData
 from starlette.responses import RedirectResponse
 
 from voxint.api import settings_view
@@ -1037,6 +1038,57 @@ def _services_step_response(request: Request, session: Session) -> Response:
     return templates.TemplateResponse(request, "settings/setup.html", context)
 
 
+def _reconcile_switches(
+    flag_names: Sequence[str],
+    form_data: FormData,
+    settings: Settings,
+    row: AppSettings | None,
+) -> dict[str, str]:
+    """Convert switch checkbox submissions to tri-state strings for persisters.
+
+    Each flag rendered as an enabled switch emits a hidden ``_rendered`` marker.
+    Flags NOT in ``_rendered`` (disabled due to unmet dependency) are preserved
+    at their stored raw state so the save never flips a disabled flag.
+
+    **Save idempotency**: when a flag is stored as ``inherit`` (NULL) and the
+    submitted effective value equals the environment default, the reconciled
+    value stays ``"inherit"`` — clicking Save without touching anything never
+    converts an inherited flag into a pinned override.
+    """
+    rendered = set(form_data.getlist("_rendered"))
+    result: dict[str, str] = {}
+    for name in flag_names:
+        if name not in rendered:
+            result[name] = feature_flag_state(row, name)
+            continue
+        desired_on = form_data.get(name) == "on"
+        stored = feature_flag_state(row, name)
+        env_default = bool(getattr(settings, name))
+        if stored == "inherit" and desired_on == env_default:
+            result[name] = "inherit"
+        else:
+            result[name] = "on" if desired_on else "off"
+    return result
+
+
+def _handle_reset_flag(
+    session: Session,
+    settings: Settings,
+    request: Request,
+    flag_name: str,
+    tab: str,
+) -> Response:
+    """Reset a single tri-state flag to inherit (NULL) and redirect."""
+    if flag_name in _RESETTABLE_FLAGS:
+        row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+        setattr(row, flag_name, None)
+        session.commit()
+    return RedirectResponse(
+        _settings_redirect(request, flag_name.replace("_", "-"), tab),
+        status_code=303,
+    )
+
+
 def _persist_feature_flags(
     session: Session, settings: Settings, *, submitted: dict[str, str]
 ) -> list[str]:
@@ -1116,6 +1168,19 @@ def _persist_feature_flags(
 _SEMANTIC_FLAG_NAMES: tuple[str, ...] = (
     "semantic_index_enabled",
     "semantic_index_autogenerate",
+)
+
+_RESETTABLE_FLAGS: frozenset[str] = frozenset(
+    _FEATURE_FLAG_NAMES
+    + _SEMANTIC_FLAG_NAMES
+    + (
+        "translation_autogenerate",
+        "watch_folder_enabled",
+        "voxint_web_research",
+        "enrichment_web_research_enabled",
+        "synthdetect_enabled",
+        "synthdetect_autogenerate",
+    )
 )
 
 
@@ -2082,7 +2147,10 @@ def _settings_page_template(request: Request) -> str:
     if not settings.console_settings_enabled:
         return "settings/settings.html"
     path = request.url.path
-    if path in {"/settings/folders", "/settings/watch-folder", "/settings/web-research"}:
+    if path in {
+        "/settings/folders", "/settings/watch-folder",
+        "/settings/web-research", "/settings/media",
+    }:
         return "settings/media.html"
     if path in {
         "/settings/llm",
@@ -2090,6 +2158,7 @@ def _settings_page_template(request: Request) -> str:
         "/settings/corrections",
         "/settings/glossary",
         "/settings/semantic",
+        "/settings/ai",
     }:
         return "settings/ai.html"
     # Plugin-contributed POST paths are intentionally not known to core. Any
@@ -2648,6 +2717,239 @@ def settings_web_research(
         )
     session.commit()
     return RedirectResponse(_settings_redirect(request, "sources", "media"), status_code=303)
+
+# ---- Tab-level POST endpoints (#379) ------------------------------------
+# One POST per settings tab, dispatching to the existing section persisters.
+# These replace the per-section Save buttons with one Save per tab.  The old
+# section endpoints remain as compatibility wrappers.
+
+
+@router.post("/settings", name="settings_general_save")
+async def settings_general_save(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Save the General tab: feature flags (switch encoding, issue #379)."""
+    form = await request.form()
+    _require_csrf(request, CSRF_SETTINGS, csrf_token)
+    settings: Settings = request.app.state.settings
+    row = get_app_settings(session)
+
+    reset_flag = form.get("reset_flag")
+    if reset_flag and isinstance(reset_flag, str):
+        return _handle_reset_flag(session, settings, request, reset_flag, tab="")
+
+    reconciled = _reconcile_switches(
+        _FEATURE_FLAG_NAMES, form, settings, row
+    )
+    errors = _persist_feature_flags(session, settings, submitted=reconciled)
+    if errors:
+        return templates.TemplateResponse(
+            request,
+            _settings_page_template(request),
+            _settings_context(
+                request, session,
+                features_errors=errors, features_submitted=reconciled,
+            ),
+        )
+    session.commit()
+    return RedirectResponse(_settings_redirect(request, "features", ""), status_code=303)
+
+
+@router.post("/settings/ai", name="settings_ai_save")
+async def settings_ai_save(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Save the AI tab: LLM + semantic + translation + glossary (#379).
+
+    Corrections stays a separate island form.  Sections are processed in
+    sequence; the first validation failure stops, rolls back any prior
+    mutations in the session, and re-renders with the error.  Earlier
+    sections' unsaved edits re-render from the DB (atomic rollback), not
+    from the submitted form data.
+    """
+    form = await request.form()
+    _require_csrf(request, CSRF_SETTINGS, csrf_token)
+    settings: Settings = request.app.state.settings
+    row = get_app_settings(session)
+
+    reset_flag = form.get("reset_flag")
+    if reset_flag and isinstance(reset_flag, str):
+        return _handle_reset_flag(session, settings, request, reset_flag, tab="ai")
+
+    # ---- LLM section ----
+    try:
+        llm_error = _persist_llm_settings(
+            session,
+            settings,
+            enabled=form.get("enabled") == "true",
+            raw_base_url=str(form.get("llm_base_url", "")),
+            raw_model=str(form.get("llm_model", "")),
+            raw_key=str(form.get("llm_api_key", "")),
+            remove_key=form.get("remove_llm_api_key") == "true",
+        )
+    except SetupValidationError as exc:
+        llm_error = str(exc)
+    if llm_error is not None:
+        session.rollback()
+        return templates.TemplateResponse(
+            request, "settings/ai.html",
+            _settings_context(request, session, llm_error=llm_error),
+        )
+
+    # ---- Semantic search section ----
+    semantic_reconciled = _reconcile_switches(
+        _SEMANTIC_FLAG_NAMES, form, settings, row
+    )
+    semantic_errors = _persist_semantic_index(
+        session, settings, submitted=semantic_reconciled
+    )
+    if semantic_errors:
+        session.rollback()
+        return templates.TemplateResponse(
+            request, "settings/ai.html",
+            _settings_context(
+                request, session,
+                semantic_index_errors=semantic_errors,
+                semantic_index_submitted=semantic_reconciled,
+            ),
+        )
+
+    # ---- Translation section ----
+    translation_auto = _reconcile_switches(
+        ("translation_autogenerate",), form, settings, row
+    )
+    translation_reconciled = {
+        "translation_target_language": str(
+            form.get("translation_target_language", "inherit")
+        ),
+        "translation_autogenerate": translation_auto.get(
+            "translation_autogenerate", "inherit"
+        ),
+    }
+    translation_errors = _persist_translation(
+        session, settings, submitted=translation_reconciled
+    )
+    if translation_errors:
+        session.rollback()
+        return templates.TemplateResponse(
+            request, "settings/ai.html",
+            _settings_context(
+                request, session,
+                translation_errors=translation_errors,
+                translation_submitted=translation_reconciled,
+            ),
+        )
+
+    # ---- Glossary section ----
+    vocabulary_text = str(form.get("vocabulary", ""))
+    try:
+        terms = normalize_vocabulary(vocabulary_text)
+    except SetupValidationError as exc:
+        session.rollback()
+        submitted_terms = [
+            line for line in vocabulary_text.splitlines() if line.strip()
+        ]
+        return templates.TemplateResponse(
+            request, "settings/ai.html",
+            _settings_context(
+                request, session,
+                glossary_error=str(exc),
+                vocabulary_text=vocabulary_text,
+                vocabulary=submitted_terms,
+            ),
+            status_code=422,
+        )
+    row_mut = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+    row_mut.vocabulary = terms
+
+    session.commit()
+    return RedirectResponse(
+        _settings_redirect(request, "llm", "ai"), status_code=303
+    )
+
+
+@router.post("/settings/media", name="settings_media_save")
+async def settings_media_save(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Save the Media tab: watch-folder + sources/research (#379).
+
+    Folder browse/add/remove/pack commands remain separate action forms.
+    """
+    form = await request.form()
+    _require_csrf(request, CSRF_SETTINGS, csrf_token)
+    settings: Settings = request.app.state.settings
+    row = get_app_settings(session)
+
+    reset_flag = form.get("reset_flag")
+    if reset_flag and isinstance(reset_flag, str):
+        return _handle_reset_flag(session, settings, request, reset_flag, tab="media")
+
+    # ---- Watch-folder section ----
+    wf_reconciled = _reconcile_switches(
+        ("watch_folder_enabled",), form, settings, row
+    )
+    wf_choice = wf_reconciled.get("watch_folder_enabled", "inherit")
+    wf_row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+    wf_row.watch_folder_enabled = (
+        None if wf_choice == "inherit" else (wf_choice == "on")
+    )
+
+    # ---- Sources & research section ----
+    wr_master = _reconcile_switches(
+        ("voxint_web_research",), form, settings, row
+    )
+    wr_producer = _reconcile_switches(
+        ("enrichment_web_research_enabled",), form, settings, row
+    )
+    wr_errors = _persist_web_research(
+        session,
+        settings,
+        submitted_master=wr_master.get("voxint_web_research", "inherit"),
+        submitted_producer=wr_producer.get(
+            "enrichment_web_research_enabled", "inherit"
+        ),
+        raw_base_url=str(form.get("web_search_base_url", "")),
+        raw_key=str(form.get("web_search_api_key", "")),
+        remove_key=form.get("remove_web_search_api_key") == "true",
+        raw_domains=str(form.get("source_authority_domains", "")),
+    )
+    if wr_errors:
+        session.rollback()
+        wr_submitted = {
+            "voxint_web_research": wr_master.get(
+                "voxint_web_research", "inherit"
+            ),
+            "enrichment_web_research_enabled": wr_producer.get(
+                "enrichment_web_research_enabled", "inherit"
+            ),
+            "web_search_base_url": str(form.get("web_search_base_url", "")),
+            "source_authority_domains": str(
+                form.get("source_authority_domains", "")
+            ),
+        }
+        return templates.TemplateResponse(
+            request, "settings/media.html",
+            _settings_context(
+                request, session,
+                web_research_errors=wr_errors,
+                web_research_submitted=wr_submitted,
+            ),
+        )
+    session.commit()
+    return RedirectResponse(
+        _settings_redirect(request, "folders", "media"), status_code=303
+    )
+
 
 # ---- Settings → Media folders + domain packs (issue #63) ---------------
 # The same folder browser as the wizard, mounted on the protected router with

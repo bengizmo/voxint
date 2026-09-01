@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "settings/_switch.html" import tri_switch %}
 {% block title %}Voxint — media settings{% endblock %}
 {% block body %}
 {% from "settings/_tab_strip.html" import settings_tabs with context %}
@@ -6,6 +7,75 @@
 <div class="settings">
 <h1>Media</h1>
 {% include "settings/_folders.html" %}
-{% include "settings/_sources.html" %}
+<form method="post" action="/settings/media" autocomplete="off">
+  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+
+  {# Watch-folder ingest (issue #60, restyled #379): the tri-state switch + status
+     line. Lives inside the tab form so it saves with sources/research. #}
+  <section id="watch-folder" class="watch-folder" aria-labelledby="wf-heading">
+    <h2 id="wf-heading">Automatic ingest</h2>
+    <p class="muted">When this is on, Voxint checks the folders above on a schedule and
+       starts a job for each <strong>new</strong> recording it finds — files it has
+       already picked up are skipped. Drop a batch of recordings into a registered
+       folder and they'll be queued automatically, no manual submitting.</p>
+    {% if watch_folder_error %}
+      <p class="notice" role="alert">{{ watch_folder_error }}</p>
+    {% endif %}
+    {{ tri_switch(
+         name="watch_folder_enabled",
+         label="Watch registered folders for new recordings",
+         help_text="Checks the registered folders on a schedule and starts a run for each new recording.",
+         state=watch_folder_state,
+         effective=watch_folder_env_default if watch_folder_state == "inherit" else (watch_folder_state == "on"),
+         env_default=watch_folder_env_default,
+    ) }}
+    <p class="muted watch-folder-status">
+      {% if watch_folder_effective %}Watching is <strong>on</strong>.{% else %}Watching is <strong>off</strong>.{% endif %}
+      {% if watch_folder_checked_at %}
+        Last checked {{ watch_folder_checked_at.strftime("%Y-%m-%d %H:%M UTC") }} —
+        picked up {{ watch_folder_last_sweep.picked_up }} new file{{ "" if watch_folder_last_sweep.picked_up == 1 else "s" }};
+        {{ watch_folder_last_sweep.already_known }} already known;
+        {{ watch_folder_last_sweep.settling }} waiting to settle.
+        {% if watch_folder_last_sweep.root_missing %}
+          <span class="notice">The media folder could not be found during the check —
+          is the drive or share mounted?</span>
+        {% endif %}
+        {% if watch_folder_last_sweep.deferred %}
+          {{ watch_folder_last_sweep.deferred }} {{ "was" if watch_folder_last_sweep.deferred == 1 else "were" }}
+          queued but could not be handed to a worker yet (the job broker was
+          unavailable) — they'll start automatically when it recovers.
+        {% endif %}
+        {% if watch_folder_last_sweep.stat_errors %}
+          {{ watch_folder_last_sweep.stat_errors }} file{{ "" if watch_folder_last_sweep.stat_errors == 1 else "s" }}
+          disappeared or could not be read during the check.
+        {% endif %}
+        {% if watch_folder_last_sweep.sidecar_errors %}
+          <span class="notice">{{ watch_folder_last_sweep.sidecar_errors }}
+          file{{ " is" if watch_folder_last_sweep.sidecar_errors == 1 else "s are" }}
+          waiting because a companion .yaml sidecar has a problem; fix the
+          sidecar and the next check will pick the recording up.</span>
+        {% endif %}
+        {% if watch_folder_last_sweep.hit_file_cap %}
+          <span class="notice">A lot of new recordings appeared at once, so
+          only the first batch was queued this pass — the rest is
+          picked up over the next few checks.</span>
+        {% endif %}
+        {% if watch_folder_last_sweep.hit_entry_cap %}
+          <span class="notice">This folder is very large, so only the first part is
+          checked each pass, and files beyond it
+          may not be picked up automatically —
+          split it into smaller folders, or submit those files by hand.</span>
+        {% endif %}
+      {% elif watch_folder_effective %}
+        No automatic check has run yet.
+      {% endif %}
+    </p>
+  </section>
+
+  {% include "settings/_sources.html" %}
+  <div class="switch-save">
+    <button type="submit">Save media settings</button>
+  </div>
+</form>
 </div>
 {% endblock %}
