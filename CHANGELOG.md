@@ -6,6 +6,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **GPU resource awareness in the installer**. VRAM-aware tier recommendation
+  with per-device compose targeting, interactive device selection, `--gpu-check`
+  diagnostics, and enhanced `--hardware-dry-run`. The installer now inventories
+  all NVIDIA and AMD GPUs, measures free VRAM, and recommends the compute tier
+  that fits. When a GPU is occupied (e.g. by a local LLM), the installer
+  explains why and defaults to CPU.
+
 ### Changed
 - **Settings IA: tabs** (#378). The settings hub is split into tabbed
   sub-pages: General (appearance, features, tutorial), Media (folders,
