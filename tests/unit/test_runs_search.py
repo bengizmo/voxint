@@ -9,11 +9,14 @@ from markupsafe import Markup
 
 from voxint.api.runs_query import (
     Cursor,
+    FailedRunGroup,
     LifecycleView,
     ReviewFilter,
+    RunListItem,
     SearchFilters,
     _escape_like,
     _render_headline,
+    group_failed_runs,
     parse_search_filters,
     runs_url,
 )
@@ -154,3 +157,87 @@ class TestRenderHeadline:
         # Jinja must not re-escape the <mark> when rendering.
         assert isinstance(html, Markup)
         assert html.__html__() == "<mark>x</mark>"
+
+
+def _make_item(
+    *,
+    status: str = "failed",
+    error: str | None = "ConnectionError: connect refused",
+    revision: int = 0,
+    minutes_ago: int = 5,
+) -> RunListItem:
+    from datetime import timedelta
+
+    return RunListItem(
+        run_id=uuid.uuid4(),
+        status=status,
+        source_path=f"incoming/test-{uuid.uuid4().hex[:6]}.wav",
+        created_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+        - timedelta(minutes=minutes_ago),
+        unresolved_count=0,
+        label_count=0,
+        claim_live=False,
+        claimed_by=None,
+        error=error,
+        revision=revision,
+    )
+
+
+class TestGroupFailedRuns:
+    def test_empty_list(self) -> None:
+        assert group_failed_runs([]) == []
+
+    def test_no_failed_items_pass_through(self) -> None:
+        item = _make_item(status="completed", error=None)
+        result = group_failed_runs([item])
+        assert result == [item]
+
+    def test_unique_errors_not_grouped(self) -> None:
+        a = _make_item(error="ConnectionError: connect refused")
+        b = _make_item(error="FileNotFoundError: /tmp/x.wav")
+        result = group_failed_runs([a, b])
+        assert all(isinstance(r, RunListItem) for r in result)
+        assert len(result) == 2
+
+    def test_identical_errors_grouped(self) -> None:
+        a = _make_item(error="ConnectionError: connect refused", minutes_ago=5)
+        b = _make_item(error="ConnectionError: connect refused", minutes_ago=10)
+        c = _make_item(error="ConnectionError: connect refused", minutes_ago=15)
+        result = group_failed_runs([a, b, c])
+        assert len(result) == 1
+        group = result[0]
+        assert isinstance(group, FailedRunGroup)
+        assert len(group.items) == 3
+        assert group.error_label == "service unreachable"
+
+    def test_mixed_groups_and_singletons(self) -> None:
+        a = _make_item(error="ConnectionError: connect refused", minutes_ago=1)
+        b = _make_item(error="ConnectionError: connect refused", minutes_ago=2)
+        c = _make_item(error="FileNotFoundError: /tmp/x.wav", minutes_ago=3)
+        result = group_failed_runs([a, b, c])
+        groups = [r for r in result if isinstance(r, FailedRunGroup)]
+        singles = [r for r in result if isinstance(r, RunListItem)]
+        assert len(groups) == 1
+        assert len(singles) == 1
+        assert groups[0].error_label == "service unreachable"
+        assert singles[0].run_id == c.run_id
+
+    def test_ordering_newest_group_first(self) -> None:
+        old_a = _make_item(error="ConnectionError: connect refused", minutes_ago=60)
+        old_b = _make_item(error="ConnectionError: connect refused", minutes_ago=50)
+        new_a = _make_item(error="FileNotFoundError: /tmp/x.wav", minutes_ago=1)
+        new_b = _make_item(error="FileNotFoundError: /tmp/x.wav", minutes_ago=2)
+        result = group_failed_runs([old_a, old_b, new_a, new_b])
+        assert len(result) == 2
+        assert all(isinstance(r, FailedRunGroup) for r in result)
+        assert result[0].error_label == "file not found"
+        assert result[1].error_label == "service unreachable"
+
+    def test_revision_preserved_per_item(self) -> None:
+        a = _make_item(error="ConnectionError: connect refused", revision=3)
+        b = _make_item(error="ConnectionError: connect refused", revision=7)
+        result = group_failed_runs([a, b])
+        group = result[0]
+        assert isinstance(group, FailedRunGroup)
+        revisions = {it.revision for it in group.items}
+        assert revisions == {3, 7}

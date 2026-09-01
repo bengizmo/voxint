@@ -148,19 +148,8 @@
     </form>
   </details>
 
-  {% if not page.items %}
-  <p class="oc-muted">No runs match{% if has_active_filters %} these filters{% endif %}{% if active_view != LifecycleView.ALL %} in this view{% endif %}.</p>
-  {% else %}
-  <div class="grid-table" style="grid-template-columns: 1fr auto auto auto auto auto;" role="region" aria-label="Runs">
-    <div class="gt-header">
-      <span>MEDIA</span>
-      <span>STATUS</span>
-      <span>REVIEW</span>
-      <span>LANGUAGE</span>
-      <span>CREATED</span>
-      <span></span>
-    </div>
-    {% for it in page.items %}
+  {# Macro: one standard run row (reused by both grouped and ungrouped paths). #}
+  {% macro run_row(it) %}
     <div class="gt-row{% if it.status == 'running' %} is-machine-active{% elif it.unresolved_count > 0 and it.status == 'completed' %} is-needs-human{% endif %}">
       <span>
         <a href="/runs/{{ it.run_id }}" class="media-title" style="color:var(--ink);text-decoration:none"
@@ -202,7 +191,56 @@
       </span>
     </div>
     {% endif %}
+  {% endmacro %}
+
+  {% if not page.items %}
+  <p class="oc-muted">No runs match{% if has_active_filters %} these filters{% endif %}{% if active_view != LifecycleView.ALL %} in this view{% endif %}.</p>
+  {% else %}
+  <div class="grid-table" style="grid-template-columns: 1fr auto auto auto auto auto;" role="region" aria-label="Runs">
+    <div class="gt-header">
+      <span>MEDIA</span>
+      <span>STATUS</span>
+      <span>REVIEW</span>
+      <span>LANGUAGE</span>
+      <span>CREATED</span>
+      <span></span>
+    </div>
+    {% if grouped_items is not none %}
+    {# Failed tab: grouped rendering with bulk-retry forms. #}
+    {% for entry in grouped_items %}
+      {% if entry.error_label is defined %}
+      {# FailedRunGroup: summary row with bulk retry form. #}
+      <div class="gt-row" style="background:var(--surface-2, var(--bg-alt, #f8f8f8))">
+        <span>
+          <span style="font-size:var(--t-sm)">{{ entry.error_label }}</span>
+          <br><span class="oc-muted" style="font-size:var(--t-sm)">{{ entry.items|length }} failed runs</span>
+        </span>
+        <span><span class="pill failed">Failed × {{ entry.items|length }}</span></span>
+        <span><span class="oc-muted">—</span></span>
+        <span><span class="oc-muted">—</span></span>
+        <span><span title="{{ entry.items[0].created_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(entry.items[0].created_at, now=now) }}</span></span>
+        <span class="gt-action">
+          {% set batch = entry.items[:100] %}
+          <form method="post" action="/runs/bulk-retry" style="display:inline">
+            {% for it in batch %}
+            <input type="hidden" name="item" value="{{ it.run_id }}:{{ it.revision }}">
+            {% endfor %}
+            <input type="hidden" name="csrf_token" value="{{ csrf_bulk_retry }}">
+            <button type="submit" class="cb-btn cb-btn-secondary" style="font-size:var(--t-sm)">Retry {% if batch|length < entry.items|length %}first {{ batch|length }}{% else %}all {{ batch|length }}{% endif %}</button>
+          </form>
+        </span>
+      </div>
+      {% else %}
+      {# Singleton failed run: normal row. #}
+      {{ run_row(entry) }}
+      {% endif %}
     {% endfor %}
+    {% else %}
+    {# Non-Failed tabs: standard row rendering. #}
+    {% for it in page.items %}
+    {{ run_row(it) }}
+    {% endfor %}
+    {% endif %}
   </div>
   {% endif %}
 
