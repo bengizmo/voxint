@@ -88,6 +88,10 @@ from voxint.app_settings import (
     resolve_effective_enrichment_web_research_enabled,
     resolve_effective_llm_api_key,
     resolve_effective_llm_enabled,
+    resolve_effective_semantic_index_autogenerate,
+    resolve_effective_semantic_index_enabled,
+    resolve_effective_translation_autogenerate,
+    resolve_effective_translation_target_language,
     resolve_effective_voxint_web_research,
     resolve_effective_watch_folder_enabled,
     resolve_effective_web_search_api_key,
@@ -1078,15 +1082,71 @@ def _handle_reset_flag(
     flag_name: str,
     tab: str,
 ) -> Response:
-    """Reset a single tri-state flag to inherit (NULL) and redirect."""
+    """Reset a single tri-state flag to inherit (NULL) and redirect.
+
+    After setting the column to NULL the resulting effective combination is
+    validated through the same invariant web the persist paths use.  If the
+    reset would create a violation (e.g. re-enabling a dependent flag whose
+    prerequisite is off) the transaction is rolled back and the flag keeps its
+    stored value.
+    """
     if flag_name in _RESETTABLE_FLAGS:
         row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
         setattr(row, flag_name, None)
-        session.commit()
+
+        if _reset_violates_invariants(row, settings):
+            session.rollback()
+        else:
+            session.commit()
+
+    anchor = f"sw-{flag_name}"
     return RedirectResponse(
-        _settings_redirect(request, flag_name.replace("_", "-"), tab),
+        _settings_redirect(request, anchor, tab),
         status_code=303,
     )
+
+
+def _reset_violates_invariants(row: AppSettings, settings: Settings) -> bool:
+    """True when the row's current effective state violates any cross-flag invariant.
+
+    Called after tentatively setting a flag to NULL (inherit) so the caller can
+    rollback before committing a broken combination.
+    """
+    feature_errors = validate_effective_flags(
+        EffectiveFlags(
+            llm_enabled=resolve_effective_llm_enabled(row, settings),
+            enrichment_names_enabled=resolve_effective_enrichment_names_enabled(
+                row, settings
+            ),
+            enrichment_names_llm_enabled=resolve_effective_enrichment_names_llm_enabled(
+                row, settings
+            ),
+            enrichment_run_assets_enabled=resolve_effective_enrichment_run_assets_enabled(
+                row, settings
+            ),
+            enrichment_run_assets_autogenerate=resolve_effective_enrichment_run_assets_autogenerate(
+                row, settings
+            ),
+            voxint_web_research=resolve_effective_voxint_web_research(row, settings),
+            enrichment_web_research_enabled=resolve_effective_enrichment_web_research_enabled(
+                row, settings
+            ),
+            web_search_base_url=resolve_effective_web_search_base_url(row, settings),
+        )
+    )
+    if feature_errors:
+        return True
+    semantic_error = semantic_index_flags_ok(
+        enabled=resolve_effective_semantic_index_enabled(row, settings),
+        autogenerate=resolve_effective_semantic_index_autogenerate(row, settings),
+    )
+    if semantic_error is not None:
+        return True
+    translation_error = translation_flags_ok(
+        autogenerate=resolve_effective_translation_autogenerate(row, settings),
+        target_language=resolve_effective_translation_target_language(row, settings),
+    )
+    return translation_error is not None
 
 
 def _persist_feature_flags(
