@@ -558,6 +558,7 @@ def test_update_env_keys_dedupes_duplicate_tier_lines(repo: Path) -> None:
 # the library seam with a fake nvidia-smi on PATH -- no GPU or Docker daemon.
 # --------------------------------------------------------------------------- #
 NO_NVIDIA = {"VOXINT_NVIDIA_SMI": "/nonexistent/nvidia-smi"}
+NO_AMD = {"VOXINT_SYSFS_ROOT": "/nonexistent/sysfs", "VOXINT_DEV_ROOT": "/nonexistent/dev"}
 
 
 def _fake_nvidia_smi(repo: Path, body: str) -> None:
@@ -566,6 +567,46 @@ def _fake_nvidia_smi(repo: Path, body: str) -> None:
     p = repo / "fakebin" / "nvidia-smi"
     p.write_text("#!/usr/bin/env bash\n" + body + "\n")
     p.chmod(0o755)
+
+
+def _fake_amd_sysfs(
+    repo: Path,
+    render_num: int = 129,
+    *,
+    vendor: str = "0x1002\n",
+    vram_total: int | None = 4294967296,  # 4 GiB in bytes
+    vram_used: int | None = 1048576000,  # ~1000 MiB
+    gtt_total: int | None = 14331686912,  # ~13.7 GiB
+    product_name: str | None = None,
+    unique_id: str | None = None,
+    pci_slot: str | None = "0000:c5:00.0",
+) -> tuple[Path, Path]:
+    """Create fake AMD GPU sysfs tree + /dev/kfd. Returns (fakesys, fakedev)."""
+    fakesys = repo / "fakesys"
+    fakedev = repo / "fakedev"
+    dev_dir = fakesys / "class" / "drm" / f"renderD{render_num}" / "device"
+    dev_dir.mkdir(parents=True, exist_ok=True)
+    (dev_dir / "vendor").write_text(vendor)
+    if vram_total is not None:
+        (dev_dir / "mem_info_vram_total").write_text(str(vram_total) + "\n")
+    if vram_used is not None:
+        (dev_dir / "mem_info_vram_used").write_text(str(vram_used) + "\n")
+    if gtt_total is not None:
+        (dev_dir / "mem_info_gtt_total").write_text(str(gtt_total) + "\n")
+    if product_name is not None:
+        (dev_dir / "product_name").write_text(product_name + "\n")
+    if unique_id is not None:
+        (dev_dir / "unique_id").write_text(unique_id + "\n")
+    if pci_slot is not None:
+        uevent = f"PCI_SLOT_NAME={pci_slot}\n"
+        (dev_dir / "uevent").write_text(uevent)
+    # /dev/kfd must exist
+    fakedev.mkdir(exist_ok=True)
+    (fakedev / "kfd").touch()
+    # /dev/dri/renderDN must be referenced (but needn't be a real device)
+    (fakedev / "dri").mkdir(exist_ok=True)
+    (fakedev / "dri" / f"renderD{render_num}").touch()
+    return fakesys, fakedev
 
 
 def run_script(
@@ -667,6 +708,639 @@ def test_detect_nvidia_gpu_malformed_vram_is_unknown(repo: Path) -> None:
     assert proc.stdout == "[]"
 
 
+# --------------------------------------------------------------------------- #
+# GPU inventory: enumerate_nvidia_gpus
+# --------------------------------------------------------------------------- #
+
+
+def test_enumerate_nvidia_single_gpu(repo: Path) -> None:
+    """Single NVIDIA GPU with 6-field CSV format."""
+    _fake_nvidia_smi(
+        repo,
+        r"printf '0, GPU-abc-123, NVIDIA GeForce RTX 3060, 12288, 2048, 10240\n'",
+    )
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        cat "$GPU_INVENTORY_FILE"
+        cleanup_gpu_inventory
+    """,
+        extra_env=NO_AMD,
+    )
+    assert proc.returncode == 0, proc.stderr
+    fields = proc.stdout.strip().split("\t")
+    assert len(fields) == 9
+    assert fields[0] == "nvidia"  # vendor
+    assert fields[1] == "0"  # index
+    assert fields[2] == "GPU-abc-123"  # stable_id (UUID)
+    assert fields[3] == "NVIDIA GeForce RTX 3060"  # name
+    assert fields[4] == "12288"  # total_mib
+    assert fields[5] == "2048"  # used_mib
+    assert fields[6] == "10240"  # free_mib
+    assert fields[7] == ""  # render_node (empty for NVIDIA)
+    assert fields[8] == "measured"  # mem_confidence
+
+
+def test_enumerate_nvidia_occupied_gpu(repo: Path) -> None:
+    """NVIDIA GPU with nearly zero free VRAM (occupied by another process)."""
+    _fake_nvidia_smi(
+        repo,
+        r"printf '0, GPU-5090-uuid, NVIDIA GeForce RTX 5090, 32607, 31974, 177\n'",
+    )
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        cat "$GPU_INVENTORY_FILE"
+        cleanup_gpu_inventory
+    """,
+        extra_env=NO_AMD,
+    )
+    assert proc.returncode == 0, proc.stderr
+    fields = proc.stdout.strip().split("\t")
+    assert fields[4] == "32607"
+    assert fields[6] == "177"  # nearly zero free
+
+
+def test_enumerate_nvidia_multi_gpu(repo: Path) -> None:
+    """Multiple NVIDIA GPUs, including one occupied."""
+    _fake_nvidia_smi(
+        repo,
+        r"printf '0, GPU-5090-uuid, NVIDIA GeForce RTX 5090, "
+        r"32607, 31974, 177\n1, GPU-4060-uuid, NVIDIA GeForce RTX 4060, "
+        r"8192, 512, 7680\n'",
+    )
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        cat "$GPU_INVENTORY_FILE"
+        cleanup_gpu_inventory
+    """,
+        extra_env=NO_AMD,
+    )
+    assert proc.returncode == 0, proc.stderr
+    lines = proc.stdout.strip().split("\n")
+    assert len(lines) == 2
+    # First GPU: occupied 5090
+    f1 = lines[0].split("\t")
+    assert f1[2] == "GPU-5090-uuid"
+    assert f1[6] == "177"
+    # Second GPU: available 4060
+    f2 = lines[1].split("\t")
+    assert f2[2] == "GPU-4060-uuid"
+    assert f2[6] == "7680"
+
+
+def test_enumerate_nvidia_absent(repo: Path) -> None:
+    """No nvidia-smi -> empty inventory."""
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        wc -l < "$GPU_INVENTORY_FILE" | tr -d ' '
+        cleanup_gpu_inventory
+    """,
+        extra_env={**NO_NVIDIA, **NO_AMD},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "0"
+
+
+def test_enumerate_nvidia_mig_rows_skipped(repo: Path) -> None:
+    """MIG instance rows are skipped but non-MIG rows pass."""
+    _fake_nvidia_smi(
+        repo,
+        r"printf '0, GPU-a100-uuid, NVIDIA A100-SXM4-40GB MIG 1g.5gb, "
+        r"4864, 0, 4864\n1, GPU-3060-uuid, NVIDIA GeForce RTX 3060, "
+        r"12288, 0, 12288\n'",
+    )
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        cat "$GPU_INVENTORY_FILE"
+        cleanup_gpu_inventory
+    """,
+        extra_env=NO_AMD,
+    )
+    assert proc.returncode == 0, proc.stderr
+    lines = proc.stdout.strip().split("\n")
+    assert len(lines) == 1  # MIG row skipped
+    assert "RTX 3060" in lines[0]
+
+
+def test_enumerate_nvidia_malformed_total_skipped(repo: Path) -> None:
+    """Rows with non-numeric total VRAM are skipped."""
+    _fake_nvidia_smi(repo, r"printf '0, GPU-bad, Bad Card, N/A, 0, 0\n'")
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        wc -l < "$GPU_INVENTORY_FILE" | tr -d ' '
+        cleanup_gpu_inventory
+    """,
+        extra_env=NO_AMD,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "0"
+
+
+def test_enumerate_nvidia_malformed_free_is_minus_one(repo: Path) -> None:
+    """Non-numeric free VRAM is recorded as -1 (unknown), row not skipped."""
+    _fake_nvidia_smi(repo, r"printf '0, GPU-ok, Good Card, 12288, N/A, N/A\n'")
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        cat "$GPU_INVENTORY_FILE"
+        cleanup_gpu_inventory
+    """,
+        extra_env=NO_AMD,
+    )
+    assert proc.returncode == 0, proc.stderr
+    fields = proc.stdout.strip().split("\t")
+    assert fields[4] == "12288"  # total is valid
+    assert fields[5] == "-1"  # used is unknown
+    assert fields[6] == "-1"  # free is unknown
+
+
+# --------------------------------------------------------------------------- #
+# GPU inventory: enumerate_amd_gpus
+# --------------------------------------------------------------------------- #
+
+
+def test_enumerate_amd_igpu_shared(repo: Path) -> None:
+    """AMD iGPU with GTT >> VRAM -> shared memory confidence."""
+    fakesys, fakedev = _fake_amd_sysfs(
+        repo,
+        129,
+        vram_total=4294967296,
+        vram_used=1048576000,
+        gtt_total=14331686912,
+    )
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        cat "$GPU_INVENTORY_FILE"
+        cleanup_gpu_inventory
+    """,
+        extra_env={
+            **NO_NVIDIA,
+            "VOXINT_SYSFS_ROOT": str(fakesys),
+            "VOXINT_DEV_ROOT": str(fakedev),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    fields = proc.stdout.strip().split("\t")
+    assert fields[0] == "amd"
+    assert fields[1] == "129"
+    assert fields[4] == "4096"  # 4294967296 / 1048576
+    assert fields[5] == "1000"  # 1048576000 / 1048576
+    assert fields[6] == "3096"  # 4096 - 1000
+    assert "renderD129" in fields[7]
+    assert fields[8] == "shared"
+
+
+def test_enumerate_amd_dgpu_sysfs(repo: Path) -> None:
+    """AMD discrete GPU with unique_id and small GTT -> sysfs confidence."""
+    fakesys, fakedev = _fake_amd_sysfs(
+        repo,
+        128,
+        vram_total=16 * 1024 * 1024 * 1024,  # 16 GiB
+        vram_used=2 * 1024 * 1024 * 1024,  # 2 GiB
+        gtt_total=8 * 1024 * 1024 * 1024,  # 8 GiB (< 2*VRAM = 32 GiB)
+        unique_id="0x00abcdef12345678",
+        product_name="Radeon RX 7900 XTX",
+    )
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        cat "$GPU_INVENTORY_FILE"
+        cleanup_gpu_inventory
+    """,
+        extra_env={
+            **NO_NVIDIA,
+            "VOXINT_SYSFS_ROOT": str(fakesys),
+            "VOXINT_DEV_ROOT": str(fakedev),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    fields = proc.stdout.strip().split("\t")
+    assert fields[0] == "amd"
+    assert fields[2] == "0x00abcdef12345678"  # unique_id
+    assert fields[3] == "Radeon RX 7900 XTX"  # product_name
+    assert fields[4] == "16384"  # 16 GiB
+    assert fields[8] == "sysfs"  # NOT shared (GTT < 2*VRAM)
+
+
+def test_enumerate_amd_no_kfd(repo: Path) -> None:
+    """No /dev/kfd -> empty AMD inventory."""
+    fakesys = repo / "fakesys"
+    fakedev = repo / "fakedev"
+    fakesys.mkdir()
+    fakedev.mkdir()
+    # No kfd file
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        wc -l < "$GPU_INVENTORY_FILE" | tr -d ' '
+        cleanup_gpu_inventory
+    """,
+        extra_env={
+            **NO_NVIDIA,
+            "VOXINT_SYSFS_ROOT": str(fakesys),
+            "VOXINT_DEV_ROOT": str(fakedev),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "0"
+
+
+def test_enumerate_amd_nvidia_device_skipped(repo: Path) -> None:
+    """NVIDIA renderD nodes (vendor 0x10de) in sysfs are not added as AMD."""
+    fakesys = repo / "fakesys"
+    fakedev = repo / "fakedev"
+    dev_dir = fakesys / "class" / "drm" / "renderD128" / "device"
+    dev_dir.mkdir(parents=True)
+    (dev_dir / "vendor").write_text("0x10de\n")  # NVIDIA vendor
+    fakedev.mkdir()
+    (fakedev / "kfd").touch()
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        wc -l < "$GPU_INVENTORY_FILE" | tr -d ' '
+        cleanup_gpu_inventory
+    """,
+        extra_env={
+            **NO_NVIDIA,
+            "VOXINT_SYSFS_ROOT": str(fakesys),
+            "VOXINT_DEV_ROOT": str(fakedev),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "0"
+
+
+def test_enumerate_amd_no_vram_files(repo: Path) -> None:
+    """AMD GPU with no mem_info files -> -1 for all memory, shared confidence."""
+    fakesys, fakedev = _fake_amd_sysfs(
+        repo, 129, vram_total=None, vram_used=None, gtt_total=None
+    )
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        cat "$GPU_INVENTORY_FILE"
+        cleanup_gpu_inventory
+    """,
+        extra_env={
+            **NO_NVIDIA,
+            "VOXINT_SYSFS_ROOT": str(fakesys),
+            "VOXINT_DEV_ROOT": str(fakedev),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    fields = proc.stdout.strip().split("\t")
+    assert fields[4] == "-1"
+    assert fields[5] == "-1"
+    assert fields[6] == "-1"
+    assert fields[8] == "shared"
+
+
+# --------------------------------------------------------------------------- #
+# GPU inventory: mixed NVIDIA + AMD
+# --------------------------------------------------------------------------- #
+
+
+def test_enumerate_mixed_nvidia_and_amd(repo: Path) -> None:
+    """Both NVIDIA and AMD GPUs appear in the same inventory."""
+    _fake_nvidia_smi(
+        repo,
+        r"printf '0, GPU-5090-uuid, NVIDIA GeForce RTX 5090, 32607, 31974, 177\n'",
+    )
+    fakesys, fakedev = _fake_amd_sysfs(
+        repo,
+        129,
+        vram_total=4294967296,
+        vram_used=1048576000,
+        gtt_total=14331686912,
+    )
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        cat "$GPU_INVENTORY_FILE"
+        cleanup_gpu_inventory
+    """,
+        extra_env={
+            "VOXINT_SYSFS_ROOT": str(fakesys),
+            "VOXINT_DEV_ROOT": str(fakedev),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    lines = proc.stdout.strip().split("\n")
+    assert len(lines) == 2
+    assert lines[0].startswith("nvidia\t")
+    assert lines[1].startswith("amd\t")
+
+
+# --------------------------------------------------------------------------- #
+# GPU inventory: classify_gpu
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("free", "total", "confidence", "tier", "expected"),
+    [
+        # NVIDIA tier
+        ("8192", "8192", "measured", "gpu", "recommended"),
+        ("7000", "8192", "measured", "gpu", "constrained"),
+        ("3000", "8192", "measured", "gpu", "insufficient"),
+        ("177", "32607", "measured", "gpu", "insufficient"),
+        ("-1", "32607", "measured", "gpu", "unknown"),
+        ("-1", "4096", "shared", "gpu", "insufficient"),
+        ("-1", "-1", "shared", "gpu", "unknown"),
+        # ROCm tier
+        ("15000", "16384", "sysfs", "rocm", "recommended"),
+        ("8000", "16384", "sysfs", "rocm", "constrained"),
+        ("2500", "4096", "shared", "rocm", "insufficient"),
+        # Unknown tier
+        ("8192", "8192", "measured", "cpu", "unknown"),
+    ],
+)
+def test_classify_gpu(
+    repo: Path,
+    free: str,
+    total: str,
+    confidence: str,
+    tier: str,
+    expected: str,
+) -> None:
+    proc = run_lib(repo, f"classify_gpu {free} {total} {confidence} {tier}")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == expected
+
+
+# --------------------------------------------------------------------------- #
+# GPU inventory: print_gpu_inventory
+# --------------------------------------------------------------------------- #
+
+
+def test_print_gpu_inventory_occupied_nvidia(repo: Path) -> None:
+    """Occupied NVIDIA GPU shows (occupied) annotation."""
+    _fake_nvidia_smi(repo, r"printf '0, GPU-5090, RTX 5090, 32607, 31974, 177\n'")
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        print_gpu_inventory "$GPU_INVENTORY_FILE"
+        cleanup_gpu_inventory
+    """,
+        extra_env=NO_AMD,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "(occupied)" in proc.stderr
+
+
+def test_print_gpu_inventory_shared_amd(repo: Path) -> None:
+    """AMD iGPU shows (shared system memory) annotation."""
+    fakesys, fakedev = _fake_amd_sysfs(
+        repo,
+        129,
+        vram_total=4294967296,
+        vram_used=1048576000,
+        gtt_total=14331686912,
+    )
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        print_gpu_inventory "$GPU_INVENTORY_FILE"
+        cleanup_gpu_inventory
+    """,
+        extra_env={
+            **NO_NVIDIA,
+            "VOXINT_SYSFS_ROOT": str(fakesys),
+            "VOXINT_DEV_ROOT": str(fakedev),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "(shared system memory)" in proc.stderr
+
+
+def test_print_gpu_inventory_empty(repo: Path) -> None:
+    """Empty inventory says 'No GPUs detected'."""
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        print_gpu_inventory "$GPU_INVENTORY_FILE"
+        cleanup_gpu_inventory
+    """,
+        extra_env={**NO_NVIDIA, **NO_AMD},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "No GPUs detected" in proc.stderr
+
+
+def test_cleanup_gpu_inventory(repo: Path) -> None:
+    """cleanup_gpu_inventory removes the temp file and clears the global."""
+    proc = run_lib(
+        repo,
+        """
+        create_gpu_inventory
+        file="$GPU_INVENTORY_FILE"
+        [ -f "$file" ] && echo "exists"
+        cleanup_gpu_inventory
+        [ -f "$file" ] && echo "still-exists" || echo "removed"
+        echo "var=[$GPU_INVENTORY_FILE]"
+    """,
+        extra_env={**NO_NVIDIA, **NO_AMD},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "exists" in proc.stdout
+    assert "removed" in proc.stdout
+    assert "var=[]" in proc.stdout
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3: compose generation with device pinning
+# --------------------------------------------------------------------------- #
+
+def test_render_hardware_override_nvidia_device_pinning(repo: Path) -> None:
+    """NVIDIA device pinning emits device_ids with the UUID for all 3 services."""
+    proc = run_lib(repo, """
+        SEL_GPU_VENDOR=nvidia
+        SEL_GPU_STABLE_ID="GPU-test-1234"
+        SEL_GPU_NAME="RTX Test"
+        SEL_GPU_TOTAL_MIB=8192
+        SEL_GPU_FREE_MIB=7000
+        SEL_GPU_RENDER_NODE=""
+        SEL_GPU_MEM_CONF=measured
+        EFFECTIVE_TIER=gpu
+        select_hardware_profile
+        render_hardware_override
+    """, extra_env=NO_NVIDIA)
+    assert proc.returncode == 0, proc.stderr
+    yaml_out = proc.stdout
+    assert "device_ids:" in yaml_out
+    assert '"GPU-test-1234"' in yaml_out
+    assert "!override" in yaml_out
+    # All three services should have the UUID
+    assert yaml_out.count("GPU-test-1234") == 3
+    # Marker is v2
+    assert "# voxint:hardware-override v2" in yaml_out
+    # BATCH_SIZE must NOT appear (unknown profile)
+    assert "BATCH_SIZE" not in yaml_out
+
+
+def test_render_hardware_override_rocm_device_pinning(repo: Path) -> None:
+    """ROCm device pinning emits renderD node + HIP/ROCR visibility vars."""
+    proc = run_lib(repo, """
+        SEL_GPU_VENDOR=amd
+        SEL_GPU_STABLE_ID="0000:c5:00.0"
+        SEL_GPU_NAME="Test AMD GPU"
+        SEL_GPU_TOTAL_MIB=16384
+        SEL_GPU_FREE_MIB=14000
+        SEL_GPU_RENDER_NODE="/dev/dri/renderD129"
+        SEL_GPU_MEM_CONF=sysfs
+        EFFECTIVE_TIER=rocm
+        PROFILE_ID="rocm-unknown-v1"
+        PROFILE_CONCURRENCY=1
+        PROFILE_MAX_PENDING=1
+        PROFILE_BATCH_SIZE=""
+        render_hardware_override
+    """, extra_env=NO_NVIDIA)
+    assert proc.returncode == 0, proc.stderr
+    yaml_out = proc.stdout
+    assert "/dev/kfd" in yaml_out
+    assert "/dev/dri/renderD129" in yaml_out
+    assert "!override" in yaml_out
+    assert 'HIP_VISIBLE_DEVICES: "0"' in yaml_out
+    assert 'ROCR_VISIBLE_DEVICES: "0"' in yaml_out
+    assert "BATCH_SIZE" not in yaml_out
+    # Should NOT have device_ids (that's NVIDIA)
+    assert "device_ids" not in yaml_out
+
+
+def test_render_hardware_override_no_device_selected(repo: Path) -> None:
+    """No device selected -> scheduling caps only, no device_ids or renderD."""
+    proc = run_lib(repo, """
+        SEL_GPU_STABLE_ID=""
+        EFFECTIVE_TIER=gpu
+        select_hardware_profile
+        render_hardware_override
+    """, extra_env=NO_NVIDIA)
+    assert proc.returncode == 0, proc.stderr
+    yaml_out = proc.stdout
+    assert "device_ids" not in yaml_out
+    assert "/dev/kfd" not in yaml_out
+    assert "MAX_PENDING_REQUESTS" in yaml_out
+    assert "BATCH_SIZE" not in yaml_out
+
+
+def test_render_hardware_override_never_emits_batch_size_for_unknown(repo: Path) -> None:
+    """Device pinning does NOT add BATCH_SIZE (numerics doctrine)."""
+    for tier, vendor, stable_id, render_node in [
+        ("gpu", "nvidia", "GPU-test", ""),
+        ("rocm", "amd", "0000:xx:00.0", "/dev/dri/renderD128"),
+        ("gpu", "", "", ""),  # no device selected
+    ]:
+        proc = run_lib(repo, f"""
+            SEL_GPU_VENDOR="{vendor}"
+            SEL_GPU_STABLE_ID="{stable_id}"
+            SEL_GPU_RENDER_NODE="{render_node}"
+            SEL_GPU_NAME="Test"
+            SEL_GPU_TOTAL_MIB=8192
+            SEL_GPU_FREE_MIB=7000
+            SEL_GPU_MEM_CONF=measured
+            EFFECTIVE_TIER={tier}
+            PROFILE_ID="test"
+            PROFILE_CONCURRENCY=1
+            PROFILE_MAX_PENDING=1
+            PROFILE_BATCH_SIZE=""
+            render_hardware_override
+        """, extra_env=NO_NVIDIA)
+        assert "BATCH_SIZE" not in proc.stdout, (
+            f"BATCH_SIZE leaked for tier={tier}, vendor={vendor}"
+        )
+
+
+def test_compose_file_args_rocm_includes_managed_hardware(repo: Path) -> None:
+    """ROCm tier includes managed compose.hardware.yaml in the chain."""
+    # Create a managed file
+    hw = repo / "compose.hardware.yaml"
+    hw.write_text("# voxint:hardware-override v2\nservices: {}\n")
+    proc = run_lib(repo, 'compose_file_args_for_tier rocm')
+    assert proc.returncode == 0, proc.stderr
+    assert "compose.hardware.yaml" in proc.stdout
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4: recommendation, dry-run, gpu-check
+# --------------------------------------------------------------------------- #
+
+def test_recommend_tier_occupied_nvidia_undersized_amd(repo: Path) -> None:
+    """The golden scenario: occupied 5090 + 4GB 780M -> CPU."""
+    _fake_nvidia_smi(repo, r"printf '0, GPU-5090, RTX 5090, 32607, 31974, 177\n'")
+    fakesys, fakedev = _fake_amd_sysfs(
+        repo,
+        129,
+        vram_total=4294967296,
+        vram_used=1048576000,
+        gtt_total=14331686912,
+    )
+    proc = run_lib(repo, """
+        create_gpu_inventory
+        recommend_compute_tier
+        printf "%s|%s" "$RECOMMENDED_TIER" "$RECOMMENDATION_REASON"
+        cleanup_gpu_inventory
+    """, extra_env={"VOXINT_SYSFS_ROOT": str(fakesys), "VOXINT_DEV_ROOT": str(fakedev)})
+    assert proc.returncode == 0, proc.stderr
+    parts = proc.stdout.split("|", 1)
+    assert parts[0] == "cpu"
+    assert "occupied" in parts[1].lower() or "177" in parts[1]
+
+
+def test_recommend_tier_available_nvidia(repo: Path) -> None:
+    """An NVIDIA GPU with plenty of free VRAM -> GPU tier."""
+    _fake_nvidia_smi(repo, r"printf '0, GPU-free, RTX 4060, 8192, 512, 7680\n'")
+    proc = run_lib(repo, """
+        create_gpu_inventory
+        recommend_compute_tier
+        printf "%s" "$RECOMMENDED_TIER"
+        cleanup_gpu_inventory
+    """, extra_env=NO_AMD)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "gpu"
+
+
+def test_gpu_check_mode(repo: Path) -> None:
+    """--gpu-check prints inventory and recommendation without writing."""
+    _fake_nvidia_smi(repo, r"printf '0, GPU-test, Test GPU, 8192, 512, 7680\n'")
+    result = run_script(repo, ["--gpu-check"], extra_env=NO_AMD)
+    assert result.returncode == 0, result.stderr
+    assert "GPU Inventory" in result.stderr
+    assert "Recommended tier" in result.stderr
+    assert "read-only check" in result.stderr
+
+
+def test_hardware_dry_run_shows_inventory(repo: Path) -> None:
+    """--hardware-dry-run shows full GPU inventory."""
+    _fake_nvidia_smi(repo, r"printf '0, GPU-test, Test GPU, 8192, 512, 7680\n'")
+    result = run_script(repo, ["--hardware-dry-run"], extra_env=NO_AMD)
+    assert result.returncode == 0, result.stderr
+    assert "GPU Inventory" in result.stderr
+    assert "Recommended tier" in result.stderr
+    assert "dry run" in result.stderr
+
+
 def test_select_hardware_profile_unknown_fallback(repo: Path) -> None:
     # No detection -> empty signature -> conservative fallback: cap concurrency
     # and pending queue, and NEVER set BATCH_SIZE (a numerics knob).
@@ -684,7 +1358,7 @@ def test_render_hardware_override_has_no_batch_size(repo: Path) -> None:
     proc = run_lib(repo, "select_hardware_profile\nrender_hardware_override")
     assert proc.returncode == 0, proc.stderr
     out = proc.stdout
-    assert out.startswith("# voxint:hardware-override v1\n")
+    assert out.startswith("# voxint:hardware-override v2\n")
     assert "# profile: nvidia-unknown-v1" in out
     assert "--concurrency=1" in out
     assert 'MAX_PENDING_REQUESTS: "1"' in out
@@ -743,7 +1417,7 @@ def test_write_hardware_override_first_write(repo: Path) -> None:
     assert "RC=0" in proc.stdout
     target = repo / "compose.hardware.yaml"
     assert target.exists()
-    assert target.read_text().startswith("# voxint:hardware-override v1\n")
+    assert target.read_text().startswith("# voxint:hardware-override v2\n")
     assert stat.S_IMODE(target.stat().st_mode) == 0o644
     assert "BATCH_SIZE" not in target.read_text()
 
@@ -892,19 +1566,20 @@ def _write_managed_hardware_file(repo: Path) -> None:
     )
 
 
-def test_compose_file_args_appends_hardware_for_gpu_only(repo: Path) -> None:
+def test_compose_file_args_appends_hardware_for_gpu_and_rocm(repo: Path) -> None:
     _write_managed_hardware_file(repo)
     assert (repo / "compose.hardware.yaml").exists()
     gpu = run_lib(repo, "compose_file_args_for_tier gpu")
     assert gpu.stdout == "-f compose.yaml -f compose.gpu.yaml -f compose.hardware.yaml"
+    rocm = run_lib(repo, "compose_file_args_for_tier rocm")
+    assert rocm.stdout == "-f compose.yaml -f compose.rocm.yaml -f compose.hardware.yaml"
     for tier, base in [
         ("cpu", "-f compose.yaml -f compose.cpu.yaml"),
-        ("rocm", "-f compose.yaml -f compose.rocm.yaml"),
         ("metal", "-f compose.yaml -f compose.metal.yaml"),
         ("none", "-f compose.yaml"),
     ]:
         proc = run_lib(repo, f"compose_file_args_for_tier {tier}")
-        assert proc.stdout == base, f"{tier} must not fold in the GPU hardware file"
+        assert proc.stdout == base, f"{tier} must not fold in the hardware file"
 
 
 def test_compose_file_args_ignores_unmarked_hardware_file(repo: Path) -> None:
@@ -942,7 +1617,7 @@ def test_hardware_dry_run_prints_yaml_and_writes_nothing(repo: Path) -> None:
     proc = run_script(repo, ["--hardware-dry-run"])
     assert proc.returncode == 0, proc.stderr
     # YAML body on stdout (so `2>/dev/null` yields just the file).
-    assert "# voxint:hardware-override v1" in proc.stdout
+    assert "# voxint:hardware-override v2" in proc.stdout
     assert 'MAX_PENDING_REQUESTS: "1"' in proc.stdout
     assert "BATCH_SIZE" not in proc.stdout
     # Human annotations on stderr; nothing written or started. The advertised
