@@ -23,6 +23,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   that fits. When a GPU is occupied (e.g. by a local LLM), the installer
   explains why and defaults to CPU.
 
+- **Runs canonical lifecycle surface** (#381, part 1). `/runs` becomes the
+  canonical lifecycle view: four lifecycle tabs (Needs attention / Active /
+  Failed / All), title-first rows with the run ID demoted to a copyable
+  secondary, a collapsible filter bar (auto-opens when any filter is active,
+  power filters like transcript search and date range under "More filters"),
+  a one-line pipeline health summary linking to Settings Status, and
+  auxiliary jobs behind a closed disclosure. State-dependent row actions
+  (Review / Retry / View) and degraded-service banners carried over from
+  the Jobs page.
+
 ### Changed
 - **Settings control model** (#379). Every tri-state feature setting
   (On / Off / Use installation setting) is now a toggle switch showing

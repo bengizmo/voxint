@@ -904,6 +904,19 @@
     .gt-row.is-needs-human > * { background: rgba(227,179,65,.04); }
     .gt-row.is-machine-active > * { background: rgba(107,167,221,.04); }
 
+    /* Runs page: collapsible filter and aux-jobs disclosures (#381). */
+    details.runs-filters { margin: .6rem 0; }
+    details.runs-filters > summary { cursor: pointer; font-weight: 600;
+                font-size: var(--t-sm); color: var(--ink-2); }
+    details.runs-filters[open] > summary { margin-bottom: .2rem; }
+    details.runs-more-filters { margin-top: .5rem; }
+    details.runs-more-filters > summary { cursor: pointer; font-size: var(--t-sm);
+                color: var(--ink-2); }
+    details.runs-aux-jobs { margin: 1rem 0; }
+    details.runs-aux-jobs > summary { cursor: pointer; }
+    details.runs-aux-jobs[open] > summary { margin-bottom: .4rem; }
+    .run-id-secondary { user-select: all; }
+
     /* Multi-select action bar */
     .gt-action-bar { display: flex; align-items: center; gap: var(--space-3);
                 padding: var(--space-2) var(--space-3); margin-bottom: 2px;
