@@ -413,15 +413,7 @@ def _shell_template_context(request: Request) -> dict[str, Any]:
                 settings.console_projects_enabled
                 and getattr(request.app.state, "projects_routed", False)
             ),
-            # Jobs (#160) dark-ships its pages routed-but-undiscovered: the /jobs
-            # routes always exist, so ``jobs_routed`` is always true; this key
-            # reduces to the flag and controls only whether the sidebar's Jobs
-            # entry points at /jobs (on) or the /runs placeholder (off).
-            "jobs_enabled": (
-                settings.console_jobs_enabled
-                and getattr(request.app.state, "jobs_routed", False)
-            ),
-            # Media (#154) dark-ships routed-but-undiscovered like Jobs: /media
+            # Media (#154) dark-ships routed-but-undiscovered: /media
             # always registers, so this stamp is always true. The shell reads flag
             # AND stamp, so flipping CONSOLE_MEDIA_ENABLED alone points the sidebar
             # Media link and the "Add media" quick action at the operable /media
@@ -430,17 +422,11 @@ def _shell_template_context(request: Request) -> dict[str, Any]:
                 settings.console_media_enabled
                 and getattr(request.app.state, "media_routed", False)
             ),
-            # Activity (#162) dark-ships behind console_activity_enabled AND its
-            # route stamp, and additionally depends on Jobs discovery: the badge
-            # lives on the sidebar Jobs entry and the toast links target /jobs, so
-            # surfacing activity while jobs discovery is off would point that entry
-            # at /runs while the badge/links go to /jobs. ANDing jobs_enabled keeps
-            # the nav honest — activation implies Jobs is already discovered.
+            # Activity (#162) dark-ships behind console_activity_enabled and its
+            # route stamp.
             "activity_enabled": (
                 settings.console_activity_enabled
                 and getattr(request.app.state, "activity_routed", False)
-                and settings.console_jobs_enabled
-                and getattr(request.app.state, "jobs_routed", False)
             ),
             "users_enabled": (
                 settings.voxint_multi_user

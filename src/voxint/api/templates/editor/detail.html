@@ -74,7 +74,7 @@
       </button>
     </form>
     {% endif %}
-    <p class="mt-1"><a href="/jobs/{{ selected_run.id }}" class="text-sm">Run details</a></p>
+    <p class="mt-1"><a href="/runs/{{ selected_run.id }}" class="text-sm">Run details</a></p>
     {% endif %}
     {% set other_runs = detail.chooser|length - (1 if selected_run else 0) %}
     {% if other_runs > 0 %}
@@ -140,7 +140,7 @@
     <p>Run <code>{{ selected_run.id.hex[:8] }}</code> is
     <strong>{{ selected_run.status }}</strong>. The transcript will be
     available once the run completes.</p>
-    <p><a href="/jobs/{{ selected_run.id }}">View run details</a></p>
+    <p><a href="/runs/{{ selected_run.id }}">View run details</a></p>
   </div>
 
 {% else %}

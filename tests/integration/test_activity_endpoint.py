@@ -2,8 +2,8 @@
 
 Pins the dark-ship wiring: operator auth runs before the flag-off 404, the
 bootstrap and since responses have the documented shape, the badge equals the
-shared jobs_badge_count the /jobs page renders, and the shell mounts the toast
-region + badge + poller only when activity AND Jobs discovery are both on.
+shared jobs_badge_count the /runs page renders, and the shell mounts the toast
+region + badge + poller when activity is enabled.
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ def _client(
     tmp_path: Path,
     *,
     activity_enabled: bool = False,
-    jobs_enabled: bool = False,
     authenticated: bool = True,
 ) -> TestClient:
     settings = Settings(
@@ -36,7 +35,6 @@ def _client(
         voxint_password=CREDS[1],
         media_root=tmp_path,
         console_activity_enabled=activity_enabled,
-        console_jobs_enabled=jobs_enabled,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
     if authenticated:
@@ -65,7 +63,7 @@ def _seed_events(session_factory: sessionmaker[Session], run_id: uuid.UUID, n: i
                 occurrence_key=f"k-{run_id}-{i}",
                 pipeline_run_id=run_id,
                 title=f"clip {i}",
-                href=f"/jobs/{run_id}",
+                href=f"/runs/{run_id}",
             )
         session.commit()
 
@@ -87,7 +85,7 @@ def test_flag_off_returns_404(session_factory: sessionmaker[Session], tmp_path: 
 def test_bootstrap_baselines_without_backlog(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
-    client = _client(session_factory, tmp_path, activity_enabled=True, jobs_enabled=True)
+    client = _client(session_factory, tmp_path, activity_enabled=True)
     rid = _seed_run(session_factory, status=RunStatus.COMPLETED)
     _seed_events(session_factory, rid, 3)
     resp = client.get("/activity/events")  # no since => bootstrap
@@ -101,7 +99,7 @@ def test_bootstrap_baselines_without_backlog(
 def test_since_returns_new_events_ascending(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
-    client = _client(session_factory, tmp_path, activity_enabled=True, jobs_enabled=True)
+    client = _client(session_factory, tmp_path, activity_enabled=True)
     rid = _seed_run(session_factory, status=RunStatus.COMPLETED)
     _seed_events(session_factory, rid, 3)
     body = client.get("/activity/events?since=0").json()
@@ -111,13 +109,13 @@ def test_since_returns_new_events_ascending(
     assert body["next_cursor"] == ids[-1]
     assert body["has_more"] is False
     assert body["events"][0]["kind"] == "run_completed"
-    assert body["events"][0]["href"] == f"/jobs/{rid}"
+    assert body["events"][0]["href"] == f"/runs/{rid}"
 
 
 def test_response_reports_retention_floor(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
-    client = _client(session_factory, tmp_path, activity_enabled=True, jobs_enabled=True)
+    client = _client(session_factory, tmp_path, activity_enabled=True)
     rid = _seed_run(session_factory, status=RunStatus.COMPLETED)
     _seed_events(session_factory, rid, 3)
     body = client.get("/activity/events?since=0").json()
@@ -130,12 +128,12 @@ def test_negative_since_is_rejected(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
     # A malformed negative cursor is a 422, not a backlog-replaying bootstrap.
-    client = _client(session_factory, tmp_path, activity_enabled=True, jobs_enabled=True)
+    client = _client(session_factory, tmp_path, activity_enabled=True)
     assert client.get("/activity/events?since=-1").status_code == 422
 
 
 def test_badge_matches_jobs_page(session_factory: sessionmaker[Session], tmp_path: Path) -> None:
-    client = _client(session_factory, tmp_path, activity_enabled=True, jobs_enabled=True)
+    client = _client(session_factory, tmp_path, activity_enabled=True)
     _seed_run(session_factory, status=RunStatus.QUEUED)
     _seed_run(session_factory, status=RunStatus.QUEUED)
     _seed_run(session_factory, status=RunStatus.RUNNING)
@@ -143,40 +141,30 @@ def test_badge_matches_jobs_page(session_factory: sessionmaker[Session], tmp_pat
 
     badge = client.get("/activity/events").json()["badge"]
     assert badge == 3
-    jobs_page = client.get("/jobs").text
-    assert "1 running" in jobs_page
-    assert "2 queued" in jobs_page
+    runs_page = client.get("/runs").text
+    assert "1 running" in runs_page
+    assert "2 queued" in runs_page
 
 
 def test_shell_chrome_absent_when_off(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
-    client = _client(session_factory, tmp_path, activity_enabled=False, jobs_enabled=True)
+    client = _client(session_factory, tmp_path, activity_enabled=False)
     home = client.get("/").text
     assert "data-toast-region" not in home
     assert "data-activity-badge" not in home
     assert "/activity/events" not in home
 
 
-def test_shell_chrome_present_when_activity_and_jobs_on(
+def test_shell_chrome_present_when_activity_on(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
-    client = _client(session_factory, tmp_path, activity_enabled=True, jobs_enabled=True)
+    client = _client(session_factory, tmp_path, activity_enabled=True)
     home = client.get("/").text
     assert "data-toast-region" in home
     assert "data-activity-badge" in home
     assert "/activity/events" in home
 
-
-def test_shell_chrome_absent_when_jobs_discovery_off(
-    session_factory: sessionmaker[Session], tmp_path: Path
-) -> None:
-    # Nav-honesty guard: activity depends on Jobs discovery. With jobs off the
-    # sidebar Jobs entry points at /runs, so the badge/toasts must stay hidden.
-    client = _client(session_factory, tmp_path, activity_enabled=True, jobs_enabled=False)
-    home = client.get("/").text
-    assert "data-toast-region" not in home
-    assert "data-activity-badge" not in home
 
 
 def test_activity_flag_defaults_off() -> None:
@@ -185,7 +173,7 @@ def test_activity_flag_defaults_off() -> None:
 def test_speaker_identified_event_round_trips(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
-    client = _client(session_factory, tmp_path, activity_enabled=True, jobs_enabled=True)
+    client = _client(session_factory, tmp_path, activity_enabled=True)
     rid = _seed_run(session_factory, status=RunStatus.COMPLETED)
     with session_factory() as session:
         record_activity_event(
@@ -194,10 +182,10 @@ def test_speaker_identified_event_round_trips(
             occurrence_key=f"decision:{uuid.uuid4()}:identified",
             pipeline_run_id=rid,
             title="Alice Anderson",
-            href=f"/jobs/{rid}",
+            href=f"/runs/{rid}",
         )
         session.commit()
     event = client.get("/activity/events?since=0").json()["events"][0]
     assert event["kind"] == "speaker_identified"
     assert event["title"] == "Alice Anderson"
-    assert event["href"] == f"/jobs/{rid}"
+    assert event["href"] == f"/runs/{rid}"

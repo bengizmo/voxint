@@ -2,10 +2,8 @@
 {% from "fragments/export_menu.html" import export_menu %}
 {% from "fragments/outline_fallback.html" import outline_fallback %}
 {% block title %}Voxint — transcript {{ run.id.hex[:8] }}{% endblock %}
-{# Canonical parent, no origin tracking: the same rule job_detail.html uses —
-   this page is reachable from both surfaces, and its one durable parent is
-   whichever run browser the shell exposes. #}
-{% block cb_breadcrumb %}{% if shell.jobs_enabled %}jobs{% else %}runs{% endif %} / <strong>{{ run.id.hex[:8] }}</strong>{% endblock %}
+{# Canonical parent, no origin tracking: transcripts belong to Runs. #}
+{% block cb_breadcrumb %}runs / <strong>{{ run.id.hex[:8] }}</strong>{% endblock %}
 {% block body %}
 <p><a href="/runs/{{ run.id }}">← run</a></p>
 <h1>Transcript <code>{{ run.id.hex[:8] }}</code></h1>

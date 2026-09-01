@@ -1470,18 +1470,11 @@
           <span class="rail-tip">Speakers</span>
         </a>
         {# Jobs — bars glyph (with activity badge extension point) #}
-        {% if shell.jobs_enabled %}
-        <a class="rail-link" href="/jobs"{% if active_nav == "jobs" %} aria-current="page"{% endif %} aria-label="Jobs">
+        <a class="rail-link" href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %} aria-label="Jobs">
           <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><rect x="3" y="4" width="12" height="2" rx="1"/><rect x="3" y="8" width="12" height="2" rx="1"/><rect x="3" y="12" width="12" height="2" rx="1"/></svg>
           {% if shell.activity_enabled %}<span class="nav-badge" data-activity-badge hidden></span>{% endif %}
           <span class="rail-tip">Jobs</span>
         </a>
-        {% else %}
-        <a class="rail-link" href="/runs" aria-label="Jobs">
-          <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><rect x="3" y="4" width="12" height="2" rx="1"/><rect x="3" y="8" width="12" height="2" rx="1"/><rect x="3" y="12" width="12" height="2" rx="1"/></svg>
-          <span class="rail-tip">Jobs</span>
-        </a>
-        {% endif %}
       </nav>
       <div class="rail-bottom">
         {# Settings entry + system health dot — hidden for non-admin in multi-user mode #}
@@ -1544,9 +1537,8 @@
   </div>
   {# Activity indicator + toasts (Console 2.0 P7, #162). The whole feature lives
      in this one flag-gated block, so a dark-shipped install (the default) ships
-     zero extra bytes. shell.activity_enabled already implies Jobs discovery is
-     on, so the badge target (/jobs) and toast links are honest. The poller is a
-     plain progressive-enhancement IIFE (the theme/sidebar convention), NOT an
+     zero extra bytes. The badge target and toast links use canonical Runs URLs.
+     The poller is a plain progressive-enhancement IIFE (the theme/sidebar convention), NOT an
      island: a JSON poll + a toast queue needs no React. #}
   {% if shell.activity_enabled %}
   <div class="toast-region" data-toast-region aria-live="polite" aria-atomic="false"></div>
@@ -1653,7 +1645,7 @@
       show(el);
     }
     /* One summary toast for a burst. A homogeneous batch gets kind-specific copy;
-       a mixed batch gets neutral copy. Always links to the Jobs page. */
+       a mixed batch gets neutral copy. Always links to the Runs page. */
     function coalescedMessage(events) {
       var n = events.length, allRun = true, allSpk = true;
       for (var i = 0; i < n; i++) {
@@ -1669,7 +1661,7 @@
       msg.textContent = coalescedMessage(events);
       el.appendChild(msg);
       var link = document.createElement("a");
-      link.href = "/jobs"; link.textContent = "Open Jobs";
+      link.href = "/runs"; link.textContent = "Open Jobs";
       el.appendChild(link);
       show(el);
     }

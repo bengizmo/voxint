@@ -275,7 +275,7 @@ def collect_resource_status_or_empty(settings: Settings) -> ResourceSnapshot:
 
     Telemetry is advisory: a probe failure must degrade to an empty snapshot
     rather than break whatever page is rendering the strip. Shared by every
-    read-path caller (the dashboard/metrics/resource pages and the Jobs page) so
+    read-path caller (the dashboard/metrics/resource pages and the Runs page) so
     the never-raise contract lives in exactly one place.
     """
     try:

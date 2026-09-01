@@ -1,7 +1,7 @@
 """Console activity outbox — emit + read (issue #162, Console 2.0 P7).
 
 The write side of the ``activity_events`` table behind the console activity
-indicator (completion toasts + a Jobs badge). Deliberately shaped like
+indicator (completion toasts + sidebar badge). Deliberately shaped like
 :mod:`voxint.notify`: persistence-only, in the CALLER's transaction, idempotent
 via ``ON CONFLICT DO NOTHING`` on the occurrence key, no HTTP / Celery / clock
 beyond the DB default. The browser polls the table directly (see
@@ -90,17 +90,17 @@ def resolve_run_completed_snapshot(session: Session, run_id: uuid.UUID) -> tuple
     Resolves the media label through the same precedence the console uses
     (frozen sidecar title, else scraped source-metadata title, else a cleaned
     filename — mirrors ``run_source_title``), inside the caller transaction. The
-    href points at the routed ``/jobs/{run_id}`` detail page: the Media editor
-    (``/media/{id}``) does not exist yet, and a frozen href is never repointed.
+    href points at the canonical ``/runs/{run_id}`` detail page; a frozen href
+    is never repointed.
     """
     run = session.get(PipelineRun, run_id)
     if run is None:  # pragma: no cover - the caller just updated this run
-        return (f"run {run_id}", f"/jobs/{run_id}")
+        return (f"run {run_id}", f"/runs/{run_id}")
     title = title_from_snapshot(run.sidecar)
     if title is None and run.media_item.source_metadata is not None:
         title = run.media_item.source_metadata.title
     label = friendly_media_label(title, run.media_item.source_path)
-    return (label, f"/jobs/{run_id}")
+    return (label, f"/runs/{run_id}")
 
 
 def record_run_completed(session: Session, run_id: uuid.UUID) -> None:
@@ -138,7 +138,7 @@ def record_speaker_identified(
         occurrence_key=f"decision:{decision_id}:identified",
         pipeline_run_id=run_id,
         title=speaker_name,
-        href=f"/jobs/{run_id}",
+        href=f"/runs/{run_id}",
     )
 
 
@@ -165,7 +165,7 @@ def record_speaker_merge(
         occurrence_key=f"merge:{occurrence_decision_id}",
         pipeline_run_id=run_id,
         title=f"{survivor_name} ({label_count} labels)",
-        href=f"/jobs/{run_id}",
+        href=f"/runs/{run_id}",
     )
 
 
@@ -181,8 +181,8 @@ def events_since(session: Session, *, after_id: int, limit: int) -> list[Activit
     identifications share this outbox and cursor) that commit out of insert order
     can let a poll landing between the two commits advance past the earlier id and
     miss its toast. That is an accepted limitation for a cosmetic notification on a
-    single-operator tool: the Jobs badge (a live count, not cursor-based) and the
-    Jobs page remain authoritative, and serializing a terminal ruling or completion
+    single-operator tool: the sidebar badge (a live count, not cursor-based) and the
+    Runs page remain authoritative, and serializing a terminal ruling or completion
     transaction for a popup is not a trade this tool makes.
     """
     rows = session.execute(

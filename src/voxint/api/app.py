@@ -641,15 +641,11 @@ def _register_routes(app: FastAPI) -> None:
     # routers/speakers.py; included here to keep registration order.
     console.include_router(speakers_router)
 
-    # ---- Jobs area (Console 2.0 P5, #160): /jobs + /jobs/{run_id}. Slotted
-    # after speakers and before the legacy runs tail so the new pages register
-    # ahead of the /runs child endpoints they will eventually absorb, keeping the
-    # legacy surface grouped last. Dark-shipped: registered unconditionally (no
-    # area gate), discovery gated by console_jobs_enabled in the sidebar.
+    # ---- Jobs compatibility aliases: /jobs + /jobs/{run_id} redirect to /runs.
     console.include_router(jobs_router)
 
     # ---- Activity poll endpoint (Console 2.0 P7, #162): /activity/events.
-    # Registered next to Jobs (its badge + toast links target /jobs). Dark-ship:
+    # Registered next to Jobs (its badge + toast links target /runs). Dark-ship:
     # always registered so the route inventory is stable; the handler 404s until
     # console_activity_enabled is on.
     console.include_router(activity_router)
@@ -760,15 +756,8 @@ def _register_routes(app: FastAPI) -> None:
     app.state.projects_routed = any(
         route.path == "/projects" for route in _iter_api_routes(app.routes)
     )
-    # Jobs (#160) dark-ships routed-but-undiscovered: /jobs always registers, so
-    # this stamp is always true. The shell reads flag AND stamp (mirroring
-    # projects), so flipping CONSOLE_JOBS_ENABLED alone surfaces the sidebar Jobs
-    # link — the dark-ship activation switch, not a route-existence guard.
-    app.state.jobs_routed = any(
-        route.path == "/jobs" for route in _iter_api_routes(app.routes)
-    )
     # Media (#154) dark-ships routed-but-undiscovered: /media always registers, so
-    # this stamp is always true. The shell reads flag AND stamp (mirroring jobs), so
+    # this stamp is always true. The shell reads flag AND stamp, so
     # flipping CONSOLE_MEDIA_ENABLED alone points the sidebar Media link and the
     # "Add media" quick action at /media — the dark-ship activation switch.
     app.state.media_routed = any(
@@ -776,9 +765,7 @@ def _register_routes(app: FastAPI) -> None:
     )
     # Activity (#162) dark-ships routed-but-undiscovered: /activity/events always
     # registers, so this stamp is always true. shell.activity_enabled ANDs the
-    # flag, this stamp, AND shell.jobs_enabled (the badge lives on the Jobs entry
-    # and the toast links target /jobs), so activity is never surfaced while Jobs
-    # discovery is off.
+    # flag and this stamp.
     app.state.activity_routed = any(
         route.path == "/activity/events" for route in _iter_api_routes(app.routes)
     )

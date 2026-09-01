@@ -36,12 +36,10 @@ def test_never_falls_through_to_neutral() -> None:
 
 
 def test_call_sites_use_the_macro() -> None:
-    # The three templates that render this chip must go through the macro, not
-    # inline spans (inline copies are how the verb-agreement bug shipped).
     from tests.contracts.conftest import REPO_ROOT
 
     tpl = REPO_ROOT / "src" / "voxint" / "api" / "templates"
-    for rel in ("home/home.html", "media/media.html", "jobs/jobs.html"):
+    for rel in ("home/home.html", "media/media.html", "legacy_runs/runs.html"):
         text = (tpl / rel).read_text()
         assert "needs_you_chip(" in text, f"{rel} no longer uses needs_you_chip"
         assert "need you</span>" not in text, f"{rel} regrew an inline needs-you span"

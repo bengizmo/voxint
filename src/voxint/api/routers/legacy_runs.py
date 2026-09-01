@@ -8,7 +8,7 @@ submit/fetch + run detail and transcript), ``actions_router`` (requeue,
 cancel, archive, media delete, notes, export), ``dashboards_router``
 (/metrics, /dashboard, /resources), and ``tail_router`` (run assets,
 translation, media streaming + peaks). Console 2.0 later phases fold these
-surfaces into the new home/media/jobs areas, hence "legacy".
+surfaces into the new home and media areas, hence "legacy".
 """
 
 from __future__ import annotations
@@ -620,9 +620,7 @@ def runs(
     language: str | None = None,
     archived: str | None = None,
 ) -> Response:
-    # Local import avoids a module cycle: jobs imports this module's run-detail
-    # context builder while /runs reuses its canonical summary formatter.
-    from voxint.api.jobs_query import jobs_badge_count, recent_aux_jobs
+    from voxint.api.jobs_query import recent_aux_jobs
     from voxint.api.routers.jobs import _detect_degraded, _pipeline_summary
 
     settings: Settings = request.app.state.settings
@@ -731,7 +729,7 @@ def runs(
                 lifecycle=active_view, archived=show_archived
             ),
             "pipeline_summary": _pipeline_summary(
-                run_status_counts(session), jobs_badge_count(session)
+                run_status_counts(session),
             ),
             "degraded": _detect_degraded(request),
             "aux_jobs": recent_aux_jobs(session),
@@ -881,16 +879,10 @@ def build_run_detail_context(
     active_nav: str = "runs",
     tutorial: bool = True,
 ) -> dict[str, Any]:
-    """The full run-detail render context, shared by ``/runs/{id}`` and the
-    Console 2.0 ``/jobs/{id}`` page (#160).
+    """Build the full ``/runs/{id}`` render context.
 
-    Promoted out of the ``run_detail`` handler so the Jobs area can render the
-    identical run-detail sections without duplicating the mutation surface: the
-    same forms post to the same ``/runs/{id}/...`` action endpoints (Track C
-    owns the eventual legacy_runs retirement, so this extraction is in-remit).
     ``active_nav`` selects the highlighted sidebar entry; ``tutorial`` gates the
-    guided-tour banner (off on ``/jobs/{id}``, which is dark-shipped and not in
-    the tutorial's route map — see the deferred activation slice).
+    guided-tour banner.
     """
     run = _run_or_404(session, run_id)
     speaker_timeline = build_speaker_timeline(session, run.id)
@@ -997,10 +989,7 @@ def build_run_detail_context(
         "csrf_translation_cancel": mint_csrf_token(
             request.app.state.csrf_secret, CSRF_TRANSLATION_CANCEL
         ),
-        # The guided-tour banner is suppressed on /jobs/{id}: that page is
-        # dark-shipped and not in the tutorial's route map, so advancing the
-        # tour from it would be incoherent until the activation slice remaps
-        # PAGE_ROUTE_NAME[RUN_DETAIL].
+        # Some callers suppress the guided-tour banner explicitly.
         "tutorial": (
             _tutorial_banner(
                 request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id
@@ -1669,7 +1658,7 @@ def _resource_snapshot(request: Request) -> ResourceSnapshot:
     ``/metrics`` and the dashboard/resource pages read this cached value
     (never ``force``): a 15s poll across tabs shares one probe, and a probe
     failure degrades to an empty snapshot rather than breaking the page. The
-    guard lives in :func:`collect_resource_status_or_empty` so the Jobs page
+    guard lives in :func:`collect_resource_status_or_empty` so the Runs page
     (#160) shares one never-raise contract with this one.
     """
     return collect_resource_status_or_empty(request.app.state.settings)
