@@ -32,6 +32,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   auxiliary jobs behind a closed disclosure. State-dependent row actions
   (Review / Retry / View) and degraded-service banners carried over from
   the Jobs page.
+- **Grouped failures with bulk retry** (#381, part 2). On the Failed tab,
+  runs with identical errors are grouped into a single row showing the
+  error label, count, and a "Retry all" button. The bulk retry endpoint
+  uses per-item CAS with savepoints for partial-failure safety, CSRF
+  protection, and a per-item result page.
 
 ### Changed
 - **Settings control model** (#379). Every tri-state feature setting

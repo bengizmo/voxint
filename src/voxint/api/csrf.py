@@ -75,6 +75,7 @@ CSRF_CANCEL = "cancel"
 CSRF_PAUSE = "pause"
 CSRF_RESUME = "resume"
 CSRF_RESTART = "restart"
+CSRF_BULK_RETRY = "bulk-retry"
 CSRF_CLAIM = "claim"
 # The first-run setup wizard (issue #3). One action for the whole flow: its
 # POST steps land in slice 4, and a token minted on one wizard step being valid

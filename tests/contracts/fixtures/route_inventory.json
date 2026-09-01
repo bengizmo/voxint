@@ -532,6 +532,12 @@
     ]
   ],
   [
+    "/runs/bulk-retry",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/runs/{run_id}",
     [
       "GET"

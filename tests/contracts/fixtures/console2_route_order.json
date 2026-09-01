@@ -336,6 +336,12 @@
     ]
   ],
   [
+    "/runs/bulk-retry",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/runs/{run_id}/requeue",
     [
       "POST"
