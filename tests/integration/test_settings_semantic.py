@@ -73,7 +73,7 @@ def test_semantic_section_renders_tristate(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
     client, _ = make_client(session_factory, tmp_path)
-    body = client.get("/settings").text
+    body = client.get("/settings/ai").text
     assert 'id="semantic-search"' in body
     # Unset columns render as "inherit" (use the installation default).
     assert 'name="semantic_index_enabled" value="inherit" checked' in body
@@ -187,7 +187,7 @@ def test_stored_override_round_trips_in_the_rendered_form(
     # save resubmits "inherit" and quietly clears the override.
     client, _ = make_client(session_factory, tmp_path)
     _seed_flags(session_factory, semantic_index_enabled=True)
-    body = client.get("/settings").text
+    body = client.get("/settings/ai").text
     assert 'name="semantic_index_enabled" value="on" checked' in body
 
 
@@ -211,7 +211,7 @@ def test_weights_absent_note_shows_when_feature_on(
     # The env default enables the feature but this env has no weights installed,
     # so the honest "weights are not installed" note renders.
     client, _ = make_client(session_factory, tmp_path)
-    body = client.get("/settings").text
+    body = client.get("/settings/ai").text
     assert "The embedding model weights are not installed" in body
 
 
@@ -230,7 +230,7 @@ def test_weights_absent_note_hidden_when_effectively_off_via_inherit(
         semantic_index_enabled=False,
         semantic_index_autogenerate=False,
     )
-    body = client.get("/settings").text
+    body = client.get("/settings/ai").text
     assert 'name="semantic_index_enabled" value="inherit" checked' in body
     assert "The embedding model weights are not installed" not in body
 
@@ -247,6 +247,6 @@ def test_weights_absent_note_shows_when_explicitly_on_over_off_default(
         semantic_index_autogenerate=False,
     )
     _seed_flags(session_factory, semantic_index_enabled=True)
-    body = client.get("/settings").text
+    body = client.get("/settings/ai").text
     assert 'name="semantic_index_enabled" value="on" checked' in body
     assert "The embedding model weights are not installed" in body

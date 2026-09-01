@@ -7,6 +7,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Changed
+- **Settings IA: tabs** (#378). The settings hub is split into tabbed
+  sub-pages: General (appearance, features, tutorial), Media (folders,
+  sources), and AI (LLM, translation, corrections, glossary, semantic
+  search). All five existing sub-pages (Status, Hardware, Database,
+  Plugins, Users) now share a single tab strip include instead of
+  duplicating it. Old fragment links like `/settings#llm` redirect to
+  the correct tab. All POST routes unchanged. The legacy flat page
+  (flag off) is unaffected.
 - **Run detail restructure** (#377). The run detail page (shared by `/runs`
   and `/jobs`) puts the summary card first (status, readable stage name,
   error with recovery hint, and the primary action). The Manage card moves

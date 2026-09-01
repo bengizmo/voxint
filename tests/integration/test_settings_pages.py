@@ -1,11 +1,8 @@
-"""Console 2.0 P6 settings hub + sub-pages (issue #161).
+"""Console 2.0 settings tabs and legacy settings page.
 
-The flag ``console_settings_enabled`` branches the ``/settings`` CONTENT: off is
-the current flat page byte-for-byte (its sections and anchors intact), on is the
-regrouped hub that keeps those same mutable sections inline and links out to the
-read-only sub-pages. The four sub-pages (status, hardware, database, plugins) are
-always registered and reachable regardless of the flag (dark-ship), fail soft
-when a dependency is down, and never write config or restart anything.
+The flag ``console_settings_enabled`` branches the ``/settings`` content: off is
+the flat page; on splits mutable sections across General, Media, AI, and Plugins
+alongside the read-only operational tabs.
 """
 
 from __future__ import annotations
@@ -78,23 +75,27 @@ def test_flag_off_renders_flat_page(session_factory: sessionmaker[Session]) -> N
     assert "Everyday settings" not in body
 
 
-def test_flag_on_hub_keeps_anchors_and_links_subpages(
+def test_flag_on_hub_contains_only_general_sections_and_all_tabs(
     session_factory: sessionmaker[Session],
 ) -> None:
     client = _client(session_factory, console_settings_enabled=True)
     body = client.get("/settings").text
-    # Anchors and form posts still resolve on the hub (deep-links keep working).
-    for marker in (*_PRESERVED_ANCHORS, *_PRESERVED_POSTS):
-        assert marker in body
-    # The hub adds the sub-page nav and the plain-language groupings.
+    assert 'id="features"' in body
+    assert 'id="benchmark"' in body
+    assert 'id="tutorial"' in body
+    assert 'id="llm"' not in body
+    assert 'id="folders"' not in body
     for link in (
+        "/settings/media",
+        "/settings/ai",
         "/settings/status",
         "/settings/hardware",
         "/settings/database",
         "/settings/plugins",
     ):
         assert link in body
-    assert "Everyday settings" in body
+    assert body.count('role="tab" aria-current="true"') == 1
+    assert 'href="/settings" role="tab" aria-current="true">General</a>' in body
 
 
 def test_default_activates_the_hub_and_nav_cutover(
@@ -112,7 +113,7 @@ def test_default_activates_the_hub_and_nav_cutover(
     )
     assert default_settings.console_settings_enabled is True
     body = _client(session_factory).get("/settings").text  # no flag override
-    assert "Everyday settings" in body  # the hub, not the flat page
+    assert 'id="features"' in body  # the General tab, not the flat page
     assert 'href="/settings/status"' in body  # status sub-page link in hub nav
     assert 'href="/settings/hardware"' in body  # hardware sub-page link in hub nav
     assert 'href="/resources"' not in body  # the old link is gone
@@ -135,7 +136,31 @@ def test_flag_on_post_error_rerenders_hub(
         },
     )
     assert resp.status_code == 200
-    assert "Everyday settings" in resp.text  # hub chrome, not the flat page
+    assert 'id="features"' in resp.text
+    assert 'aria-current="true">General</a>' in resp.text
+
+
+def test_mutable_tabs_own_their_sections(
+    session_factory: sessionmaker[Session],
+) -> None:
+    client = _client(session_factory, console_settings_enabled=True)
+    media = client.get("/settings/media").text
+    assert 'id="folders"' in media and 'id="sources"' in media
+    assert 'id="llm"' not in media
+    assert 'aria-current="true">Media</a>' in media
+
+    ai = client.get("/settings/ai").text
+    for anchor in ("llm", "translation", "corrections", "glossary", "semantic-search"):
+        assert f'id="{anchor}"' in ai
+    assert 'id="folders"' not in ai
+    assert 'aria-current="true">AI</a>' in ai
+
+
+def test_removed_features_get_route_is_not_registered(
+    session_factory: sessionmaker[Session],
+) -> None:
+    client = _client(session_factory)
+    assert client.get("/settings/features").status_code == 405
 
 
 # --------------------------------------------------------------------------- #
@@ -143,7 +168,15 @@ def test_flag_on_post_error_rerenders_hub(
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("flag", [False, True])
 @pytest.mark.parametrize(
-    "path", ["/settings/status", "/settings/hardware", "/settings/database", "/settings/plugins"]
+    "path",
+    [
+        "/settings/media",
+        "/settings/ai",
+        "/settings/status",
+        "/settings/hardware",
+        "/settings/database",
+        "/settings/plugins",
+    ],
 )
 def test_subpages_reachable_regardless_of_flag(
     session_factory: sessionmaker[Session], flag: bool, path: str
@@ -245,6 +278,8 @@ def test_plugins_page_shows_synthdetect(
     client = _client(session_factory)
     body = client.get("/settings/plugins").text
     assert "Synthetic Speech Detection" in body
+    assert 'id="synthdetect"' in body
+    assert 'aria-current="true">Plugins</a>' in body
 
 
 def test_plugins_page_reports_unknown_kill_switch_id(

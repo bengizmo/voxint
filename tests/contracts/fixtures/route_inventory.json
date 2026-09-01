@@ -662,6 +662,12 @@
     ]
   ],
   [
+    "/settings/ai",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/settings/corrections",
     [
       "POST"
@@ -669,12 +675,6 @@
   ],
   [
     "/settings/database",
-    [
-      "GET"
-    ]
-  ],
-  [
-    "/settings/features",
     [
       "GET"
     ]
@@ -713,6 +713,12 @@
     "/settings/llm",
     [
       "POST"
+    ]
+  ],
+  [
+    "/settings/media",
+    [
+      "GET"
     ]
   ],
   [

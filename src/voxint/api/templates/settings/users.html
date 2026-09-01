@@ -1,19 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Voxint — users{% endblock %}
 {% block body %}
-<nav class="filter-tabs" role="tablist" aria-label="Settings pages">
-  <a href="/settings/status" role="tab">Status</a>
-  <a href="/settings/hardware" role="tab">Hardware</a>
-  <a href="/settings/database" role="tab">Database</a>
-  <a href="/settings/plugins" role="tab">Plugins</a>
-  <a href="/settings/features" role="tab">Features</a>
-  {% if shell.users_enabled %}<a href="/settings/users" role="tab" aria-current="true">Users</a>{% endif %}
-  <span class="ft-spacer"></span>
-</nav>
+{% from "settings/_tab_strip.html" import settings_tabs with context %}
+{{ settings_tabs("users") }}
 
 <div class="settings">
 <h1>Users</h1>
-<p><a href="/settings">← Settings</a></p>
 
 {% if users_error %}
 <p class="notice" role="alert">{{ users_error }}</p>

@@ -113,7 +113,7 @@ def test_enable_run_assets_applies_without_restart(
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/settings"
+    assert resp.headers["location"] == "/settings#features"
     row = _row(session_factory)
     assert row is not None and row.enrichment_run_assets_enabled is True
     # Same app instance — no restart — and the gate is now open.

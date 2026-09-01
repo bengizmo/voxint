@@ -7,16 +7,8 @@
 {% block cb_actions %}{% endblock %}
 
 {% block body %}
-<nav class="filter-tabs" role="tablist" aria-label="Settings pages">
-  <a href="/settings/status" role="tab" aria-current="true">Status</a>
-  <a href="/settings/hardware" role="tab">Hardware</a>
-  <a href="/settings/database" role="tab">Database</a>
-  <a href="/settings/plugins" role="tab">Plugins</a>
-  <a href="/settings/features" role="tab">Features</a>
-  {% if shell.users_enabled %}<a href="/settings/users" role="tab">Users</a>{% endif %}
-  <span class="ft-spacer"></span>
-  <span class="oc-muted">Some changes restart parts of Voxint -- it tells you before it does.</span>
-</nav>
+{% from "settings/_tab_strip.html" import settings_tabs with context %}
+{{ settings_tabs("status") }}
 
 <section class="oc-section" aria-label="System status">
   <div class="status-banner">

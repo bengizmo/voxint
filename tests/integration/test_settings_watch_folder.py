@@ -60,7 +60,7 @@ def test_toggle_section_renders_beside_folders(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
     client, _ = make_client(session_factory, media_root)
-    body = client.get("/settings").text
+    body = client.get("/settings/media").text
     assert 'id="watch-folder"' in body
     assert 'action="/settings/watch-folder"' in body
     assert 'name="watch_folder_enabled"' in body
@@ -126,7 +126,7 @@ def test_status_line_renders_persisted_summary(
         }
         s.commit()
 
-    body = client.get("/settings").text
+    body = client.get("/settings/media").text
     assert "picked up 3 new files" in body
     assert "12 already known" in body
     assert "2 waiting to settle" in body
@@ -156,7 +156,7 @@ def test_status_line_file_cap_warning_promises_eventual_pickup(
         row = get_or_create(s, llm_enabled_default=False)
         row.watch_folder_last_sweep = _cap_summary(hit_file_cap=True)
         s.commit()
-    body = client.get("/settings").text
+    body = client.get("/settings/media").text
     assert "only the first batch was queued" in body
     assert "picked up over the next few checks" in body
 
@@ -171,7 +171,7 @@ def test_status_line_entry_cap_warning_is_honest_about_starvation(
         row = get_or_create(s, llm_enabled_default=False)
         row.watch_folder_last_sweep = _cap_summary(hit_entry_cap=True)
         s.commit()
-    body = client.get("/settings").text
+    body = client.get("/settings/media").text
     assert "may not be picked up" in body
     assert "picked up over the next few checks" not in body
 
@@ -186,7 +186,7 @@ def test_status_line_root_missing_warning(
         summary["root_missing"] = True
         row.watch_folder_last_sweep = summary
         s.commit()
-    body = client.get("/settings").text
+    body = client.get("/settings/media").text
     assert "media folder could not be found" in body
 
 
@@ -202,7 +202,7 @@ def test_status_line_sidecar_errors_warning(
         summary["sidecar_errors"] = 2
         row.watch_folder_last_sweep = summary
         s.commit()
-    body = client.get("/settings").text
+    body = client.get("/settings/media").text
     assert "companion .yaml sidecar has a problem" in body
     assert "next check will pick the recording up" in body
 
@@ -217,6 +217,6 @@ def test_status_line_pre_sidecar_blob_renders_safely(
         row = get_or_create(s, llm_enabled_default=False)
         row.watch_folder_last_sweep = _cap_summary()  # no sidecar_errors key
         s.commit()
-    resp = client.get("/settings")
+    resp = client.get("/settings/media")
     assert resp.status_code == 200
     assert "companion .yaml sidecar" not in resp.text

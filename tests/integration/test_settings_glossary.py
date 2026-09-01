@@ -67,7 +67,7 @@ def test_section_renders_with_form(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
     client = make_client(session_factory, media_root)
-    resp = client.get("/settings")
+    resp = client.get("/settings/ai")
     assert resp.status_code == 200
     body = resp.text
     assert 'id="glossary"' in body
@@ -83,7 +83,7 @@ def test_section_prefills_stored_terms(
     with session_factory() as session:
         get_or_create(session, llm_enabled_default=False).vocabulary = ["Zoning Board", "NUCA"]
         session.commit()
-    body = client.get("/settings").text
+    body = client.get("/settings/ai").text
     # Both terms render in the textarea, one per line, and the count is exact.
     assert "Zoning Board" in body
     assert "NUCA" in body
@@ -101,7 +101,7 @@ def test_post_valid_terms_persists_normalized(
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/settings#glossary"
+    assert resp.headers["location"] == "/settings/ai#glossary"
     row = _row(session_factory)
     assert row is not None and row.vocabulary == ["Zoning Board", "NUCA"]
 

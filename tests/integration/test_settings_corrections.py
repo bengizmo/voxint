@@ -79,7 +79,7 @@ def test_section_renders_with_island_mount(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
     client, _ = make_client(session_factory, media_root)
-    resp = client.get("/settings")
+    resp = client.get("/settings/ai")
     assert resp.status_code == 200
     body = resp.text
     assert 'id="corrections"' in body
@@ -124,7 +124,7 @@ def test_post_without_json_accept_redirects(
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/settings"
+    assert resp.headers["location"] == "/settings/ai#corrections"
     row = _row(session_factory)
     assert row is not None and row.corrections[0]["id"] == "teh"
 

@@ -1653,10 +1653,12 @@ by their per-run claim token.
 | `GET /media/{run_id}` | Gated media serving (Range-aware) for the workbench player |
 | `GET /login` · `POST /login` · `POST /logout` | Multi-user session auth (login form, session create, session destroy); returns 404 when `VOXINT_MULTI_USER` is false |
 | `GET /setup` · `POST /setup/{media,scan,vocabulary,llm,finish}` | First-run setup wizard; held by the onboarding gate until finished (own `CSRF_SETUP` token) |
-| `GET /settings` | Post-onboarding settings hub: edit features / media folders / corrections / LLM / sources, re-run the wizard, start/replay/complete the tutorial, and reach the read-only sub-pages below |
+| `GET /settings` | Settings hub, General tab: appearance, features, benchmark, re-run the wizard, start/replay/complete the tutorial. Old fragment links (`#llm`, `#folders`, etc.) are redirected client-side to the owning tab page |
+| `GET /settings/media` | Settings Media tab: media folders, automatic ingest (watch-folder), sources and research |
+| `GET /settings/ai` | Settings AI tab: LLM enhancement, translation, corrections, glossary, semantic search |
 | `GET /settings/status` | Status and health: install kind, live component health (Postgres / Redis / model services), and the live hardware snapshot (absorbs the old `/resources`; answers an `HX-Request` poll with just the hardware fragment, 15s auto-refresh) |
-| `GET /settings/features` | 303 redirect to `/settings#features` (the Features section on the hub page) |
 | `GET /settings/{hardware,database,plugins}`, `GET /settings/plugins/{id}` | Read-only settings sub-pages: effective hardware config, database size/retention, and the plugin registry |
+| `GET /settings/users` | Users tab (multi-user mode only; returns 404 when `VOXINT_MULTI_USER` is false) |
 | `GET /activity/events?since={id}` | Activity feed poll (JSON): run-completion and speaker-identification events after a cursor plus the live-jobs badge count. Dark-shipped behind `CONSOLE_ACTIVITY_ENABLED` (answers 404 until on); no `since` bootstraps at the high-water mark so a fresh tab does not replay history (#162) |
 | `POST /settings/tutorial/{complete,replay}` | Complete / non-destructively replay the guided tutorial (own `CSRF_SETTINGS` token) |
 | `POST /settings/corrections` | Replace the operator's console-authored correction rules (#84; whole list validated through the pack #80 gate, own `CSRF_SETTINGS` token; a pack collision returns a plain-language 422) |

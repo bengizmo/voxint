@@ -58,7 +58,7 @@ def test_translation_section_renders(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
     client, _ = make_client(session_factory, tmp_path)
-    body = client.get("/settings").text
+    body = client.get("/settings/ai").text
     assert 'id="translation"' in body
     assert 'name="translation_target_language"' in body
     # Unset columns render as "inherit" and name the (unset) env default.
@@ -83,7 +83,7 @@ def test_save_override_and_revert_to_inherit(
     assert row.translation_autogenerate is True
 
     # The saved state renders back selected/checked.
-    body = client.get("/settings").text
+    body = client.get("/settings/ai").text
     assert 'value="es" selected' in body
     assert 'name="translation_autogenerate" value="on" checked' in body
 

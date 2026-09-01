@@ -148,7 +148,7 @@ class TestSettingsSection:
         self, session_factory: sessionmaker[Session]
     ) -> None:
         client = _client(session_factory)
-        resp = client.get("/settings")
+        resp = client.get("/settings/plugins")
         assert resp.status_code == 200
         assert 'id="synthdetect"' in resp.text
         assert "Synthetic speech detection" in resp.text
@@ -157,7 +157,7 @@ class TestSettingsSection:
         self, session_factory: sessionmaker[Session]
     ) -> None:
         client = _client(session_factory)
-        resp = client.get("/settings")
+        resp = client.get("/settings/plugins")
         assert resp.status_code == 200
         assert 'name="synthdetect_enabled"' in resp.text
         assert 'name="synthdetect_autogenerate"' in resp.text

@@ -884,6 +884,14 @@
     true
   ],
   [
+    "/settings/ai",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/settings/corrections",
     [
       "POST"
@@ -893,14 +901,6 @@
   ],
   [
     "/settings/database",
-    [
-      "GET"
-    ],
-    "onboarding",
-    true
-  ],
-  [
-    "/settings/features",
     [
       "GET"
     ],
@@ -951,6 +951,14 @@
     "/settings/llm",
     [
       "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/media",
+    [
+      "GET"
     ],
     "onboarding",
     true
