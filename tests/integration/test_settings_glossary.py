@@ -71,7 +71,7 @@ def test_section_renders_with_form(
     assert resp.status_code == 200
     body = resp.text
     assert 'id="glossary"' in body
-    assert "/settings/glossary" in body
+    assert "/settings/ai" in body
     # Fresh deployment: no terms yet, and the count reads honestly.
     assert "0 terms." in body
 

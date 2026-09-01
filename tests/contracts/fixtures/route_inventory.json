@@ -662,9 +662,21 @@
     ]
   ],
   [
+    "/settings",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/settings/ai",
     [
       "GET"
+    ]
+  ],
+  [
+    "/settings/ai",
+    [
+      "POST"
     ]
   ],
   [
@@ -719,6 +731,12 @@
     "/settings/media",
     [
       "GET"
+    ]
+  ],
+  [
+    "/settings/media",
+    [
+      "POST"
     ]
   ],
   [

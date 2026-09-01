@@ -5,10 +5,17 @@
 {{ settings_tabs("ai") }}
 <div class="settings">
 <h1>AI</h1>
-{% include "settings/_llm.html" %}
-{% include "settings/_translation.html" %}
+<form method="post" action="/settings/ai" autocomplete="off">
+  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+  <button type="submit" hidden aria-hidden="true" tabindex="-1"></button>
+  {% include "settings/_llm.html" %}
+  {% include "settings/_translation.html" %}
+  {% include "settings/_glossary.html" %}
+  {% include "settings/_semantic.html" %}
+  <div class="switch-save">
+    <button type="submit">Save AI settings</button>
+  </div>
+</form>
 {% include "settings/_corrections.html" %}
-{% include "settings/_glossary.html" %}
-{% include "settings/_semantic.html" %}
 </div>
 {% endblock %}

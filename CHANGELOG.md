@@ -15,6 +15,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   explains why and defaults to CPU.
 
 ### Changed
+- **Settings control model** (#379). Every tri-state feature setting
+  (On / Off / Use installation setting) is now a toggle switch showing
+  the effective state. Overridden settings show a "Changed" badge and a
+  "Reset to default" affordance. Each settings tab has one Save button
+  instead of one per section. Feature dependencies are enforced by
+  disabling the dependent switch with an inline reason, not prose
+  notices. The LLM checkbox is restyled as a visual switch (no
+  inheritance — the underlying model is unchanged). The three persisted
+  states (on / off / inherit) are preserved on the wire; saving without
+  changes never converts an inherited flag to a pinned override (save
+  idempotency).
 - **Settings IA: tabs** (#378). The settings hub is split into tabbed
   sub-pages: General (appearance, features, tutorial), Media (folders,
   sources), and AI (LLM, translation, corrections, glossary, semantic

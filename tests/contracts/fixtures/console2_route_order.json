@@ -738,6 +738,24 @@
     ]
   ],
   [
+    "/settings",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/settings/ai",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/settings/media",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/settings/folders/browse",
     [
       "GET"

@@ -1,0 +1,29 @@
+{%- macro tri_switch(name, label, help_text, state, effective, env_default, disabled=False, disabled_reason="") -%}
+<div class="switch-row{% if disabled %} switch-disabled{% endif %}">
+  <div class="switch-header">
+    <label class="switch-label" for="sw-{{ name }}">{{ label }}</label>
+    <div class="switch-meta">
+      {% if state != "inherit" %}
+        <span class="switch-badge">Changed</span>
+        <button type="submit" name="reset_flag" value="{{ name }}" class="switch-reset">
+          Reset to default ({{ "On" if env_default else "Off" }})
+        </button>
+      {% endif %}
+    </div>
+  </div>
+  <div class="switch-control">
+    {% if not disabled %}
+      <input type="hidden" name="_rendered" value="{{ name }}">
+    {% endif %}
+    <input type="checkbox" id="sw-{{ name }}" name="{{ name }}" value="on"
+           role="switch"
+           {% if effective %}checked{% endif %}
+           {% if disabled %}disabled{% endif %}
+           aria-describedby="sw-{{ name }}-help{% if disabled and disabled_reason %} sw-{{ name }}-why{% endif %}">
+  </div>
+  <p class="muted switch-help" id="sw-{{ name }}-help">{{ help_text }}</p>
+  {% if disabled and disabled_reason %}
+    <p class="muted switch-why" id="sw-{{ name }}-why">{{ disabled_reason }}</p>
+  {% endif %}
+</div>
+{%- endmacro -%}
