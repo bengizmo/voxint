@@ -7,6 +7,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Media library search and status filter** (#380). Server-side search
+  (case-insensitive substring over display name, source path, and folder
+  name) and a status filter (Needs review / Failed / Reviewed / All).
+  Search and filter compose with each other and with the existing sort
+  and view controls. An empty-result state with a Clear link replaces the
+  generic empty message when a filter is active. Row actions are now
+  state-dependent: Review (needs adjudication), Retry (failed), or Open
+  (everything else). The "File missing" chip is replaced with plain
+  language ("Original file not found") showing the expected path.
 - **GPU resource awareness in the installer**. VRAM-aware tier recommendation
   with per-device compose targeting, interactive device selection, `--gpu-check`
   diagnostics, and enhanced `--hardware-dry-run`. The installer now inventories
