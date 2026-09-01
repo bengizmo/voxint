@@ -311,6 +311,21 @@
        grid, a plain rows table, and a right-rail split that stacks narrow. */
     .lib-toolbar { display: flex; flex-wrap: wrap; align-items: center;
                gap: var(--space-2) var(--space-3); margin: var(--space-4) 0; }
+    .lib-search { margin: var(--space-3) 0 0; }
+    .lib-search-row { display: flex; flex-wrap: wrap; align-items: center;
+               gap: var(--space-2); }
+    .lib-search-row input[type="search"] { flex: 1 1 14rem; min-width: 10rem;
+               padding: .35rem .5rem; font: inherit; border: 1px solid var(--line);
+               border-radius: var(--r-md); background: var(--surface); color: var(--ink); }
+    .lib-search-row select { padding: .35rem .5rem; font: inherit;
+               border: 1px solid var(--line); border-radius: var(--r-md);
+               background: var(--surface); color: var(--ink); }
+    .lib-search-clear { font-size: var(--t-sm); color: var(--accent); text-decoration: none; }
+    .file-missing-notice { display: inline-flex; align-items: baseline; gap: var(--space-1);
+               flex-wrap: wrap; }
+    .file-missing-path { font-size: var(--t-sm); color: var(--ink-2); word-break: break-all;
+               max-width: 20rem; overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; display: inline-block; vertical-align: bottom; }
     .view-toggle { display: inline-flex; border: 1px solid var(--line);
                border-radius: var(--r-md); overflow: hidden; }
     .view-toggle a, .view-toggle button { padding: .25rem .6rem; border: 0;

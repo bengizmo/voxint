@@ -183,6 +183,175 @@ def test_library_lists_a_file_with_folder_and_status(
     assert "reviewed" in body  # completed run with no unresolved labels
 
 
+# ---- search + status filters -----------------------------------------------
+
+
+def test_search_by_title(client: TestClient, session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        _add_media(session, source_path="incoming/alpha.wav", title="Alpha interview")
+        _add_media(session, source_path="incoming/bravo.wav", title="Bravo briefing")
+        session.commit()
+
+    resp = client.get("/media?q=Alpha")
+    assert "Alpha interview" in resp.text
+    assert "Bravo briefing" not in resp.text
+
+
+def test_search_by_source_path(client: TestClient, session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        _add_media(session, source_path="incoming/council-session.wav", title="Council audio")
+        _add_media(session, source_path="incoming/other.wav", title="Other audio")
+        session.commit()
+
+    resp = client.get("/media?q=council-session")
+    assert "Council audio" in resp.text
+    assert "Other audio" not in resp.text
+
+
+def test_search_by_folder_name(client: TestClient, session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        folder = MediaFolder(path="field-recordings")
+        session.add(folder)
+        session.flush()
+        _add_media(
+            session,
+            source_path="incoming/one.wav",
+            title="Field recording one",
+            folder_id=folder.id,
+        )
+        _add_media(
+            session,
+            source_path="incoming/two.wav",
+            title="Field recording two",
+            folder_id=folder.id,
+        )
+        _add_media(session, source_path="incoming/studio.wav", title="Studio recording")
+        session.commit()
+
+    resp = client.get("/media?q=field-recordings")
+    assert "Field recording one" in resp.text
+    assert "Field recording two" in resp.text
+    assert "Studio recording" not in resp.text
+
+
+def test_search_case_insensitive(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        _add_media(session, source_path="incoming/lower.wav", title="lowercase title")
+        session.commit()
+
+    resp = client.get("/media?q=LOWERCASE")
+    assert "lowercase title" in resp.text
+
+
+def test_search_empty_result(client: TestClient, session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        _add_media(session, source_path="incoming/present.wav", title="Present title")
+        session.commit()
+
+    resp = client.get("/media?q=does-not-exist")
+    assert "No recordings match" in resp.text
+
+
+def test_status_filter_needs_review(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        review = _add_media(session, source_path="incoming/review.wav", title="Review me")
+        done = _add_media(session, source_path="incoming/done.wav", title="Already done")
+        _add_run(session, review, status=RunStatus.AWAITING_ADJUDICATION)
+        _add_run(session, done, status=RunStatus.COMPLETED)
+        session.commit()
+
+    resp = client.get("/media?status=needs_review")
+    assert "Review me" in resp.text
+    assert "Already done" not in resp.text
+
+
+def test_status_filter_failed(client: TestClient, session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        failed = _add_media(session, source_path="incoming/failed.wav", title="Failed item")
+        running = _add_media(session, source_path="incoming/running.wav", title="Running item")
+        _add_run(session, failed, status=RunStatus.FAILED)
+        _add_run(session, running, status=RunStatus.RUNNING)
+        session.commit()
+
+    resp = client.get("/media?status=failed")
+    assert "Failed item" in resp.text
+    assert "Running item" not in resp.text
+
+
+def test_status_filter_reviewed(client: TestClient, session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        done = _add_media(session, source_path="incoming/done.wav", title="Reviewed item")
+        queued = _add_media(session, source_path="incoming/queued.wav", title="Queued item")
+        _add_run(session, done, status=RunStatus.COMPLETED)
+        _add_run(session, queued, status=RunStatus.QUEUED)
+        session.commit()
+
+    resp = client.get("/media?status=reviewed")
+    assert "Reviewed item" in resp.text
+    assert "Queued item" not in resp.text
+
+
+def test_search_and_status_compose(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        matching = _add_media(session, source_path="incoming/match.wav", title="Council match")
+        wrong_status = _add_media(
+            session, source_path="incoming/done.wav", title="Council completed"
+        )
+        wrong_search = _add_media(session, source_path="incoming/other.wav", title="Other failure")
+        _add_run(session, matching, status=RunStatus.FAILED)
+        _add_run(session, wrong_status, status=RunStatus.COMPLETED)
+        _add_run(session, wrong_search, status=RunStatus.FAILED)
+        session.commit()
+
+    resp = client.get("/media?q=Council&status=failed")
+    assert "Council match" in resp.text
+    assert "Council completed" not in resp.text
+    assert "Other failure" not in resp.text
+
+
+def test_row_action_review_verb(client: TestClient, session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        media = _add_media(session, source_path="incoming/review.wav", title="Review action")
+        _add_run(session, media, status=RunStatus.AWAITING_ADJUDICATION)
+        session.commit()
+
+    assert "Review →" in client.get("/media").text
+
+
+def test_row_action_retry_verb(client: TestClient, session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        media = _add_media(session, source_path="incoming/retry.wav", title="Retry action")
+        _add_run(session, media, status=RunStatus.FAILED)
+        session.commit()
+
+    assert "Retry →" in client.get("/media").text
+
+
+def test_row_action_open_verb(client: TestClient, session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        media = _add_media(session, source_path="incoming/open.wav", title="Open action")
+        _add_run(session, media, status=RunStatus.COMPLETED)
+        session.commit()
+
+    assert "Open →" in client.get("/media").text
+
+
+def test_file_missing_plain_language(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        _add_media(session, source_path="incoming/missing.wav", title="Missing original")
+        session.commit()
+
+    assert "Original file not found" in client.get("/media").text
+
+
 # ---- the aggregate ----------------------------------------------------------
 
 

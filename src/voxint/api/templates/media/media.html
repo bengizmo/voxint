@@ -8,9 +8,10 @@
 {{ media_summary.file_count }} recording{{ "s" if media_summary.file_count != 1 else "" }} · {{ media_summary.total_hours }}
 {%- endblock %}
 {% block cb_actions %}
+{% set _fqs %}{% if search %}&q={{ search|urlencode }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% endset %}
 <nav class="view-toggle" aria-label="Show as">
   {% for value in views %}
-  <a href="/media?sort={{ sort }}&view={{ value }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
+  <a href="/media?sort={{ sort }}&view={{ value }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}{{ _fqs }}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
   {% endfor %}
 </nav>
 {% if not archived and not trashed %}
@@ -35,6 +36,10 @@
 {% endblock %}
 
 {% block body %}
+{# Query-string suffix carrying the current search and status filter,
+   appended to sort/view/folder links so navigation preserves the filter. #}
+{% set filter_qs %}{% if search %}&q={{ search|urlencode }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% endset %}
+
 {# Status chip for a media item — shared by table rows and cards to prevent drift. #}
 {% macro media_status(row) %}
   {%- if row.latest_run_id -%}
@@ -46,6 +51,29 @@
     {{ chip(humanize_status(row.latest_run_status)) }}
     {%- endif -%}
   {%- else -%}<span class="oc-muted">—</span>{%- endif -%}
+{% endmacro %}
+
+{# File-missing notice — plain language with the expected path and a Remove action. #}
+{% macro file_missing_notice(row) %}
+  {%- if row.id in missing_file_ids -%}
+  <span class="file-missing-notice">
+    <span class="chip chip-danger">Original file not found</span>
+    <code class="file-missing-path" title="{{ row.current_path or row.source_path }}">{{ row.current_path or row.source_path }}</code>
+  </span>
+  {%- endif -%}
+{% endmacro %}
+
+{# Row action verb — state-dependent to tell the operator what they will do. #}
+{% macro row_action(row) %}
+  {%- if row.latest_run_id -%}
+    {%- if row.latest_run_status == "awaiting_adjudication" -%}
+    <a href="/media/{{ row.id }}/editor">Review →</a>
+    {%- elif row.latest_run_status == "failed" -%}
+    <a href="/media/{{ row.id }}/editor">Retry →</a>
+    {%- else -%}
+    <a href="/media/{{ row.id }}/editor">Open →</a>
+    {%- endif -%}
+  {%- endif -%}
 {% endmacro %}
 
 {# Card macro for a single media item in cards view. #}
@@ -63,7 +91,7 @@
     {% endif %}
     <div class="media-card-chips">
       {{ media_status(row) }}
-      {% if row.id in missing_file_ids %}<span class="chip chip-danger" title="The file at {{ row.current_path or row.source_path }} was not found on disk">File missing</span>{% endif %}
+      {{ file_missing_notice(row) }}
     </div>
     <p class="media-card-meta">
       {% if trashed and row.trashed_at %}{{ format_age(row.trashed_at, now=now) }}
@@ -136,6 +164,8 @@
           <input type="hidden" name="folder_id" value="{{ opt.id }}">
           <input type="hidden" name="sort" value="{{ sort }}">
           <input type="hidden" name="view" value="{{ view }}">
+          {% if search %}<input type="hidden" name="q" value="{{ search }}">{% endif %}
+          {% if status %}<input type="hidden" name="filter_status" value="{{ status }}">{% endif %}
           <button type="submit" class="danger">Unregister</button>
         </form>
       </li>
@@ -149,6 +179,8 @@
       <input type="hidden" name="action" value="add">
       <input type="hidden" name="sort" value="{{ sort }}">
       <input type="hidden" name="view" value="{{ view }}">
+      {% if search %}<input type="hidden" name="q" value="{{ search }}">{% endif %}
+      {% if status %}<input type="hidden" name="filter_status" value="{{ status }}">{% endif %}
       <label for="register-folder-path">Folder path (under the media root)
         <input id="register-folder-path" type="text" name="folder" placeholder="interviews/2026" required>
       </label>
@@ -173,10 +205,31 @@
 </div>
 {% endif %}
 
+{% if not archived and not trashed %}
+<form class="lib-search" method="get" action="/media">
+  <input type="hidden" name="sort" value="{{ sort }}">
+  <input type="hidden" name="view" value="{{ view }}">
+  <div class="lib-search-row">
+    <input type="search" name="q" value="{{ search }}" placeholder="Search by name or folder…" aria-label="Search media">
+    <select name="status" aria-label="Filter by status" onchange="this.form.submit()">
+      {% for value, label in statuses %}
+      <option value="{{ value }}"{% if value == status %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="cb-btn cb-btn-secondary">Search</button>
+    {% if is_filtered %}
+    <a href="/media?sort={{ sort }}&view={{ view }}" class="lib-search-clear">Clear</a>
+    {% endif %}
+  </div>
+</form>
+{% endif %}
+
 {% if rows %}
 <form method="post" action="{% if trashed %}/media/restore{% elif archived %}/media/unarchive{% else %}/media/assign{% endif %}" id="bulk-form">
   <input type="hidden" name="sort" value="{{ sort }}">
   <input type="hidden" name="view" value="{{ view }}">
+  {% if search %}<input type="hidden" name="q" value="{{ search }}">{% endif %}
+  {% if status %}<input type="hidden" name="filter_status" value="{{ status }}">{% endif %}
   {% if open_folder_id is defined and open_folder_id %}
   <input type="hidden" name="open" value="{{ open_folder_id }}">
   {% endif %}
@@ -211,7 +264,7 @@
   <div class="lib-toolbar">
     <nav class="view-toggle" aria-label="Sort by">
       {% for value, label in sorts %}
-      <a href="/media?sort={{ value }}&view={{ view }}{% if open_folder_id is defined and open_folder_id %}&open={{ open_folder_id }}{% endif %}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
+      <a href="/media?sort={{ value }}&view={{ view }}{% if open_folder_id is defined and open_folder_id %}&open={{ open_folder_id }}{% endif %}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}{{ filter_qs }}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
       {% endfor %}
     </nav>
     <span style="flex:1"></span>
@@ -280,7 +333,7 @@
       </span>
       <span class="gt-child-indent">
         {{ friendly_media_label(row.source_title, row.source_path) }}
-        {% if row.id in missing_file_ids %}<span class="chip chip-danger" title="The file at {{ row.current_path or row.source_path }} was not found on disk">File missing</span>{% endif %}
+        {{ file_missing_notice(row) }}
       </span>
       <span class="num">—</span>
       <span class="num">{{ format_duration(row.duration_seconds) }}</span>
@@ -289,11 +342,7 @@
         {% if trashed and row.trashed_at %}{{ format_age(row.trashed_at, now=now) }}
         {% else %}{{ format_age(row.added_at, now=now) }}{% endif %}
       </span>
-      <span class="gt-action">
-        {% if row.latest_run_id %}
-        <a href="/media/{{ row.id }}/editor">View →</a>
-        {% endif %}
-      </span>
+      <span class="gt-action">{{ row_action(row) }}</span>
     </div>
     {% endfor %}
     {% endfor %}
@@ -308,7 +357,7 @@
       </span>
       <span>
         {{ friendly_media_label(row.source_title, row.source_path) }}
-        {% if row.id in missing_file_ids %}<span class="chip chip-danger" title="The file at {{ row.current_path or row.source_path }} was not found on disk">File missing</span>{% endif %}
+        {{ file_missing_notice(row) }}
       </span>
       <span class="num">—</span>
       <span class="num">{{ format_duration(row.duration_seconds) }}</span>
@@ -317,11 +366,7 @@
         {% if trashed and row.trashed_at %}{{ format_age(row.trashed_at, now=now) }}
         {% else %}{{ format_age(row.added_at, now=now) }}{% endif %}
       </span>
-      <span class="gt-action">
-        {% if row.latest_run_id %}
-        <a href="/media/{{ row.id }}/editor">View →</a>
-        {% endif %}
-      </span>
+      <span class="gt-action">{{ row_action(row) }}</span>
     </div>
     {% endfor %}
   </div>
@@ -330,7 +375,7 @@
   {# --- Cards view ---------------------------------------------------- #}
   {% if active_folder is defined and active_folder %}
   {# Drill-down: showing a single folder's items as a list. #}
-  <a class="cards-back" href="/media?sort={{ sort }}&view=cards{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}">
+  <a class="cards-back" href="/media?sort={{ sort }}&view=cards{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}{{ filter_qs }}">
     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11 2L5 8l6 6" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
     All folders
   </a>
@@ -369,15 +414,11 @@
       </span>
       <span>
         {{ friendly_media_label(row.source_title, row.source_path) }}
-        {% if row.id in missing_file_ids %}<span class="chip chip-danger" title="The file at {{ row.current_path or row.source_path }} was not found on disk">File missing</span>{% endif %}
+        {{ file_missing_notice(row) }}
       </span>
       <span class="num">{{ format_duration(row.duration_seconds) }}</span>
       <span>{{ media_status(row) }}</span>
-      <span class="gt-action">
-        {% if row.latest_run_id %}
-        <a href="/media/{{ row.id }}/editor">View →</a>
-        {% endif %}
-      </span>
+      <span class="gt-action">{{ row_action(row) }}</span>
     </div>
     {% else %}
     <div class="gt-row"><span></span><span class="oc-muted" style="grid-column:span 4">No recordings in this folder.</span></div>
@@ -390,7 +431,7 @@
   <ul class="lib-cards">
     {% for group in folder_groups %}
     <li class="folder-tile">
-      <a class="media-folder-card" href="/media?sort={{ sort }}&view=cards&open={{ group.folder_id }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}">
+      <a class="media-folder-card" href="/media?sort={{ sort }}&view=cards&open={{ group.folder_id }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}{{ filter_qs }}">
         <div class="mfc-icon">
           <svg width="24" height="24" viewBox="0 0 16 16" fill="var(--ink-2)" aria-hidden="true"><path d="M1.5 2A1.5 1.5 0 000 3.5v9A1.5 1.5 0 001.5 14h13a1.5 1.5 0 001.5-1.5V5a1.5 1.5 0 00-1.5-1.5H7.71L6.85 2.64A1.5 1.5 0 005.57 2H1.5z"/></svg>
           <span class="mfc-name">{{ group.folder_path }}</span>
@@ -447,6 +488,8 @@
 <p class="oc-muted">Trash is empty.</p>
 {% elif archived %}
 <p class="oc-muted">No archived runs. Archive a run from the <a href="{{ archived_toggle_url }}">active library</a> to see it here.</p>
+{% elif is_filtered %}
+<p class="oc-muted">No recordings match{% if search %} "{{ search }}"{% endif %}{% if status %} with that filter{% endif %}. <a href="/media?sort={{ sort }}&view={{ view }}">Clear search</a></p>
 {% else %}
 <p class="oc-muted">No media yet. Add a recording with the button above, or register a folder on the server.</p>
 {% endif %}

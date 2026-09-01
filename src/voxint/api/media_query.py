@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final, TypeGuard
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
 
@@ -234,6 +234,19 @@ SORT_LABELS: Final[tuple[tuple[str, str], ...]] = (
     ("size", "Largest"),
 )
 
+# Status filter keys — the allowlist. The WHERE clause is built in
+# media_library() because "needs_review" and "reviewed" depend on
+# unresolved_label_count (a correlated subquery), not just run status.
+_STATUS_FILTER_KEYS: Final[frozenset[str]] = frozenset(
+    {"needs_review", "failed", "reviewed"}
+)
+STATUS_LABELS: Final[tuple[tuple[str, str], ...]] = (
+    ("", "All"),
+    ("needs_review", "Needs review"),
+    ("failed", "Failed"),
+    ("reviewed", "Reviewed"),
+)
+
 # The listing is bounded (the read doctrine's "no unbounded SELECT"). The target
 # audience is a single operator with a modest library, so a flat cap is honest
 # and needs no config knob; the page says so when it truncates.
@@ -244,6 +257,15 @@ def sort_is_known(sort: str | None) -> TypeGuard[str]:
     return sort in _SORTS
 
 
+def status_is_known(status: str | None) -> bool:
+    return status is not None and status in _STATUS_FILTER_KEYS
+
+
+def _escape_like(term: str) -> str:
+    """Escape ``%``, ``_``, and ``\\`` for use in ILIKE patterns."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def media_library(
     session: Session,
     *,
@@ -251,6 +273,8 @@ def media_library(
     limit: int = MEDIA_LIBRARY_LIMIT,
     archived: bool = False,
     trashed: bool = False,
+    search: str | None = None,
+    status: str | None = None,
 ) -> list[MediaLibraryRow]:
     """The media library rows, newest-first by default.
 
@@ -262,6 +286,11 @@ def media_library(
     view (``True``): only items whose most-recent ARCHIVED run exists (inner join).
     ``trashed`` switches the item filter from active, non-purged rows to trashed,
     non-purged rows; callers keep it mutually exclusive with ``archived``.
+
+    ``search`` applies a case-insensitive substring match over the display name
+    (source title or source path) and the settings-folder name. ``status`` filters
+    to items whose latest run is in the given status group (``needs_review``,
+    ``failed``, or ``reviewed``); unknown values are ignored.
     """
     order_by = _SORTS.get(sort, _SORTS[DEFAULT_SORT])
 
@@ -335,7 +364,36 @@ def media_library(
             MediaItem.trashed_at.is_(None),
             MediaItem.purged_at.is_(None),
         )
-    stmt = stmt.where(*item_view).order_by(*order_by).limit(limit)
+    stmt = stmt.where(*item_view)
+
+    if search and search.strip():
+        pattern = f"%{_escape_like(search.strip())}%"
+        stmt = stmt.where(
+            or_(
+                MediaItem.source_path.ilike(pattern, escape="\\"),
+                MediaSourceMetadata.title.ilike(pattern, escape="\\"),
+                MediaFolder.path.ilike(pattern, escape="\\"),
+            )
+        )
+
+    if status and status in _STATUS_FILTER_KEYS:
+        unresolved = func.coalesce(unresolved_label_count(PipelineRun.id), 0)
+        if status == "needs_review":
+            # awaiting_adjudication OR completed-with-unresolved-labels (the
+            # "needs you" state the chip shows).
+            stmt = stmt.where(
+                or_(
+                    latest.c.status == "awaiting_adjudication",
+                    (latest.c.status == "completed") & (unresolved > 0),
+                )
+            )
+        elif status == "failed":
+            stmt = stmt.where(latest.c.status == "failed")
+        elif status == "reviewed":
+            # completed AND no unresolved labels left.
+            stmt = stmt.where(latest.c.status == "completed", unresolved == 0)
+
+    stmt = stmt.order_by(*order_by).limit(limit)
 
     rows: list[MediaLibraryRow] = []
     for row in session.execute(stmt):

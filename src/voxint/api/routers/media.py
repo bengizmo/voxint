@@ -46,11 +46,13 @@ from voxint.api.media_query import (
     DEFAULT_SORT,
     MEDIA_LIBRARY_LIMIT,
     SORT_LABELS,
+    STATUS_LABELS,
     folder_options,
     group_by_folder,
     media_library,
     media_summary,
     sort_is_known,
+    status_is_known,
 )
 from voxint.api.presentation import friendly_media_label
 from voxint.api.routers import deps
@@ -130,12 +132,21 @@ def _safe_view(view: str | None) -> str:
     return view if view in _VIEWS else _DEFAULT_VIEW
 
 
+def _safe_status(status: str | None) -> str:
+    return status if status is not None and status_is_known(status) else ""
+
+
 def _redirect_params(
-    sort: str, view: str, open_folder: str = "", **extra: Any,
+    sort: str, view: str, open_folder: str = "",
+    search: str = "", status: str = "", **extra: Any,
 ) -> str:
     params: dict[str, Any] = {**extra, "sort": _safe_sort(sort), "view": _safe_view(view)}
     if open_folder and _safe_view(view) == "cards":
         params["open"] = open_folder
+    if search:
+        params["q"] = search
+    if status:
+        params["status"] = status
     return urlencode(params)
 
 
@@ -362,6 +373,8 @@ def _library_context(
     selected_ids: frozenset[str] = frozenset(),
     attempted_folder_id: str = "",
     open_folder: str = "",
+    search: str = "",
+    status: str = "",
 ) -> dict[str, Any]:
     """The full /media render context, shared by the GET page and every error
     re-render.
@@ -374,23 +387,32 @@ def _library_context(
     ``trashed`` selects the trash item view and is mutually exclusive with archived
     at the GET route. ``selected_ids``/``attempted_folder_id`` let a rejected bulk
     action re-check the operator's boxes and target instead of silently dropping
-    them.
+    them. ``search`` and ``status`` narrow the listing.
     """
     selected_sort = _safe_sort(sort)
     selected_view = _safe_view(view)
+    selected_status = _safe_status(status)
+    clean_search = search.strip() if search else ""
     rows = media_library(
-        session, sort=selected_sort, archived=archived, trashed=trashed
+        session,
+        sort=selected_sort,
+        archived=archived,
+        trashed=trashed,
+        search=clean_search or None,
+        status=selected_status or None,
     )
     folder_groups, ungrouped_items = group_by_folder(rows)
     summary = media_summary(folder_groups, ungrouped_items)
     secret = request.app.state.csrf_secret
     # The archive-view toggle target: the same sort/layout in the opposite view.
     # Active -> add ?archived=1; archived -> drop it (mirrors the /runs toggle).
-    toggle_params = {"sort": selected_sort, "view": selected_view}
+    # Search and status are intentionally NOT carried into archive/trash views
+    # (different item populations make the filter confusing).
+    toggle_params: dict[str, str] = {"sort": selected_sort, "view": selected_view}
     if not archived:
         toggle_params["archived"] = "1"
     archived_toggle_url = f"/media?{urlencode(toggle_params)}"
-    trash_params = {"sort": selected_sort, "view": selected_view}
+    trash_params: dict[str, str] = {"sort": selected_sort, "view": selected_view}
     if not trashed:
         trash_params["trashed"] = "1"
     trash_toggle_url = f"/media?{urlencode(trash_params)}"
@@ -444,6 +466,10 @@ def _library_context(
         "selected_ids": selected_ids,
         "attempted_folder_id": attempted_folder_id,
         "missing_file_ids": missing_file_ids,
+        "search": clean_search,
+        "status": selected_status,
+        "statuses": STATUS_LABELS,
+        "is_filtered": bool(clean_search or selected_status),
     }
     if open_folder and selected_view == "cards":
         for g in folder_groups:
@@ -475,6 +501,8 @@ def media_library_page(
     skipped: str | None = None,
     live_skipped: str | None = None,
     open_folder: Annotated[str | None, Query(alias="open")] = None,
+    q: str | None = None,
+    status: str | None = None,
 ) -> Response:
     settings: Settings = request.app.state.settings
     show_trashed = trashed == "1"
@@ -502,6 +530,8 @@ def media_library_page(
         submitted=submitted,
         notice=notice,
         open_folder=open_folder or "",
+        search=q or "",
+        status=status or "",
     )
     return templates.TemplateResponse(request, "media/media.html", context)
 
@@ -614,6 +644,8 @@ def media_assign(
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
     open: Annotated[str, Form()] = "",
+    q: Annotated[str, Form()] = "",
+    filter_status: Annotated[str, Form()] = "",
 ) -> Response:
     """Bulk-set the settings folder over a selection (ADR 0002 addendum).
 
@@ -636,6 +668,8 @@ def media_assign(
             settings,
             sort=sort,
             view=view,
+            search=q,
+            status=filter_status,
             notice={"kind": "error", "text": text},
             selected_ids=frozenset(raw_ids),
             attempted_folder_id=media_folder_id,
@@ -685,7 +719,9 @@ def media_assign(
             "was changed.",
         )
 
-    query = _redirect_params(sort, view, open, assigned=len(items))
+    query = _redirect_params(
+        sort, view, open, search=q, status=filter_status, assigned=len(items)
+    )
     return RedirectResponse(f"/media?{query}", status_code=303)
 
 
@@ -699,6 +735,8 @@ def media_folders(
     folder_id: Annotated[str, Form()] = "",
     sort: Annotated[str, Form()] = DEFAULT_SORT,
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
+    q: Annotated[str, Form()] = "",
+    filter_status: Annotated[str, Form()] = "",
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> Response:
     """Register (``action=add``) or unregister (``action=remove``) a folder.
@@ -722,6 +760,8 @@ def media_folders(
             settings,
             sort=sort,
             view=view,
+            search=q,
+            status=filter_status,
             notice={"kind": "error", "text": text},
         )
         return templates.TemplateResponse(
@@ -733,9 +773,16 @@ def media_folders(
         if error is not None:
             return _reject(400, error)
         session.commit()
-        query = urlencode(
-            {"folder": "added", "sort": _safe_sort(sort), "view": _safe_view(view)}
-        )
+        params = {
+            "folder": "added",
+            "sort": _safe_sort(sort),
+            "view": _safe_view(view),
+        }
+        if q:
+            params["q"] = q
+        if filter_status:
+            params["status"] = filter_status
+        query = urlencode(params)
         return RedirectResponse(f"/media?{query}", status_code=303)
 
     if action == "remove":
@@ -750,14 +797,17 @@ def media_folders(
         if fid is not None:
             _removed, reverted = unregister_folder_by_id(session, fid)
         session.commit()
-        query = urlencode(
-            {
-                "folder": "removed",
-                "reverted": reverted,
-                "sort": _safe_sort(sort),
-                "view": _safe_view(view),
-            }
-        )
+        params = {
+            "folder": "removed",
+            "reverted": str(reverted),
+            "sort": _safe_sort(sort),
+            "view": _safe_view(view),
+        }
+        if q:
+            params["q"] = q
+        if filter_status:
+            params["status"] = filter_status
+        query = urlencode(params)
         return RedirectResponse(f"/media?{query}", status_code=303)
 
     # An unknown verb is a malformed request (stale form / typo), never a silent
@@ -888,6 +938,8 @@ def media_rerun(
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
     open: Annotated[str, Form()] = "",
+    q: Annotated[str, Form()] = "",
+    filter_status: Annotated[str, Form()] = "",
 ) -> Response:
     """Advisory preview of a bulk re-run — resolves config, mutates NOTHING.
 
@@ -913,6 +965,8 @@ def media_rerun(
             settings,
             sort=sort,
             view=view,
+            search=q,
+            status=filter_status,
             notice={"kind": "error", "text": text},
             selected_ids=frozenset(raw_ids),
             open_folder=open,
@@ -973,6 +1027,8 @@ def media_rerun(
         "runnable": sum(1 for p in previews if p["issue"] is None),
         "sort": _safe_sort(sort),
         "view": _safe_view(view),
+        "search": q,
+        "status": filter_status,
         "csrf_media_rerun_confirm": mint_csrf_token(secret, CSRF_MEDIA_RERUN_CONFIRM),
     }
     return templates.TemplateResponse(request, "media/rerun_confirm.html", context)
@@ -990,6 +1046,8 @@ def media_rerun_confirm(
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
     open: Annotated[str, Form()] = "",
+    q: Annotated[str, Form()] = "",
+    filter_status: Annotated[str, Form()] = "",
 ) -> Response:
     """Atomically mint a fresh run per selected file, then report per item.
 
@@ -1016,6 +1074,8 @@ def media_rerun_confirm(
             settings,
             sort=sort,
             view=view,
+            search=q,
+            status=filter_status,
             notice={"kind": "error", "text": text},
             selected_ids=selected,
             open_folder=open,
@@ -1131,6 +1191,8 @@ def media_rerun_confirm(
         ),
         "sort": _safe_sort(sort),
         "view": _safe_view(view),
+        "search": q,
+        "status": filter_status,
     }
     return templates.TemplateResponse(request, "media/rerun_result.html", context)
 
@@ -1144,6 +1206,8 @@ def _bulk_set_archived(
     run_baseline: list[str] | None,
     sort: str,
     view: str,
+    q: str,
+    filter_status: str,
     archiving: bool,
     open: str = "",
 ) -> Response:
@@ -1177,6 +1241,8 @@ def _bulk_set_archived(
             settings,
             sort=sort,
             view=view,
+            search=q,
+            status=filter_status,
             archived=view_archived,
             notice={"kind": "error", "text": text},
             selected_ids=frozenset(raw_ids),
@@ -1254,6 +1320,10 @@ def _bulk_set_archived(
         )
 
     params: dict[str, Any] = {"sort": _safe_sort(sort), "view": _safe_view(view)}
+    if q:
+        params["q"] = q
+    if filter_status:
+        params["status"] = filter_status
     if open and _safe_view(view) == "cards":
         params["open"] = open
     if archiving:
@@ -1280,6 +1350,8 @@ def media_archive(
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
     open: Annotated[str, Form()] = "",
+    q: Annotated[str, Form()] = "",
+    filter_status: Annotated[str, Form()] = "",
 ) -> Response:
     """Bulk-archive the latest terminal run of each selected file (issue #5 archive,
     reversible). Hides those runs from the active library and the review queue while
@@ -1295,6 +1367,8 @@ def media_archive(
         run_baseline=run_baseline,
         sort=sort,
         view=view,
+        q=q,
+        filter_status=filter_status,
         archiving=True,
         open=open,
     )
@@ -1311,6 +1385,8 @@ def media_unarchive(
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
     open: Annotated[str, Form()] = "",
+    q: Annotated[str, Form()] = "",
+    filter_status: Annotated[str, Form()] = "",
 ) -> Response:
     """Bulk-restore the latest archived run of each selected file — it reappears in
     the active library and the review queue. Reached from the archived view, where
@@ -1325,6 +1401,8 @@ def media_unarchive(
         run_baseline=run_baseline,
         sort=sort,
         view=view,
+        q=q,
+        filter_status=filter_status,
         archiving=False,
         open=open,
     )
@@ -1339,6 +1417,8 @@ def _reject_media_operation(
     text: str,
     sort: str,
     view: str,
+    q: str,
+    filter_status: str,
     trashed: bool,
     selected_ids: list[str] | None = None,
     open_folder: str = "",
@@ -1351,6 +1431,8 @@ def _reject_media_operation(
         settings,
         sort=sort,
         view=view,
+        search=q,
+        status=filter_status,
         trashed=trashed,
         notice={"kind": "error", "text": text},
         selected_ids=frozenset(selected_ids or []),
@@ -1371,6 +1453,8 @@ def media_trash(
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
     open: Annotated[str, Form()] = "",
+    q: Annotated[str, Form()] = "",
+    filter_status: Annotated[str, Form()] = "",
 ) -> Response:
     """Move selected active media into the durable operation-owned trash tree."""
     _require_csrf(request, CSRF_MEDIA_TRASH, csrf_token)
@@ -1388,6 +1472,8 @@ def media_trash(
             text=exc.text,
             sort=sort,
             view=view,
+            q=q,
+            filter_status=filter_status,
             trashed=False,
             selected_ids=raw_ids,
             open_folder=open,
@@ -1419,6 +1505,10 @@ def media_trash(
         "sort": _safe_sort(sort),
         "view": _safe_view(view),
     }
+    if q:
+        params["q"] = q
+    if filter_status:
+        params["status"] = filter_status
     if open and _safe_view(view) == "cards":
         params["open"] = open
     if skipped:
@@ -1436,6 +1526,8 @@ def media_restore(
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
     open: Annotated[str, Form()] = "",
+    q: Annotated[str, Form()] = "",
+    filter_status: Annotated[str, Form()] = "",
 ) -> Response:
     """Restore selected trash items to their pre-trash paths."""
     _require_csrf(request, CSRF_MEDIA_RESTORE, csrf_token)
@@ -1453,6 +1545,8 @@ def media_restore(
             text=exc.text,
             sort=sort,
             view=view,
+            q=q,
+            filter_status=filter_status,
             trashed=True,
             selected_ids=raw_ids,
             open_folder=open,
@@ -1499,6 +1593,10 @@ def media_restore(
         "sort": _safe_sort(sort),
         "view": _safe_view(view),
     }
+    if q:
+        params["q"] = q
+    if filter_status:
+        params["status"] = filter_status
     if open and _safe_view(view) == "cards":
         params["open"] = open
     if skipped:
@@ -1513,6 +1611,8 @@ def media_empty_trash(
     session: SessionDep,
     sort: Annotated[str, Form()] = DEFAULT_SORT,
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
+    q: Annotated[str, Form()] = "",
+    filter_status: Annotated[str, Form()] = "",
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> Response:
     """Permanently delete every trashed, non-purged media item and its artifacts."""
@@ -1556,6 +1656,10 @@ def media_empty_trash(
         "sort": _safe_sort(sort),
         "view": _safe_view(view),
     }
+    if q:
+        params["q"] = q
+    if filter_status:
+        params["status"] = filter_status
     if skipped:
         params["skipped"] = skipped
     return RedirectResponse(f"/media?{urlencode(params)}", status_code=303)
