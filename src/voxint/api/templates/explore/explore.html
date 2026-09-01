@@ -39,6 +39,7 @@
     text-align: center; padding: var(--space-6); color: var(--ink-3);
     font-size: var(--t-base);
   }
+  .explore-examples { display: flex; gap: var(--space-2); justify-content: center; margin-top: var(--space-2); }
   .kwic-table { width: 100%; border-collapse: collapse; font-size: var(--t-sm); }
   .kwic-table th {
     text-align: left; padding: var(--space-1) var(--space-2);
@@ -180,7 +181,17 @@
 
   <div data-island="explore" data-props='{{ explore_props|tojson }}'>
     {% if not query %}
-    <div class="explore-empty-state"><p>Type a term to search across all transcripts.</p></div>
+    <div class="explore-empty-state">
+      <p>Search across all your transcripts. Try:</p>
+      <p class="explore-examples">
+        {% for ex in ["budget", "timeline", "interview"] %}
+        <a href="/explore?q={{ ex }}" class="secondary small">{{ ex }}</a>
+        {% endfor %}
+      </p>
+      <p class="oc-muted" style="font-size: var(--t-sm); margin-top: var(--space-2);">
+        Results appear as a concordance with surrounding context, a word cloud, and a frequency chart.
+      </p>
+    </div>
     {% elif total == 0 %}
     <div class="explore-empty-state"><p>No matches for <strong>"{{ query|e }}"</strong>.</p></div>
     {% else %}

@@ -176,8 +176,8 @@ def test_flag_on_renders_overview_with_numbers(
     # diagnostics row) shows "needs you", never "weak".
     assert "verified" in page.text
     assert "needs you" in page.text
-    # Default sort = minutes: Alice (2 segments) before Bob (1).
-    assert page.text.index("Alice") < page.text.index("Bob")
+    # Unnamed voices listed first: Bob (unverified) before Alice (verified).
+    assert page.text.index("Bob") < page.text.index("Alice")
 
 
 def test_sorts_apply_and_unknown_degrades(
@@ -854,9 +854,9 @@ def test_overview_groups_verified_and_unverified(
     assert "Unnamed voices" in page.text
     known_pos = page.text.index("Known speakers")
     unnamed_pos = page.text.index("Unnamed voices")
-    assert known_pos < unnamed_pos
-    assert "VerifiedAlice" in page.text[known_pos:unnamed_pos]
-    assert "UnverifiedBob" in page.text[unnamed_pos:]
+    assert unnamed_pos < known_pos
+    assert "UnverifiedBob" in page.text[unnamed_pos:known_pos]
+    assert "VerifiedAlice" in page.text[known_pos:]
 
 
 # ---- #245 Heard-name annotation ---------------------------------------------

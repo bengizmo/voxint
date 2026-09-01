@@ -39,6 +39,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   protection, and a per-item result page.
 
 ### Changed
+- **Queue, speakers, explore polish** (#383). Review queue rows show the
+  folder name instead of the raw file path. Confidence scores throughout
+  the review workbench are humanized to bands (likely / possible / low)
+  instead of raw decimals. Speakers page: unnamed voices are listed first
+  and expanded by default. Profile fields are editable inline (blank + Save
+  clears). Speaker insights poll automatically when computing (bounded,
+  with backoff). Explore empty state shows example searches and a
+  capability hint.
 - `/jobs` now redirects to the canonical `/runs` surface; old bookmarks and
   links continue to work (#382)
 

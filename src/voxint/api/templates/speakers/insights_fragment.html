@@ -1,0 +1,106 @@
+{# Insights section fragment for htmx polling (#383).
+   Rendered by the insights-poll endpoint; replaces itself via hx-swap.
+   poll_remaining controls bounded retry: >0 re-polls after a delay,
+   0 shows a manual check button, absent means static (no poll attrs). #}
+<div id="insights-poll">
+{% if insights %}
+<section class="oc-section">
+  <h2 class="oc-section-title">INSIGHTS</h2>
+
+  {% if insights.distinctive_terms %}
+  <div class="card insight-card">
+    <h3 class="insight-card-title">DISTINCTIVE VOCABULARY</h3>
+    <p class="oc-muted" style="margin-bottom: var(--space-3); font-size: var(--t-xs);">
+      Based on {{ "{:,}".format(insights.speaker_token_count) }} words
+      across {{ insights.recording_count }} recording{{ "s" if insights.recording_count != 1 else "" }}
+    </p>
+    <div class="term-bars" role="list" aria-label="Terms distinctive to {{ speaker.display_name }}">
+      {%- set max_z = insights.distinctive_terms[0].z_score if insights.distinctive_terms and insights.distinctive_terms[0].z_score else 1 -%}
+      {% for t in insights.distinctive_terms[:20] %}
+      <a href="/explore?q={{ t.term|urlencode }}&amp;speaker={{ speaker.id }}"
+         class="term-bar-row" role="listitem"
+         title="{{ t.term }}: used {{ t.count }}x (z-score {{ '%.1f'|format(t.z_score) }})">
+        <span class="term-bar-label">{{ t.term }}</span>
+        <span class="term-bar-fill" style="width: {{ (t.z_score / max_z * 100)|round }}%"></span>
+        <span class="term-bar-count">{{ t.count }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if insights.ego_transitions_in or insights.ego_transitions_out %}
+  <div class="card insight-card">
+    <h3 class="insight-card-title">CONVERSATION PARTNERS</h3>
+    <div class="ego-transitions">
+      {% if insights.ego_transitions_in %}
+      <div class="ego-col">
+        <h4 class="ego-col-title">SPEAKS BEFORE {{ speaker.display_name|upper }}</h4>
+        {% for edge in insights.ego_transitions_in[:8] %}
+        <div class="ego-edge" title="{{ edge.speaker_name or 'Unknown' }} spoke before {{ speaker.display_name }} {{ edge.count }}x">
+          <span class="ego-edge-name">{{ edge.speaker_name or "Unknown" }}</span>
+          <span class="ego-edge-count">{{ edge.count }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if insights.ego_transitions_out %}
+      <div class="ego-col">
+        <h4 class="ego-col-title">{{ speaker.display_name|upper }} SPEAKS BEFORE</h4>
+        {% for edge in insights.ego_transitions_out[:8] %}
+        <div class="ego-edge" title="{{ speaker.display_name }} spoke before {{ edge.speaker_name or 'Unknown' }} {{ edge.count }}x">
+          <span class="ego-edge-name">{{ edge.speaker_name or "Unknown" }}</span>
+          <span class="ego-edge-count">{{ edge.count }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if insights.wpm is not none %}
+  <div class="card insight-card">
+    <h3 class="insight-card-title">SPEAKING PACE</h3>
+    <div class="wpm-stat">
+      <span class="wpm-value">{{ insights.wpm|round|int }}</span>
+      <span class="wpm-unit">words/min</span>
+    </div>
+    {% if insights.wpm_timed_segments < insights.wpm_total_segments %}
+    <p class="oc-muted" style="font-size: var(--t-xs);">
+      Based on {{ insights.wpm_timed_segments }} of {{ insights.wpm_total_segments }} segments with word-level timing
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <p style="margin-top: var(--space-3);">
+    <a href="/explore?speaker={{ speaker.id }}" class="secondary small">
+      All quotes by {{ speaker.display_name }} in Explore &rarr;
+    </a>
+  </p>
+</section>
+{% elif insights_eligible and poll_remaining is defined and poll_remaining > 0 %}
+<section class="oc-section"
+         hx-get="/speakers/{{ speaker.id }}/insights?poll={{ poll_remaining - 1 }}"
+         hx-trigger="load delay:{{ 3 * (4 - poll_remaining) }}s"
+         hx-target="#insights-poll" hx-swap="outerHTML">
+  <h2 class="oc-section-title">INSIGHTS</h2>
+  <p class="oc-muted">Computing speaker insights<span class="loading-dots">...</span></p>
+</section>
+{% elif insights_eligible %}
+<section class="oc-section">
+  <h2 class="oc-section-title">INSIGHTS</h2>
+  <p class="oc-muted">Speaker insights are still computing.</p>
+  <a href="/speakers/{{ speaker.id }}/insights?poll=3"
+     hx-get="/speakers/{{ speaker.id }}/insights?poll=3"
+     hx-target="#insights-poll" hx-swap="outerHTML"
+     class="secondary small">Check now</a>
+</section>
+{% elif not insights_eligible and aggregate.files > 0 %}
+<section class="oc-section">
+  <h2 class="oc-section-title">INSIGHTS</h2>
+  <p class="oc-muted">Not enough data for speaker insights. This speaker needs at least 2 recordings with substantial speech.</p>
+</section>
+{% endif %}
+</div>

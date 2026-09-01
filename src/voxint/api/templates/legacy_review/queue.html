@@ -31,7 +31,8 @@
     <div class="gt-row{% if e.unresolved_labels > 0 %} is-needs-human{% endif %}">
       <span>
         <span class="media-title" title="{{ e.source_path }}">{{ friendly_media_label(e.title, e.source_path) }}</span>
-        <br><code class="oc-muted" style="font-size:var(--t-sm)">{{ e.source_path }}</code>
+        {% set fl = folder_label(e.source_path) %}
+        {% if fl %}<br><span class="oc-muted" style="font-size:var(--t-sm)">{{ fl }}</span>{% endif %}
       </span>
       <span>{{ format_duration(e.duration_seconds) }}</span>
       <span>

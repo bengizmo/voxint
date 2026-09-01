@@ -1220,6 +1220,14 @@
     true
   ],
   [
+    "/speakers/{speaker_id}/insights",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/speakers/{speaker_id}/merge",
     [
       "POST"

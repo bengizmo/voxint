@@ -331,3 +331,30 @@ def humanize_error(error: str | None) -> str | None:
     """
     result = normalize_error(error)
     return result.label if result is not None else None
+
+
+def confidence_band(score: float | None) -> str:
+    """A 0-1 score as a plain-language band: likely / possible / low."""
+    if score is None:
+        return "low"
+    if score >= 0.8:
+        return "likely"
+    if score >= 0.5:
+        return "possible"
+    return "low"
+
+
+def folder_label(source_path: str) -> str | None:
+    """The parent directory of a source path as a short folder name.
+
+    Returns ``None`` for top-level files (no directory component). A
+    non-technical operator sees "interviews" rather than
+    ``/data/media/interviews/episode-42.mp3``.
+    """
+    last_sep = max(source_path.rfind("/"), source_path.rfind("\\"))
+    if last_sep <= 0:
+        return None
+    parent = source_path[:last_sep]
+    basename_sep = max(parent.rfind("/"), parent.rfind("\\"))
+    name = parent[basename_sep + 1:] if basename_sep >= 0 else parent
+    return name or None

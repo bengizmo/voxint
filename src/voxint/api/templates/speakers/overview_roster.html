@@ -23,8 +23,7 @@
   {% if overview.unverified_active %}
   <span class="spk-todo-item">
     {{ overview.unverified_active_total }} voice{{ "s" if overview.unverified_active_total != 1 }} waiting for a name
-    <a href="#unnamed-voices" class="spk-todo-action"
-       onclick="document.getElementById('unnamed-voices').open=true">Review them</a>
+    <a href="#unnamed-voices" class="spk-todo-action">Review them</a>
   </span>
   {% endif %}
   {% if overview.name_suggestions %}
@@ -160,6 +159,28 @@
   </div>
 {% endmacro %}
 
+{# === Unnamed voices (unverified, listed first + expanded) === #}
+{% if unverified_rows %}
+<div class="spk-group spk-group-unnamed" id="unnamed-voices">
+  <div class="spk-group-header">Unnamed voices <span class="oc-muted">({{ unverified_rows|length }})</span></div>
+  {% if view == "table" %}
+  <div class="grid-table spk-roster-grid" role="region" aria-label="Unnamed voices" tabindex="0"
+       style="grid-template-columns: auto 1fr auto auto auto auto auto auto;">
+    {{ table_header() }}
+    {% for row in unverified_rows %}
+    {{ table_row(row) }}
+    {% endfor %}
+  </div>
+  {% else %}
+  <ul class="lib-cards" aria-label="Unnamed voices">
+    {% for row in unverified_rows %}
+    {{ card_item(row) }}
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endif %}
+
 {# === Known speakers (verified) === #}
 {% if verified_rows %}
 <div class="spk-group">
@@ -182,28 +203,6 @@
 </div>
 {% else %}
 <p class="oc-muted spk-group-empty">No verified speakers yet. Name a voice during review to add someone here.</p>
-{% endif %}
-
-{# === Unnamed voices (unverified, collapsed by default) === #}
-{% if unverified_rows %}
-<details class="spk-group spk-group-unnamed" id="unnamed-voices">
-  <summary class="spk-group-header">Unnamed voices <span class="oc-muted">({{ unverified_rows|length }})</span></summary>
-  {% if view == "table" %}
-  <div class="grid-table spk-roster-grid" role="region" aria-label="Unnamed voices" tabindex="0"
-       style="grid-template-columns: auto 1fr auto auto auto auto auto auto;">
-    {{ table_header() }}
-    {% for row in unverified_rows %}
-    {{ table_row(row) }}
-    {% endfor %}
-  </div>
-  {% else %}
-  <ul class="lib-cards" aria-label="Unnamed voices">
-    {% for row in unverified_rows %}
-    {{ card_item(row) }}
-    {% endfor %}
-  </ul>
-  {% endif %}
-</details>
 {% endif %}
 
 {% else %}

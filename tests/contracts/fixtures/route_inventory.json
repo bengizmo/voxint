@@ -914,6 +914,12 @@
     ]
   ],
   [
+    "/speakers/{speaker_id}/insights",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/speakers/{speaker_id}/merge",
     [
       "POST"

@@ -43,6 +43,8 @@ from voxint.api.auth import (
 from voxint.api.csrf import CSRF_LOGOUT, CSRF_PLUGIN, mint_csrf_token, verify_csrf_token
 from voxint.api.languages import language_label
 from voxint.api.presentation import (
+    confidence_band,
+    folder_label,
     format_age,
     format_clock_time,
     format_compact_duration,
@@ -473,6 +475,8 @@ templates.env.globals["gib"] = gib
 templates.env.globals["vram_percent"] = vram_percent
 templates.env.globals["short_uuid"] = short_uuid
 templates.env.globals["device_state"] = device_state
+templates.env.globals["confidence_band"] = confidence_band
+templates.env.globals["folder_label"] = folder_label
 
 
 # Plugin template loading (issue #138, rule 10). Plugin settings sections and

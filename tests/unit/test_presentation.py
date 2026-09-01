@@ -6,6 +6,8 @@ import pytest
 
 from voxint.api.home_query import ActivityItem
 from voxint.api.presentation import (
+    confidence_band,
+    folder_label,
     format_age,
     format_duration,
     format_size,
@@ -398,3 +400,40 @@ def test_group_activity_single_failure_not_grouped() -> None:
     grouped = group_activity([_fail("a", "ConnectionError: x")])
     assert len(grouped) == 1
     assert not isinstance(grouped[0], GroupedActivityItem)
+
+
+# ---- confidence_band --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("score", "expected"),
+    [
+        (0.95, "likely"),
+        (0.80, "likely"),
+        (0.79, "possible"),
+        (0.50, "possible"),
+        (0.49, "low"),
+        (0.0, "low"),
+        (None, "low"),
+    ],
+)
+def test_confidence_band(score: float | None, expected: str) -> None:
+    assert confidence_band(score) == expected
+
+
+# ---- folder_label -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("incoming/episode-42.mp3", "incoming"),
+        ("/data/media/interviews/ep42.wav", "interviews"),
+        ("episode.mp3", None),
+        ("a/b/c/d.wav", "c"),
+        ("top/file.mp3", "top"),
+        ("", None),
+    ],
+)
+def test_folder_label(path: str, expected: str | None) -> None:
+    assert folder_label(path) == expected
