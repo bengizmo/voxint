@@ -7,6 +7,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Media library search and status filter** (#380). Server-side search
+  (case-insensitive substring over display name, source path, and folder
+  name) and a status filter (Needs review / Failed / Reviewed / All).
+  Search and filter compose with each other and with the existing sort
+  and view controls. An empty-result state with a Clear link replaces the
+  generic empty message when a filter is active. Row actions are now
+  state-dependent: Review (needs adjudication), Retry (failed), or Open
+  (everything else). The "File missing" chip is replaced with plain
+  language ("Original file not found") showing the expected path.
 - **GPU resource awareness in the installer**. VRAM-aware tier recommendation
   with per-device compose targeting, interactive device selection, `--gpu-check`
   diagnostics, and enhanced `--hardware-dry-run`. The installer now inventories
@@ -14,7 +23,33 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   that fits. When a GPU is occupied (e.g. by a local LLM), the installer
   explains why and defaults to CPU.
 
+- **Runs canonical lifecycle surface** (#381, part 1). `/runs` becomes the
+  canonical lifecycle view: four lifecycle tabs (Needs attention / Active /
+  Failed / All), title-first rows with the run ID demoted to a copyable
+  secondary, a collapsible filter bar (auto-opens when any filter is active,
+  power filters like transcript search and date range under "More filters"),
+  a one-line pipeline health summary linking to Settings Status, and
+  auxiliary jobs behind a closed disclosure. State-dependent row actions
+  (Review / Retry / View) and degraded-service banners carried over from
+  the Jobs page.
+- **Grouped failures with bulk retry** (#381, part 2). On the Failed tab,
+  runs with identical errors are grouped into a single row showing the
+  error label, count, and a "Retry all" button. The bulk retry endpoint
+  uses per-item CAS with savepoints for partial-failure safety, CSRF
+  protection, and a per-item result page.
+
 ### Changed
+- **Settings control model** (#379). Every tri-state feature setting
+  (On / Off / Use installation setting) is now a toggle switch showing
+  the effective state. Overridden settings show a "Changed" badge and a
+  "Reset to default" affordance. Each settings tab has one Save button
+  instead of one per section. Feature dependencies are enforced by
+  disabling the dependent switch with an inline reason, not prose
+  notices. The LLM checkbox is restyled as a visual switch (no
+  inheritance — the underlying model is unchanged). The three persisted
+  states (on / off / inherit) are preserved on the wire; saving without
+  changes never converts an inherited flag to a pinned override (save
+  idempotency).
 - **Settings IA: tabs** (#378). The settings hub is split into tabbed
   sub-pages: General (appearance, features, tutorial), Media (folders,
   sources), and AI (LLM, translation, corrections, glossary, semantic

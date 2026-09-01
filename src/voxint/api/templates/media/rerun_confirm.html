@@ -30,6 +30,8 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_media_rerun_confirm }}">
   <input type="hidden" name="sort" value="{{ sort }}">
   <input type="hidden" name="view" value="{{ view }}">
+  {% if search %}<input type="hidden" name="q" value="{{ search }}">{% endif %}
+  {% if status %}<input type="hidden" name="filter_status" value="{{ status }}">{% endif %}
 
   <ul class="rerun-list" aria-label="Files to re-run">
     {% for p in previews %}
@@ -55,7 +57,7 @@
 
   <div class="rerun-actions">
     <button type="submit" class="primary">Re-run {{ runnable }} file{{ '' if runnable == 1 else 's' }}</button>
-    <a href="/media?sort={{ sort }}&view={{ view }}">Cancel</a>
+    <a href="/media?sort={{ sort }}&view={{ view }}{% if search %}&q={{ search|urlencode }}{% endif %}{% if status %}&status={{ status }}{% endif %}">Cancel</a>
   </div>
 </form>
 {% endblock %}

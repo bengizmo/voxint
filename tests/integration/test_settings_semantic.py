@@ -75,9 +75,12 @@ def test_semantic_section_renders_tristate(
     client, _ = make_client(session_factory, tmp_path)
     body = client.get("/settings/ai").text
     assert 'id="semantic-search"' in body
-    # Unset columns render as "inherit" (use the installation default).
-    assert 'name="semantic_index_enabled" value="inherit" checked' in body
-    assert 'name="semantic_index_autogenerate" value="inherit" checked' in body
+    # Unset columns render as switches (effective state from env default).
+    assert 'id="sw-semantic_index_enabled"' in body
+    assert 'id="sw-semantic_index_autogenerate"' in body
+    assert 'role="switch"' in body
+    # No overrides → no "Changed" badge rendered in content.
+    assert ">Changed</span>" not in body
 
 
 def test_semantic_route_declares_every_flag(
@@ -160,8 +163,10 @@ def test_autogenerate_without_feature_is_refused_and_writes_nothing(
     assert row is not None
     assert row.semantic_index_enabled is False
     assert row.semantic_index_autogenerate is None
-    # The operator's rejected choices are preserved in the re-rendered form.
-    assert 'name="semantic_index_autogenerate" value="on" checked' in resp.text
+    # The operator's rejected choices are preserved in the re-rendered form:
+    # the switch for the submitted "on" renders checked, with a "Changed" badge.
+    assert 'id="sw-semantic_index_autogenerate"' in resp.text
+    assert ">Changed</span>" in resp.text
 
 
 def test_malformed_choice_is_rejected_without_writing(
@@ -188,7 +193,10 @@ def test_stored_override_round_trips_in_the_rendered_form(
     client, _ = make_client(session_factory, tmp_path)
     _seed_flags(session_factory, semantic_index_enabled=True)
     body = client.get("/settings/ai").text
-    assert 'name="semantic_index_enabled" value="on" checked' in body
+    # The stored override renders the switch checked AND shows the "Changed" badge.
+    assert 'id="sw-semantic_index_enabled"' in body
+    assert "checked" in body
+    assert "switch-badge" in body
 
 
 def test_semantic_requires_csrf(
@@ -231,7 +239,9 @@ def test_weights_absent_note_hidden_when_effectively_off_via_inherit(
         semantic_index_autogenerate=False,
     )
     body = client.get("/settings/ai").text
-    assert 'name="semantic_index_enabled" value="inherit" checked' in body
+    # Inherited with env default off → switch unchecked, no badge.
+    assert 'id="sw-semantic_index_enabled"' in body
+    assert ">Changed</span>" not in body
     assert "The embedding model weights are not installed" not in body
 
 
@@ -248,5 +258,7 @@ def test_weights_absent_note_shows_when_explicitly_on_over_off_default(
     )
     _seed_flags(session_factory, semantic_index_enabled=True)
     body = client.get("/settings/ai").text
-    assert 'name="semantic_index_enabled" value="on" checked' in body
+    # Explicit On over OFF env default → switch checked + "Changed" badge.
+    assert 'id="sw-semantic_index_enabled"' in body
+    assert ">Changed</span>" in body
     assert "The embedding model weights are not installed" in body

@@ -58,7 +58,8 @@ def _client(
 # Anchors external files deep-link into, plus the mutation endpoints; both must
 # survive the hub regroup, since the deep-linking files are outside Track D.
 _PRESERVED_ANCHORS = ('id="llm"', 'id="features"', 'id="glossary"')
-_PRESERVED_POSTS = ("/settings/llm", "/settings/features", "/settings/glossary")
+# Tab-level POST endpoints (the flat page groups sections into three forms: #379).
+_PRESERVED_POSTS = ("/settings/ai", "/settings/media")
 
 
 def test_flag_off_renders_flat_page(session_factory: sessionmaker[Session]) -> None:

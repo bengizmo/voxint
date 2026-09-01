@@ -56,6 +56,15 @@ class ReviewFilter(enum.StrEnum):
     CLAIMED = "claimed"  # a reviewer currently holds a live claim
 
 
+class LifecycleView(enum.StrEnum):
+    """Tab-level lifecycle classification for the /runs canonical surface."""
+
+    NEEDS_ATTENTION = "needs_attention"  # awaiting adjudication or unresolved labels
+    ACTIVE = "active"  # queued, running, or paused
+    FAILED = "failed"  # failed
+    ALL = "all"  # no lifecycle predicate (default)
+
+
 class InvalidCursorError(ValueError):
     """The pagination cursor is malformed or corrupt."""
 
@@ -206,6 +215,8 @@ class RunListItem:
     folder_path: str | None = None
     # Run-level error message for failed runs; None otherwise.
     error: str | None = None
+    # CAS revision for optimistic concurrency (bulk retry forms embed this).
+    revision: int = 0
 
 
 @dataclass(frozen=True)
@@ -214,6 +225,59 @@ class RunsPage:
 
     items: list[RunListItem]
     next_cursor: Cursor | None
+
+
+@dataclass(frozen=True)
+class FailedRunGroup:
+    """Failed runs with the same humanized error on the current page.
+
+    Always len(items) >= 2; singletons pass through ungrouped.
+    """
+
+    error_label: str
+    items: tuple[RunListItem, ...]
+
+
+def group_failed_runs(
+    items: list[RunListItem],
+) -> list[RunListItem | FailedRunGroup]:
+    """Collapse failed rows with identical humanized errors into groups.
+
+    Groups ALL failed items by label (not just consecutive), since the Failed
+    tab contains only failed runs. Singletons are not collapsed. Groups are
+    ordered by the newest member's created_at descending.
+    """
+    from voxint.api.presentation import humanize_error
+
+    failed = [it for it in items if it.status == "failed"]
+    non_failed = [it for it in items if it.status != "failed"]
+
+    if not failed:
+        return list(items)
+
+    buckets: dict[str, list[RunListItem]] = {}
+    for it in failed:
+        label = humanize_error(it.error) or "unknown error"
+        buckets.setdefault(label, []).append(it)
+
+    result: list[RunListItem | FailedRunGroup] = list(non_failed)
+    sorted_groups = sorted(
+        buckets.items(),
+        key=lambda pair: max(it.created_at for it in pair[1]),
+        reverse=True,
+    )
+    for label, group_items in sorted_groups:
+        if len(group_items) == 1:
+            result.append(group_items[0])
+        else:
+            ordered = sorted(
+                group_items, key=lambda it: it.created_at, reverse=True
+            )
+            result.append(FailedRunGroup(
+                error_label=label,
+                items=tuple(ordered),
+            ))
+    return result
 
 
 def parse_status_filter(raw: str | None) -> RunStatus | None:
@@ -237,6 +301,7 @@ def parse_review_filter(raw: str | None) -> ReviewFilter | None:
 
 def runs_url(
     *,
+    lifecycle: LifecycleView | None = None,
     status: RunStatus | None = None,
     review: ReviewFilter | None = None,
     filters: SearchFilters | None = None,
@@ -245,6 +310,10 @@ def runs_url(
 ) -> str:
     """Build a ``/runs`` URL preserving the active filters (+ optional cursor)."""
     params: list[tuple[str, str]] = []
+    # ALL is the canonical default, so omitting it preserves the same active
+    # view without adding a redundant query parameter.
+    if lifecycle is not None and lifecycle is not LifecycleView.ALL:
+        params.append(("view", lifecycle.value))
     if status is not None:
         params.append(("status", status.value))
     if review is not None:
@@ -391,6 +460,7 @@ def list_runs(
     review: ReviewFilter | None,
     cursor: Cursor | None,
     page_size: int,
+    lifecycle: LifecycleView | None = None,
     filters: SearchFilters | None = None,
     archived: bool = False,
 ) -> RunsPage:
@@ -432,6 +502,7 @@ def list_runs(
             PipelineRun.review_claimed_by,
             PipelineRun.archived_at,
             PipelineRun.error,
+            PipelineRun.revision,
             MediaItem.source_path,
             PipelineRun.sidecar,
             PipelineRun.detected_language,
@@ -460,6 +531,31 @@ def list_runs(
         stmt = stmt.where(PipelineRun.archived_at.is_not(None))
     else:
         stmt = stmt.where(PipelineRun.archived_at.is_(None))
+
+    # Lifecycle tabs are the broad first cut. The existing status/review
+    # predicates below remain independent and narrow this set with AND.
+    if lifecycle is LifecycleView.NEEDS_ATTENTION:
+        stmt = stmt.where(
+            or_(
+                PipelineRun.status == RunStatus.AWAITING_ADJUDICATION.value,
+                and_(
+                    PipelineRun.status == RunStatus.COMPLETED.value,
+                    unresolved_label_exists(PipelineRun.id),
+                ),
+            )
+        )
+    elif lifecycle is LifecycleView.ACTIVE:
+        stmt = stmt.where(
+            PipelineRun.status.in_(
+                (
+                    RunStatus.QUEUED.value,
+                    RunStatus.RUNNING.value,
+                    RunStatus.PAUSED.value,
+                )
+            )
+        )
+    elif lifecycle is LifecycleView.FAILED:
+        stmt = stmt.where(PipelineRun.status == RunStatus.FAILED.value)
 
     if status is not None:
         stmt = stmt.where(PipelineRun.status == status.value)
@@ -571,6 +667,7 @@ def list_runs(
             elapsed_seconds=row.elapsed_seconds,
             folder_path=row.folder_path,
             error=row.error,
+            revision=row.revision,
         )
         for row in rows
     ]

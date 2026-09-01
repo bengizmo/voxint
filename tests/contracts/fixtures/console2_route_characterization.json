@@ -710,6 +710,14 @@
     true
   ],
   [
+    "/runs/bulk-retry",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/runs/{run_id}",
     [
       "GET"
@@ -884,9 +892,25 @@
     true
   ],
   [
+    "/settings",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/settings/ai",
     [
       "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/ai",
+    [
+      "POST"
     ],
     "onboarding",
     true
@@ -959,6 +983,14 @@
     "/settings/media",
     [
       "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/media",
+    [
+      "POST"
     ],
     "onboarding",
     true

@@ -336,6 +336,12 @@
     ]
   ],
   [
+    "/runs/bulk-retry",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/runs/{run_id}/requeue",
     [
       "POST"
@@ -733,6 +739,24 @@
   ],
   [
     "/settings/web-research",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/settings",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/settings/ai",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/settings/media",
     [
       "POST"
     ]

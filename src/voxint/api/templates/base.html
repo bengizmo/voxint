@@ -311,6 +311,21 @@
        grid, a plain rows table, and a right-rail split that stacks narrow. */
     .lib-toolbar { display: flex; flex-wrap: wrap; align-items: center;
                gap: var(--space-2) var(--space-3); margin: var(--space-4) 0; }
+    .lib-search { margin: var(--space-3) 0 0; }
+    .lib-search-row { display: flex; flex-wrap: wrap; align-items: center;
+               gap: var(--space-2); }
+    .lib-search-row input[type="search"] { flex: 1 1 14rem; min-width: 10rem;
+               padding: .35rem .5rem; font: inherit; border: 1px solid var(--line);
+               border-radius: var(--r-md); background: var(--surface); color: var(--ink); }
+    .lib-search-row select { padding: .35rem .5rem; font: inherit;
+               border: 1px solid var(--line); border-radius: var(--r-md);
+               background: var(--surface); color: var(--ink); }
+    .lib-search-clear { font-size: var(--t-sm); color: var(--accent); text-decoration: none; }
+    .file-missing-notice { display: inline-flex; align-items: baseline; gap: var(--space-1);
+               flex-wrap: wrap; }
+    .file-missing-path { font-size: var(--t-sm); color: var(--ink-2); word-break: break-all;
+               max-width: 20rem; overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; display: inline-block; vertical-align: bottom; }
     .view-toggle { display: inline-flex; border: 1px solid var(--line);
                border-radius: var(--r-md); overflow: hidden; }
     .view-toggle a, .view-toggle button { padding: .25rem .6rem; border: 0;
@@ -525,6 +540,52 @@
                       border: 1px solid var(--line); border-radius: var(--r-lg);
                       box-shadow: var(--shadow-1); padding: var(--card-pad); margin: var(--space-5) 0; }
     .settings > section:not(.tutorial-banner) > h2:first-child { margin-top: 0; }
+    /* Tri-state switch rows (#379): toggle + badge + reset for feature flags.
+       Each .switch-row is a self-contained control inside a settings card. */
+    .switch-row { padding: var(--space-3) 0; border-top: 1px solid var(--line-subtle); }
+    .switch-row:first-child { border-top: none; padding-top: 0; }
+    .switch-header { display: flex; align-items: center; gap: var(--space-3);
+                     flex-wrap: wrap; margin-bottom: var(--space-1); }
+    .switch-label { font-weight: 600; font-size: var(--t-base); cursor: pointer; flex: 1 1 auto; }
+    .switch-meta { display: flex; align-items: center; gap: var(--space-2);
+                   flex-shrink: 0; }
+    .switch-badge { display: inline-block; font-size: var(--t-xs);
+                    padding: 1px 6px; border-radius: var(--r-sm);
+                    background: var(--warn-soft); color: var(--warn);
+                    font-weight: 600; text-transform: uppercase;
+                    letter-spacing: .03em; }
+    .switch-reset { background: none; border: none; padding: 0; margin: 0;
+                    font: inherit; font-size: var(--t-xs); color: var(--accent-ink);
+                    cursor: pointer; text-decoration: underline;
+                    text-underline-offset: 2px; }
+    .switch-reset:hover { color: var(--accent); }
+    .switch-control { display: flex; align-items: center; gap: var(--space-3);
+                      margin: var(--space-2) 0; }
+    .switch-control input[type="checkbox"][role="switch"] {
+      appearance: none; -webkit-appearance: none;
+      width: 40px; height: 22px; border-radius: var(--r-full);
+      background: var(--line-strong); border: none;
+      position: relative; cursor: pointer; flex-shrink: 0;
+      transition: background .15s ease; }
+    .switch-control input[type="checkbox"][role="switch"]::before {
+      content: ""; position: absolute; top: 2px; left: 2px;
+      width: 18px; height: 18px; border-radius: 50%;
+      background: var(--surface); box-shadow: 0 1px 3px rgba(0,0,0,.15);
+      transition: transform .15s ease; }
+    .switch-control input[type="checkbox"][role="switch"]:checked {
+      background: var(--accent); }
+    .switch-control input[type="checkbox"][role="switch"]:checked::before {
+      transform: translateX(18px); }
+    .switch-control input[type="checkbox"][role="switch"]:focus-visible {
+      outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    .switch-control input[type="checkbox"][role="switch"]:disabled {
+      opacity: .45; cursor: not-allowed; }
+    .switch-help { margin: 0; font-size: var(--t-sm); }
+    .switch-why { margin: var(--space-1) 0 0; font-size: var(--t-xs);
+                  color: var(--warn); font-style: italic; }
+    .switch-disabled .switch-label { color: var(--ink-3); }
+    .switch-row.switch-dependent { padding-left: var(--space-5); }
+    .settings .switch-save { margin-top: var(--space-5); }
     /* Speaker roster cards (issue #93): the .review-head card family, applied
        via the compound .label-card.roster-card ((0,2,0), order-independent) so
        it deterministically overrides the shared global .label-card left stripe
@@ -842,6 +903,19 @@
     .gt-row.is-selected > * { background: rgba(79,192,181,.04); }
     .gt-row.is-needs-human > * { background: rgba(227,179,65,.04); }
     .gt-row.is-machine-active > * { background: rgba(107,167,221,.04); }
+
+    /* Runs page: collapsible filter and aux-jobs disclosures (#381). */
+    details.runs-filters { margin: .6rem 0; }
+    details.runs-filters > summary { cursor: pointer; font-weight: 600;
+                font-size: var(--t-sm); color: var(--ink-2); }
+    details.runs-filters[open] > summary { margin-bottom: .2rem; }
+    details.runs-more-filters { margin-top: .5rem; }
+    details.runs-more-filters > summary { cursor: pointer; font-size: var(--t-sm);
+                color: var(--ink-2); }
+    details.runs-aux-jobs { margin: 1rem 0; }
+    details.runs-aux-jobs > summary { cursor: pointer; }
+    details.runs-aux-jobs[open] > summary { margin-bottom: .4rem; }
+    .run-id-secondary { user-select: all; }
 
     /* Multi-select action bar */
     .gt-action-bar { display: flex; align-items: center; gap: var(--space-3);

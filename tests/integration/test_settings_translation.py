@@ -64,7 +64,9 @@ def test_translation_section_renders(
     # Unset columns render as "inherit" and name the (unset) env default.
     assert 'value="inherit" selected' in body
     assert "currently not set" in body
-    assert 'name="translation_autogenerate" value="inherit" checked' in body
+    # Autogenerate switch renders (inherited, no badge).
+    assert 'id="sw-translation_autogenerate"' in body
+    assert 'role="switch"' in body
 
 
 def test_save_override_and_revert_to_inherit(
@@ -85,7 +87,9 @@ def test_save_override_and_revert_to_inherit(
     # The saved state renders back selected/checked.
     body = client.get("/settings/ai").text
     assert 'value="es" selected' in body
-    assert 'name="translation_autogenerate" value="on" checked' in body
+    # The saved override renders the switch checked with a "Changed" badge.
+    assert 'id="sw-translation_autogenerate"' in body
+    assert ">Changed</span>" in body
 
     response = client.post(
         "/settings/translation",
@@ -113,8 +117,9 @@ def test_autogenerate_without_target_refused_and_writes_nothing(
     )
     assert response.status_code == 200
     assert "Pick a preferred language" in response.text
-    # The operator's rejected choice is preserved in the re-render.
-    assert 'name="translation_autogenerate" value="on" checked' in response.text
+    # The operator's rejected choice is preserved: switch checked + badge.
+    assert 'id="sw-translation_autogenerate"' in response.text
+    assert ">Changed</span>" in response.text
     row = _row(session_factory)
     assert row is None or row.translation_autogenerate is None
 

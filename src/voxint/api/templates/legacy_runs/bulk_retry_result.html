@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Voxint — bulk retry results{% endblock %}
+{% block body %}
+<style>
+  .retry-list { list-style: none; padding: 0; display: grid; gap: .6rem; margin: 1rem 0; }
+  .retry-list li { margin: 0; }
+</style>
+<h1>Bulk retry results</h1>
+
+{% if error %}
+<p class="notice error" role="alert">{{ error }}</p>
+{% else %}
+<p class="notice {{ 'success' if requeued else 'error' }}" role="status">
+  {% if requeued %}Requeued {{ requeued }} run{{ '' if requeued == 1 else 's' }}.{% else %}No runs were requeued.{% endif %}
+  {% if skipped %} Skipped {{ skipped }}.{% endif %}
+</p>
+{% endif %}
+
+{% if any_deferred %}
+<p class="muted">Some runs are queued but not yet handed to the worker (it was unavailable). The recovery sweep will start them.</p>
+{% endif %}
+
+{% if results %}
+<ul class="retry-list" aria-label="Bulk retry results">
+  {% for r in results %}
+  <li class="card">
+    <p>
+      <span class="media-title">{{ r.label }}</span>
+      {% if r.status == "requeued" %}
+      <span class="pill queued">Requeued</span>
+      {% else %}
+      <span class="pill">Skipped</span>
+      {% endif %}
+    </p>
+    {% if r.status == "requeued" %}
+    <p class="muted"><a href="/runs/{{ r.run_id }}">View run</a>{% if not r.published %} &middot; will start when the worker is available{% endif %}</p>
+    {% else %}
+    <p class="muted">Skipped: {{ r.reason }}.</p>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+<p><a href="/runs?view=failed">Back to failed runs</a></p>
+{% endblock %}

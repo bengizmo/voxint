@@ -26,6 +26,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from sqlalchemy import exists, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from voxint.adjudication.transcript import (
@@ -38,6 +39,7 @@ from voxint.api.clip_service import ClipServiceError, resolve_servable_clip
 from voxint.api.csrf import (
     CSRF_ASSETS_CANCEL,
     CSRF_ASSETS_GENERATE,
+    CSRF_BULK_RETRY,
     CSRF_CANCEL,
     CSRF_FETCH,
     CSRF_NOTES,
@@ -57,7 +59,7 @@ from voxint.api.csrf import (
 from voxint.api.languages import LANGUAGE_NAMES, language_label
 from voxint.api.model_provenance import select_run_model_identity
 from voxint.api.playback import MediaResolutionError, playback_capability, resolve_servable_media
-from voxint.api.presentation import title_from_snapshot
+from voxint.api.presentation import friendly_media_label, title_from_snapshot
 from voxint.api.resource_status import (
     ResourceSnapshot,
     collect_resource_status_or_empty,
@@ -78,7 +80,9 @@ from voxint.api.routers.deps import (
 from voxint.api.runs_query import (
     Cursor,
     InvalidCursorError,
+    LifecycleView,
     ReviewFilter,
+    group_failed_runs,
     list_runs,
     parse_review_filter,
     parse_search_filters,
@@ -88,7 +92,12 @@ from voxint.api.runs_query import (
 )
 from voxint.api.speaker_colors import speaker_palette
 from voxint.api.speaker_timeline import build_speaker_timeline
-from voxint.api.stats_query import DEFAULT_WINDOW, collect_stats, render_prometheus
+from voxint.api.stats_query import (
+    DEFAULT_WINDOW,
+    collect_stats,
+    render_prometheus,
+    run_status_counts,
+)
 from voxint.api.transcript_view import (
     _run_label_universe,
     _transcript_island_props,
@@ -599,6 +608,7 @@ def runs(
     request: Request,
     operator: OperatorDep,
     session: SessionDep,
+    view: str | None = None,
     status: str | None = None,
     review: str | None = None,
     cursor: str | None = None,
@@ -610,11 +620,17 @@ def runs(
     language: str | None = None,
     archived: str | None = None,
 ) -> Response:
+    # Local import avoids a module cycle: jobs imports this module's run-detail
+    # context builder while /runs reuses its canonical summary formatter.
+    from voxint.api.jobs_query import jobs_badge_count, recent_aux_jobs
+    from voxint.api.routers.jobs import _detect_degraded, _pipeline_summary
+
     settings: Settings = request.app.state.settings
     # ?archived=1 flips to the archived-only view (issue #5); anything else
     # (absent / "0" / blank) is the default listing that hides archived runs.
     show_archived = archived == "1"
     try:
+        active_view = LifecycleView(view or LifecycleView.ALL.value)
         status_filter = parse_status_filter(status)
         review_filter = parse_review_filter(review)
         search_filters = parse_search_filters(
@@ -637,6 +653,7 @@ def runs(
             raise HTTPException(status_code=400, detail="invalid cursor") from exc
     page = list_runs(
         session,
+        lifecycle=active_view,
         status=status_filter,
         review=review_filter,
         cursor=parsed_cursor,
@@ -646,6 +663,7 @@ def runs(
     )
     next_url = (
         runs_url(
+            lifecycle=active_view,
             status=status_filter,
             review=review_filter,
             filters=search_filters,
@@ -655,12 +673,38 @@ def runs(
         if page.next_cursor
         else None
     )
+    grouped_items = (
+        group_failed_runs(page.items)
+        if active_view is LifecycleView.FAILED
+        else None
+    )
     return templates.TemplateResponse(
         request,
         "legacy_runs/runs.html",
         {
             "request": request,
             "page": page,
+            "grouped_items": grouped_items,
+            "active_view": active_view,
+            "view_tabs": tuple(
+                (
+                    lv,
+                    label,
+                    runs_url(
+                        lifecycle=lv,
+                        status=status_filter,
+                        review=review_filter,
+                        filters=search_filters,
+                        archived=show_archived,
+                    ),
+                )
+                for lv, label in (
+                    (LifecycleView.NEEDS_ATTENTION, "Needs attention"),
+                    (LifecycleView.ACTIVE, "Active"),
+                    (LifecycleView.FAILED, "Failed"),
+                    (LifecycleView.ALL, "All"),
+                )
+            ),
             "status": status_filter,
             "review": review_filter,
             "statuses": list(RunStatus),
@@ -670,6 +714,7 @@ def runs(
             # Toggle target: the same listing in the opposite archive view,
             # preserving the active status/review/search facets.
             "archived_toggle_url": runs_url(
+                lifecycle=active_view,
                 status=status_filter,
                 review=review_filter,
                 filters=search_filters,
@@ -681,6 +726,16 @@ def runs(
                 archived=show_archived,
                 include=search_filters.language,
             ),
+            "LifecycleView": LifecycleView,
+            "clear_url": runs_url(
+                lifecycle=active_view, archived=show_archived
+            ),
+            "pipeline_summary": _pipeline_summary(
+                run_status_counts(session), jobs_badge_count(session)
+            ),
+            "degraded": _detect_degraded(request),
+            "aux_jobs": recent_aux_jobs(session),
+            "settings_status_url": str(request.url_for("settings_status")),
             "next_url": next_url,
             # Server-issued per-render ids: each namespaces its form's path and
             # makes a double-submit idempotent (see POST /submit, POST /fetch).
@@ -692,6 +747,11 @@ def runs(
             # token is not valid on the other's route (or on /requeue).
             "csrf_submit": mint_csrf_token(request.app.state.csrf_secret, CSRF_SUBMIT),
             "csrf_fetch": mint_csrf_token(request.app.state.csrf_secret, CSRF_FETCH),
+            "csrf_bulk_retry": (
+                mint_csrf_token(request.app.state.csrf_secret, CSRF_BULK_RETRY)
+                if grouped_items is not None
+                else None
+            ),
             # Gate the URL-fetch form: when off, it renders disabled (POST /fetch
             # also refuses with 403), matching the CLI's ytdlp_enabled refusal.
             "ytdlp_enabled": resolve_effective_ytdlp_enabled(
@@ -1091,6 +1151,156 @@ def run_transcript(
 
 # /review/{run_id}/transcript registers between core_router and actions_router
 # (legacy_review.transcript_router, included in app.py's registration order).
+
+_BULK_RETRY_MAX = 100
+
+
+@actions_router.post("/runs/bulk-retry")
+def bulk_retry(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    item: Annotated[list[str] | None, Form()] = None,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Bulk-retry a group of failed runs with per-item CAS safety."""
+    _require_csrf(request, CSRF_BULK_RETRY, csrf_token)
+    raw_items = item or []
+
+    if not raw_items:
+        raise HTTPException(status_code=400, detail="no runs selected")
+    if len(raw_items) > _BULK_RETRY_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"too many runs ({len(raw_items)}); max is {_BULK_RETRY_MAX}",
+        )
+
+    seen: set[uuid.UUID] = set()
+    pairs: list[tuple[uuid.UUID, int]] = []
+    for entry in raw_items:
+        raw_id, sep, raw_rev = entry.partition(":")
+        if not sep:
+            raise HTTPException(
+                status_code=400,
+                detail="malformed item — reload and try again",
+            )
+        try:
+            run_uuid = uuid.UUID(raw_id)
+            revision = int(raw_rev)
+            if revision < 0 or revision > 2_147_483_647:
+                raise ValueError("revision out of range")
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="malformed item — reload and try again",
+            ) from exc
+        if run_uuid not in seen:
+            seen.add(run_uuid)
+            pairs.append((run_uuid, revision))
+
+    _SKIP_REASONS: dict[type, str] = {
+        RunNotFoundError: "run not found",
+        RunArchivedError: "run is archived",
+        RunNotFailedError: "run is not in a failed state",
+        MissingStageError: "run has no failed stage to retry",
+        StaleRevisionError: "run changed since this page loaded",
+        InvalidTransitionError: "run is not in a retryable state",
+    }
+
+    results: list[dict[str, Any]] = []
+    pending_publishes: list[tuple[uuid.UUID, Stage | None]] = []
+
+    for run_id, expected_revision in pairs:
+        run = session.get(PipelineRun, run_id)
+        if run is None:
+            results.append({
+                "run_id": run_id,
+                "label": run_id.hex[:8],
+                "status": "skipped",
+                "reason": "run not found",
+            })
+            continue
+        try:
+            failed_stage = Stage(run.current_stage) if run.current_stage else None
+            source_path = run.media_item.source_path if run.media_item else ""
+            label = friendly_media_label(
+                title_from_snapshot(run.sidecar), source_path
+            )
+        except (ValueError, AttributeError):
+            failed_stage = None
+            label = run_id.hex[:8]
+        try:
+            with session.begin_nested():
+                requeue_failed_run(
+                    session, run_id, expected_revision=expected_revision
+                )
+        except (
+            RunNotFoundError, RunArchivedError, RunNotFailedError,
+            MissingStageError, StaleRevisionError, InvalidTransitionError,
+            IntegrityError,
+        ) as exc:
+            results.append({
+                "run_id": run_id,
+                "label": label,
+                "status": "skipped",
+                "reason": _SKIP_REASONS.get(type(exc), "cannot requeue"),
+            })
+            continue
+        results.append({
+            "run_id": run_id,
+            "label": label,
+            "status": "requeued",
+        })
+        pending_publishes.append((run_id, failed_stage))
+
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        return templates.TemplateResponse(
+            request,
+            "legacy_runs/bulk_retry_result.html",
+            {
+                "request": request,
+                "active_nav": "runs",
+                "results": [],
+                "requeued": 0,
+                "skipped": 0,
+                "error": (
+                    "Something changed while the runs were being retried. "
+                    "Nothing was started; reload and try again."
+                ),
+                "any_deferred": False,
+            },
+            status_code=409,
+        )
+
+    for run_id, stage in pending_publishes:
+        published = deps._publish_or_defer(run_id, stage=stage)
+        for r in results:
+            if r.get("run_id") == run_id and r["status"] == "requeued":
+                r["published"] = published
+                break
+
+    requeued_count = sum(1 for r in results if r["status"] == "requeued")
+    skipped_count = sum(1 for r in results if r["status"] == "skipped")
+
+    return templates.TemplateResponse(
+        request,
+        "legacy_runs/bulk_retry_result.html",
+        {
+            "request": request,
+            "active_nav": "runs",
+            "results": results,
+            "requeued": requeued_count,
+            "skipped": skipped_count,
+            "any_deferred": any(
+                r["status"] == "requeued" and not r.get("published")
+                for r in results
+            ),
+        },
+    )
+
 
 @actions_router.post("/runs/{run_id}/requeue")
 def requeue_run(

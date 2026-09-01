@@ -1,19 +1,15 @@
 {% extends "base.html" %}
+{% from "settings/_switch.html" import tri_switch %}
 {% block title %}Voxint — settings{% endblock %}
 {% block body %}
-{# Sectioned settings-page IA (issue #62): this shell holds the page frame and the
-   terminal tutorial-complete celebration; every configurable section is a
-   self-contained partial under settings/ with its own scoped, CSRF-guarded POST,
-   so later children (#76 external sources, #63 folders, #61 diagnostics, #75
-   tutorial-seed) slot a partial in here without disturbing another section's save. #}
+{# Legacy flat settings page (console_settings_enabled off). Sections that
+   have tri-state switches are grouped into three forms matching the tab-level
+   POST endpoints (#379). Sections with their own action forms (folders,
+   corrections, tutorial) stay independent. #}
 <div class="settings">
 <h1>Settings</h1>
 
 {% if tutorial_done %}
-{# Completion celebration after POST /settings/tutorial/complete (?tutorial=done).
-   Terminal — no "next step" — so it is rendered here rather than through the
-   walkthrough banner partial, and it offers the plain "submit your own media"
-   link the plan calls for in place of a live "try it" step. #}
 <section class="tutorial-banner" role="note" aria-label="Tutorial complete">
   <h2>You finished the tutorial 🎉</h2>
   <p>You have completed one full run end to end: submit, attribute the voices,
@@ -33,19 +29,54 @@
 </section>
 
 {% include "settings/_appearance.html" %}
-{% include "settings/_features.html" %}
-{% include "settings/_semantic.html" %}
-{% include "settings/_translation.html" %}
-{% include "settings/_folders.html" %}
-{% include "settings/_glossary.html" %}
+
+<form method="post" action="/settings">
+  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+  <button type="submit" hidden aria-hidden="true" tabindex="-1"></button>
+  {% include "settings/_features.html" %}
+  <div class="switch-save"><button type="submit">Save feature settings</button></div>
+</form>
+
+<form method="post" action="/settings/ai" autocomplete="off">
+  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+  <button type="submit" hidden aria-hidden="true" tabindex="-1"></button>
+  {% include "settings/_llm.html" %}
+  {% include "settings/_semantic.html" %}
+  {% include "settings/_translation.html" %}
+  {% include "settings/_glossary.html" %}
+  <div class="switch-save"><button type="submit">Save AI settings</button></div>
+</form>
+
 {% include "settings/_corrections.html" %}
-{% include "settings/_llm.html" %}
-{% include "settings/_sources.html" %}
+
+{% include "settings/_folders.html" %}
+
+<form method="post" action="/settings/media" autocomplete="off">
+  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+  <button type="submit" hidden aria-hidden="true" tabindex="-1"></button>
+  <section id="watch-folder" class="watch-folder" aria-labelledby="wf-heading-legacy">
+    <h2 id="wf-heading-legacy">Automatic ingest</h2>
+    <p class="muted">When this is on, Voxint checks the folders above on a schedule and
+       starts a job for each <strong>new</strong> recording it finds.</p>
+    {% if watch_folder_error %}
+      <p class="notice" role="alert">{{ watch_folder_error }}</p>
+    {% endif %}
+    {{ tri_switch(
+         name="watch_folder_enabled",
+         label="Watch registered folders for new recordings",
+         help_text="Checks the registered folders on a schedule and starts a run for each new recording.",
+         state=watch_folder_state,
+         effective=watch_folder_env_default if watch_folder_state == "inherit" else (watch_folder_state == "on"),
+         env_default=watch_folder_env_default,
+    ) }}
+  </section>
+  {% include "settings/_sources.html" %}
+  <div class="switch-save"><button type="submit">Save media settings</button></div>
+</form>
+
 {% include "settings/_models.html" %}
 {% include "settings/_benchmark.html" %}
 {% include "settings/_tutorial.html" %}
-{#- Plugin settings sections (issue #138): rendered after the core sections, in
-    (order, section_id) order. Empty registry ⇒ no iterations ⇒ zero bytes. -#}
 {%- for section in plugin_settings_sections %}
 {% include section.template %}
 {%- endfor %}

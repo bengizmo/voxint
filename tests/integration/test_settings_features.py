@@ -90,11 +90,12 @@ def test_features_section_renders_tristate(
         "ytdlp_enabled",
     ):
         assert f'name="{name}"' in body
-    # No stored override anywhere → every flag renders "use installation setting".
-    assert 'name="enrichment_run_assets_enabled" value="inherit" checked' in body
-    # Env defaults surfaced honestly: names/ytdlp default on, run assets default off.
-    assert "currently On" in body
-    assert "currently Off" in body
+    # No stored override anywhere → every flag renders as a switch with no badge.
+    assert 'role="switch"' in body
+    # No overrides → no "Changed" badges (check for the rendered badge element,
+    # not the CSS class name which appears in the stylesheet).
+    assert ">Changed</span>" not in body
+    assert 'id="sw-enrichment_run_assets_enabled"' in body
     # The gated fragments no longer send operators to raw env vars.
     assert "ENRICHMENT_RUN_ASSETS_ENABLED" not in body
 
@@ -154,8 +155,11 @@ def test_invariant_violation_writes_nothing_and_preserves_input(
     assert row.enrichment_names_llm_enabled is None
     assert row.ytdlp_enabled is False
     assert row.enrichment_names_enabled is False
-    # The operator's rejected choice is rendered back for correction.
-    assert 'name="enrichment_names_llm_enabled" value="on" checked' in resp.text
+    # The operator's rejected choice is rendered back for correction: the switch
+    # for the submitted "on" renders checked (the submitted value is "on", so
+    # effective = True → checked), and the "Changed" badge appears.
+    assert 'id="sw-enrichment_names_llm_enabled"' in resp.text
+    assert ">Changed</span>" in resp.text
 
 
 def test_names_llm_requires_names_enabled(
@@ -361,7 +365,10 @@ def test_bundled_override_round_trips_in_the_rendered_form(
     client, _ = make_client(session_factory, media_root)
     _seed_flags(session_factory, llm_bundled_enabled=True)
     body = client.get("/settings").text
-    assert 'name="llm_bundled_enabled" value="on" checked' in body
+    # The stored override renders the switch checked AND shows the "Changed" badge.
+    assert 'id="sw-llm_bundled_enabled"' in body
+    assert "checked" in body
+    assert ">Changed</span>" in body
 
 
 def test_features_requires_csrf(
