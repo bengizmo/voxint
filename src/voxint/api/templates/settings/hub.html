@@ -29,6 +29,7 @@
 
 <form method="post" action="/settings">
   <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+  <button type="submit" hidden aria-hidden="true" tabindex="-1"></button>
   {% include "settings/_features.html" %}
   <div class="switch-save">
     <button type="submit">Save settings</button>

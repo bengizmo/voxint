@@ -7,6 +7,7 @@
 <h1>AI</h1>
 <form method="post" action="/settings/ai" autocomplete="off">
   <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+  <button type="submit" hidden aria-hidden="true" tabindex="-1"></button>
   {% include "settings/_llm.html" %}
   {% include "settings/_translation.html" %}
   {% include "settings/_glossary.html" %}

@@ -9,6 +9,7 @@
 {% include "settings/_folders.html" %}
 <form method="post" action="/settings/media" autocomplete="off">
   <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+  <button type="submit" hidden aria-hidden="true" tabindex="-1"></button>
 
   {# Watch-folder ingest (issue #60, restyled #379): the tri-state switch + status
      line. Lives inside the tab form so it saves with sources/research. #}

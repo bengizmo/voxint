@@ -90,6 +90,8 @@ from voxint.app_settings import (
     resolve_effective_llm_enabled,
     resolve_effective_semantic_index_autogenerate,
     resolve_effective_semantic_index_enabled,
+    resolve_effective_synthdetect_autogenerate,
+    resolve_effective_synthdetect_enabled,
     resolve_effective_translation_autogenerate,
     resolve_effective_translation_target_language,
     resolve_effective_voxint_web_research,
@@ -1146,7 +1148,12 @@ def _reset_violates_invariants(row: AppSettings, settings: Settings) -> bool:
         autogenerate=resolve_effective_translation_autogenerate(row, settings),
         target_language=resolve_effective_translation_target_language(row, settings),
     )
-    return translation_error is not None
+    if translation_error is not None:
+        return True
+    return bool(
+        resolve_effective_synthdetect_autogenerate(row, settings)
+        and not resolve_effective_synthdetect_enabled(row, settings)
+    )
 
 
 def _persist_feature_flags(
@@ -2858,7 +2865,7 @@ async def settings_ai_save(
     if llm_error is not None:
         session.rollback()
         return templates.TemplateResponse(
-            request, "settings/ai.html",
+            request, _settings_page_template(request),
             _settings_context(request, session, llm_error=llm_error),
         )
 
@@ -2872,7 +2879,7 @@ async def settings_ai_save(
     if semantic_errors:
         session.rollback()
         return templates.TemplateResponse(
-            request, "settings/ai.html",
+            request, _settings_page_template(request),
             _settings_context(
                 request, session,
                 semantic_index_errors=semantic_errors,
@@ -2898,7 +2905,7 @@ async def settings_ai_save(
     if translation_errors:
         session.rollback()
         return templates.TemplateResponse(
-            request, "settings/ai.html",
+            request, _settings_page_template(request),
             _settings_context(
                 request, session,
                 translation_errors=translation_errors,
@@ -2916,7 +2923,7 @@ async def settings_ai_save(
             line for line in vocabulary_text.splitlines() if line.strip()
         ]
         return templates.TemplateResponse(
-            request, "settings/ai.html",
+            request, _settings_page_template(request),
             _settings_context(
                 request, session,
                 glossary_error=str(exc),
@@ -2998,7 +3005,7 @@ async def settings_media_save(
             ),
         }
         return templates.TemplateResponse(
-            request, "settings/media.html",
+            request, _settings_page_template(request),
             _settings_context(
                 request, session,
                 web_research_errors=wr_errors,
