@@ -8,9 +8,10 @@
 {{ media_summary.file_count }} recording{{ "s" if media_summary.file_count != 1 else "" }} · {{ media_summary.total_hours }}
 {%- endblock %}
 {% block cb_actions %}
+{% set _fqs %}{% if search %}&q={{ search|urlencode }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% endset %}
 <nav class="view-toggle" aria-label="Show as">
   {% for value in views %}
-  <a href="/media?sort={{ sort }}&view={{ value }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}{{ filter_qs }}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
+  <a href="/media?sort={{ sort }}&view={{ value }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}{{ _fqs }}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
   {% endfor %}
 </nav>
 {% if not archived and not trashed %}

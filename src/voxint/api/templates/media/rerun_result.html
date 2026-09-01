@@ -36,5 +36,5 @@
   {% endfor %}
 </ul>
 
-<p><a href="/media?sort={{ sort }}&view={{ view }}">Back to media</a></p>
+<p><a href="/media?sort={{ sort }}&view={{ view }}{% if search %}&q={{ search|urlencode }}{% endif %}{% if status %}&status={{ status }}{% endif %}">Back to media</a></p>
 {% endblock %}

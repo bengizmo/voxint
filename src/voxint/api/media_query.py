@@ -234,12 +234,12 @@ SORT_LABELS: Final[tuple[tuple[str, str], ...]] = (
     ("size", "Largest"),
 )
 
-# Status filter: maps the query-param value to the PipelineRun.status string.
-_STATUS_FILTERS: Final[dict[str, str]] = {
-    "needs_review": "awaiting_adjudication",
-    "failed": "failed",
-    "reviewed": "completed",
-}
+# Status filter keys — the allowlist. The WHERE clause is built in
+# media_library() because "needs_review" and "reviewed" depend on
+# unresolved_label_count (a correlated subquery), not just run status.
+_STATUS_FILTER_KEYS: Final[frozenset[str]] = frozenset(
+    {"needs_review", "failed", "reviewed"}
+)
 STATUS_LABELS: Final[tuple[tuple[str, str], ...]] = (
     ("", "All"),
     ("needs_review", "Needs review"),
@@ -258,7 +258,7 @@ def sort_is_known(sort: str | None) -> TypeGuard[str]:
 
 
 def status_is_known(status: str | None) -> bool:
-    return status is not None and status in _STATUS_FILTERS
+    return status is not None and status in _STATUS_FILTER_KEYS
 
 
 def _escape_like(term: str) -> str:
@@ -370,14 +370,28 @@ def media_library(
         pattern = f"%{_escape_like(search.strip())}%"
         stmt = stmt.where(
             or_(
-                MediaItem.source_path.ilike(pattern),
-                MediaSourceMetadata.title.ilike(pattern),
-                MediaFolder.path.ilike(pattern),
+                MediaItem.source_path.ilike(pattern, escape="\\"),
+                MediaSourceMetadata.title.ilike(pattern, escape="\\"),
+                MediaFolder.path.ilike(pattern, escape="\\"),
             )
         )
 
-    if status and status in _STATUS_FILTERS:
-        stmt = stmt.where(latest.c.status == _STATUS_FILTERS[status])
+    if status and status in _STATUS_FILTER_KEYS:
+        unresolved = func.coalesce(unresolved_label_count(PipelineRun.id), 0)
+        if status == "needs_review":
+            # awaiting_adjudication OR completed-with-unresolved-labels (the
+            # "needs you" state the chip shows).
+            stmt = stmt.where(
+                or_(
+                    latest.c.status == "awaiting_adjudication",
+                    (latest.c.status == "completed") & (unresolved > 0),
+                )
+            )
+        elif status == "failed":
+            stmt = stmt.where(latest.c.status == "failed")
+        elif status == "reviewed":
+            # completed AND no unresolved labels left.
+            stmt = stmt.where(latest.c.status == "completed", unresolved == 0)
 
     stmt = stmt.order_by(*order_by).limit(limit)
 
