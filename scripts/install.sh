@@ -162,11 +162,11 @@ compose_file_args_for_tier() {
     metal) args='-f compose.yaml -f compose.metal.yaml' ;;
     *)   args='-f compose.yaml' ;;
   esac
-  # Conservative GPU sizing (issue #96): fold in the installer-generated
-  # compose.hardware.yaml, after the tier overlay so it wins. GPU tier only
-  # (the other tiers have no NVIDIA sizing), and only when we generated it --
-  # an unmarked hand-written file is left alone and never auto-loaded here.
-  if [ "$tier" = "gpu" ] && [ "$skip_hardware" != "skip-hardware" ] && hardware_override_is_managed; then
+  # Conservative GPU/ROCm sizing (issue #96): fold in the installer-generated
+  # compose.hardware.yaml, after the tier overlay so it wins. GPU and ROCm tiers
+  # only, and only when we generated it -- an unmarked hand-written file is left
+  # alone and never auto-loaded here.
+  if { [ "$tier" = "gpu" ] || [ "$tier" = "rocm" ]; } && [ "$skip_hardware" != "skip-hardware" ] && hardware_override_is_managed; then
     args="$args -f $HARDWARE_OVERRIDE_FILE"
   fi
   # An operator's own compose.override.yaml is NOT auto-merged when explicit -f
@@ -380,18 +380,44 @@ resolve_port() {
   done
 }
 
-# Which compute tier should run the model services. Suggests GPU when an
-# NVIDIA driver is visible on the host, ROCm when an AMD compute node
-# (/dev/kfd) is (advisory only -- the user decides).
+# Which compute tier should run the model services. Uses the GPU inventory's
+# VRAM-aware recommendation when available, with presence-based detection as a
+# backward-compatible fallback (advisory only -- the user decides).
 prompt_compute_tier() {
-  local def=c label ans
-  if [ -e /dev/kfd ]; then def=a; fi
-  if command -v "${VOXINT_NVIDIA_SMI:-nvidia-smi}" >/dev/null 2>&1; then def=g; fi
+  local def
+  # Use inventory-based recommendation when available
+  if [ -s "${GPU_INVENTORY_FILE:-}" ]; then
+    recommend_compute_tier
+    def=$RECOMMENDED_TIER
+  else
+    # Fallback: presence-based detection (no inventory created yet)
+    def=c
+    if [ -e /dev/kfd ]; then def=a; fi
+    if command -v "${VOXINT_NVIDIA_SMI:-nvidia-smi}" >/dev/null 2>&1; then def=g; fi
+  fi
   # Checked LAST so it wins on a Mac even if a stray nvidia-smi is on PATH:
   # Apple Silicon cannot run the CUDA containers, and the metal tier is what
   # actually uses the Apple GPU.
   if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then def=m; fi
+
+  # Map tier names to prompt letters
+  case $def in gpu) def=g ;; rocm) def=a ;; cpu) def=c ;; metal) def=m ;; esac
+
   step "Choosing a compute tier for the model services"
+
+  # Show GPU inventory if available
+  if [ -s "${GPU_INVENTORY_FILE:-}" ]; then
+    print_gpu_inventory "$GPU_INVENTORY_FILE"
+    if [ -n "${RECOMMENDATION_REASON:-}" ]; then
+      case $def in
+        g) say "  Recommending GPU tier: $RECOMMENDATION_REASON" ;;
+        a) say "  Recommending AMD tier: $RECOMMENDATION_REASON" ;;
+        c) say "  Recommending CPU tier: $RECOMMENDATION_REASON" ;;
+      esac
+    fi
+    say ""
+  fi
+
   say "  Transcription, diarization, and speaker embedding run as model services."
   say "  Pick how they should run:"
   say "    [G] GPU tier  -- needs an NVIDIA GPU + driver (fastest; ~6-8 GB VRAM)"
@@ -404,6 +430,7 @@ prompt_compute_tier() {
   say "                     diarization uses the Apple GPU; needs a separate"
   say "                     native setup step AFTER this installer (uv, ~3.2 GB)"
   say "    [N] None for now -- core console only; audio processing disabled"
+  local label ans
   case $def in
     g) label='[G/a/c/m/n]' ;;
     a) label='[A/g/c/m/n]' ;;
@@ -815,7 +842,19 @@ configure() {
 
   prompt_password
   prompt_media_root
+  create_gpu_inventory
   prompt_compute_tier
+  # GPU/ROCm: select a specific device and confirm VRAM budget
+  case $COMPUTE_TIER_VALUE in
+    gpu|rocm)
+      prompt_gpu_device "$COMPUTE_TIER_VALUE"
+      if ! confirm_gpu_budget "$COMPUTE_TIER_VALUE"; then
+        say "  Falling back to CPU tier."
+        COMPUTE_TIER_VALUE=cpu
+      fi
+      ;;
+  esac
+  cleanup_gpu_inventory
   EFFECTIVE_TIER=$COMPUTE_TIER_VALUE
   COMPOSE_FILE_ARGS=$(compose_file_args_for_tier "$EFFECTIVE_TIER")
 
@@ -864,6 +903,572 @@ configure() {
 GPU_NAME=""
 GPU_VRAM_MIB=""
 GPU_SIGNATURE=""
+
+# ---------------------------------------------------------------------------
+# GPU inventory: vendor-neutral enumeration of all accelerators on the host.
+# The inventory is a cleanup-managed temporary TSV file with one record per
+# physical GPU. Foundation for VRAM-aware tier suggestion (Phase 2) and
+# per-device compose targeting (Phase 3).
+# ---------------------------------------------------------------------------
+
+# VRAM budget thresholds for tier recommendations. Advisory only -- BATCH_SIZE
+# is NEVER derived from these (numerics doctrine: only parity-passed profiles
+# touch BATCH_SIZE).
+GPU_BUDGET_RECOMMENDED_MIB=8192    # NVIDIA full suite: comfortable headroom
+GPU_BUDGET_MINIMUM_MIB=6144        # NVIDIA full suite: tight but workable
+ROCM_BUDGET_RECOMMENDED_MIB=14336  # ROCm whisper: measured 13.06 GiB peak
+ROCM_BUDGET_MINIMUM_MIB=6144       # ROCm whisper: lower batch or small model
+
+# Inventory file: tab-separated, one record per physical GPU.
+# Fields: vendor index stable_id name total_mib used_mib free_mib render_node mem_confidence
+#   vendor:         nvidia | amd
+#   index:          display-only ordinal (nvidia-smi index or renderD number)
+#   stable_id:      NVIDIA UUID (GPU-xxxx) or AMD PCI BDF (targeting identity)
+#   name:           human-readable GPU name
+#   total_mib:      integer; -1 when unknown
+#   used_mib:       integer; -1 when unknown
+#   free_mib:       integer; -1 when unknown
+#   render_node:    empty for NVIDIA; /dev/dri/renderDN for AMD
+#   mem_confidence: measured (nvidia-smi) | sysfs (AMD dGPU) | shared (AMD iGPU)
+GPU_INVENTORY_FILE=""
+
+# Selected GPU device for compose targeting (set by prompt_gpu_device).
+SEL_GPU_VENDOR=""
+SEL_GPU_STABLE_ID=""
+SEL_GPU_INDEX=""
+SEL_GPU_NAME=""
+SEL_GPU_TOTAL_MIB=""
+SEL_GPU_FREE_MIB=""
+SEL_GPU_RENDER_NODE=""
+SEL_GPU_MEM_CONF=""
+
+# Tier recommendation (set by recommend_compute_tier).
+RECOMMENDED_TIER=""
+RECOMMENDATION_REASON=""
+
+# Create the GPU inventory temp file and populate it from all vendors.
+# Sets GPU_INVENTORY_FILE. Caller must call cleanup_gpu_inventory when done.
+create_gpu_inventory() {
+  GPU_INVENTORY_FILE=$(mktemp "${TMPDIR:-/tmp}/voxint-gpu-inv.XXXXXX")
+  enumerate_nvidia_gpus "$GPU_INVENTORY_FILE"
+  enumerate_amd_gpus "$GPU_INVENTORY_FILE"
+}
+
+cleanup_gpu_inventory() {
+  [ -n "${GPU_INVENTORY_FILE:-}" ] && rm -f "$GPU_INVENTORY_FILE"
+  GPU_INVENTORY_FILE=""
+}
+
+# Portable tab-safe inventory line reader. Sets the nine inventory globals:
+# _inv_vendor _inv_idx _inv_stable_id _inv_name _inv_total _inv_used _inv_free
+# _inv_render_node _inv_conf
+# Usage: _read_inv_line "$line"
+_read_inv_line() {
+  local _rl
+  _rl=$(printf '%s' "$1" | tr '\t' '\034')
+  IFS=$(printf '\034') read -r _inv_vendor _inv_idx _inv_stable_id _inv_name \
+    _inv_total _inv_used _inv_free _inv_render_node _inv_conf <<EOF
+$_rl
+EOF
+}
+
+# Append one record per NVIDIA GPU to the inventory file.
+# Uses VOXINT_NVIDIA_SMI as a test seam (same as detect_nvidia_gpu).
+enumerate_nvidia_gpus() {
+  local inv_file=$1
+  local smi=${VOXINT_NVIDIA_SMI:-nvidia-smi}
+  command -v "$smi" >/dev/null 2>&1 || return 0
+  local out
+  out=$("$smi" --query-gpu=index,uuid,name,memory.total,memory.used,memory.free \
+    --format=csv,noheader,nounits 2>/dev/null) || return 0
+  [ -n "$out" ] || return 0
+
+  local line idx uuid name total used free
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    # Skip truly blank lines
+    local trimmed=${line#"${line%%[![:blank:]]*}"}
+    trimmed=${trimmed%"${trimmed##*[![:blank:]]}"}
+    [ -n "$trimmed" ] || continue
+
+    # Parse 6 CSV fields: index, uuid, name, memory.total, memory.used, memory.free
+    # Each field may have leading/trailing whitespace from nvidia-smi CSV output.
+    local rest=$line
+    idx=${rest%%,*}; rest=${rest#*,}
+    uuid=${rest%%,*}; rest=${rest#*,}
+    name=${rest%%,*}; rest=${rest#*,}
+    total=${rest%%,*}; rest=${rest#*,}
+    used=${rest%%,*}
+    free=${rest#*,}
+
+    # Trim whitespace from all fields
+    idx=${idx#"${idx%%[![:blank:]]*}"}; idx=${idx%"${idx##*[![:blank:]]}"}
+    uuid=${uuid#"${uuid%%[![:blank:]]*}"}; uuid=${uuid%"${uuid##*[![:blank:]]}"}
+    name=${name#"${name%%[![:blank:]]*}"}; name=${name%"${name##*[![:blank:]]}"}
+    total=${total#"${total%%[![:blank:]]*}"}; total=${total%"${total##*[![:blank:]]}"}
+    used=${used#"${used%%[![:blank:]]*}"}; used=${used%"${used##*[![:blank:]]}"}
+    free=${free#"${free%%[![:blank:]]*}"}; free=${free%"${free##*[![:blank:]]}"}
+
+    # Skip MIG instances and malformed rows
+    case $name in *MIG*|*mig*) continue ;; esac
+    case $total in ''|*[!0-9]*) continue ;; esac
+    case $used in ''|*[!0-9]*) used=-1 ;; esac
+    case $free in ''|*[!0-9]*) free=-1 ;; esac
+
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "nvidia" "$idx" "$uuid" "$name" "$total" "$used" "$free" "" "measured" \
+      >> "$inv_file"
+  done < <(printf '%s\n' "$out")
+}
+
+# Append one record per AMD GPU to the inventory file.
+# Test seams: VOXINT_SYSFS_ROOT (default /sys), VOXINT_DEV_ROOT (default /dev).
+enumerate_amd_gpus() {
+  local inv_file=$1
+  local sysfs_root=${VOXINT_SYSFS_ROOT:-/sys}
+  local dev_root=${VOXINT_DEV_ROOT:-/dev}
+
+  # /dev/kfd must exist for ROCm compute
+  [ -e "${dev_root}/kfd" ] || return 0
+
+  local render_path dev_path render_name idx
+  local vendor total_bytes used_bytes gtt_bytes total_mib used_mib free_mib mem_conf
+  local unique_id pci_slot name
+
+  for render_path in "${sysfs_root}"/class/drm/renderD*/device; do
+    [ -d "$render_path" ] || continue
+
+    # Filter: only AMD GPUs (vendor 0x1002)
+    [ -f "${render_path}/vendor" ] || continue
+    vendor=$(cat "${render_path}/vendor" 2>/dev/null) || continue
+    case $vendor in *1002*) ;; *) continue ;; esac
+
+    # Extract renderD node name and number
+    dev_path=${render_path%/device}
+    render_name=${dev_path##*/}
+    idx=${render_name#renderD}
+
+    # Stable ID: prefer unique_id (dGPU), fall back to PCI slot
+    unique_id=""
+    [ -f "${render_path}/unique_id" ] && unique_id=$(cat "${render_path}/unique_id" 2>/dev/null) || true
+    if [ -z "$unique_id" ]; then
+      pci_slot=""
+      [ -f "${render_path}/uevent" ] && \
+        pci_slot=$(grep -o 'PCI_SLOT_NAME=[^ ]*' "${render_path}/uevent" 2>/dev/null | cut -d= -f2) || true
+      [ -n "$pci_slot" ] && unique_id=$pci_slot || unique_id="renderD${idx}"
+    fi
+
+    # GPU name: product_name or marketing_name from sysfs
+    name=""
+    local name_file
+    for name_file in "${render_path}/product_name" "${render_path}/marketing_name"; do
+      [ -f "$name_file" ] && name=$(cat "$name_file" 2>/dev/null) && [ -n "$name" ] && break
+    done
+    [ -n "$name" ] || name="AMD GPU (renderD${idx})"
+
+    # VRAM from sysfs (bytes -> MiB)
+    total_mib=-1; used_mib=-1; free_mib=-1; mem_conf="shared"
+    if [ -f "${render_path}/mem_info_vram_total" ]; then
+      total_bytes=$(cat "${render_path}/mem_info_vram_total" 2>/dev/null) || true
+      case $total_bytes in ''|*[!0-9]*) total_bytes="" ;; esac
+      if [ -n "$total_bytes" ] && [ "$total_bytes" -gt 0 ] 2>/dev/null; then
+        total_mib=$((total_bytes / 1048576))
+        mem_conf="sysfs"
+        if [ -f "${render_path}/mem_info_vram_used" ]; then
+          used_bytes=$(cat "${render_path}/mem_info_vram_used" 2>/dev/null) || true
+          case $used_bytes in ''|*[!0-9]*) used_bytes="" ;; esac
+          if [ -n "$used_bytes" ]; then
+            used_mib=$((used_bytes / 1048576))
+            free_mib=$((total_mib - used_mib))
+            [ "$free_mib" -lt 0 ] && free_mib=0
+          fi
+        fi
+        # Detect shared memory (iGPU/APU): GTT >> VRAM means system-backed
+        if [ -f "${render_path}/mem_info_gtt_total" ]; then
+          gtt_bytes=$(cat "${render_path}/mem_info_gtt_total" 2>/dev/null) || true
+          case $gtt_bytes in ''|*[!0-9]*) gtt_bytes="" ;; esac
+          if [ -n "$gtt_bytes" ]; then
+            local gtt_mib=$((gtt_bytes / 1048576))
+            if [ "$gtt_mib" -gt "$((total_mib * 2))" ]; then
+              mem_conf="shared"
+            fi
+          fi
+        fi
+      fi
+    fi
+
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "amd" "$idx" "$unique_id" "$name" "$total_mib" "$used_mib" "$free_mib" \
+      "${dev_root}/dri/${render_name}" "$mem_conf" \
+      >> "$inv_file"
+  done
+}
+
+# Print the GPU inventory as a human-readable table to stderr.
+print_gpu_inventory() {
+  local inv_file=$1
+  [ -s "$inv_file" ] || { say "  No GPUs detected."; return 0; }
+
+  say "  Detected GPUs:"
+  local line status free_display
+  while IFS= read -r line || [ -n "$line" ]; do
+    _read_inv_line "$line"
+    # Build status annotation
+    if [ "$_inv_free" = "-1" ]; then
+      free_display="unknown"
+      status="(free VRAM unknown)"
+    elif [ "$_inv_free" -eq 0 ] || { [ "$_inv_vendor" = "nvidia" ] && [ "$_inv_free" -lt 256 ]; }; then
+      free_display="${_inv_free} MiB free"
+      status="(occupied)"
+    else
+      free_display="${_inv_free} MiB free"
+      status=""
+    fi
+
+    local total_display
+    [ "$_inv_total" = "-1" ] && total_display="unknown" || total_display="${_inv_total} MiB"
+
+    if [ "$_inv_vendor" = "nvidia" ]; then
+      say "    [nv:${_inv_idx}] ${_inv_name}: ${total_display} total, ${free_display} ${status}"
+    else
+      local conf_note=""
+      [ "$_inv_conf" = "shared" ] && conf_note=" (shared system memory)"
+      say "    [amd:${_inv_idx}] ${_inv_name}: ${total_display} total, ${free_display}${conf_note} ${status}"
+    fi
+  done < "$inv_file"
+}
+
+# Classify a GPU's VRAM against budget thresholds for a given tier.
+# Usage: classify_gpu FREE_MIB TOTAL_MIB MEM_CONFIDENCE TIER
+# Prints one of: recommended, constrained, insufficient, unknown
+classify_gpu() {
+  local free_mib=$1 total_mib=$2 confidence=$3 tier=$4
+  local budget_rec budget_min
+
+  case $tier in
+    gpu)
+      budget_rec=$GPU_BUDGET_RECOMMENDED_MIB
+      budget_min=$GPU_BUDGET_MINIMUM_MIB
+      ;;
+    rocm)
+      budget_rec=$ROCM_BUDGET_RECOMMENDED_MIB
+      budget_min=$ROCM_BUDGET_MINIMUM_MIB
+      ;;
+    *) printf 'unknown'; return 0 ;;
+  esac
+
+  # Unknown free VRAM: fall back to total for a rough estimate
+  if [ "$free_mib" = "-1" ]; then
+    if [ "$total_mib" = "-1" ]; then
+      printf 'unknown'; return 0
+    fi
+    # Use total as the upper bound; actual free could be anything
+    if [ "$total_mib" -ge "$budget_rec" ]; then
+      printf 'unknown'; return 0
+    elif [ "$total_mib" -ge "$budget_min" ]; then
+      printf 'unknown'; return 0
+    else
+      printf 'insufficient'; return 0
+    fi
+  fi
+
+  if [ "$free_mib" -ge "$budget_rec" ]; then
+    printf 'recommended'
+  elif [ "$free_mib" -ge "$budget_min" ]; then
+    printf 'constrained'
+  else
+    printf 'insufficient'
+  fi
+}
+
+# Analyze the GPU inventory and pick the best tier. Sets RECOMMENDED_TIER and
+# RECOMMENDATION_REASON. Apple Silicon override is handled by the caller.
+recommend_compute_tier() {
+  RECOMMENDED_TIER="cpu"
+  RECOMMENDATION_REASON="no eligible GPU detected"
+
+  [ -s "$GPU_INVENTORY_FILE" ] || return 0
+
+  local line
+  local best_nvidia_free=-1 best_nvidia_name="" best_nvidia_class="" best_nvidia_class_rank=-1
+  local best_amd_free=-1 best_amd_name="" best_amd_class="" best_amd_total=-1 best_amd_class_rank=-1
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    _read_inv_line "$line"
+    if [ "$_inv_vendor" = "nvidia" ]; then
+      local class class_rank=0 effective_free=$_inv_free
+      class=$(classify_gpu "$_inv_free" "$_inv_total" "$_inv_conf" "gpu")
+      [ "$effective_free" = "-1" ] && effective_free=$_inv_total
+      case $class in recommended) class_rank=3 ;; constrained) class_rank=2 ;; unknown) class_rank=1 ;; esac
+      if [ "$class_rank" -gt "$best_nvidia_class_rank" ] || \
+         { [ "$class_rank" -eq "$best_nvidia_class_rank" ] && [ "$effective_free" -gt "$best_nvidia_free" ] 2>/dev/null; }; then
+        best_nvidia_free=$effective_free
+        best_nvidia_name=$_inv_name
+        best_nvidia_class=$class
+        best_nvidia_class_rank=$class_rank
+      fi
+    elif [ "$_inv_vendor" = "amd" ]; then
+      local class class_rank=0 effective_free=$_inv_free
+      class=$(classify_gpu "$_inv_free" "$_inv_total" "$_inv_conf" "rocm")
+      [ "$effective_free" = "-1" ] && effective_free=$_inv_total
+      case $class in recommended) class_rank=3 ;; constrained) class_rank=2 ;; unknown) class_rank=1 ;; esac
+      if [ "$class_rank" -gt "$best_amd_class_rank" ] || \
+         { [ "$class_rank" -eq "$best_amd_class_rank" ] && [ "$effective_free" -gt "$best_amd_free" ] 2>/dev/null; }; then
+        best_amd_free=$effective_free
+        best_amd_name=$_inv_name
+        best_amd_class=$class
+        best_amd_total=$_inv_total
+        best_amd_class_rank=$class_rank
+      fi
+    fi
+  done < "$GPU_INVENTORY_FILE"
+
+  # Prefer NVIDIA if any card is at least "constrained"
+  case $best_nvidia_class in
+    recommended|constrained)
+      RECOMMENDED_TIER="gpu"
+      RECOMMENDATION_REASON="${best_nvidia_name}: ${best_nvidia_free} MiB free"
+      return 0
+      ;;
+  esac
+
+  # Then AMD if at least "constrained"
+  case $best_amd_class in
+    recommended|constrained)
+      RECOMMENDED_TIER="rocm"
+      if [ "$best_amd_free" = "-1" ]; then
+        RECOMMENDATION_REASON="${best_amd_name}: ${best_amd_total} MiB total (free unknown)"
+      else
+        RECOMMENDATION_REASON="${best_amd_name}: ${best_amd_free} MiB free"
+      fi
+      return 0
+      ;;
+  esac
+
+  # All GPUs are insufficient or unknown -- explain why
+  local reasons=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    _read_inv_line "$line"
+    local tier_for_vendor
+    [ "$_inv_vendor" = "nvidia" ] && tier_for_vendor="gpu" || tier_for_vendor="rocm"
+    local class
+    class=$(classify_gpu "$_inv_free" "$_inv_total" "$_inv_conf" "$tier_for_vendor")
+    case $class in
+      insufficient)
+        if [ "$_inv_free" != "-1" ] && [ "$_inv_free" -lt 256 ] 2>/dev/null; then
+          reasons="${reasons}${reasons:+; }${_inv_name}: ${_inv_free} MiB free (occupied)"
+        elif [ "$_inv_free" != "-1" ]; then
+          reasons="${reasons}${reasons:+; }${_inv_name}: ${_inv_free} MiB free (below budget)"
+        else
+          reasons="${reasons}${reasons:+; }${_inv_name}: ${_inv_total} MiB total (below budget)"
+        fi
+        ;;
+      unknown)
+        reasons="${reasons}${reasons:+; }${_inv_name}: free VRAM unknown"
+        ;;
+    esac
+  done < "$GPU_INVENTORY_FILE"
+  [ -n "$reasons" ] && RECOMMENDATION_REASON="$reasons"
+}
+
+# When the chosen tier has >1 eligible device, prompt for which one.
+# When exactly one, auto-select it. Sets SEL_GPU_* globals.
+# Usage: prompt_gpu_device TIER
+prompt_gpu_device() {
+  local tier=$1
+
+  # Reset selection
+  SEL_GPU_VENDOR=""; SEL_GPU_STABLE_ID=""; SEL_GPU_INDEX=""
+  SEL_GPU_NAME=""; SEL_GPU_TOTAL_MIB=""; SEL_GPU_FREE_MIB=""
+  SEL_GPU_RENDER_NODE=""; SEL_GPU_MEM_CONF=""
+
+  [ -s "$GPU_INVENTORY_FILE" ] || return 0
+
+  local target_vendor
+  case $tier in
+    gpu)  target_vendor="nvidia" ;;
+    rocm) target_vendor="amd" ;;
+    *)    return 0 ;;
+  esac
+
+  # Collect matching devices into parallel arrays (Bash 3.2: no associative arrays)
+  local count=0
+  local vendors=() indices=() stable_ids=() names=() totals=() frees=() render_nodes=() confs=()
+
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    _read_inv_line "$line"
+    [ "$_inv_vendor" = "$target_vendor" ] || continue
+    count=$((count + 1))
+    vendors+=("$_inv_vendor")
+    indices+=("$_inv_idx")
+    stable_ids+=("$_inv_stable_id")
+    names+=("$_inv_name")
+    totals+=("$_inv_total")
+    frees+=("$_inv_free")
+    render_nodes+=("$_inv_render_node")
+    confs+=("$_inv_conf")
+  done < "$GPU_INVENTORY_FILE"
+
+  if [ "$count" -eq 0 ]; then
+    say "  No ${target_vendor} GPUs detected."
+    return 0
+  fi
+
+  local sel=0
+  if [ "$count" -gt 1 ]; then
+    say ""
+    say "  Multiple ${target_vendor} GPUs detected. Pick one for Voxint:"
+    local i=0
+    while [ "$i" -lt "$count" ]; do
+      local f_disp
+      [ "${frees[$i]}" = "-1" ] && f_disp="unknown" || f_disp="${frees[$i]} MiB free"
+      local t_disp="${totals[$i]} MiB"
+      local status=""
+      if [ "${frees[$i]}" != "-1" ] && [ "${frees[$i]}" -lt 256 ] 2>/dev/null; then
+        status=" (occupied)"
+      fi
+      say "    [$((i + 1))] ${names[$i]}: ${t_disp} total, ${f_disp}${status}"
+      i=$((i + 1))
+    done
+    # Default to the device with most free VRAM
+    local best_idx=0 best_free=-1
+    i=0
+    while [ "$i" -lt "$count" ]; do
+      if [ "${frees[$i]}" != "-1" ] && [ "${frees[$i]}" -gt "$best_free" ] 2>/dev/null; then
+        best_free=${frees[$i]}
+        best_idx=$i
+      fi
+      i=$((i + 1))
+    done
+    local def_num=$((best_idx + 1))
+    local ans
+    printf '  Device [%s]: ' "$def_num" >&2
+    IFS= read -r ans || ans=""
+    ans=${ans:-$def_num}
+    case $ans in *[!0-9]*) ans=$def_num ;; esac
+    if [ "$ans" -lt 1 ] || [ "$ans" -gt "$count" ] 2>/dev/null; then
+      ans=$def_num
+    fi
+    sel=$((ans - 1))
+  fi
+
+  SEL_GPU_VENDOR=${vendors[$sel]}
+  SEL_GPU_INDEX=${indices[$sel]}
+  SEL_GPU_STABLE_ID=${stable_ids[$sel]}
+  SEL_GPU_NAME=${names[$sel]}
+  SEL_GPU_TOTAL_MIB=${totals[$sel]}
+  SEL_GPU_FREE_MIB=${frees[$sel]}
+  SEL_GPU_RENDER_NODE=${render_nodes[$sel]}
+  SEL_GPU_MEM_CONF=${confs[$sel]}
+
+  say "  Selected: ${SEL_GPU_NAME} (${SEL_GPU_STABLE_ID})"
+}
+
+# Warn if the selected GPU is below the VRAM budget for the chosen tier.
+# Returns 0 to proceed, 1 to fall back to CPU. Requires explicit 'y' for
+# below-budget devices; Enter defaults to falling back.
+confirm_gpu_budget() {
+  local tier=$1
+
+  # Nothing selected or not a GPU tier
+  [ -n "$SEL_GPU_STABLE_ID" ] || return 0
+  case $tier in gpu|rocm) ;; *) return 0 ;; esac
+
+  local class
+  class=$(classify_gpu "$SEL_GPU_FREE_MIB" "$SEL_GPU_TOTAL_MIB" "$SEL_GPU_MEM_CONF" "$tier")
+
+  case $class in
+    recommended) return 0 ;;
+    constrained)
+      say "  Note: ${SEL_GPU_NAME} has ${SEL_GPU_FREE_MIB} MiB free -- tight but workable."
+      return 0
+      ;;
+    insufficient)
+      say ""
+      say "  WARNING: ${SEL_GPU_NAME} has insufficient free VRAM for the $tier tier."
+      if [ "$SEL_GPU_FREE_MIB" != "-1" ]; then
+        say "  Currently ${SEL_GPU_FREE_MIB} MiB free; the $tier stack needs at least"
+      else
+        say "  Free VRAM is unknown; the $tier stack needs at least"
+      fi
+      case $tier in
+        gpu)  say "  ${GPU_BUDGET_MINIMUM_MIB} MiB (recommended: ${GPU_BUDGET_RECOMMENDED_MIB} MiB)." ;;
+        rocm) say "  ${ROCM_BUDGET_MINIMUM_MIB} MiB (recommended: ${ROCM_BUDGET_RECOMMENDED_MIB} MiB)." ;;
+      esac
+      say "  Model services may crash with out-of-memory errors."
+      say ""
+      local ans
+      printf '  Proceed with %s anyway? Type "y" to continue, Enter to fall back to CPU: ' "$tier" >&2
+      IFS= read -r ans || ans=""
+      case $ans in
+        y|Y) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    unknown)
+      say "  Note: Could not determine free VRAM on ${SEL_GPU_NAME}."
+      say "  If the GPU is occupied by another process, model services may run out of memory."
+      return 0
+      ;;
+  esac
+}
+
+# Re-query the selected GPU's free VRAM. Called before compose up to warn if
+# availability has changed since device selection. Does not block unattended starts.
+refresh_selected_gpu() {
+  [ -n "$SEL_GPU_STABLE_ID" ] || return 0
+
+  if [ "$SEL_GPU_VENDOR" = "nvidia" ]; then
+    local smi=${VOXINT_NVIDIA_SMI:-nvidia-smi}
+    command -v "$smi" >/dev/null 2>&1 || return 0
+    local out
+    out=$("$smi" --query-gpu=uuid,memory.free --format=csv,noheader,nounits 2>/dev/null) || return 0
+    local line uuid free
+    while IFS= read -r line || [ -n "$line" ]; do
+      uuid=${line%%,*}
+      free=${line#*,}
+      uuid=${uuid#"${uuid%%[![:blank:]]*}"}; uuid=${uuid%"${uuid##*[![:blank:]]}"}
+      free=${free#"${free%%[![:blank:]]*}"}; free=${free%"${free##*[![:blank:]]}"}
+      if [ "$uuid" = "$SEL_GPU_STABLE_ID" ]; then
+        case $free in *[!0-9]*) return 0 ;; esac
+        SEL_GPU_FREE_MIB=$free
+        return 0
+      fi
+    done < <(printf '%s\n' "$out")
+  elif [ "$SEL_GPU_VENDOR" = "amd" ]; then
+    local sysfs_root=${VOXINT_SYSFS_ROOT:-/sys}
+    local render_path
+    for render_path in "${sysfs_root}"/class/drm/renderD*/device; do
+      [ -d "$render_path" ] || continue
+      local uid=""
+      [ -f "${render_path}/unique_id" ] && uid=$(cat "${render_path}/unique_id" 2>/dev/null) || true
+      local pci_slot=""
+      [ -f "${render_path}/uevent" ] && \
+        pci_slot=$(grep -o 'PCI_SLOT_NAME=[^ ]*' "${render_path}/uevent" 2>/dev/null | cut -d= -f2) || true
+      local dev_path=${render_path%/device}
+      local render_name=${dev_path##*/}
+      local idx=${render_name#renderD}
+      local cand=${uid:-$pci_slot}
+      [ -z "$cand" ] && cand="renderD${idx}"
+      if [ "$cand" = "$SEL_GPU_STABLE_ID" ]; then
+        local total_bytes used_bytes
+        [ -f "${render_path}/mem_info_vram_total" ] || return 0
+        total_bytes=$(cat "${render_path}/mem_info_vram_total" 2>/dev/null) || return 0
+        case $total_bytes in ''|*[!0-9]*) return 0 ;; esac
+        [ "$total_bytes" -gt 0 ] 2>/dev/null || return 0
+        local total_mib=$((total_bytes / 1048576))
+        [ -f "${render_path}/mem_info_vram_used" ] || return 0
+        used_bytes=$(cat "${render_path}/mem_info_vram_used" 2>/dev/null) || return 0
+        case $used_bytes in ''|*[!0-9]*) return 0 ;; esac
+        local used_mib=$((used_bytes / 1048576))
+        SEL_GPU_FREE_MIB=$((total_mib - used_mib))
+        [ "$SEL_GPU_FREE_MIB" -lt 0 ] && SEL_GPU_FREE_MIB=0
+        return 0
+      fi
+    done
+  fi
+}
 
 # Lowercase, collapse whitespace to single underscores, drop everything but
 # [a-z0-9_], and trim leading/trailing underscores -- a stable signature token.
@@ -955,18 +1560,85 @@ select_hardware_profile() {
 # gets MAX_PENDING_REQUESTS (additive env merge). BATCH_SIZE is emitted ONLY when
 # a profile set it -- never for the unknown fallback.
 render_hardware_override() {
-  printf '%s\n' "${HARDWARE_OVERRIDE_MARKER} v1"
+  # Sanitize identities before YAML emission (defense-in-depth).
+  if [ -n "$SEL_GPU_STABLE_ID" ]; then
+    case $SEL_GPU_STABLE_ID in
+      GPU-*|[0-9]*:*.*|0x*|renderD[0-9]*) ;;
+      *) say "  WARNING: unexpected GPU id format: $SEL_GPU_STABLE_ID -- skipping device pinning."
+         SEL_GPU_STABLE_ID=""; SEL_GPU_RENDER_NODE="" ;;
+    esac
+  fi
+  if [ -n "$SEL_GPU_RENDER_NODE" ]; then
+    case $SEL_GPU_RENDER_NODE in
+      /dev/dri/renderD[0-9]*) ;;
+      *) say "  WARNING: unexpected render node format: $SEL_GPU_RENDER_NODE -- skipping device pinning."
+         SEL_GPU_STABLE_ID=""; SEL_GPU_RENDER_NODE="" ;;
+    esac
+  fi
+
+  printf '%s\n' "${HARDWARE_OVERRIDE_MARKER} v2"
   printf '%s\n' "# profile: ${PROFILE_ID}"
+  if [ -n "$SEL_GPU_STABLE_ID" ]; then
+    printf '%s\n' "# device: ${SEL_GPU_NAME} (${SEL_GPU_TOTAL_MIB} MiB)"
+  fi
   printf '%s\n' "# Generated by scripts/install.sh -- regenerated on every install run."
   printf '%s\n' "# Do not edit; put your own overrides in compose.override.yaml instead."
   printf '%s\n' "services:"
   printf '%s\n' "  worker:"
   printf '%s\n' "    command: ${WORKER_BASE_COMMAND} --concurrency=${PROFILE_CONCURRENCY}"
-  printf '%s\n' "  whisper:"
-  printf '%s\n' "    environment:"
-  printf '%s\n' "      MAX_PENDING_REQUESTS: \"${PROFILE_MAX_PENDING}\""
-  if [ -n "$PROFILE_BATCH_SIZE" ]; then
-    printf '%s\n' "      BATCH_SIZE: \"${PROFILE_BATCH_SIZE}\""
+
+  if [ "${EFFECTIVE_TIER:-}" = "rocm" ] && [ -n "$SEL_GPU_RENDER_NODE" ]; then
+    # ROCm: pin whisper to one renderD node; container sees one GPU as index 0
+    printf '%s\n' "  whisper:"
+    printf '%s\n' "    devices: !override"
+    printf '%s\n' "      - /dev/kfd"
+    printf '%s\n' "      - ${SEL_GPU_RENDER_NODE}"
+    printf '%s\n' "    environment:"
+    printf '%s\n' "      MAX_PENDING_REQUESTS: \"${PROFILE_MAX_PENDING}\""
+    printf '%s\n' "      HIP_VISIBLE_DEVICES: \"0\""
+    printf '%s\n' "      ROCR_VISIBLE_DEVICES: \"0\""
+    if [ -n "$PROFILE_BATCH_SIZE" ]; then
+      printf '%s\n' "      BATCH_SIZE: \"${PROFILE_BATCH_SIZE}\""
+    fi
+  elif [ "${EFFECTIVE_TIER:-}" = "gpu" ] && [ -n "$SEL_GPU_STABLE_ID" ]; then
+    # NVIDIA: pin all three model services to one UUID
+    printf '%s\n' "  whisper:"
+    printf '%s\n' "    environment:"
+    printf '%s\n' "      MAX_PENDING_REQUESTS: \"${PROFILE_MAX_PENDING}\""
+    if [ -n "$PROFILE_BATCH_SIZE" ]; then
+      printf '%s\n' "      BATCH_SIZE: \"${PROFILE_BATCH_SIZE}\""
+    fi
+    printf '%s\n' "    deploy:"
+    printf '%s\n' "      resources:"
+    printf '%s\n' "        reservations:"
+    printf '%s\n' "          devices: !override"
+    printf '%s\n' "            - driver: nvidia"
+    printf '%s\n' "              device_ids: [\"${SEL_GPU_STABLE_ID}\"]"
+    printf '%s\n' "              capabilities: [gpu]"
+    printf '%s\n' "  pyannote:"
+    printf '%s\n' "    deploy:"
+    printf '%s\n' "      resources:"
+    printf '%s\n' "        reservations:"
+    printf '%s\n' "          devices: !override"
+    printf '%s\n' "            - driver: nvidia"
+    printf '%s\n' "              device_ids: [\"${SEL_GPU_STABLE_ID}\"]"
+    printf '%s\n' "              capabilities: [gpu]"
+    printf '%s\n' "  titanet:"
+    printf '%s\n' "    deploy:"
+    printf '%s\n' "      resources:"
+    printf '%s\n' "        reservations:"
+    printf '%s\n' "          devices: !override"
+    printf '%s\n' "            - driver: nvidia"
+    printf '%s\n' "              device_ids: [\"${SEL_GPU_STABLE_ID}\"]"
+    printf '%s\n' "              capabilities: [gpu]"
+  else
+    # No device selected: scheduling caps only (backward compatible)
+    printf '%s\n' "  whisper:"
+    printf '%s\n' "    environment:"
+    printf '%s\n' "      MAX_PENDING_REQUESTS: \"${PROFILE_MAX_PENDING}\""
+    if [ -n "$PROFILE_BATCH_SIZE" ]; then
+      printf '%s\n' "      BATCH_SIZE: \"${PROFILE_BATCH_SIZE}\""
+    fi
   fi
 }
 
@@ -1009,14 +1681,20 @@ write_hardware_override() {
   printf '%s\n' "$candidate" >"$tmp" || { umask "$old_umask"; fail "Failed writing candidate hardware override."; }
   umask "$old_umask"
 
-  # Validate against the file set that will actually run (base + gpu overlay +
+  # Validate against the file set that will actually run (base + tier overlay +
   # this candidate + any operator override), so a bad render fails here, not at up.
   # $tmp is an absolute path (REPO_ROOT can contain spaces on macOS), so pass every
   # -f as a discrete quoted argument rather than word-splitting one string.
+  local tier_file
+  case ${EFFECTIVE_TIER:-gpu} in
+    gpu)  tier_file="compose.gpu.yaml" ;;
+    rocm) tier_file="compose.rocm.yaml" ;;
+    *)    tier_file="compose.gpu.yaml" ;;
+  esac
   if [ -f compose.override.yaml ]; then
-    docker compose -f compose.yaml -f compose.gpu.yaml -f "$tmp" -f compose.override.yaml --env-file .env config --quiet >/dev/null 2>&1 && rc=0 || rc=$?
+    docker compose -f compose.yaml -f "$tier_file" -f "$tmp" -f compose.override.yaml --env-file .env config --quiet >/dev/null 2>&1 && rc=0 || rc=$?
   else
-    docker compose -f compose.yaml -f compose.gpu.yaml -f "$tmp" --env-file .env config --quiet >/dev/null 2>&1 && rc=0 || rc=$?
+    docker compose -f compose.yaml -f "$tier_file" -f "$tmp" --env-file .env config --quiet >/dev/null 2>&1 && rc=0 || rc=$?
   fi
   if [ "$rc" -ne 0 ]; then
     rm -f "$tmp"; _CLEANUP_TMP=""
@@ -1030,23 +1708,58 @@ write_hardware_override() {
   return 0
 }
 
-# GPU tier only: detect the card, pick the conservative profile, generate/refresh
+# GPU/ROCm tiers only: pick conservative defaults and generate/refresh
 # compose.hardware.yaml, then refold COMPOSE_FILE_ARGS so pull/up/ps/handoff all
 # agree on the effective chain. Requires .env in place (the write validates it).
 configure_hardware_defaults() {
-  [ "$EFFECTIVE_TIER" = "gpu" ] || return 0
-  step "Applying conservative GPU defaults (issue #96)"
-  detect_nvidia_gpu
-  select_hardware_profile
-  if [ -n "$GPU_NAME" ]; then
-    say "  Detected GPU: $GPU_NAME (${GPU_VRAM_MIB} MiB)."
-  else
-    say "  Could not read a single, unambiguous NVIDIA GPU from nvidia-smi;"
-    say "  using the conservative default that suits any modest card."
+  case $EFFECTIVE_TIER in gpu|rocm) ;; *) return 0 ;; esac
+
+  # Kept-env path: SEL_GPU_* may be empty (device selection only runs during
+  # configure/generate). Auto-select the best device to preserve pinning.
+  if [ -z "$SEL_GPU_STABLE_ID" ]; then
+    create_gpu_inventory
+    local target_vendor
+    case $EFFECTIVE_TIER in gpu) target_vendor="nvidia" ;; rocm) target_vendor="amd" ;; esac
+    local best_free=-1 line
+    while IFS= read -r line || [ -n "$line" ]; do
+      _read_inv_line "$line"
+      [ "$_inv_vendor" = "$target_vendor" ] || continue
+      local eff_free=$_inv_free
+      [ "$eff_free" = "-1" ] && eff_free=$_inv_total
+      if [ "$eff_free" -gt "$best_free" ] 2>/dev/null; then
+        best_free=$eff_free
+        SEL_GPU_VENDOR=$_inv_vendor; SEL_GPU_INDEX=$_inv_idx; SEL_GPU_STABLE_ID=$_inv_stable_id
+        SEL_GPU_NAME=$_inv_name; SEL_GPU_TOTAL_MIB=$_inv_total; SEL_GPU_FREE_MIB=$_inv_free
+        SEL_GPU_RENDER_NODE=$_inv_render_node; SEL_GPU_MEM_CONF=$_inv_conf
+      fi
+    done < "$GPU_INVENTORY_FILE"
+    cleanup_gpu_inventory
   fi
-  # Announce what actually took effect: the caps are only "applied" when the file
-  # is written (or was already current). A refused (operator-owned/symlinked)
-  # target is NOT merged into the compose chain, so do not imply the caps are on.
+  step "Applying conservative hardware defaults"
+
+  # For GPU tier, detect the card for profile matching.
+  # For ROCm, use the conservative unknown profile.
+  if [ "$EFFECTIVE_TIER" = "gpu" ]; then
+    detect_nvidia_gpu
+    select_hardware_profile
+    if [ -n "$GPU_NAME" ]; then
+      say "  Detected GPU: $GPU_NAME (${GPU_VRAM_MIB} MiB)."
+    else
+      say "  Could not read a single, unambiguous NVIDIA GPU from nvidia-smi;"
+      say "  using the conservative default that suits any modest card."
+    fi
+  else
+    # ROCm: no per-GPU profile matching yet
+    PROFILE_ID="rocm-unknown-v1"
+    PROFILE_CONCURRENCY=1
+    PROFILE_MAX_PENDING=1
+    PROFILE_BATCH_SIZE=""
+  fi
+
+  if [ -n "$SEL_GPU_STABLE_ID" ]; then
+    say "  Device: ${SEL_GPU_NAME} (${SEL_GPU_STABLE_ID})"
+  fi
+
   if write_hardware_override; then
     say "  Profile '$PROFILE_ID' applied: worker --concurrency=$PROFILE_CONCURRENCY,"
     say "  whisper MAX_PENDING_REQUESTS=$PROFILE_MAX_PENDING. This is a scheduling-only"
@@ -1057,13 +1770,20 @@ configure_hardware_defaults() {
       say "  it needs a measured per-GPU profile, so the installer does not set it. If a"
       say "  run hits out-of-memory, lower BATCH_SIZE by hand in compose.override.yaml."
     fi
+    if [ -n "$SEL_GPU_STABLE_ID" ]; then
+      if [ "$EFFECTIVE_TIER" = "gpu" ]; then
+        say "  NVIDIA device pinned: ${SEL_GPU_STABLE_ID}"
+      else
+        say "  ROCm device pinned: ${SEL_GPU_RENDER_NODE}"
+      fi
+    fi
     if [ "$HARDWARE_WRITE_RESULT" = "unchanged" ]; then
       say "  $HARDWARE_OVERRIDE_FILE was already current. See docs/operations.md (#96)."
     else
       say "  Wrote $HARDWARE_OVERRIDE_FILE. See docs/operations.md (#96)."
     fi
   else
-    say "  Conservative GPU defaults were NOT applied: $HARDWARE_OVERRIDE_FILE is present"
+    say "  Conservative hardware defaults were NOT applied: $HARDWARE_OVERRIDE_FILE is present"
     say "  but not installer-managed, so it is left as-is and is NOT merged into the"
     say "  compose chain. Put your own overrides in compose.override.yaml instead."
   fi
@@ -1073,35 +1793,105 @@ configure_hardware_defaults() {
   fi
 }
 
-# `install.sh --hardware-dry-run`: report the detected GPU, the selected profile,
-# the effective GPU compose chain, and the exact compose.hardware.yaml that WOULD
-# be written -- without touching Docker, .env, or any file. The YAML goes to
-# stdout so `--hardware-dry-run 2>/dev/null` yields just the file body.
+# `install.sh --hardware-dry-run`: report the inventory, recommendation, selected
+# devices, and exact GPU/ROCm compose.hardware.yaml bodies that WOULD be written.
 hardware_dry_run() {
+  create_gpu_inventory
+  say "=== GPU Inventory ==="
+  print_gpu_inventory "$GPU_INVENTORY_FILE"
+  say ""
+  recommend_compute_tier
+  say "Recommended tier: $RECOMMENDED_TIER"
+  say "Reason: $RECOMMENDATION_REASON"
+  say ""
+
+  # Show what hardware_override would look like for gpu tier
   detect_nvidia_gpu
   select_hardware_profile
   if [ -n "$GPU_NAME" ]; then
-    say "Detected GPU: $GPU_NAME (${GPU_VRAM_MIB} MiB)"
-  else
-    say "No single, unambiguous NVIDIA GPU detected (or nvidia-smi unavailable)."
+    say "NVIDIA profile: $PROFILE_ID (worker --concurrency=$PROFILE_CONCURRENCY, whisper MAX_PENDING_REQUESTS=$PROFILE_MAX_PENDING)"
   fi
-  say "Profile: $PROFILE_ID (worker --concurrency=$PROFILE_CONCURRENCY, whisper MAX_PENDING_REQUESTS=$PROFILE_MAX_PENDING)"
   if [ -z "$PROFILE_BATCH_SIZE" ]; then
     say "BATCH_SIZE: unchanged (needs a measured per-GPU profile before it is auto-set)."
   fi
-  # Show the chain a real install WOULD use, i.e. WITH the hardware file folded in.
-  # compose_file_args_for_tier only includes it once it exists on disk, so build
-  # the prospective chain explicitly here rather than reporting the current one.
+
+  # Retain the prospective chain in the report for existing CLI consumers.
   local chain="-f compose.yaml -f compose.gpu.yaml -f $HARDWARE_OVERRIDE_FILE"
   if [ -f compose.override.yaml ]; then chain="$chain -f compose.override.yaml"; fi
   say "Effective GPU compose chain would be:"
   say "  docker compose $chain"
+
+  # Simulate GPU tier with best NVIDIA device
+  local saved_tier=$EFFECTIVE_TIER
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    _read_inv_line "$line"
+    if [ "$_inv_vendor" = "nvidia" ]; then
+      SEL_GPU_VENDOR=$_inv_vendor; SEL_GPU_INDEX=$_inv_idx; SEL_GPU_STABLE_ID=$_inv_stable_id
+      SEL_GPU_NAME=$_inv_name; SEL_GPU_TOTAL_MIB=$_inv_total; SEL_GPU_FREE_MIB=$_inv_free
+      SEL_GPU_RENDER_NODE=""; SEL_GPU_MEM_CONF=$_inv_conf
+      break
+    fi
+  done < "$GPU_INVENTORY_FILE"
+  # Always render the conservative GPU scheduling caps. When inventory has a
+  # device, the same rendering also demonstrates UUID pinning.
+  EFFECTIVE_TIER=gpu
   say ""
-  say "$HARDWARE_OVERRIDE_FILE would contain:"
-  say "----------------------------------------------------------------------"
+  say "--- GPU tier compose.hardware.yaml would contain: ---"
   render_hardware_override
-  say "----------------------------------------------------------------------"
+  say "-----------------------------------------------------"
+
+  # Simulate ROCm tier with best AMD device
+  SEL_GPU_VENDOR=""; SEL_GPU_STABLE_ID=""; SEL_GPU_RENDER_NODE=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    _read_inv_line "$line"
+    if [ "$_inv_vendor" = "amd" ]; then
+      SEL_GPU_VENDOR=$_inv_vendor; SEL_GPU_INDEX=$_inv_idx; SEL_GPU_STABLE_ID=$_inv_stable_id
+      SEL_GPU_NAME=$_inv_name; SEL_GPU_TOTAL_MIB=$_inv_total; SEL_GPU_FREE_MIB=$_inv_free
+      SEL_GPU_RENDER_NODE=$_inv_render_node; SEL_GPU_MEM_CONF=$_inv_conf
+      PROFILE_ID="rocm-unknown-v1"; PROFILE_CONCURRENCY=1; PROFILE_MAX_PENDING=1; PROFILE_BATCH_SIZE=""
+      break
+    fi
+  done < "$GPU_INVENTORY_FILE"
+  if [ -n "$SEL_GPU_STABLE_ID" ]; then
+    EFFECTIVE_TIER=rocm
+    say ""
+    say "--- ROCm tier compose.hardware.yaml would contain: ---"
+    render_hardware_override
+    say "------------------------------------------------------"
+  fi
+
+  EFFECTIVE_TIER=$saved_tier
+  cleanup_gpu_inventory
+  say ""
   say "(dry run -- nothing was written or started.)"
+}
+
+# `install.sh --gpu-check`: read-only GPU inventory and classification.
+# No Docker daemon, .env, or file writes required.
+gpu_check() {
+  create_gpu_inventory
+  say "=== GPU Inventory ==="
+  print_gpu_inventory "$GPU_INVENTORY_FILE"
+  say ""
+  recommend_compute_tier
+  say "Recommended tier: $RECOMMENDED_TIER"
+  say "Reason: $RECOMMENDATION_REASON"
+  say ""
+
+  # Classify each GPU for both tiers
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    _read_inv_line "$line"
+    local gpu_class rocm_class
+    gpu_class=$(classify_gpu "$_inv_free" "$_inv_total" "$_inv_conf" "gpu")
+    rocm_class=$(classify_gpu "$_inv_free" "$_inv_total" "$_inv_conf" "rocm")
+    say "  ${_inv_name}: gpu=$gpu_class, rocm=$rocm_class"
+  done < "$GPU_INVENTORY_FILE"
+
+  cleanup_gpu_inventory
+  say ""
+  say "(read-only check -- nothing was written or started.)"
 }
 
 # ---------------------------------------------------------------------------
@@ -1109,6 +1899,22 @@ hardware_dry_run() {
 # do not parse its messages or auto-retry with different ports.
 # ---------------------------------------------------------------------------
 pull_and_start() {
+  # Refresh selected GPU VRAM before starting services
+  if [ -n "${SEL_GPU_STABLE_ID:-}" ]; then
+    local old_free=$SEL_GPU_FREE_MIB
+    refresh_selected_gpu
+    if [ "$SEL_GPU_FREE_MIB" != "$old_free" ] && [ "$SEL_GPU_FREE_MIB" != "-1" ]; then
+      local class
+      class=$(classify_gpu "$SEL_GPU_FREE_MIB" "$SEL_GPU_TOTAL_MIB" "$SEL_GPU_MEM_CONF" "$EFFECTIVE_TIER")
+      case $class in
+        insufficient)
+          say "  NOTE: ${SEL_GPU_NAME} now has ${SEL_GPU_FREE_MIB} MiB free (was ${old_free} MiB)."
+          say "  VRAM availability changed; model services may run out of memory."
+          ;;
+      esac
+    fi
+  fi
+
   step "Pulling release images (first run can take a few minutes)"
   dc pull || fail "Image pull failed. Check your connection and re-run."
 
@@ -1336,6 +2142,7 @@ main() {
   # nothing. No Docker daemon or .env required.
   case ${1:-} in
     --hardware-dry-run) hardware_dry_run; return 0 ;;
+    --gpu-check) gpu_check; return 0 ;;
   esac
 
   say "Voxint installer"
