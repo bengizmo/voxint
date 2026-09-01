@@ -40,12 +40,16 @@ bash, not `sh`; it needs nothing at runtime beyond Docker). It:
 - preflights Docker and the Compose plugin (**≥ 2.24**; the legacy v1
   `docker-compose` binary cannot parse this stack);
 - prompts for an **admin password**, a **media folder**, and a **compute
-  tier** for the model services (GPU / AMD / CPU / Apple / none-for-now; it
-  suggests GPU when `nvidia-smi` is present, AMD when `/dev/kfd` exists, and
-  the Apple **metal** tier on Apple Silicon Macs), and auto-generates the
-  rest (including a random `CSRF_SECRET`). The **CPU tier holds the models in
-  RAM** and needs **≥ 8 GB** available to the container host. On Docker
-  Desktop that is the **VM memory limit**, not the physical machine; see
+  tier** for the model services (GPU / AMD / CPU / Apple / none-for-now).
+  It inventories every GPU on the host, measures free VRAM on each, and
+  recommends the tier that fits. On a multi-GPU host it presents a numbered
+  list and lets you pick which card to target. If a card's VRAM is mostly
+  occupied (for example by a co-resident local LLM), the installer explains
+  why and suggests CPU instead. On Apple Silicon Macs it recommends the
+  **metal** tier. It auto-generates the rest (including a random
+  `CSRF_SECRET`). The **CPU tier holds the models in RAM** and needs
+  **≥ 8 GB** available to the container host. On Docker Desktop that is the
+  **VM memory limit**, not the physical machine; see
   [operations.md](operations.md#running-without-an-nvidia-gpu-cpu-tier);
 - renders `.env` from `.env.example`, never overwriting an existing `.env`
   without first taking a timestamped backup. The tier choice is recorded as
@@ -54,11 +58,14 @@ bash, not `sh`; it needs nothing at runtime beyond Docker). It:
 - detects host-port collisions (`API_PORT`, `POSTGRES_PORT`, `REDIS_PORT`) and
   offers a free alternate;
 - on the GPU tier, reads your card and writes a small installer-managed
-  `compose.hardware.yaml` with conservative single-GPU caps (it works one
-  recording at a time so a modest GPU does not thrash), folds it into the stack
-  it starts, and never overwrites a compose file you edited yourself. Preview
-  the detection without changing anything with
-  `./scripts/install.sh --hardware-dry-run`; details in
+  `compose.hardware.yaml` with conservative caps that pin the model services
+  to your chosen card (it works one recording at a time so a modest GPU does
+  not thrash), folds it into the stack it starts, and never overwrites a
+  compose file you edited yourself. Two read-only diagnostics preview the
+  detection without changing anything:
+  `./scripts/install.sh --gpu-check` (quick inventory and recommendation) and
+  `./scripts/install.sh --hardware-dry-run` (full preview including the
+  compose override); details in
   [operations.md](operations.md#gpu-memory-on-a-single-modest-gpu-issue-96);
 - pulls the pinned release images, starts the stack (core control plane plus
   the chosen tier's model services), polls the API container's healthcheck,

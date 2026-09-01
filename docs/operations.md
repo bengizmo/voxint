@@ -243,10 +243,47 @@ is restarted. Shrinking that first allocation is the fix.
 
 #### What the installer applies automatically
 
-On the GPU tier, `scripts/install.sh` reads the host GPU with `nvidia-smi`,
-writes a generated `compose.hardware.yaml` with a conservative baseline, and
-merges it into the compose chain it launches. For any GPU it does not yet have a
-measured profile for, that baseline caps two schedule-only levers:
+On the GPU or ROCm tier, `scripts/install.sh` inventories every GPU on the host,
+measures free VRAM, and classifies each device against built-in budget
+thresholds. On multi-GPU hosts it presents a numbered list and lets you pick
+which card to target. Based on the selected device, it writes a generated
+`compose.hardware.yaml` with a conservative baseline and merges it into the
+compose chain it launches.
+
+**GPU inventory and classification.** The installer discovers NVIDIA GPUs via
+`nvidia-smi` and AMD GPUs via `/sys/class/drm/card*/device` sysfs nodes. For
+each device it reads total and free VRAM and classifies the result:
+
+| Classification | NVIDIA threshold | ROCm threshold | Meaning |
+|---|---|---|---|
+| `recommended` | ≥ 8192 MiB free | ≥ 14336 MiB free | Comfortable headroom for the full suite. |
+| `constrained` | 6144–8191 MiB free | 6144–14335 MiB free | Will work, but tight. The installer warns. |
+| `insufficient` | < 6144 MiB free | < 6144 MiB free | Not enough for GPU inference. CPU tier suggested. |
+
+The ROCm recommended threshold is higher because the ROCm whisper image peaks
+at ~13 GiB VRAM under `BATCH_SIZE=16` (measured on real hardware).
+
+When no GPU has enough free VRAM (for example, when a co-resident local LLM is
+occupying the card), the installer recommends the CPU tier and explains why.
+Just before writing the override, it re-reads VRAM to catch workloads that
+started or stopped since the initial scan.
+
+**Two read-only diagnostics** let you inspect the installer's view of your
+hardware without changing anything:
+
+```bash
+./scripts/install.sh --gpu-check         # inventory + classification only
+./scripts/install.sh --hardware-dry-run  # full preview: inventory, recommendation,
+                                         # and the compose.hardware.yaml it would write
+```
+
+`--gpu-check` prints the GPU inventory table and the recommended tier with its
+reasoning, then exits. `--hardware-dry-run` goes further: it also renders the
+`compose.hardware.yaml` content for both the NVIDIA and ROCm paths, showing
+device IDs, concurrency caps, and the profile comment.
+
+**The generated override.** For any GPU that does not yet have a measured
+per-card profile, the baseline caps two schedule-only levers:
 
 ```yaml
 services:
@@ -268,15 +305,18 @@ parity gate and an out-of-memory soak on real hardware. Until such a profile
 exists for your card, `BATCH_SIZE` stays at the image default and you tune it by
 hand (below) if a run exhausts VRAM.
 
+**Device pinning.** On multi-GPU hosts (or when you select a specific card
+during the interactive prompt), the generated file includes per-device targeting.
+For NVIDIA, that means `device_ids` with the GPU's UUID and the `!override` tag
+so Compose replaces the base overlay's `count: 1` reservation rather than
+appending to it. For ROCm, it pins the specific `/dev/dri/renderD*` node and
+sets `HIP_VISIBLE_DEVICES` / `ROCR_VISIBLE_DEVICES`. This keeps model services
+on your chosen card even when other GPUs are present.
+
 The file is installer-owned: its first line carries a `# voxint:hardware-override`
 marker, it is regenerated on every install run, and it is refreshed if you swap
 cards. A `compose.hardware.yaml` you wrote yourself (no marker) is left untouched
-and is not loaded. To preview what the installer would write, changing nothing,
-run:
-
-```bash
-./scripts/install.sh --hardware-dry-run
-```
+and is not loaded.
 
 Put your own hand-tuning in `compose.override.yaml`, not in the generated file.
 The installer launches with an explicit file list, so it now merges your
@@ -285,11 +325,10 @@ overlay, and the hardware baseline. Precedence runs lowest to highest:
 `compose.yaml`, the tier overlay (`compose.gpu.yaml`), `compose.hardware.yaml`,
 then `compose.override.yaml`.
 
-For overrides that are purely local to one host (GPU device IDs, port remaps to
-avoid conflicts with other services on the same box), a gitignored
-`compose.local.yaml` keeps deployment-specific details out of version control.
-Add it to your `.gitignore` and append it to your `-f` chain after the other
-overlays so it wins last.
+For overrides that are purely local to one host (port remaps to avoid conflicts
+with other services on the same box), a gitignored `compose.local.yaml` keeps
+deployment-specific details out of version control. Add it to your `.gitignore`
+and append it to your `-f` chain after the other overlays so it wins last.
 
 #### Multi-GPU hosts
 
@@ -298,9 +337,11 @@ The GPU overlay (`compose.gpu.yaml`) requests one GPU per model service with
 several GPUs, the runtime may assign a card that is already under memory
 pressure from other workloads.
 
-Pin all three model services to a specific card by overriding the `devices`
-list with `device_ids`. Compose v2.24+ supports the `!override` tag to replace
-a sequence instead of appending to it:
+The installer handles this automatically: it presents a numbered device list
+and writes the selected GPU's UUID into `compose.hardware.yaml` as a
+`device_ids` entry with `!override` (Compose v2.24+), so every model service
+lands on the card you chose. If you need to change the pin after installation,
+either re-run the installer or override it manually in `compose.local.yaml`:
 
 ```yaml
 # compose.local.yaml (gitignored)

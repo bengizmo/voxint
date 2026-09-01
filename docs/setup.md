@@ -167,11 +167,16 @@ and a GPU-offloaded bundled LLM on one card usually needs **16 GB+**; on a
 > covers transcript **enhancement** and run-asset **summary/entities** only;
 > web research and speaker-name attribution still need a BYO endpoint.
 
-> **Installed with the guided installer?** On the GPU tier it reads your card
-> and writes a conservative, scheduling-only baseline (it works one recording at
-> a time so a modest single GPU does not thrash), then folds it into the stack it
-> starts. You can preview what it would detect and write, without changing
-> anything, by running `./scripts/install.sh --hardware-dry-run`. Details and how
+> **Installed with the guided installer?** On the GPU tier it inventories every
+> GPU on the host, measures free VRAM, and recommends the tier that fits. On a
+> multi-GPU host it lets you pick which card to target, then writes a
+> conservative baseline that pins the model services to that card and works one
+> recording at a time so a modest GPU does not thrash. If a card's VRAM is
+> occupied (for example by a co-resident local LLM), the installer explains why
+> and suggests the CPU tier instead. Two read-only diagnostics preview the
+> detection without changing anything: `./scripts/install.sh --gpu-check` (quick
+> inventory and classification) and `./scripts/install.sh --hardware-dry-run`
+> (full preview including the compose override it would write). Details and how
 > to tune the levers back up are in
 > [operations.md](operations.md#gpu-memory-on-a-single-modest-gpu-issue-96).
 
@@ -205,6 +210,13 @@ keeps the image default `BATCH_SIZE=16` and ships no automatic per-GPU batch
 profile. The tuned profiles noted above are NVIDIA-specific; on ROCm you can
 still lower `BATCH_SIZE` by hand if a smaller card runs short of memory
 (see [operations.md](operations.md#gpu-memory-on-a-single-modest-gpu-issue-96)).
+
+> **Guided installer and AMD GPUs.** The installer discovers AMD GPUs via sysfs,
+> reads their VRAM, and classifies each device. The ROCm budget threshold is
+> higher than NVIDIA's (14 GiB recommended vs. 8 GiB) because the ROCm whisper
+> image peaks at ~13 GiB VRAM under the default batch size. On a multi-GPU host,
+> the installer lets you pick which AMD renderD node to target and pins it in the
+> generated `compose.hardware.yaml`.
 
 ### Apple Silicon Mac: metal tier
 
