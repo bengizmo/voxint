@@ -30,8 +30,7 @@ from voxint.db.models import (
 )
 from voxint.speakers.matching import (
     MatchingGates,
-    eligible_label_vectors,
-    label_centroid,
+    centroid_for_label,
 )
 from voxint.speakers.roster import (
     describe_name_owner,
@@ -118,17 +117,12 @@ def enroll_new_speaker(
             )
         raise EnrollmentError(describe_name_owner(owner))
 
-    by_label = eligible_label_vectors(session, run_id, gates)
-    if diarization_label not in by_label:
+    derived = centroid_for_label(session, run_id, diarization_label, gates)
+    if derived is None:
         raise EnrollmentError(
             f"label {diarization_label!r} has no speaker audio to create an identity from"
         )
-    space, entries = by_label[diarization_label]
-    centroid = label_centroid(entries, gates.turn_weight_cap_seconds)
-    if centroid is None:
-        raise EnrollmentError(
-            f"label {diarization_label!r} produced no usable centroid"
-        )
+    space, centroid = derived
 
     speaker = Speaker(display_name=name)
     try:

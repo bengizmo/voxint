@@ -1559,6 +1559,30 @@ printing per-run counts (created, matched, skipped) without persisting anything.
 The backfill processes runs oldest-first and is safe to interrupt: each run
 commits independently.
 
+## Upgrading the titanet embedding space
+
+When a new titanet image reports a different `embedding_space`, preview the
+voice-vector migration and then run it:
+
+```bash
+docker compose exec api voxint speakers re-embed --dry-run
+docker compose exec api voxint speakers re-embed
+```
+
+The command reads the target space from titanet's `/healthz`. If that field is
+unavailable, it obtains the space from the first real embedding response. It
+updates existing `diarization_turns` vectors in place, re-derives sourced
+`speaker_embeddings` centroids, and refreshes speaker proposals and match
+candidates. It does not re-transcribe audio, replace turn rows, or touch
+`transcript_segments`.
+
+Each run commits as one transaction. An enrolment row is reported as `stale
+(manual attention)` when its source run and label no longer yield an eligible
+centroid, usually because every window was skipped. The row is retained in its
+old space. Manual imports and tutorial seed embeddings without a source run are
+reported as unmigratable and are also retained. Use `--run <uuid>` to restrict
+the migration to one completed run, and `--yes` to skip confirmation.
+
 ## Adjudication workflow
 
 The review console is served by the API at `http://127.0.0.1:8080/` (or your

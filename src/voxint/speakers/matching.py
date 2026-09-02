@@ -225,6 +225,21 @@ def label_centroid(
     )
 
 
+def centroid_for_label(
+    session: Session,
+    run_id: uuid.UUID,
+    label: str,
+    gates: MatchingGates,
+) -> tuple[str, np.ndarray] | None:
+    """Return one label's eligible centroid using the canonical matching policy."""
+    by_label = eligible_label_vectors(session, run_id, gates)
+    if label not in by_label:
+        return None
+    space, entries = by_label[label]
+    centroid = label_centroid(entries, gates.turn_weight_cap_seconds)
+    return (space, centroid) if centroid is not None else None
+
+
 def match_speakers(
     session: Session, run_id: uuid.UUID, gates: MatchingGates
 ) -> tuple[CosineProposal, ...]:

@@ -43,6 +43,7 @@ class ServiceHealth:
     detail: str  # stable, plain-language outcome ("ready", "timeout", …)
     latency_ms: float | None  # round-trip for a completed attempt; None if none
     device: str | None = None  # the service's reported compute device, when it says
+    embedding_space: str | None = None  # additive titanet voice-vector space id
     # Additive, optional hardware telemetry (docs/gpu-contracts.md ``resources``
     # block). The raw parsed object when the service reports one, else None
     # (tolerated exactly as ``device`` is). Captured on the degraded 503 path
@@ -105,6 +106,7 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
         detail: str,
         latency_ms: float | None,
         device: str | None = None,
+        embedding_space: str | None = None,
         resources: dict[str, object] | None = None,
     ) -> ServiceHealth:
         return ServiceHealth(
@@ -114,6 +116,7 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
             detail=detail,
             latency_ms=latency_ms,
             device=device,
+            embedding_space=embedding_space,
             resources=resources,
         )
 
@@ -164,9 +167,31 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
         # it only when the service reports a string so `doctor` can show cpu/cuda/rocm.
         raw_device = body.get("device")
         device = raw_device if isinstance(raw_device, str) else None
+        raw_space = body.get("embedding_space")
+        embedding_space = raw_space if isinstance(raw_space, str) and raw_space else None
         return outcome(
-            up=True, detail="ready", latency_ms=latency_ms, device=device, resources=resources
+            up=True,
+            detail="ready",
+            latency_ms=latency_ms,
+            device=device,
+            embedding_space=embedding_space,
+            resources=resources,
         )
     # A parseable-but-not-ready 2xx (e.g. status="starting"): keep any telemetry
     # the body carried, exactly as the degraded paths above do.
     return outcome(up=False, detail="not ready", latency_ms=latency_ms, resources=resources)
+
+
+def probe_embedding_service(
+    settings: Settings, *, client: httpx.Client | None = None
+) -> ServiceHealth:
+    """Probe only titanet, using the same readiness parser as the setup flow."""
+    own_client = client is None
+    probe_client = client or httpx.Client(
+        timeout=httpx.Timeout(settings.health_probe_timeout_seconds)
+    )
+    try:
+        return _probe_one(probe_client, "speaker embedding", settings.embedder_url)
+    finally:
+        if own_client:
+            probe_client.close()

@@ -135,6 +135,16 @@ def test_export_accepts_markdown_format() -> None:
     assert args.timestamps is False
 
 
+def test_speakers_reembed_parser_wiring() -> None:
+    run_id = uuid.uuid4()
+    args = build_parser().parse_args(
+        ["speakers", "re-embed", "--run", str(run_id), "--dry-run", "--yes"]
+    )
+    assert args.run == run_id
+    assert args.dry_run is True
+    assert args.yes is True
+
+
 def test_list_rejects_unknown_status_before_db(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

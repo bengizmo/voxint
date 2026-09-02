@@ -93,6 +93,27 @@ def test_device_surfaced_when_service_reports_it() -> None:
     assert results["diarization"].device is None
 
 
+def test_embedder_health_exposes_embedding_space() -> None:
+    ready = httpx.Response(
+        200,
+        json={
+            "status": "ok",
+            "model": "titanet",
+            "model_loaded": True,
+            "embedding_space": "titanet-large-v2",
+        },
+    )
+    client = _client(
+        {
+            _ASR_PORT: _healthy("whisper"),
+            _DIARIZER_PORT: _healthy("pyannote"),
+            _EMBEDDER_PORT: ready,
+        }
+    )
+    results = _by_name(probe_services(_settings(), client=client))
+    assert results["speaker embedding"].embedding_space == "titanet-large-v2"
+
+
 def test_non_string_device_is_ignored() -> None:
     weird = httpx.Response(
         200, json={"status": "ok", "model": "m", "model_loaded": True, "device": 123}

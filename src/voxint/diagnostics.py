@@ -25,11 +25,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 import httpx
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, distinct, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from voxint.api.health_probe import probe_services
+from voxint.api.health_probe import ServiceHealth, probe_services
 from voxint.app_settings import (
     byo_llm_configured,
     get_app_settings,
@@ -99,17 +99,72 @@ def check_redis(url: str, *, client: object | None = None) -> CheckResult:
     return CheckResult("redis", True, True, "reachable")
 
 
+def _model_results(health: list[ServiceHealth]) -> list[CheckResult]:
+    results = []
+    for item in health:
+        detail = f"ready ({item.device})" if item.up and item.device else item.detail
+        results.append(CheckResult(item.name, item.up, True, detail))
+    return results
+
+
 def check_models(settings: Settings, *, client: httpx.Client | None = None) -> list[CheckResult]:
     """Hard: probe each model service's ``/healthz`` (reuses the wizard's probe).
 
     A ready service reports its compute device (cpu/cuda/rocm) — surface it so the
     operator can confirm the GPU tier actually took.
     """
-    results = []
-    for h in probe_services(settings, client=client):
-        detail = f"ready ({h.device})" if h.up and h.device else (h.detail)
-        results.append(CheckResult(h.name, h.up, True, detail))
-    return results
+    return _model_results(probe_services(settings, client=client))
+
+
+def check_voice_embedding_spaces(
+    engine: Engine, service_space: str | None
+) -> CheckResult:
+    """Advisory warning for mixed or service-stale stored voice-vector spaces."""
+    from voxint.db.models import DiarizationTurn, SpeakerEmbedding
+
+    try:
+        with Session(engine) as session:
+            turn_spaces = set(
+                space
+                for space in session.scalars(
+                    select(distinct(DiarizationTurn.embedding_space)).where(
+                        DiarizationTurn.embedding_space.is_not(None)
+                    )
+                )
+                if space is not None
+            )
+            enrollment_spaces = set(
+                space
+                for space in session.scalars(
+                    select(distinct(SpeakerEmbedding.embedding_space)).where(
+                        SpeakerEmbedding.embedding_space.is_not(None)
+                    )
+                )
+                if space is not None
+            )
+            spaces = tuple(turn_spaces | enrollment_spaces)
+    except SQLAlchemyError as exc:
+        return CheckResult(
+            "voice embedding spaces",
+            False,
+            False,
+            f"could not inspect stored spaces ({_safe(exc)})",
+        )
+    stale = service_space is not None and any(space != service_space for space in spaces)
+    if len(spaces) > 1 or stale:
+        rendered = ", ".join(sorted(spaces)) or "none"
+        target = f"; service reports {service_space}" if service_space is not None else ""
+        return CheckResult(
+            "voice embedding spaces",
+            False,
+            False,
+            f"stored spaces: {rendered}{target}; run voxint speakers re-embed",
+        )
+    if not spaces:
+        return CheckResult("voice embedding spaces", True, False, "no stored voice vectors")
+    return CheckResult(
+        "voice embedding spaces", True, False, f"consistent ({spaces[0]})"
+    )
 
 
 def check_hf_token(token: str | None, *, client: httpx.Client) -> CheckResult:
@@ -244,7 +299,17 @@ def run_diagnostics(
     """
     token = hf_token if hf_token is not None else os.environ.get("HF_TOKEN")
     results = [check_database(engine), check_redis(settings.redis_url, client=redis_client)]
-    results.extend(check_models(settings, client=http_client))
+    service_health = probe_services(settings, client=http_client)
+    results.extend(_model_results(service_health))
+    embedder_health = next(
+        (item for item in service_health if item.name == "speaker embedding"), None
+    )
+    service_space = (
+        embedder_health.embedding_space if embedder_health and embedder_health.up else None
+    )
+    results.append(
+        check_voice_embedding_spaces(engine, service_space)
+    )
     if include_hf_token:
         results.append(check_hf_token(token, client=http_client))
     # Resolve the effective LLM config from the app_settings row (issue #10) in a
