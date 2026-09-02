@@ -16,6 +16,7 @@ export interface TimelineLane {
   speaker_name: string | null;
   speaker_id: string | null;
   resolution: string;
+  palette_index: number;
   total_seconds: number;
   turn_count: number;
   intervals: TimelineInterval[];
@@ -48,14 +49,6 @@ const BLOCK_INSET = 3;
 const AXIS_HEIGHT = 34;
 const LARGE_INTERVAL_COUNT = 1_000;
 
-function speakerPaletteIndex(label: string): number {
-  let hash = 0;
-  for (const character of label) {
-    hash = (hash * 31 + character.charCodeAt(0)) | 0;
-  }
-  return Math.abs(hash) % 8;
-}
-
 function formatTime(seconds: number, long: boolean): string {
   const rounded = Math.max(0, Math.round(seconds));
   const hours = Math.floor(rounded / 3_600);
@@ -69,6 +62,9 @@ function formatTime(seconds: number, long: boolean): string {
 
 function intervalName(lane: TimelineLane): string {
   if (lane.resolution === "human_exclude") return `${lane.label} (excluded)`;
+  if (lane.speaker_name && lane.speaker_name !== lane.label) {
+    return `${lane.label} · ${lane.speaker_name}`;
+  }
   return lane.speaker_name ?? lane.label;
 }
 
@@ -127,7 +123,7 @@ export function SpeakerTimelineIsland({
       });
       return {
         lane,
-        color: `var(--spk-${speakerPaletteIndex(lane.speaker_id ?? lane.label)})`,
+        color: `var(--spk-${lane.palette_index})`,
         patternId: `speaker-overlap-${laneIndex}`,
         intervals: visible,
       };
@@ -237,7 +233,7 @@ export function SpeakerTimelineIsland({
                     return (
                       <a
                         key={`${interval.start_seconds}-${interval.end_seconds}-${intervalIndex}`}
-                        href={`/runs/${runId}/transcript#t=${interval.start_seconds}`}
+                        href={`/runs/${runId}/transcript?t=${interval.start_seconds}`}
                         aria-label={`${label}. Open transcript at this time.`}
                         onPointerEnter={() => setHovered({ lane, interval })}
                         onPointerLeave={() => setHovered(null)}

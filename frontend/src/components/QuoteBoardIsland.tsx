@@ -227,7 +227,7 @@ export function QuoteBoardIsland({
                   ) : null}
                   <a
                     className="text-[var(--accent)] no-underline hover:underline"
-                    href={`/runs/${q.run_id}/transcript#t=${q.start_seconds}`}
+                    href={`/runs/${q.run_id}/transcript?t=${q.start_seconds}`}
                   >
                     {q.media_title} · {q.start_seconds.toFixed(1)}s
                   </a>

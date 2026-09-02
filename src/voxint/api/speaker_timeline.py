@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from voxint.adjudication.resolver import LabelState, Resolution, label_states
+from voxint.api.speaker_colors import run_label_universe, speaker_palette
 from voxint.db.models import DiarizationTurn
 
 ADJACENT_GAP_SECONDS = 0.05
@@ -36,6 +37,7 @@ class TimelineLane(TypedDict):
     speaker_name: str | None
     speaker_id: str | None
     resolution: str
+    palette_index: int
     total_seconds: float
     turn_count: int
     intervals: list[TimelineInterval]
@@ -104,6 +106,7 @@ def build_speaker_timeline(session: Session, run_id: uuid.UUID) -> SpeakerTimeli
         return None
 
     states = {state.label: state for state in label_states(session, run_id)}
+    palette = speaker_palette(run_label_universe(session, run_id))
     grouped: defaultdict[str, list[DiarizationTurn]] = defaultdict(list)
     for turn in turns:
         grouped[turn.label].append(turn)
@@ -123,6 +126,7 @@ def build_speaker_timeline(session: Session, run_id: uuid.UUID) -> SpeakerTimeli
                 "speaker_name": state.speaker_name,
                 "speaker_id": _speaker_id_value(state.speaker_id),
                 "resolution": _resolution_value(state.resolution),
+                "palette_index": palette.get(label, 0),
                 "total_seconds": float(state.total_seconds),
                 "turn_count": int(state.turn_count),
                 "intervals": intervals,

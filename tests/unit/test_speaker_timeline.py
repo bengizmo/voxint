@@ -71,6 +71,11 @@ def _session(turns: list[DiarizationTurn]) -> Session:
 
 def _patch_states(monkeypatch: pytest.MonkeyPatch, states: list[LabelState]) -> None:
     monkeypatch.setattr(speaker_timeline, "label_states", lambda _session, _run_id: states)
+    monkeypatch.setattr(
+        speaker_timeline,
+        "run_label_universe",
+        lambda _session, _run_id: {state.label for state in states},
+    )
 
 
 def test_no_diarization_turns_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,6 +87,9 @@ def test_no_diarization_turns_returns_none(monkeypatch: pytest.MonkeyPatch) -> N
         return []
 
     monkeypatch.setattr(speaker_timeline, "label_states", states_not_expected)
+    monkeypatch.setattr(
+        speaker_timeline, "run_label_universe", lambda _session, _run_id: set()
+    )
 
     assert build_speaker_timeline(_session([]), uuid.uuid4()) is None
     assert called is False
@@ -116,6 +124,7 @@ def test_single_speaker_multiple_turns_builds_one_lane(
             "speaker_name": "Alice",
             "speaker_id": str(speaker_id),
             "resolution": "human_assign",
+            "palette_index": 0,
             "total_seconds": 3.0,
             "turn_count": 2,
             "intervals": [
@@ -172,6 +181,7 @@ def test_named_lanes_sort_before_unnamed_then_alphabetically(
     ]
     assert timeline["lanes"][2]["resolution"] == "human_exclude"
     assert timeline["lanes"][3]["resolution"] == "unresolved"
+    assert [lane["palette_index"] for lane in timeline["lanes"]] == [0, 2, 1, 3]
 
 
 def test_only_sub_50ms_nonnegative_gaps_merge(

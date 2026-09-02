@@ -77,7 +77,7 @@
   .chip.muted { background: var(--surface-2); color: var(--ink-3); }
   .speaker-chip {
     display: inline-block; padding: 0 var(--space-1); font-size: var(--t-micro);
-    border-radius: var(--r-sm); background: var(--accent-soft); color: var(--accent);
+    border-radius: var(--r-sm); border: 1px solid var(--ink-3); color: var(--ink-2);
     margin-right: var(--space-1);
   }
   /* Term stats panel — word cloud + bar chart */
@@ -215,7 +215,7 @@
             <td class="kwic-right">{{ row.right_context }}</td>
             <td class="kwic-meta">
               {% if row.speaker_name %}<span class="speaker-chip">{{ row.speaker_name }}</span>{% endif %}
-              <a href="/runs/{{ row.run_id }}/transcript#t={{ row.start_seconds }}">{{ row.media_title }} · {{ "%.1f"|format(row.start_seconds) }}s</a>
+              <a href="/runs/{{ row.run_id }}/transcript?t={{ row.start_seconds }}">{{ row.media_title }} · {{ "%.1f"|format(row.start_seconds) }}s</a>
               {% if row.suspect %}<span class="chip warn">suspect</span>{% endif %}
               {% if row.confidence is not none and row.confidence < 0.7 %}<span class="chip muted">low conf</span>{% endif %}
             </td>
