@@ -51,6 +51,10 @@ Voxint saves the file and starts a run straight away. You are taken to the run's
 page, where you can watch it move through the pipeline (see
 [Watch a run](#watch-a-run) below).
 
+On the **Media** page, use the search box to find a recording by name or folder.
+The status filter offers **Needs review**, **Failed**, **Reviewed**, and **All**.
+Each recording's action matches its state: **Review**, **Retry**, or **Open**.
+
 A couple of honest notes:
 
 - **There is a size limit.** Very large uploads are rejected so a single file
@@ -214,7 +218,7 @@ ground.
 Every run has its own page (open it from the **Runs** list, then click **open** on
 a row). The page shows where the run is and what has happened.
 
-![The Runs page: execution history, newest first, with the upload and URL boxes at the top.](../images/runs-list.png)
+![The Runs page with Needs attention, Active, Failed, and All tabs, a collapsed Filter, and title-first rows with a short run ID underneath. When the Media library is off, Upload media and Fetch from URL boxes appear at the top.](../images/runs-list.png)
 
 A run moves through **six stages**, in order:
 
@@ -226,11 +230,11 @@ A run moves through **six stages**, in order:
 5. **enhance & match**: tidy the transcript and match voices to known speakers.
 6. **finalize**: assemble the finished result.
 
-Near the bottom of the run page, the **stage ledger** lists each attempt at each
-stage: when it started, when it finished, and any error. This is the detailed
-record; you rarely need it unless something went wrong.
+Open the collapsed **Technical details** section on the run page to find the
+**stage ledger**. It lists each attempt at each stage: when it started, when it
+finished, and any error. You rarely need it unless something went wrong.
 
-![A run's detail page showing its status and the stage ledger.](../images/run-detail.png)
+![A run's detail page with a summary card first, showing status, current stage, and the primary action. Manage, notes, run assets, and the speaker timeline follow, with a collapsed Technical details section holding the stage ledger.](../images/run-detail.png)
 
 The run's overall **status** tells you the headline:
 
@@ -245,6 +249,17 @@ between attempts. Only after those retries are exhausted does the run land in
 the **transcribe** or **diarize & embed** stage, the most common cause is that
 the model services were not running; the run page says so and tells you how to
 start them.
+
+### Understand a failure
+
+A failed run shows a plain-language reason and a hint for what to do next. If
+you need the original error message, open **Raw error** below it.
+
+### Retry a group of failed runs
+
+Open the **Failed** tab on the **Runs** page to see runs with the same error
+grouped together. After you fix the cause, click **Retry all** on a group to
+retry every run in it at once.
 
 ### The recording's language
 

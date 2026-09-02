@@ -11,8 +11,8 @@ confirm or overrule every proposal, and nothing is settled until you say so.
 Review has two steps: start with the people, then check the words.
 
 - **Step 1, [Identify the voices](#workflow-a-identify-the-voices):** decide who
-  each detected voice really is (or that they should be left out). Claiming a run
-  opens here.
+  each detected voice really is (or that they should be left out). Opening a run
+  takes you here.
 - **Step 2, [Verify and correct the transcript](#workflow-b-verify-and-correct-the-transcript):**
   read through the words, confirm the ones that are right, and fix the ones that
   are wrong.
@@ -45,7 +45,7 @@ Everything lives on your own machine. Open the console at
 during install (`VOXINT_USER`, default `admin`, and `VOXINT_PASSWORD`). Nothing
 leaves your computer.
 
-### 1. Open Review and claim a run
+### 1. Open Review and choose a run
 
 Click **Review** in the sidebar. The **Review** page lists every
 completed run that still has voices needing a human ruling. Each row shows:
@@ -56,27 +56,27 @@ completed run that still has voices needing a human ruling. Each row shows:
 - the recording's **duration** and its **age** ("3 hours ago"; hover for the
   exact time),
 - a **progress bar** that fills as you resolve voices ("2 of 4 resolved"), and
-- who, if anyone, has already **claimed** it.
+- a **Review** button.
 
 You can sort **Oldest first** (the default) or **Most voices to resolve**.
 
 ![The Voxint adjudication queue: a table of completed runs, each row showing a
-recording title with its folder name, duration and age, a progress bar of voices
-resolved, who has claimed it, and a Review button.](../images/review-queue.png)
+recording name with its folder and date, duration, age, a progress bar reading
+"N of M resolved," and a Review button.](../images/review-queue.png)
 
-Press **Review** on the run you want. That **claims** the run for your browser
-tab, so only you can make rulings on it while you work, and no one else (and no
-other tab) can change your decisions underneath you. When you are done, or want
-to hand it off, use **Release claim** on the run's page.
+Press **Review** on the run you want. In the default single-operator mode, the
+workbench claims the run for this browser tab as it opens. The transcript editor
+does the same when you open it. There is no separate claiming step.
 
-> If a run isn't claimed by your tab, its buttons are disabled and the page
-> tells you so honestly. Claim it first.
+> In multi-user mode, the queue adds a **Claimed by** column and you claim work
+> manually with **Claim for review**. Use **Release claim** when you want to hand
+> it to someone else.
 
 ---
 
 ## Workflow A: Identify the voices
 
-Claiming a run opens the **slot workbench** (`/review/{id}`). Voxint separated
+Opening a run shows the **slot workbench** (`/review/{id}`). Voxint separated
 the recording into voices and gave each one a placeholder label like
 `SPEAKER_00`. Your job here is to say who each label really is.
 

@@ -1096,6 +1096,51 @@ in full** on maintainer hardware before tagging:
 Gates A/R/M carried on empty diffs; Gate E green fresh across all three lanes.
 Clear to tag v0.24.0.
 
+#### Verdict: v0.32.0, Gates A/R/M carry, Gate E browser lane PASS (2026-09-02)
+
+v0.32.0 ships the UX audit remediation epic (#369, seventeen slices), the
+media library search and status filter (#380), the viewer role (#363), the
+evidence pack and bundled quote export (#331, #281), and GPU resource awareness
+in the installer. Releases v0.28.0 through v0.31.0 recorded no verdict block
+here; this entry resumes the record.
+
+`git diff v0.31.0..HEAD -- services/` is empty and no metal-lane path
+(`scripts/metal/`, `tests/parity/`, `metal-lane.yml`) changed, so the three
+inference model services are byte-identical to v0.31.0 and **Gates A (CUDA),
+R (ROCm), and M (Metal) carry** their standing verdicts.
+
+Gate E scope: the pipeline-aware diff is non-empty, but every changed path is
+under `src/voxint/api/` (templates, routers, presentation helpers), `frontend/`,
+and one additive migration (`0057_viewer_role`); `src/voxint/pipeline/`,
+`src/voxint/clients/`, `src/voxint/enrichment/`, and `tests/e2e/` are unchanged.
+That triggers the browser acceptance lane and not the pipeline lane.
+
+- **Browser acceptance lane** (maintainer hardware, serial, headless Chrome via
+  Python Playwright over `tools/e2e_browser_lifecycle.py`, the three CPU model
+  services running so readiness probes were live): the full `voxint-e2e-review`
+  sequence on the seeded 5-segment run. Two uncertain chips and one peaks fetch
+  on load; verify-and-advance (one `POST /verify` 200, counter 0 to 1 of 5,
+  cursor to the next unverified segment) followed by replay with an
+  instrumented `play()`; skip with no network; click-to-edit; the discard
+  warning (warned `v` fires nothing, second `v` verifies); edit and save
+  (one `POST /text` 200); keymap suppression on a focused select; the
+  shortcuts dialog opened by key and by button and dismissed by Escape, close
+  control, and backdrop, with `v` suppressed behind it; domain-pack provenance
+  (chip present on segment 0 and absent on segment 2, raw transcript reveal,
+  client-only reset-to-raw, reconciliation panel "1 of 2 applied, 1 never
+  fired"). 39 assertions green, no page errors. **RECONCILE PASS** (2 of 5
+  verified, one correction matched).
+- **Labelled rail and theme control (#384)**: the three rail tiers (168px
+  labelled, 52px icon-only with tooltips, narrow-screen disclosure), the
+  70rem boundary, theme cycle order and label/tooltip/aria sync, localStorage
+  clearing on System, and Settings radio agreement all green on the release
+  content. The low-data widget thresholds and island hydration (#385) were
+  browser-verified at the landing commit `af60c45`, which is the release
+  content minus version pins, changelog, docs, and screenshots.
+
+Gates A/R/M carried on byte-identical services; Gate E browser lane green.
+Clear to tag v0.32.0.
+
 #### Verdict: v0.27.0, Gates A/R/M carry, Gate E browser lane PASS (2026-08-27)
 
 v0.27.0 ships Ops Console R4 (speakers overview + detail refresh, #213) and
