@@ -33,9 +33,9 @@ _MODEL_STAGES: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
     (Stage.TRANSCRIBE.value, "Transcription", (("asr", "Transcription model"),)),
     (
         Stage.DIARIZE_EMBED.value,
-        "Speaker diarization and embedding",
+        "Voice separation and embedding",
         (
-            ("diarizer", "Diarization model"),
+            ("diarizer", "Voice-separation model"),
             ("embedder", "Speaker embedding model"),
         ),
     ),

@@ -151,7 +151,7 @@ _SERVICE_SPECS: tuple[_ServiceSpec, ...] = (
     ),
     _ServiceSpec(
         role="diarizer",
-        label="Speaker diarization",
+        label="Separate voices",
         url_attr="diarizer_url",
         configurable=True,
         validated_models=_VALIDATED_DIARIZER_MODELS,
