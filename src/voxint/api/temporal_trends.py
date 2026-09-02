@@ -143,12 +143,16 @@ class TemporalTrendsPayload(TypedDict):
     display_mode: DisplayMode
 
 
-def display_mode_for(buckets: list[BucketMeta], dated_recordings: int) -> DisplayMode:
-    """Pick the render mode from the number of distinct dates present."""
-    if dated_recordings == 0 or not buckets:
+def display_mode_for(dates: list[date]) -> DisplayMode:
+    """Pick the render mode from the resolved recording dates themselves.
+
+    Counts distinct calendar dates, not occupied buckets, so the answer does
+    not depend on the bucket unit a long range happens to select.
+    """
+    distinct_dates = len(set(dates))
+    if distinct_dates == 0:
         return "empty"
-    distinct_dates = sum(1 for bucket in buckets if bucket["recording_count"] > 0)
-    return "single_date" if distinct_dates < 2 else "chart"
+    return "single_date" if distinct_dates == 1 else "chart"
 
 
 def resolve_date(upload_date: date | None, created_at: datetime) -> tuple[date, str]:
@@ -453,7 +457,7 @@ def build_temporal_trends(recordings: list[RecordingInput]) -> TemporalTrendsPay
         "terms": len(all_term_keys) > MAX_TERMS,
         "entities": len(all_entity_keys) > MAX_ENTITIES,
     }
-    payload["display_mode"] = display_mode_for(buckets, len(recordings))
+    payload["display_mode"] = display_mode_for(dates)
     return payload
 
 

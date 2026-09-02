@@ -500,7 +500,7 @@ def test_entity_widget_switches_from_list_to_bars_at_five(
         assert f"Entity {index}" in body
     assert body.count(f"&amp;project={project_id}") >= count
     if not expect_bars:
-        assert '<span class="pi-entity-rank">1.</span>' in body
+        assert '<span class="pi-entity-rank" aria-hidden="true">1.</span>' in body
         assert 'title="Entity 0: 1 mention across 1 recording"' in body
 
 
@@ -546,8 +546,10 @@ def test_coverage_widget_switches_from_list_to_matrix_at_three_by_three(
         plural = "s" if recordings != 1 else ""
         assert body.count(f"{recordings} of {recordings} recording{plural}") == speakers
         # Truncated-label safety: the row title names every recording.
+        # Recording names are visible text (not tooltip-only), with the full
+        # list repeated as the title for the truncating case.
         titles = ", ".join(f"project/rec-{index}.wav" for index in range(recordings))
-        assert f'title="Speaker 0: {titles}"' in body
+        assert f'<span class="pi-speaker-titles" title="{titles}">{titles}</span>' in body
 
 
 def _seed_dated(session: Session, days: list[int]) -> uuid.UUID:

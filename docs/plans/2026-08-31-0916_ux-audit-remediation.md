@@ -193,9 +193,11 @@ lands opportunistically in slices that already touch a page.
 
 **S16. Low-data thresholds.** Project detail: entity bars render as ranked
 count lists below five distinct entities (boundary-tested), the coverage
-matrix becomes a speaker list below 3x3, temporal trends hide below two
-distinct dates; truncated labels get title attributes. Simpler
-representation, never hiding data that exists.
+matrix becomes a speaker list below 3x3, temporal trends degrade to a
+dated summary below two distinct dates (decided at implementation: a
+summary rather than hiding the section, consistent with the principle
+below); truncated labels get title attributes. Simpler representation,
+never hiding data that exists.
 
 **S17. Terminology sweep (final).** The glossary (Run not job; Recording;
 Separate voices; Needs review; Open) is defined up front in the epic body

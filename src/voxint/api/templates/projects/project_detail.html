@@ -53,7 +53,9 @@
   .pi-speaker-row { display: flex; justify-content: space-between; gap: var(--space-2);
     padding: 2px var(--space-2); font-size: var(--t-sm); }
   .pi-speaker-row .pi-speaker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pi-speaker-recs { color: var(--ink-3); font-size: var(--t-xs); white-space: nowrap; }
+  .pi-speaker-recs { color: var(--ink-3); font-size: var(--t-xs); white-space: nowrap;
+    display: flex; gap: var(--space-2); min-width: 0; }
+  .pi-speaker-titles { overflow: hidden; text-overflow: ellipsis; max-width: 24em; }
   .pi-low-data-note { font-size: var(--t-xs); color: var(--ink-3); margin: var(--space-2) 0 0; }
   .pi-topic-list { display: flex; flex-wrap: wrap; gap: var(--space-2); }
   .pi-topic-chip {
@@ -199,13 +201,13 @@
      The threshold is the full list, not the display slice. #}
   <div class="card pi-card">
     <h3 class="pi-card-title">TOP ENTITIES</h3>
-    <ol class="pi-entity-list" aria-label="Most mentioned entities">
+    <ol class="pi-entity-list" role="list" aria-label="Most mentioned entities">
       {% for e in insights.entities %}
       <li>
         <a href="/explore?q=%22{{ e.surface|urlencode }}%22&amp;project={{ detail.id }}"
            class="pi-entity-row"
            title="{{ e.surface }}: {{ e.total_occurrences }} mention{{ 's' if e.total_occurrences != 1 else '' }} across {{ e.runs_count }} recording{{ 's' if e.runs_count != 1 else '' }}">
-          <span class="pi-entity-rank">{{ loop.index }}.</span>
+          <span class="pi-entity-rank" aria-hidden="true">{{ loop.index }}.</span>
           <span class="pi-entity-label">{{ e.surface }}{% if e.kind %}<span class="pi-entity-kind">{{ e.kind }}</span>{% endif %}</span>
           <span class="pi-entity-count">{{ e.total_occurrences }}</span>
         </a>
@@ -272,7 +274,7 @@
      rotated headers; a plain list says the same thing legibly (#385). #}
   <div class="card pi-card">
     <h3 class="pi-card-title">SPEAKER COVERAGE</h3>
-    <ul class="pi-speaker-list" aria-label="Speakers by recording">
+    <ul class="pi-speaker-list" role="list" aria-label="Speakers by recording">
       {% for spk in insights.coverage.speakers %}
       {%- set spk_idx = loop.index0 -%}
       {%- set ns = namespace(titles=[]) -%}
@@ -281,11 +283,16 @@
           {%- set ns.titles = ns.titles + [rec.title] -%}
         {%- endif -%}
       {%- endfor -%}
-      <li class="pi-speaker-row" title="{{ spk.name or 'Unnamed' }}: {{ ns.titles|join(', ') if ns.titles else 'no recordings' }}">
+      <li class="pi-speaker-row">
         <span class="pi-speaker-name">
           {% if spk.name %}<a href="/speakers/{{ spk.id }}">{{ spk.name }}</a>{% else %}<span class="oc-muted">Unnamed</span>{% endif %}
         </span>
-        <span class="pi-speaker-recs">{{ ns.titles|length }} of {{ insights.coverage.recordings|length }} recording{{ "s" if insights.coverage.recordings|length != 1 else "" }}</span>
+        <span class="pi-speaker-recs">
+          {{ ns.titles|length }} of {{ insights.coverage.recordings|length }} recording{{ "s" if insights.coverage.recordings|length != 1 else "" }}
+          {#- The recording names stay visible (not tooltip-only) so keyboard and
+              touch users can read them; the list is short by construction. #}
+          {% if ns.titles %}<span class="pi-speaker-titles" title="{{ ns.titles|join(', ') }}">{{ ns.titles|join(', ') }}</span>{% endif %}
+        </span>
       </li>
       {% endfor %}
     </ul>
