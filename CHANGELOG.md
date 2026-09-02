@@ -7,6 +7,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Low-data rendering for project widgets** (#385, UX audit S16). With the
+  one to ten recordings a new project actually has, the overview widgets
+  now pick a simpler shape instead of a near-empty chart: fewer than five
+  entities render as a ranked count list rather than same-length bars, a
+  speaker coverage smaller than three speakers by three recordings
+  renders as a plain speaker list with per-speaker recording counts, and
+  recordings that all fall on one day render a dated summary ("Trends
+  appear once recordings span more than one day") rather than a
+  one-point trend chart. The temporal payload carries a server-decided
+  `display_mode`, so the page and the chart island share one threshold.
+  Nothing is hidden: every entity and speaker is still listed and linked,
+  and truncated labels carry the full text as a tooltip.
 - **Media library search and status filter** (#380). Server-side search
   (case-insensitive substring over display name, source path, and folder
   name) and a status filter (Needs review / Failed / Reviewed / All).
@@ -111,6 +123,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   keep their compact density.
 
 ### Fixed
+- **Three review-console islands never hydrated** (found by #385). The
+  speaker timeline on run detail, the temporal trends chart, and the
+  project quote board wrote their `data-props` through a double-quoted
+  attribute with a quote-replacing filter, which autoescaping encoded a
+  second time; the browser handed the island literal `&quot;` text and
+  JSON parsing failed silently behind the server-rendered fallback. All
+  three now use the single-quoted attribute the other islands use, and a
+  contract test pins the pattern.
 - **Queue progress strikethrough** (#372). The review queue's "N of M
   resolved" label appeared struck-through because the progress column
   (10rem) was too narrow for the track (`min-width: 8rem`) plus the

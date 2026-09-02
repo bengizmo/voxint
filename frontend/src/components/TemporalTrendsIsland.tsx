@@ -47,6 +47,8 @@ export interface TemporalTrendsProps {
     terms: boolean;
     entities: boolean;
   };
+  /** Server-decided render mode (#385); the threshold lives in one place. */
+  display_mode: "chart" | "single_date" | "empty";
 }
 
 type Mode = "terms" | "entities";
@@ -102,8 +104,8 @@ export function TemporalTrendsIsland(props: TemporalTrendsProps) {
     });
   };
 
-  const noDatedRecordings =
-    props.coverage.dated_recordings === 0 || !props.buckets.length;
+  const noDatedRecordings = props.display_mode === "empty";
+  const singleDate = props.display_mode === "single_date";
   const noModeData = options.length === 0;
   const unit = props.range.bucket_unit ?? "calendar";
 
@@ -139,6 +141,13 @@ export function TemporalTrendsIsland(props: TemporalTrendsProps) {
       {noDatedRecordings ? (
         <p className="py-8 text-center text-sm text-[var(--ink-3)]">
           No dated recordings are available yet.
+        </p>
+      ) : singleDate ? (
+        <p className="py-8 text-center text-sm text-[var(--ink-3)]">
+          All {props.coverage.dated_recordings} dated recording
+          {props.coverage.dated_recordings === 1 ? "" : "s"} are from{" "}
+          {props.range.start}. Trends appear once recordings span more than
+          one day.
         </p>
       ) : noModeData ? (
         <p className="py-8 text-center text-sm text-[var(--ink-3)]">
