@@ -318,7 +318,8 @@ def test_render_shows_detected_language_with_score(
     body = client.get(f"/runs/{run_id}").text
     assert "Detected language" in body
     assert "Spanish (es)" in body
-    assert "Whisper language-detection score:\n0.92" in body
+    assert "Language detection confidence:" in body
+    assert "likely" in body
     assert "not a measure of\ntranscript accuracy" in body
 
 

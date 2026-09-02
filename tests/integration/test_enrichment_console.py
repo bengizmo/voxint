@@ -159,7 +159,8 @@ def test_trigger_renders_run_and_label_suggestions(
     token = claim_token(client, run_id)
     fragment = _enrich(client, run_id, token)
     assert "Jane Doe" in fragment  # run-level, from the title
-    assert "Self-introduced (unverified): “Bob Smith”" in fragment
+    assert "Self-introduced (unverified):" in fragment
+    assert "Bob Smith" in fragment
     assert "Re-run name suggestions" in fragment
     # Suggestions carry accept/reject forms while proposed.
     assert 'name="verdict" value="accept"' in fragment

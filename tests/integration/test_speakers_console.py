@@ -173,9 +173,9 @@ def test_flag_on_renders_overview_with_numbers(
     assert "2 people" in page.text
     assert "1 verified by you" in page.text
     # Alice (human assign) carries the verified chip; Bob (grounded, no
-    # diagnostics row) shows "needs you", never "weak".
+    # diagnostics row) shows "needs review", never "weak".
     assert "verified" in page.text
-    assert "needs you" in page.text
+    assert "needs review" in page.text
     # Unnamed voices listed first: Bob (unverified) before Alice (verified).
     assert page.text.index("Bob") < page.text.index("Alice")
 
