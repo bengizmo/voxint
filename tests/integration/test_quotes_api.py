@@ -339,12 +339,13 @@ def test_project_page_renders_the_quote_board_props(
     resp = client.get(f"/projects/{project_id}")
     assert resp.status_code == 200
     match = re.search(
-        r'data-island="quote-board"\s+data-props="([^"]+)"', resp.text
+        r"data-island=\"quote-board\"\s+data-props='([^']+)'", resp.text
     )
     assert match, "the quote-board island must render on the project page"
-    # The template writes tojson|replace('"', '&quot;') and Jinja autoescape
-    # then escapes the ampersands again, so the attribute needs two passes.
-    props = json.loads(html.unescape(html.unescape(match.group(1))))
+    # Single-quoted attribute around tojson output (the contract every island
+    # follows, see tests/contracts/test_island_props_encoding.py): one pass of
+    # entity decoding yields exactly what the browser hands JSON.parse.
+    props = json.loads(html.unescape(match.group(1)))
     assert props["total"] == 1
     assert props["projectId"] == str(project_id)
     assert props["csrfToken"], "the board needs a manage token to mutate"

@@ -36,8 +36,11 @@ from voxint.db.models import (
 MAX_TERMS = 20
 MAX_ENTITIES = 20
 MAX_BUCKETS = 60
-ALGORITHM_VERSION = "1"
-SCHEMA_VERSION = 1
+# Version 2 (#385): payload gains ``display_mode``. ALGORITHM_VERSION feeds the
+# cache fingerprint, so bumping it recomputes artifacts stored under the old
+# shape instead of serving a payload without the key.
+ALGORITHM_VERSION = "2"
+SCHEMA_VERSION = 2
 
 BucketUnit = Literal["day", "week", "month"]
 DateProvenance = Literal["source_upload_date", "ingestion_created_at"]
@@ -119,6 +122,14 @@ class TruncationSummary(TypedDict):
     entities: bool
 
 
+# How the console should render the payload (#385). Decided server-side so the
+# Jinja mount and the React island never disagree on the threshold:
+# ``chart`` for two or more distinct dates, ``single_date`` when every dated
+# recording falls on one day (a one-point chart conveys nothing, so the mount
+# renders a dated summary instead of hiding the data), ``empty`` for none.
+DisplayMode = Literal["chart", "single_date", "empty"]
+
+
 class TemporalTrendsPayload(TypedDict):
     schema_version: int
     algorithm_version: str
@@ -129,6 +140,19 @@ class TemporalTrendsPayload(TypedDict):
     entities: list[EntitySeries]
     coverage: TemporalCoverage
     truncated: TruncationSummary
+    display_mode: DisplayMode
+
+
+def display_mode_for(dates: list[date]) -> DisplayMode:
+    """Pick the render mode from the resolved recording dates themselves.
+
+    Counts distinct calendar dates, not occupied buckets, so the answer does
+    not depend on the bucket unit a long range happens to select.
+    """
+    distinct_dates = len(set(dates))
+    if distinct_dates == 0:
+        return "empty"
+    return "single_date" if distinct_dates == 1 else "chart"
 
 
 def resolve_date(upload_date: date | None, created_at: datetime) -> tuple[date, str]:
@@ -366,6 +390,7 @@ def _empty_payload() -> TemporalTrendsPayload:
             "entity_enriched_recordings": 0,
         },
         "truncated": {"terms": False, "entities": False},
+        "display_mode": "empty",
     }
 
 
@@ -432,6 +457,7 @@ def build_temporal_trends(recordings: list[RecordingInput]) -> TemporalTrendsPay
         "terms": len(all_term_keys) > MAX_TERMS,
         "entities": len(all_entity_keys) > MAX_ENTITIES,
     }
+    payload["display_mode"] = display_mode_for(dates)
     return payload
 
 

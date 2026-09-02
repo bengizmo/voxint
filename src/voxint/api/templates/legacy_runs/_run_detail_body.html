@@ -220,7 +220,7 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
 <section class="card">
   <div data-island="speaker-timeline"
        data-run-id="{{ run.id }}"
-       data-props="{{ speaker_timeline|tojson|replace('\"', '&quot;') }}">
+       data-props='{{ speaker_timeline|tojson }}'>
     <h2>Speaker timeline</h2>
     <ul class="oc-muted">
       {% for lane in speaker_timeline.lanes %}

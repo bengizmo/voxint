@@ -1,5 +1,6 @@
 """Project overview insights against the migrated PostgreSQL schema (#336)."""
 
+import html
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -450,4 +451,141 @@ def test_speakers_and_matrix_use_only_canonical_runs(
     response = client.get(f"/projects/{project_id}")
     assert response.status_code == 200
     assert "Ghost" not in response.text
-    assert response.text.count('class="pi-cov-dot"') == 2
+    # Two speakers by two recordings is below the 3x3 matrix threshold (#385):
+    # the page renders the plain speaker list, one row per canonical speaker.
+    assert 'class="pi-speaker-list"' in response.text
+    assert 'class="pi-cov-dot"' not in response.text
+    assert response.text.count("1 of 2 recordings") == 2
+
+
+# ---------------------------------------------------------------------------
+# Low-data rendering thresholds (#385): boundary tests at each cut-over.
+# ---------------------------------------------------------------------------
+
+
+def _seed_entities(session: Session, count: int) -> uuid.UUID:
+    project, folder = _project_and_folder(session)
+    run = _run(session, _media(session, folder, "project/enriched.wav"))
+    _asset(
+        session,
+        run,
+        RunAssetKind.ENTITY_MENTIONS,
+        _entity_payload(*[f"Entity {index}" for index in range(count)]),
+    )
+    session.commit()
+    return project.id
+
+
+@pytest.mark.parametrize(
+    ("count", "expect_bars"),
+    [(4, False), (5, True)],
+    ids=["four-entities-list", "five-entities-bars"],
+)
+def test_entity_widget_switches_from_list_to_bars_at_five(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    count: int,
+    expect_bars: bool,
+) -> None:
+    with session_factory() as session:
+        project_id = _seed_entities(session, count)
+
+    body = client.get(f"/projects/{project_id}").text
+
+    assert ('class="pi-entity-bars"' in body) is expect_bars
+    assert ('class="pi-entity-list"' in body) is not expect_bars
+    assert ('class="pi-entity-fill"' in body) is expect_bars
+    # Never hides data: every entity is still listed and linked either way.
+    for index in range(count):
+        assert f"Entity {index}" in body
+    assert body.count(f"&amp;project={project_id}") >= count
+    if not expect_bars:
+        assert '<span class="pi-entity-rank" aria-hidden="true">1.</span>' in body
+        assert 'title="Entity 0: 1 mention across 1 recording"' in body
+
+
+def _seed_coverage(session: Session, speakers: int, recordings: int) -> uuid.UUID:
+    project, folder = _project_and_folder(session)
+    people = [Speaker(display_name=f"Speaker {index}") for index in range(speakers)]
+    session.add_all(people)
+    session.flush()
+    for rec_index in range(recordings):
+        run = _run(session, _media(session, folder, f"project/rec-{rec_index}.wav"))
+        for spk_index, person in enumerate(people):
+            _assign_speaker(
+                session, run, person, label=f"SPEAKER_{spk_index:02d}", turn_index=spk_index
+            )
+    session.commit()
+    return project.id
+
+
+@pytest.mark.parametrize(
+    ("speakers", "recordings", "expect_matrix"),
+    [(2, 3, False), (3, 2, False), (3, 3, True)],
+    ids=["2x3-list", "3x2-list", "3x3-matrix"],
+)
+def test_coverage_widget_switches_from_list_to_matrix_at_three_by_three(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    speakers: int,
+    recordings: int,
+    expect_matrix: bool,
+) -> None:
+    with session_factory() as session:
+        project_id = _seed_coverage(session, speakers, recordings)
+
+    body = client.get(f"/projects/{project_id}").text
+
+    assert ('class="pi-coverage"' in body) is expect_matrix
+    assert ('class="pi-speaker-list"' in body) is not expect_matrix
+    for index in range(speakers):
+        assert f"Speaker {index}" in body
+    if expect_matrix:
+        assert body.count('class="pi-cov-dot"') == speakers * recordings
+    else:
+        plural = "s" if recordings != 1 else ""
+        assert body.count(f"{recordings} of {recordings} recording{plural}") == speakers
+        # Truncated-label safety: the row title names every recording.
+        # Recording names are visible text (not tooltip-only), with the full
+        # list repeated as the title for the truncating case.
+        titles = ", ".join(f"project/rec-{index}.wav" for index in range(recordings))
+        assert f'<span class="pi-speaker-titles" title="{titles}">{titles}</span>' in body
+
+
+def _seed_dated(session: Session, days: list[int]) -> uuid.UUID:
+    base = datetime(2026, 3, 1, 12, tzinfo=UTC)
+    project, folder = _project_and_folder(session)
+    for index, day in enumerate(days):
+        media = _media(session, folder, f"project/day-{index}.wav")
+        media.created_at = base + timedelta(days=day)
+        _run(session, media)
+    session.commit()
+    return project.id
+
+
+@pytest.mark.parametrize(
+    ("days", "expect_mode"),
+    [([0, 0], "single_date"), ([0, 1], "chart"), ([], "empty")],
+    ids=["one-date-summary", "two-dates-chart", "no-dates-empty"],
+)
+def test_temporal_widget_mode_follows_distinct_dates(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    days: list[int],
+    expect_mode: str,
+) -> None:
+    with session_factory() as session:
+        project_id = _seed_dated(session, days)
+
+    body = client.get(f"/projects/{project_id}").text
+
+    assert ('data-island="temporal-trends"' in body) is (expect_mode == "chart")
+    if expect_mode == "chart":
+        assert '"display_mode": "chart"' in html.unescape(body)
+    else:
+        assert f'data-temporal-mode="{expect_mode}"' in body
+    if expect_mode == "single_date":
+        assert "All 2 dated recordings are from 2026-03-01." in body
+        assert "Trends appear once recordings span more than one day." in body
+    if expect_mode == "empty":
+        assert "No dated recordings are available yet." in body

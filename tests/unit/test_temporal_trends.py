@@ -19,6 +19,7 @@ from voxint.api.temporal_trends import (
     build_temporal_trends,
     count_entity_frequencies,
     count_term_frequencies,
+    display_mode_for,
     generate_buckets,
     resolve_date,
     select_bucket_unit,
@@ -252,6 +253,7 @@ class TestBuildTemporalTrends:
         assert payload["buckets"] == []
         assert payload["terms"] == []
         assert payload["entities"] == []
+        assert payload["display_mode"] == "empty"
 
     def test_single_date_corpus_and_provenance(self) -> None:
         records = [
@@ -280,6 +282,29 @@ class TestBuildTemporalTrends:
         }
         assert payload["date_provenance"]["source_upload_date_recordings"] == 1
         assert payload["date_provenance"]["ingestion_created_at_recordings"] == 1
+        # One distinct day: a one-point chart says nothing, so the console
+        # renders a dated summary instead (#385).
+        assert payload["display_mode"] == "single_date"
+
+    def test_two_distinct_dates_select_chart_mode(self) -> None:
+        records = [
+            recording(when=date(2026, 1, 1), text="alpha"),
+            recording(when=date(2026, 1, 2), text="alpha"),
+        ]
+        assert build_temporal_trends(records)["display_mode"] == "chart"
+
+    def test_display_mode_counts_distinct_dates_not_buckets(self) -> None:
+        assert display_mode_for([]) == "empty"
+        assert display_mode_for([date(2026, 1, 1), date(2026, 1, 1)]) == "single_date"
+        assert display_mode_for([date(2026, 1, 1), date(2026, 1, 2)]) == "chart"
+        # Two dates far enough apart to bucket by month still count as two.
+        far = [date(2020, 1, 1), date(2026, 1, 1)]
+        assert display_mode_for(far) == "chart"
+        payload = build_temporal_trends(
+            [recording(when=far[0], text="a"), recording(when=far[1], text="a")]
+        )
+        assert payload["range"]["bucket_unit"] == "month"
+        assert payload["display_mode"] == "chart"
 
     def test_zero_fills_gaps_and_all_series_align_to_buckets(self) -> None:
         records = [
