@@ -131,7 +131,7 @@
       /* App-shell metrics (#207). Theme-agnostic like the spacing scale (no
          dark override); the icon rail and command bar colour from the existing
          surface/ink/line tokens so both dark blocks stay untouched. */
-      --rail-w: 52px;
+      --rail-w: 168px;
 
       /* Primary-action pair (issue #92): text on an --accent fill, and the kbd
          chip overlay inside it. White fails AA on the LIGHTER dark-theme accent,
@@ -206,10 +206,11 @@
     .content-wrap { max-width: 74rem; margin: 0 auto;
                     padding: var(--space-6) 1rem var(--space-7); }
 
-    /* Icon rail — 52px fixed column, always visible on desktop */
+    /* Icon rail — labelled column at desktop width (S15, #384). Width is
+       --rail-w only; the tiers below swap that token, never a literal. */
     .icon-rail { flex: none; width: var(--rail-w); box-sizing: border-box;
-               display: flex; flex-direction: column; align-items: center;
-               gap: 2px; padding: var(--space-3) 0;
+               display: flex; flex-direction: column; align-items: stretch;
+               gap: 2px; padding: var(--space-3) var(--space-2);
                background: var(--surface); border-right: 1px solid var(--line);
                position: sticky; top: 0; align-self: flex-start;
                max-height: 100vh; overflow: visible; }
@@ -218,14 +219,18 @@
                border-radius: var(--r-sm); background: var(--accent);
                color: var(--accent-contrast); font-family: var(--font-mono);
                font-weight: 600; font-size: 16px; text-decoration: none;
-               margin-bottom: var(--space-2); }
-    .icon-rail nav { display: flex; flex-direction: column; align-items: center;
+               margin-bottom: var(--space-2); align-self: center; }
+    .icon-rail nav { display: flex; flex-direction: column; align-items: stretch;
                gap: 2px; }
     .icon-rail .rail-link { position: relative; display: flex;
-               align-items: center; justify-content: center;
-               width: 40px; height: 40px; border-radius: var(--r-sm);
+               align-items: center; justify-content: flex-start;
+               gap: var(--space-2); width: auto; height: 36px;
+               padding: 0 var(--space-3); border-radius: var(--r-sm);
                color: var(--ink-2); text-decoration: none; border: 0;
-               background: transparent; cursor: pointer; }
+               background: transparent; cursor: pointer;
+               font: inherit; font-size: var(--t-xs); }
+    .rail-icon-wrap { position: relative; display: inline-flex; flex: none; }
+    .rail-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .icon-rail .rail-link:hover { background: var(--surface-2); color: var(--ink); }
     .icon-rail .rail-link[aria-current="page"] { color: var(--accent);
                outline: 4px solid rgba(79,192,181,.18); outline-offset: -4px; }
@@ -241,12 +246,14 @@
     .icon-rail .rail-link:hover .rail-tip,
     .icon-rail .rail-link:focus-visible .rail-tip { opacity: 1; }
     .rail-bottom { margin-top: auto; display: flex; flex-direction: column;
-               align-items: center; gap: 2px; }
-    .health-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; }
+               align-items: stretch; gap: 2px; }
+    .health-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 4px;
+               align-self: center; }
     .health-dot.ok { background: var(--ok); }
     .health-dot.warn { background: var(--warn); }
     .health-dot.danger { background: var(--danger); }
     .rail-user { display: flex; flex-direction: column; align-items: center;
+               align-self: center;
                gap: 2px; font-size: var(--t-xs); color: var(--ink-2); }
     .rail-user .rail-username { max-width: calc(var(--rail-w) - 8px);
                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -281,6 +288,22 @@
        wrap: its fixed 40px row cannot shrink the view toggle below its
        content, so on narrow screens the toggle spills under the page action
        button, which then steals its clicks. */
+    /* Rail tiers (S15, #384). Expanded (>70rem, labels, tips hidden) |
+       intermediate (50.0625rem to 70rem, 52px icon-only, tips on hover) |
+       hamburger (<=50rem, the block below; labels stay visible in the open
+       disclosure). 70rem = the .lib-rail two-column floor (60rem) plus the
+       expanded rail width, so a wide rail never squeezes two-column pages.
+       The two-sided band keeps the tiers disjoint: no reset needed below. */
+    .icon-rail .rail-tip { display: none; }
+    @media screen and (min-width: 50.0625rem) and (max-width: 70rem) {
+      :root { --rail-w: 52px; }
+      .icon-rail { align-items: center; padding: var(--space-3) 0; }
+      .icon-rail nav, .icon-rail .rail-bottom { align-items: center; }
+      .icon-rail .rail-link { width: 40px; height: 40px;
+              justify-content: center; gap: 0; padding: 0; }
+      .icon-rail .rail-label { display: none; }
+      .icon-rail .rail-tip { display: block; }
+    }
     @media (max-width: 50rem) {
       .cb-search { display: none; }
       .command-bar { flex-wrap: wrap; box-sizing: border-box; height: auto;
@@ -1444,35 +1467,40 @@
       <nav aria-label="Primary">
         {# Home — square glyph #}
         <a class="rail-link" href="/"{% if active_nav == "home" %} aria-current="page"{% endif %} aria-label="Home">
-          <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><rect x="3" y="3" width="12" height="12" rx="2"/></svg>
+          <span class="rail-icon-wrap"><svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><rect x="3" y="3" width="12" height="12" rx="2"/></svg></span>
+          <span class="rail-label">Home</span>
           <span class="rail-tip">Home</span>
         </a>
         {# Media — circle glyph. Points at /media when enabled, /runs otherwise. #}
         <a class="rail-link" href="{% if shell.media_enabled %}/media{% else %}/runs{% endif %}"{% if active_nav == "media" or (not shell.media_enabled and active_nav == "runs") %} aria-current="page"{% endif %} aria-label="Media">
-          <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><circle cx="9" cy="9" r="6"/></svg>
+          <span class="rail-icon-wrap"><svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><circle cx="9" cy="9" r="6"/></svg></span>
+          <span class="rail-label">Media</span>
           <span class="rail-tip">Media</span>
         </a>
         {# Projects — diamond glyph (behind flag) #}
         {% if shell.projects_enabled %}
         <a class="rail-link" href="/projects"{% if active_nav == "projects" %} aria-current="page"{% endif %} aria-label="Projects">
-          <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><polygon points="9,2 16,9 9,16 2,9"/></svg>
+          <span class="rail-icon-wrap"><svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><polygon points="9,2 16,9 9,16 2,9"/></svg></span>
+          <span class="rail-label">Projects</span>
           <span class="rail-tip">Projects</span>
         </a>
         {% endif %}
         {# Explore — magnifying-glass glyph (corpus evidence browser, #331) #}
         <a class="rail-link" href="/explore"{% if active_nav == "explore" %} aria-current="page"{% endif %} aria-label="Explore">
-          <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><circle cx="7.5" cy="7.5" r="4.5"/><line x1="11" y1="11" x2="15" y2="15" stroke-linecap="round"/></svg>
+          <span class="rail-icon-wrap"><svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><circle cx="7.5" cy="7.5" r="4.5"/><line x1="11" y1="11" x2="15" y2="15" stroke-linecap="round"/></svg></span>
+          <span class="rail-label">Explore</span>
           <span class="rail-tip">Explore</span>
         </a>
         {# Speakers — ring glyph #}
         <a class="rail-link" href="/speakers"{% if active_nav == "speakers" %} aria-current="page"{% endif %} aria-label="Speakers">
-          <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><circle cx="9" cy="9" r="5.5"/></svg>
+          <span class="rail-icon-wrap"><svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><circle cx="9" cy="9" r="5.5"/></svg></span>
+          <span class="rail-label">Speakers</span>
           <span class="rail-tip">Speakers</span>
         </a>
         {# Runs — bars glyph (with activity badge extension point) #}
         <a class="rail-link" href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %} aria-label="Runs">
-          <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><rect x="3" y="4" width="12" height="2" rx="1"/><rect x="3" y="8" width="12" height="2" rx="1"/><rect x="3" y="12" width="12" height="2" rx="1"/></svg>
-          {% if shell.activity_enabled %}<span class="nav-badge" data-activity-badge hidden></span>{% endif %}
+          <span class="rail-icon-wrap"><svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><rect x="3" y="4" width="12" height="2" rx="1"/><rect x="3" y="8" width="12" height="2" rx="1"/><rect x="3" y="12" width="12" height="2" rx="1"/></svg>{% if shell.activity_enabled %}<span class="nav-badge" data-activity-badge hidden></span>{% endif %}</span>
+          <span class="rail-label">Runs</span>
           <span class="rail-tip">Runs</span>
         </a>
       </nav>
@@ -1480,7 +1508,8 @@
         {# Settings entry + system health dot — hidden for non-admin in multi-user mode #}
         {% if not shell.multi_user or (shell.current_user and shell.current_user.role == "admin") %}
         <a class="rail-link" href="/settings"{% if active_nav == "settings" %} aria-current="page"{% endif %} aria-label="Settings">
-          <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><path d="M9 6.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zm0 1.5a1 1 0 110 2 1 1 0 010-2z"/><path d="M7.8 2l-.3 1.5c-.4.2-.7.4-1 .6L5 3.6l-1.2 2 1.2 1c0 .3-.1.6-.1.9s0 .6.1.9l-1.2 1 1.2 2 1.5-.5c.3.3.6.5 1 .6L7.8 13h2.4l.3-1.5c.4-.2.7-.4 1-.6l1.5.5 1.2-2-1.2-1c0-.3.1-.6.1-.9s0-.6-.1-.9l1.2-1-1.2-2-1.5.5c-.3-.3-.6-.5-1-.6L10.2 2H7.8z"/></svg>
+          <span class="rail-icon-wrap"><svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><path d="M9 6.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zm0 1.5a1 1 0 110 2 1 1 0 010-2z"/><path d="M7.8 2l-.3 1.5c-.4.2-.7.4-1 .6L5 3.6l-1.2 2 1.2 1c0 .3-.1.6-.1.9s0 .6.1.9l-1.2 1 1.2 2 1.5-.5c.3.3.6.5 1 .6L7.8 13h2.4l.3-1.5c.4-.2.7-.4 1-.6l1.5.5 1.2-2-1.2-1c0-.3.1-.6.1-.9s0-.6-.1-.9l1.2-1-1.2-2-1.5.5c-.3-.3-.6-.5-1-.6L10.2 2H7.8z"/></svg></span>
+          <span class="rail-label">Settings</span>
           <span class="rail-tip">Settings</span>
         </a>
         {% endif %}
@@ -1495,6 +1524,13 @@
           </form>
         </div>
         {% endif %}
+        {# Theme cycle (S15, #384): one consistent location on every page, for
+           every user, so it sits outside the admin and multi-user gates. #}
+        <button type="button" class="rail-link" data-theme-cycle aria-label="Theme: System">
+          <span class="rail-icon-wrap"><svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><circle cx="9" cy="9" r="6"/><path d="M9 3a6 6 0 010 12z" fill="currentColor" stroke="none"/></svg></span>
+          <span class="rail-label" data-theme-label>Theme: System</span>
+          <span class="rail-tip" data-theme-label>Theme: System</span>
+        </button>
         <div class="health-dot ok" role="img" aria-label="System health: ok"></div>
       </div>
     </aside>
@@ -1516,9 +1552,7 @@
            broken promise. The block stays as the seam the real command
            palette will fill; the .cb-search CSS is kept for it too. #}
         {% block cb_search %}{% endblock %}
-        {% block cb_actions %}
-        <button type="button" class="secondary" data-theme-cycle>Theme: System</button>
-        {% endblock %}
+        {% block cb_actions %}{% endblock %}
         {% endblock %}
       </header>
       {% endblock %}
@@ -1544,7 +1578,7 @@
   <div class="toast-region" data-toast-region aria-live="polite" aria-atomic="false"></div>
   <style>
     .nav-badge {
-      position: absolute; top: 2px; right: 2px;
+      position: absolute; top: -6px; right: -8px;
       display: inline-block; min-width: 1.1em; padding: 0 0.25em;
       border-radius: var(--r-full); background: var(--accent);
       color: var(--accent-contrast, #fff); font-size: .625rem;
@@ -1773,14 +1807,18 @@
         radios[i].checked = radios[i].value === (v || "system");
       }
     }
-    /* Topbar cycle button (#152): System -> Light -> Dark -> System. Shares
-       applyDom/persist/syncRadios with the Settings radios, so the two
-       controls can never disagree; the label always names the CURRENT state. */
+    /* Rail cycle button (#152, moved to the rail footer in #384): System ->
+       Light -> Dark -> System. Shares applyDom/persist/syncRadios with the
+       Settings radios, so the two controls can never disagree; the label
+       always names the CURRENT state. The aria-label is synced too, because
+       the collapsed tier hides .rail-label from the accessibility tree. */
     function syncToggle(v) {
       var label = v === "light" ? "Light" : v === "dark" ? "Dark" : "System";
+      var els = document.querySelectorAll("[data-theme-label]");
+      for (var i = 0; i < els.length; i++) { els[i].textContent = "Theme: " + label; }
       var buttons = document.querySelectorAll("[data-theme-cycle]");
-      for (var i = 0; i < buttons.length; i++) {
-        buttons[i].textContent = "Theme: " + label;
+      for (var j = 0; j < buttons.length; j++) {
+        buttons[j].setAttribute("aria-label", "Theme: " + label);
       }
     }
     function syncAll(v) { syncRadios(v); syncToggle(v); }
