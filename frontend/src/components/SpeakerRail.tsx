@@ -4,6 +4,13 @@ import { ApiError, apiFetch } from "../lib/api-client";
 import { makeNonce } from "../lib/nonce";
 import type { Segment } from "./TranscriptPlayer";
 
+function confidenceBand(score: number | null): string {
+  if (score == null || !isFinite(score)) return "unknown";
+  if (score >= 0.8) return "likely";
+  if (score >= 0.5) return "possible";
+  return "low";
+}
+
 export interface LabelsResult {
   labels: LabelStateShape[];
   segments: Segment[];
@@ -189,10 +196,7 @@ function SpeakerCard({
             <details className="match-why">
               <summary className="text-sm">Why this match?</summary>
               <p className="muted text-sm">
-                Voice similarity{" "}
-                {state.cosineConfidence != null
-                  ? state.cosineConfidence.toFixed(2)
-                  : "—"}{" "}
+                Voice similarity {confidenceBand(state.cosineConfidence)} ({state.cosineConfidence?.toFixed(2) ?? "—"}){" "}
                 to {state.cosineSpeakerName}
                 {state.cosineGrounded
                   ? ", strong enough to trust on its own"

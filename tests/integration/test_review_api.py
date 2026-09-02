@@ -286,7 +286,7 @@ def test_queue_renders_operator_ergonomics(
     # aria-labelled region. Column headers are in .gt-header spans.
     assert 'class="grid-table"' in body
     assert 'aria-label="Review queue"' in body
-    assert "MEDIA" in body
+    assert "RECORDING" in body
     # The otherwise-empty action column header carries a visually-hidden label so
     # it isn't an unnamed column for assistive tech (locks the one novel a11y bit).
     assert 'class="visually-hidden">Action</span>' in body

@@ -388,11 +388,40 @@ export function ExploreIsland({
           <div className="py-12 text-center text-base text-[var(--ink-3)]">
             No transcripts yet. Submit a recording to start exploring.
           </div>
-        ) : terms.length === 0 ? (
-          <div className="py-12 text-center text-base text-[var(--ink-3)]">
-            Type a term to search across all transcripts
+        ) : (
+          <div className="explore-empty-state">
+            <p>
+              Search finds every occurrence across all your transcripts, with
+              context, speakers, and timestamps.
+            </p>
+            {terms.length > 0 && (
+              <p style={{ marginTop: "var(--space-2)" }}>
+                Try:{" "}
+                {terms.slice(0, 3).map((t, i) => {
+                  const params = new URLSearchParams({ q: t.term });
+                  if (filters.project_id) params.set("project", filters.project_id);
+                  if (filters.speaker_id) params.set("speaker", filters.speaker_id);
+                  return (
+                    <span key={t.term}>
+                      {i > 0 && " · "}
+                      <a href={`/explore?${params}`}>{t.term}</a>
+                    </span>
+                  );
+                })}
+              </p>
+            )}
+            <p
+              className="oc-muted"
+              style={{
+                marginTop: "var(--space-2)",
+                fontSize: "var(--t-sm)",
+              }}
+            >
+              After searching, you will see a word cloud, a meaning map, and
+              concordance matches you can export.
+            </p>
           </div>
-        ) : null
+        )
       ) : total === 0 ? (
         <div className="py-12 text-center text-base text-[var(--ink-3)]">
           No matches for &apos;{query}&apos;

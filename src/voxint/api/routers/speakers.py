@@ -754,6 +754,39 @@ def speaker_profile_page(
     )
 
 
+@router.get(
+    "/speakers/{speaker_id}/insights",
+    dependencies=[Depends(require_speakers_enabled)],
+)
+def speaker_insights_fragment(
+    speaker_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    poll: int = 0,
+) -> Response:
+    """Insights section fragment for bounded htmx polling (#383)."""
+    speaker = _speaker_or_404(session, speaker_id)
+    if speaker.merged_into_id is not None:
+        canonical = canonicalize(speaker.id, merge_map(session))
+        speaker = _speaker_or_404(session, canonical)
+    aggregate = aggregate_for_speaker(session, speaker.id)
+    insights = get_speaker_insights(session, speaker.id) if aggregate.files > 0 else None
+    insights_eligible = aggregate.files >= 2 and aggregate.segments >= 10
+    return templates.TemplateResponse(
+        request,
+        "speakers/insights_fragment.html",
+        {
+            "request": request,
+            "speaker": speaker,
+            "insights": insights,
+            "insights_eligible": insights_eligible,
+            "aggregate": aggregate,
+            "poll_remaining": max(0, min(poll, 3)),
+        },
+    )
+
+
 @router.post(
     "/speakers/{speaker_id}/profile", dependencies=[Depends(require_speakers_enabled)]
 )
@@ -784,7 +817,7 @@ def speaker_profile_edit(
             detail="speaker is archived; restore it before editing the profile",
         )
     try:
-        if action == "clear":
+        if action == "clear" or not (value or "").strip():
             clear_profile_field(
                 session, speaker_id=speaker.id, field=field, operator=operator
             )

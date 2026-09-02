@@ -51,7 +51,8 @@ Click **Review** in the sidebar. The **Review** page lists every
 completed run that still has voices needing a human ruling. Each row shows:
 
 - a **friendly title** (the recording's own title when it has one, otherwise a
-  cleaned-up filename) with the full file path beneath it,
+  cleaned-up filename) with the folder name beneath it when the file came from
+  a registered folder,
 - the recording's **duration** and its **age** ("3 hours ago"; hover for the
   exact time),
 - a **progress bar** that fills as you resolve voices ("2 of 4 resolved"), and
@@ -60,7 +61,7 @@ completed run that still has voices needing a human ruling. Each row shows:
 You can sort **Oldest first** (the default) or **Most voices to resolve**.
 
 ![The Voxint adjudication queue: a table of completed runs, each row showing a
-recording title and file path, its duration and age, a progress bar of voices
+recording title with its folder name, duration and age, a progress bar of voices
 resolved, who has claimed it, and a Review button.](../images/review-queue.png)
 
 Press **Review** on the run you want. That **claims** the run for your browser

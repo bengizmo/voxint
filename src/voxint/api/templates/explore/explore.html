@@ -39,6 +39,7 @@
     text-align: center; padding: var(--space-6); color: var(--ink-3);
     font-size: var(--t-base);
   }
+  .explore-examples { display: flex; gap: var(--space-2); justify-content: center; margin-top: var(--space-2); }
   .kwic-table { width: 100%; border-collapse: collapse; font-size: var(--t-sm); }
   .kwic-table th {
     text-align: left; padding: var(--space-1) var(--space-2);
@@ -180,7 +181,19 @@
 
   <div data-island="explore" data-props='{{ explore_props|tojson }}'>
     {% if not query %}
-    <div class="explore-empty-state"><p>Type a term to search across all transcripts.</p></div>
+    <div class="explore-empty-state">
+      <p>Search finds every occurrence across all your transcripts, with context, speakers, and timestamps.</p>
+      {% if top_terms %}
+      <p style="margin-top: var(--space-2);">Try:
+        {% for t in top_terms %}
+        <a href="/explore?q={{ t.term|urlencode }}{% if filters.project_id %}&amp;project={{ filters.project_id }}{% endif %}{% if filters.speaker_id %}&amp;speaker={{ filters.speaker_id }}{% endif %}" class="secondary small">{{ t.term }}</a>{% if not loop.last %} &middot; {% endif %}
+        {% endfor %}
+      </p>
+      {% endif %}
+      <p class="oc-muted" style="font-size: var(--t-sm); margin-top: var(--space-2);">
+        After searching, you will see a word cloud, a meaning map, and concordance matches you can export.
+      </p>
+    </div>
     {% elif total == 0 %}
     <div class="explore-empty-state"><p>No matches for <strong>"{{ query|e }}"</strong>.</p></div>
     {% else %}
