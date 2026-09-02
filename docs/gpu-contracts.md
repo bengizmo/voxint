@@ -551,10 +551,30 @@ against reference outputs produced by the NeMo/CUDA implementation
 A failed gate means a new space id (`titanet-large-v3`) plus a re-embed
 migration, never shipping a drifted implementation under the old id.
 
-#### v2 verdict: pending
+#### Verdict: ONNX Runtime engine PASS for `titanet-large-v2` (2026-09-02, amd64)
 
-CUDA references for v2 and a re-run of the ONNX gate are required before any
-non-CUDA tier ships v2.
+The ONNX engine keeps `titanet-large-v2`. Measured on a maintainer workstation
+(amd64, onnxruntime CPU EP) against 2026-09-02 CUDA references (RTX 3090,
+NeMo 1.22.0). Full golden corpus: 99 embedded / 114 windows, 465 labeled
+pairs, 7 long windows (30 s cap exact, 30.5 s runt, 31 s, 60 s, 90 s,
+175 s, 220 s pooled).
+
+| Level | Measured | Ratcheted gate |
+|---|---|---|
+| mel max abs diff | 1.76e-4 | 1e-3 |
+| vector cosine (min / p50) | 0.999997 / 0.999999 | ≥ 0.9995 |
+| `skip_reason` mismatches | 0 | 0 |
+| `snr_db` max diff | 0.0 dB | ±0.5 dB |
+| pair-cosine drift (max) | 4.6e-4 | ≤ 2e-3 |
+| 0.60/0.70 gate crossings | 0 | 0 |
+| top-1 flips / margin drift (max) | 0 / 3.53e-4 | 0 / ≤ 2e-3 |
+| repeat determinism (max abs diff) | 0.0 | 0.0 |
+
+The 7 long windows exercise the 30 s cap and pooled sub-window path
+introduced in v2. `long_cap_runt` (30.5 s, 0.5 s tail dropped) produces
+the same embedding as `long_cap_exact` (30 s) on both engines, confirming
+the runt-discard path. Pooled windows (31 s through 220 s) fall within the
+same cosine floor as the single-window corpus.
 
 #### Verdict: ONNX Runtime engine PASS (2026-08-13, amd64)
 
