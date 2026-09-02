@@ -430,7 +430,7 @@
         {% if speaker.name %}
         <span class="pd-spk-status">{{ chip("verified") }}</span>
         {% else %}
-        <span class="pd-spk-status">{{ chip("needs you") }}</span>
+        <span class="pd-spk-status">{{ chip("needs review") }}</span>
         {% endif %}
         <span class="pd-spk-count num">{{ speaker.run_count }} file{{ "" if speaker.run_count == 1 else "s" }}</span>
       </li>

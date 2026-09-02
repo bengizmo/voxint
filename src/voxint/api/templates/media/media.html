@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "fragments/_chips.html" import chip, needs_you_chip %}
+{% from "fragments/_chips.html" import chip, needs_review_chip %}
 {% block title %}Voxint — media{% endblock %}
 
 {% block cb_breadcrumb %}media /{% endblock %}
@@ -44,7 +44,7 @@
 {% macro media_status(row) %}
   {%- if row.latest_run_id -%}
     {%- if row.unresolved_count -%}
-    {{ needs_you_chip(row.unresolved_count) }}
+    {{ needs_review_chip(row.unresolved_count) }}
     {%- elif row.latest_run_status == "completed" -%}
     {{ chip("reviewed") }}
     {%- else -%}
@@ -311,8 +311,8 @@
         {{ chip("transcribing") }}
         {% elif group.needs_review_count %}
         {# Folder-level chip: counts RECORDINGS, not voices, so it stays
-           noun-less and outside needs_you_chip (which owns the voice copy). #}
-        <span class="chip chip-warn">{{ group.needs_review_count }} need{{ "s" if group.needs_review_count == 1 else "" }} you</span>
+           noun-less and outside needs_review_chip (which owns the voice copy). #}
+        <span class="chip chip-warn">{{ group.needs_review_count }} need{{ "s" if group.needs_review_count == 1 else "" }} review</span>
         {% elif group.completed_count == group.item_count and group.item_count > 0 %}
         {{ chip("all reviewed") }}
         {% else %}
@@ -447,7 +447,7 @@
           {% elif group.running_count %}
           {{ chip("transcribing") }}
           {% elif group.needs_review_count %}
-          <span class="chip chip-warn">{{ group.needs_review_count }} need{{ "s" if group.needs_review_count == 1 else "" }} you</span>
+          <span class="chip chip-warn">{{ group.needs_review_count }} need{{ "s" if group.needs_review_count == 1 else "" }} review</span>
           {% elif group.completed_count == group.item_count and group.item_count > 0 %}
           {{ chip("all reviewed") }}
           {% else %}
