@@ -408,13 +408,17 @@ def test_group_activity_single_failure_not_grouped() -> None:
 @pytest.mark.parametrize(
     ("score", "expected"),
     [
+        (None, "unknown"),
+        (float("nan"), "unknown"),
+        (float("inf"), "unknown"),
+        (1.0, "likely"),
         (0.95, "likely"),
         (0.80, "likely"),
         (0.79, "possible"),
         (0.50, "possible"),
         (0.49, "low"),
         (0.0, "low"),
-        (None, "low"),
+        (-0.1, "low"),
     ],
 )
 def test_confidence_band(score: float | None, expected: str) -> None:

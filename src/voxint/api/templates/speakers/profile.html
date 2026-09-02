@@ -4,7 +4,7 @@
 
 {% block cb_breadcrumb %}speakers / <strong>{{ speaker.display_name|lower|replace(" ", "-") }}</strong>{% endblock %}
 {% block cb_summary %}
-{%- if aggregate.verified %}{{ chip("verified by you") }}{% elif aggregate.files > 0 %}{{ chip("needs you") }}{% endif -%}
+{%- if aggregate.verified %}{{ chip("verified by you") }}{% elif aggregate.files > 0 %}{{ chip("needs review") }}{% endif -%}
 {% endblock %}
 {% block cb_actions %}
 {% if not archived %}

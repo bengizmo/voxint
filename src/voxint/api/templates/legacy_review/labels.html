@@ -52,7 +52,7 @@
     {% for hint in name_hints_run %}
     <li>
       {{ hint.candidate.value }}
-      <span class="muted">({{ confidence_band(hint.candidate.score) }})</span>
+      <span class="muted" title="score: {{ '%.2f'|format(hint.candidate.score or 0) }}">({{ confidence_band(hint.candidate.score) }})</span>
       {{ triage_badge(hint) }}
       {{ hint_state_pill(hint) }}
       {% if hint.evidence %}
@@ -188,7 +188,7 @@
     {% for hint in name_hints_labels[s.label] %}
     <li>
       Self-introduced (unverified): "{{ hint.candidate.value }}"
-      <span class="muted">({{ confidence_band(hint.candidate.score) }}{% if hint.evidence and hint.evidence[0].timestamp_seconds is not none %}, at {{ "%.0f"|format(hint.evidence[0].timestamp_seconds) }}s{% endif %})</span>
+      <span class="muted" title="score: {{ '%.2f'|format(hint.candidate.score or 0) }}">({{ confidence_band(hint.candidate.score) }}{% if hint.evidence and hint.evidence[0].timestamp_seconds is not none %}, at {{ "%.0f"|format(hint.evidence[0].timestamp_seconds) }}s{% endif %})</span>
       {{ triage_badge(hint) }}
       {{ hint_state_pill(hint) }}
       {{ hint_decision_forms(hint) }}

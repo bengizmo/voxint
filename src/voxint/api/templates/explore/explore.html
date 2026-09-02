@@ -182,14 +182,16 @@
   <div data-island="explore" data-props='{{ explore_props|tojson }}'>
     {% if not query %}
     <div class="explore-empty-state">
-      <p>Search across all your transcripts. Try:</p>
-      <p class="explore-examples">
-        {% for ex in ["budget", "timeline", "interview"] %}
-        <a href="/explore?q={{ ex }}" class="secondary small">{{ ex }}</a>
+      <p>Search finds every occurrence across all your transcripts, with context, speakers, and timestamps.</p>
+      {% if top_terms %}
+      <p style="margin-top: var(--space-2);">Try:
+        {% for t in top_terms %}
+        <a href="/explore?q={{ t.term|urlencode }}{% if filters.project_id %}&amp;project={{ filters.project_id }}{% endif %}{% if filters.speaker_id %}&amp;speaker={{ filters.speaker_id }}{% endif %}" class="secondary small">{{ t.term }}</a>{% if not loop.last %} &middot; {% endif %}
         {% endfor %}
       </p>
+      {% endif %}
       <p class="oc-muted" style="font-size: var(--t-sm); margin-top: var(--space-2);">
-        Results appear as a concordance with surrounding context, a word cloud, and a frequency chart.
+        After searching, you will see a word cloud, a meaning map, and concordance matches you can export.
       </p>
     </div>
     {% elif total == 0 %}

@@ -175,6 +175,7 @@ def explore(
         "projects": _filter_projects(session),
         "speakers": _filter_speakers(session),
         "pagination_qs": _pagination_qs_factory(request),
+        "top_terms": ts.terms[:3] if ts.terms else [],
     }
     return templates.TemplateResponse(request, "explore/explore.html", context)
 

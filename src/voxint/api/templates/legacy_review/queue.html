@@ -19,7 +19,7 @@
   </p>
   <div class="grid-table" style="grid-template-columns: 1fr auto auto 14rem{% if shell.multi_user %} auto{% endif %} auto;" role="region" aria-label="Review queue">
     <div class="gt-header">
-      <span>MEDIA</span>
+      <span>RECORDING</span>
       <span>DURATION</span>
       <span>AGE</span>
       <span>PROGRESS</span>
@@ -32,7 +32,9 @@
       <span>
         <span class="media-title" title="{{ e.source_path }}">{{ friendly_media_label(e.title, e.source_path) }}</span>
         {% set fl = folder_label(e.source_path) %}
-        {% if fl %}<br><span class="oc-muted" style="font-size:var(--t-sm)">{{ fl }}</span>{% endif %}
+        {% if fl or e.created_at %}
+        <br><span class="oc-muted" style="font-size:var(--t-sm)">{% if fl %}{{ fl }}{% endif %}{% if fl and e.created_at %} · {% endif %}{% if e.created_at %}{{ e.created_at.strftime("%b %d, %Y") }}{% endif %}</span>
+        {% endif %}
       </span>
       <span>{{ format_duration(e.duration_seconds) }}</span>
       <span>

@@ -334,9 +334,9 @@ def humanize_error(error: str | None) -> str | None:
 
 
 def confidence_band(score: float | None) -> str:
-    """A 0-1 score as a plain-language band: likely / possible / low."""
-    if score is None:
-        return "low"
+    """A 0-1 score as a plain-language band: likely / possible / low / unknown."""
+    if score is None or not math.isfinite(score):
+        return "unknown"
     if score >= 0.8:
         return "likely"
     if score >= 0.5:
