@@ -30,7 +30,7 @@ from voxint.adjudication.review_state import verified_progress
 from voxint.adjudication.splits import derive_children
 from voxint.adjudication.transcript import TranscriptLine, TranscriptText, attributed_transcript
 from voxint.api.playback import PlaybackCapability
-from voxint.api.speaker_colors import speaker_palette
+from voxint.api.speaker_colors import run_label_universe, speaker_palette
 from voxint.config import Settings
 from voxint.db.models import (
     DiarizationTurn,
@@ -43,29 +43,6 @@ from voxint.enrichment.outline import build_outline
 from voxint.media.peaks import peaks_artifact_row
 
 logger = logging.getLogger(__name__)
-
-def _run_label_universe(session: Session, run_id: uuid.UUID) -> set[str]:
-    """Every diarization label present in a run, from BOTH its diarization turns
-    and its transcript segments.
-
-    A transcript segment may carry a label with no turn (the supported degenerate
-    case the resolver's turn-derived ``label_states`` does not enumerate), and a
-    turn's label may have no segment; the union covers both. This is the ONE
-    canonical universe the per-speaker palette (#50) is built from, so the
-    transcript page, its JS-off fallback, and the workbench cards color a given
-    label identically. Two cheap indexed ``DISTINCT`` queries — deliberately not
-    ``label_states`` (which resolves turn stats, proposals, decisions, and merges)."""
-    turn_labels = session.execute(
-        select(DiarizationTurn.label)
-        .where(DiarizationTurn.pipeline_run_id == run_id)
-        .distinct()
-    ).scalars()
-    segment_labels = session.execute(
-        select(TranscriptSegment.diarization_label)
-        .where(TranscriptSegment.pipeline_run_id == run_id)
-        .distinct()
-    ).scalars()
-    return {*turn_labels, *(label for label in segment_labels if label is not None)}
 
 
 def _wants_island_json(request: Request) -> bool:
@@ -271,7 +248,7 @@ def _run_island_segments(session: Session, run_id: uuid.UUID) -> list[dict[str, 
     """The run's island segment payload (issue #59) — CORRECTED variant, split
     parents expanded — for a live write to reconcile the console against server
     truth. Same builder as hydration, so a split response and a page reload agree."""
-    palette = speaker_palette(_run_label_universe(session, run_id))
+    palette = speaker_palette(run_label_universe(session, run_id))
     lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
     rule_index = _load_run_rule_index(session, run_id)
     return [_island_segment(ln, palette, rule_index) for ln in lines]
@@ -333,5 +310,4 @@ def _segment_is_corrected(session: Session, segment_id: uuid.UUID) -> bool:
     """Whether a segment has operator-corrected text (issues #58/#59)."""
     row = session.get(SegmentReviewState, segment_id)
     return row is not None and row.corrected_text is not None
-
 

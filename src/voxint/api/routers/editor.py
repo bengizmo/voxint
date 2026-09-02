@@ -49,11 +49,8 @@ from voxint.api.routers.deps import (
     templates,
 )
 from voxint.api.routers.legacy_review import _annotation_limits, _annotations_payload
-from voxint.api.speaker_colors import speaker_palette
-from voxint.api.transcript_view import (
-    _run_label_universe,
-    _transcript_island_props,
-)
+from voxint.api.speaker_colors import run_label_universe, speaker_palette
+from voxint.api.transcript_view import _transcript_island_props
 from voxint.app_settings import get_app_settings, resolve_effective_translation_target_language
 from voxint.config import Settings
 from voxint.db.models import PipelineRun, RunStatus
@@ -117,7 +114,7 @@ def media_detail_page(
             lines = attributed_transcript(
                 session, run_id, text=TranscriptText.CORRECTED
             )
-            palette = speaker_palette(_run_label_universe(session, run_id))
+            palette = speaker_palette(run_label_universe(session, run_id))
             verified_n, total = verified_progress(session, run_id)
             capability = playback_capability(
                 session, selected_run_obj, settings, _get_media_gate(request)

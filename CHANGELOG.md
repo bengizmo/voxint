@@ -6,6 +6,30 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **Timeline deep links now jump to the correct transcript row** (#420).
+  The speaker timeline, Explore, and Quote Board pages linked to the
+  transcript with `#t=` (a URL fragment) but the transcript island only
+  reads `?t=` (a query parameter), so following a link opened the
+  transcript at the top on a different speaker's row with no highlight.
+  All link producers now emit `?t=`.
+- **Timeline and transcript colours now agree** (#420). The timeline and
+  Explore islands computed speaker colours with a client-side hash that
+  diverged from the server's positional palette once a label resolved.
+  Timeline lanes now carry a server-owned palette index identical to the
+  transcript's. Explore uses a neutral badge (cross-run context has no
+  meaningful per-run palette). A contract test pins this: no client-side
+  palette hash may exist in `frontend/src`.
+- **Raw label badge restored on hydrated transcript rows** (#420). The
+  hydrated island dropped the raw-label badge the JS-off fallback
+  renders, so two labels resolved to one speaker were told apart only by
+  colour. The badge now appears when the label differs from the displayed
+  name, matching the fallback.
+- **Timeline lanes show the raw diarization label** (#420). When a lane
+  resolves to a speaker name, the raw label (`SPEAKER_00`) is shown
+  alongside it so per-segment reassignments remain visible at the
+  timeline level.
+
 
 ## [0.32.0] - 2026-09-02
 

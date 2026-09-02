@@ -373,7 +373,12 @@ const TranscriptRow = memo(function TranscriptRow({
           uncertain
         </span>
       )}
-      <strong>{seg.speaker}:</strong>{" "}
+      {seg.label ? (
+        <span className="spk-badge">{seg.label}</span>
+      ) : null}
+      {seg.speaker !== seg.label ? (
+        <><strong>{seg.speaker}:</strong>{" "}</>
+      ) : " "}
       {splitting ? (
         // A cut lands BEFORE the clicked word, so word 0 has no legal cut
         // (its index would be 0, and the backend requires 0 < index < n);

@@ -62,13 +62,6 @@ function pageHref(page: number): string {
   return `/explore?${params.toString()}`;
 }
 
-function speakerPaletteIndex(id: string | null): number {
-  if (!id) return 0;
-  let hash = 0;
-  for (const character of id) hash = (hash * 31 + character.charCodeAt(0)) | 0;
-  return Math.abs(hash) % 8;
-}
-
 const integerFormatter = new Intl.NumberFormat();
 
 function handleTermClick(term: string) {
@@ -463,7 +456,6 @@ export function ExploreIsland({
               </thead>
               <tbody>
                 {rows.map((row) => {
-                  const paletteIndex = speakerPaletteIndex(row.speaker_id);
                   const rowKey = `${row.segment_id}-${row.start_seconds}`;
                   const isExpanded = expandedSimilar === rowKey;
                   return (
@@ -485,14 +477,14 @@ export function ExploreIsland({
                       <td className="whitespace-nowrap px-2 py-1 text-[length:var(--t-micro)]">
                         {row.speaker_name ? (
                           <span
-                            className={`spk-${paletteIndex} mr-1 inline-block rounded-[var(--r-sm)] border border-[var(--spk-accent)] px-1 text-[var(--spk-accent)]`}
+                            className="mr-1 inline-block rounded-[var(--r-sm)] border border-[var(--ink-3)] px-1 text-[var(--ink-2)]"
                           >
                             {row.speaker_name}
                           </span>
                         ) : null}
                         <a
                           className="text-[var(--accent)] no-underline hover:underline"
-                          href={`/runs/${row.run_id}/transcript#t=${row.start_seconds}`}
+                          href={`/runs/${row.run_id}/transcript?t=${row.start_seconds}`}
                         >
                           {row.media_title} · {row.start_seconds.toFixed(1)}s
                         </a>

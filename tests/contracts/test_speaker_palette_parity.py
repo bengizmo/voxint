@@ -154,6 +154,24 @@ def test_base_html_light_and_dark_tokens_cover_the_palette() -> None:
     )
 
 
+def test_no_client_side_palette_hash_in_frontend() -> None:
+    """The speaker palette index MUST come from the server (issue #420).
+
+    A client-side hash (the old ``speakerPaletteIndex``) disagrees with the
+    server's positional palette once a label resolves, painting the same voice
+    in two colors across pages. This contract ensures no such function exists."""
+    frontend_src = REPO_ROOT / "frontend" / "src"
+    hits = []
+    for path in frontend_src.rglob("*.tsx"):
+        text = path.read_text()
+        if "speakerPaletteIndex" in text:
+            hits.append(str(path.relative_to(REPO_ROOT)))
+    assert not hits, (
+        "frontend/src still contains a client-side speakerPaletteIndex hash; "
+        f"palette indices must come from the server: {hits}"
+    )
+
+
 def test_base_html_class_mappings_cover_the_palette() -> None:
     css = _strip_css_comments(_BASE_HTML.read_text())
     expected = {(i, i) for i in range(PALETTE_SIZE)}

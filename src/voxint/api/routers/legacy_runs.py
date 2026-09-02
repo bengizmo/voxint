@@ -90,7 +90,7 @@ from voxint.api.runs_query import (
     runs_url,
     searchable_languages,
 )
-from voxint.api.speaker_colors import speaker_palette
+from voxint.api.speaker_colors import run_label_universe, speaker_palette
 from voxint.api.speaker_timeline import build_speaker_timeline
 from voxint.api.stats_query import (
     DEFAULT_WINDOW,
@@ -98,11 +98,7 @@ from voxint.api.stats_query import (
     render_prometheus,
     run_status_counts,
 )
-from voxint.api.transcript_view import (
-    _run_label_universe,
-    _transcript_island_props,
-    _wants_island_json,
-)
+from voxint.api.transcript_view import _transcript_island_props, _wants_island_json
 from voxint.api.tutorial_view import _tutorial_banner
 from voxint.app_settings import (
     get_app_settings,
@@ -1095,7 +1091,7 @@ def run_transcript(
     # the JS-off fallback matches the hydrated island. The union also colors a
     # transcript-only label (a segment whose label has no turn). Two cheap
     # DISTINCT queries, kept explicit so the shared universe is provable here.
-    palette = speaker_palette(_run_label_universe(session, run_id))
+    palette = speaker_palette(run_label_universe(session, run_id))
     island_props = _transcript_island_props(
         session, run_id, lines, palette, capability, settings
     )

@@ -131,11 +131,10 @@ from voxint.api.routers.deps import (
     templates,
 )
 from voxint.api.routers.deps import run_source_title as _run_source_title
-from voxint.api.speaker_colors import speaker_palette
+from voxint.api.speaker_colors import run_label_universe, speaker_palette
 from voxint.api.transcript_view import (
     _load_run_rule_index,
     _run_island_segments,
-    _run_label_universe,
     _run_reconcile_response,
     _segment_child_ranges,
     _segment_is_corrected,
@@ -282,7 +281,7 @@ def _workbench_context(
         # raw label, derived from the SAME run-label universe the transcript page
         # uses (turns and segments), so a label's color never drifts between the
         # two surfaces.
-        "palette": speaker_palette(_run_label_universe(session, run.id)),
+        "palette": speaker_palette(run_label_universe(session, run.id)),
         "previews": _label_previews(session, run.id, states, settings.review_preview_segments),
         # Per-segment overrides (issue #54 Phase B): keyed by segment id, so a
         # preview segment can show its this-segment attribution + a reset control.
@@ -611,7 +610,7 @@ def review_transcript(
     lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
     settings: Settings = request.app.state.settings
     capability = playback_capability(session, run, settings, _get_media_gate(request))
-    palette = speaker_palette(_run_label_universe(session, run_id))
+    palette = speaker_palette(run_label_universe(session, run_id))
     verified_n, total = verified_progress(session, run_id)
     island_props = _transcript_island_props(
         session, run_id, lines, palette, capability, settings
@@ -1024,7 +1023,7 @@ def merge_preview(
             "target_speaker": target_speaker,
             "target_name": display_name,
             "expected_json": expected,
-            "palette": speaker_palette(_run_label_universe(session, run_id)),
+            "palette": speaker_palette(run_label_universe(session, run_id)),
         },
     )
 
