@@ -150,12 +150,12 @@ def test_job_detail_invalid_uuid_is_422(client: TestClient) -> None:
 # ---- sidebar nav tests ----
 
 
-def test_sidebar_jobs_entry_always_points_at_runs(client: TestClient) -> None:
-    """The sidebar Jobs entry always points at /runs (no flag branch)."""
+def test_sidebar_runs_entry_always_points_at_runs(client: TestClient) -> None:
+    """The sidebar Runs entry always points at /runs (no flag branch)."""
     home = client.get("/", follow_redirects=True)
     assert home.status_code == 200
     assert 'href="/runs"' in home.text
-    assert 'aria-label="Jobs"' in home.text
+    assert 'aria-label="Runs"' in home.text
 
 
 # ---- follow-through redirect tests ----

@@ -86,7 +86,7 @@ def test_merge_preview_reports_server_computed_impact(
     assert resp.status_code == 200
     # Seed: S0 has 2 turns / 2 segments, S1 has 2 turns / 1 segment.
     flat = " ".join(resp.text.split())
-    assert "Affects 4 diarization turns and 3 transcript segments" in flat
+    assert "Affects 4 voice-separation turns and 3 transcript segments" in flat
     assert "Known Voice" in resp.text
     fields = hidden_fields(resp.text)
     assert fields["labels"] == ["S0", "S1"]

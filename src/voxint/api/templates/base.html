@@ -1469,11 +1469,11 @@
           <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><circle cx="9" cy="9" r="5.5"/></svg>
           <span class="rail-tip">Speakers</span>
         </a>
-        {# Jobs — bars glyph (with activity badge extension point) #}
-        <a class="rail-link" href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %} aria-label="Jobs">
+        {# Runs — bars glyph (with activity badge extension point) #}
+        <a class="rail-link" href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %} aria-label="Runs">
           <svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><rect x="3" y="4" width="12" height="2" rx="1"/><rect x="3" y="8" width="12" height="2" rx="1"/><rect x="3" y="12" width="12" height="2" rx="1"/></svg>
           {% if shell.activity_enabled %}<span class="nav-badge" data-activity-badge hidden></span>{% endif %}
-          <span class="rail-tip">Jobs</span>
+          <span class="rail-tip">Runs</span>
         </a>
       </nav>
       <div class="rail-bottom">
@@ -1653,7 +1653,7 @@
       }
       if (allSpk) { return n + " speakers identified."; }
       if (allRun) { return n + " transcriptions finished. Review speakers."; }
-      return n + " updates. Open Jobs.";
+      return n + " updates. Open Runs.";
     }
     function renderCoalesced(events) {
       var el = toastEl();
@@ -1661,7 +1661,7 @@
       msg.textContent = coalescedMessage(events);
       el.appendChild(msg);
       var link = document.createElement("a");
-      link.href = "/runs"; link.textContent = "Open Jobs";
+      link.href = "/runs"; link.textContent = "Open Runs";
       el.appendChild(link);
       show(el);
     }

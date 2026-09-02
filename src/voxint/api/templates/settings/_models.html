@@ -7,7 +7,7 @@
 <section id="pipeline-models" aria-labelledby="pipeline-models-heading">
 <h2 id="pipeline-models-heading">Pipeline models</h2>
 <p class="muted">The models Voxint is running right now for transcription, speaker
-   diarization, and speaker embedding. This is read from each service as the page
+   voice separation, and speaker embedding. This is read from each service as the page
    loads, so it shows what is actually running. You cannot change models here.
    Models are chosen when Voxint is installed or configured, and changing one is a
    quick edit followed by a restart, described below.</p>
@@ -49,7 +49,7 @@
      <code>PYANNOTE_SEGMENTATION_STEP</code>, or
      <code>PYANNOTE_MIN_DURATION_OFF</code> value differs from the validated
      default. Set those back to their built-in values (or remove them from your
-     <code>.env</code>) and restart the speaker diarization service.</p>
+     <code>.env</code>) and restart the voice-separation service.</p>
   {% else %}
   <p class="notice" role="alert">⚠ This reports the validated model name, but the
      loaded model files do not match the validated ones. The results cannot be
@@ -74,7 +74,7 @@
   <p class="notice" role="alert">⚠ This is not the validated model. It runs, but its
      accuracy has not been measured and the results may be unreliable. Only
      <code>large-v2</code> for transcription and
-     <code>pyannote/speaker-diarization-3.1</code> for diarization are validated.
+     <code>pyannote/speaker-diarization-3.1</code> for voice separation are validated.
      If you did not mean to change this, set it back using the keys below.</p>
   {% else %}
   <p class="notice" role="status">Voxint could not classify this model's identity.
@@ -91,7 +91,7 @@
 <ul>
   <li><strong>Transcription:</strong> <code>WHISPER_MODEL</code>,
       <code>WHISPER_REVISION</code>, <code>WHISPER_ALLOW_DOWNLOAD</code></li>
-  <li><strong>Speaker diarization:</strong> <code>DIARIZER_MODEL_NAME</code>,
+  <li><strong>Separate voices:</strong> <code>DIARIZER_MODEL_NAME</code>,
       <code>DIARIZER_REVISION</code> (and <code>HF_TOKEN</code> for a gated
       pipeline)</li>
 </ul>

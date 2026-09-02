@@ -79,7 +79,7 @@ class HardwareField:
 _HARDWARE_FIELDS: tuple[tuple[str, str, str, bool], ...] = (
     ("compute_tier", "COMPUTE_TIER", "Compute tier", False),
     ("asr_url", "ASR_URL", "Transcription service URL", True),
-    ("diarizer_url", "DIARIZER_URL", "Diarization service URL", True),
+    ("diarizer_url", "DIARIZER_URL", "Voice-separation service URL", True),
     ("embedder_url", "EMBEDDER_URL", "Speaker embedding service URL", True),
     (
         "gpu_http_timeout_seconds",

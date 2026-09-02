@@ -1,13 +1,15 @@
 {# Ops Console semantic chip macros (V3 #208).
    Canonical label-to-semantic mapping for the Ops Console chip system.
    Import: {% from "fragments/_chips.html" import chip %}
-   Usage:  {{ chip("done") }}  {{ chip("2 voices need you") }}
+   Usage:  {{ chip("done") }}  {{ chip("needs review") }}
 
    The mapping is the single source; R1-R6 consume it via the macro.
    Extending: add a row to CHIP_MAP below and the CSS class if needed. #}
 
 {# Map: label → (css_class, display_text). Labels are the canonical
-   user-facing strings from the design spec (#208). #}
+   user-facing strings from the design spec (#208).
+   "needs you" / "need you" are deprecated aliases kept for backward compat;
+   the canonical label is "needs review" (S17 glossary). #}
 {% set CHIP_MAP = {
   "verified":       ("chip-ok",      "✓ verified"),
   "verified by you": ("chip-ok",     "✓ verified by you"),
@@ -15,9 +17,9 @@
   "all reviewed":   ("chip-ok",      "✓ all reviewed"),
   "done":           ("chip-ok",      "done"),
   "transcribing":   ("chip-info",    none),
-  "needs you":      ("chip-warn",    "needs you"),
   "needs review":   ("chip-warn",    "needs review"),
-  "need you":       ("chip-warn",    none),
+  "needs you":      ("chip-warn",    "needs review"),
+  "need you":       ("chip-warn",    "needs review"),
   "failed":         ("chip-danger",  "failed"),
   "active":         ("chip-ok",      "active"),
   "watched":        ("chip-accent",  "watched"),
@@ -25,12 +27,11 @@
   "unknown":        ("chip-neutral", "unknown"),
 } %}
 
-{# Count-inflected "needs you" chip. Owns BOTH the inflection ("1 voice needs
-   you" / "2 voices need you") and the warn class, so call sites cannot drift
-   into subject-verb disagreement or fall through the exact-key chip() lookup
-   to chip-neutral (which "2 voices need you" did on the jobs page). #}
-{% macro needs_you_chip(count) -%}
-<span class="chip chip-warn">{{ count }} voice{{ "s" if count != 1 else "" }} need{{ "s" if count == 1 else "" }} you</span>
+{# Count-inflected "needs review" chip. Owns BOTH the inflection and the warn
+   class, so call sites cannot drift into subject-verb disagreement or fall
+   through the exact-key chip() lookup to chip-neutral. #}
+{% macro needs_review_chip(count) -%}
+<span class="chip chip-warn">{{ count }} voice{{ "s" if count != 1 else "" }} need{{ "s" if count == 1 else "" }} review</span>
 {%- endmacro %}
 
 {% macro chip(label, extra_class="") -%}

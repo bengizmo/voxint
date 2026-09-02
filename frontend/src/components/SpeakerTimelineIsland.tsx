@@ -150,7 +150,7 @@ export function SpeakerTimelineIsland({
   }, [timeline, width]);
 
   if (!timeline.lanes.length) {
-    return <p className="oc-muted">No diarization data available</p>;
+    return <p className="oc-muted">No voice-separation data available</p>;
   }
 
   const hoveredX = hovered

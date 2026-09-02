@@ -165,7 +165,7 @@ def test_home_renders_attention_cards_and_stats(
     # Non-zero cards link to their queues.
     assert 'href="/review"' in body
     # Default window is the day: the 3-day-old run is outside it.
-    assert _stat_value(body, "JOBS RUN") == 3
+    assert _stat_value(body, "RUNS") == 3
     assert _stat_value(body, "MEDIA ADDED") == 3
     assert _stat_value(body, "SPEAKERS IDENTIFIED") == 2
 
@@ -219,13 +219,13 @@ def test_home_window_switch_changes_counts(
     # Default day window: 3 recent runs. Week window: the 3-day-old one too.
     day = client.get("/").text
     week = client.get("/", params={"window": "week"}).text
-    assert _stat_value(day, "JOBS RUN") == 3
-    assert _stat_value(week, "JOBS RUN") == 4
+    assert _stat_value(day, "RUNS") == 3
+    assert _stat_value(week, "RUNS") == 4
     # The switch marks the active window (default day; week when chosen).
     assert 'is-active" href="/?window=day"' in day
     assert 'is-active" href="/?window=week"' in week
     # All time includes everything as well.
-    assert _stat_value(client.get("/", params={"window": "all"}).text, "JOBS RUN") == 4
+    assert _stat_value(client.get("/", params={"window": "all"}).text, "RUNS") == 4
 
 
 def test_home_malformed_window_degrades_with_notice(
@@ -237,7 +237,7 @@ def test_home_malformed_window_degrades_with_notice(
     body = resp.text
     # Falls back to the day window and says so; never silently a different one.
     assert "Unrecognized" in body
-    assert _stat_value(body, "JOBS RUN") == 3
+    assert _stat_value(body, "RUNS") == 3
     assert 'is-active" href="/?window=day"' in body
 
 
@@ -249,7 +249,7 @@ def test_home_matches_metrics_snapshot(
     seed_snapshot(session_factory)
     home = client.get("/").text
     metrics = client.get("/metrics").text
-    assert _stat_value(home, "JOBS RUN") == 3
+    assert _stat_value(home, "RUNS") == 3
     assert "voxint_runs_created_24h 3" in metrics
     assert "voxint_roster_speakers 2" in metrics
     assert _stat_value(home, "SPEAKERS IDENTIFIED") == 2
@@ -266,14 +266,14 @@ def test_home_activity_feed_lists_runs_and_speakers(
     seed_snapshot(session_factory)
     body = client.get("/").text
     # The feed names each family with a link to its surface.
-    assert "Run started" in body
-    assert "Run finished" in body
-    assert "Run failed" in body
+    assert "Processing started" in body
+    assert "Processing finished" in body
+    assert "Processing failed" in body
     assert "Speaker verified" in body
     assert re.search(r'href="/speakers">(Alice|Bob)</a>', body)
     # Newest first: the seeded speakers (enrolled last) render before the
     # 3-day-old failed run's entry.
-    assert body.index("Speaker verified") < body.index("Run failed")
+    assert body.index("Speaker verified") < body.index("Processing failed")
 
 
 def test_dashboard_redirects_to_home(client: TestClient) -> None:

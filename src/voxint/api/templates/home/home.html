@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "fragments/_chips.html" import needs_you_chip %}
+{% from "fragments/_chips.html" import needs_review_chip %}
 {% block title %}Voxint — home{% endblock %}
 
 {% block cb_breadcrumb %}home{% endblock %}
@@ -73,7 +73,7 @@
     </div>
     <div class="oc-stat-tile">
       <div class="tile-value">{{ counts.runs_started }}</div>
-      <div class="tile-label">JOBS RUN</div>
+      <div class="tile-label">RUNS</div>
     </div>
     <div class="oc-stat-tile">
       <div class="tile-value">{{ counts.speakers_enrolled }}</div>
@@ -102,16 +102,16 @@
         {{ entry.count }} runs failed: {{ nerr.label if nerr else "unknown error" }}
         {% if nerr and nerr.hint %}<br><span class="oc-muted text-sm">{{ nerr.hint }}</span>{% endif %}
         {% elif item.kind == "run_completed" %}
-        Run finished: <a href="/runs/{{ item.run_id }}">{{ friendly_media_label(item.title, item.source_path) }}</a>{% if item.unresolved_count %} {{ needs_you_chip(item.unresolved_count) }}{% endif %}
+        Processing finished: <a href="/runs/{{ item.run_id }}">{{ friendly_media_label(item.title, item.source_path) }}</a>{% if item.unresolved_count %} {{ needs_review_chip(item.unresolved_count) }}{% endif %}
         {% elif item.kind == "run_failed" %}
         {% set nerr = normalize_error(item.error) %}
-        Run failed: <a href="/runs/{{ item.run_id }}">{{ friendly_media_label(item.title, item.source_path) }}</a>
+        Processing failed: <a href="/runs/{{ item.run_id }}">{{ friendly_media_label(item.title, item.source_path) }}</a>
         {% if nerr %}<br><span class="oc-muted text-sm">{{ nerr.label }}.{% if nerr.hint %} {{ nerr.hint }}{% endif %}</span>{% endif %}
         {% if nerr and nerr.raw != nerr.label %}
         <details class="text-sm"><summary>Details</summary><pre class="error-raw">{{ nerr.raw }}</pre></details>
         {% endif %}
         {% elif item.kind == "run_started" %}
-        Run started: <a href="/runs/{{ item.run_id }}">{{ friendly_media_label(item.title, item.source_path) }}</a>
+        Processing started: <a href="/runs/{{ item.run_id }}">{{ friendly_media_label(item.title, item.source_path) }}</a>
         {% elif item.kind == "speaker_enrolled" %}
         Speaker verified: <a href="/speakers">{{ item.title }}</a>
         {% endif %}

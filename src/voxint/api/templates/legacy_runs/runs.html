@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "fragments/_chips.html" import chip, needs_you_chip %}
+{% from "fragments/_chips.html" import chip, needs_review_chip %}
 {% block title %}Voxint — runs{% endblock %}
 
 {% block cb_breadcrumb %}runs /{% if show_archived %} <span class="oc-muted">archived</span>{% endif %}{% endblock %}
@@ -164,7 +164,7 @@
       <span>
         {% if it.status == "completed" %}
           {% if it.label_count == 0 %}<span class="pill muted">no speakers</span>
-          {% elif it.unresolved_count > 0 %}{{ needs_you_chip(it.unresolved_count) }}
+          {% elif it.unresolved_count > 0 %}{{ needs_review_chip(it.unresolved_count) }}
           {% else %}{{ chip("reviewed") }}{% endif %}
         {% elif it.status == "failed" and it.error %}
         <span class="oc-muted" style="font-size:var(--t-sm)">{{ humanize_error(it.error) or "—" }}</span>
@@ -251,7 +251,7 @@
 
 {% if aux_jobs %}
 <details class="runs-aux-jobs">
-  <summary class="oc-section-title" style="cursor:pointer">OTHER JOBS <span class="oc-muted" style="font-weight:400;font-size:var(--t-sm)">({{ aux_jobs|length }})</span></summary>
+  <summary class="oc-section-title" style="cursor:pointer">OTHER TASKS <span class="oc-muted" style="font-weight:400;font-size:var(--t-sm)">({{ aux_jobs|length }})</span></summary>
   <p class="oc-muted">Recent asset, translation, voice sample, and research
   jobs. These run alongside the pipeline and never block it.</p>
   <div class="grid-table" style="grid-template-columns: auto auto auto auto auto;">
