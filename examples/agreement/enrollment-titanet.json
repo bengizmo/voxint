@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "embedding_space": "titanet-large-v1",
+  "embedding_space": "titanet-large-v2",
   "dims": 8,
   "voiceprints": {
     "host-dana": {

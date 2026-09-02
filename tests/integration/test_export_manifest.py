@@ -217,7 +217,7 @@ def _seed_stage_runs(session: Session, run_id: uuid.UUID) -> None:
                     },
                     "embedder": {
                         "reachable": True,
-                        "model": "titanet-large-v1",
+                        "model": "titanet-large-v2",
                         "revision": None,
                     },
                 },
@@ -372,7 +372,7 @@ class TestSingleManifest:
         assert t["roles"]["asr"]["reachable"] is True
         de = stages["diarize_embed"]
         assert de["roles"]["diarizer"]["model"] == "speaker-diarization-3.1"
-        assert de["roles"]["embedder"]["model"] == "titanet-large-v1"
+        assert de["roles"]["embedder"]["model"] == "titanet-large-v2"
 
     def test_no_stage_runs(
         self, client: TestClient, session_factory: sessionmaker[Session], media_root: Path

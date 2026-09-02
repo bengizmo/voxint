@@ -24,7 +24,7 @@ from voxint.db.models import (
 from voxint.speakers.matching import MatchingGates
 from voxint.speakers.roster import rename_speaker
 
-SPACE = "titanet-large-v1"
+SPACE = "titanet-large-v2"
 GATES = MatchingGates()
 
 

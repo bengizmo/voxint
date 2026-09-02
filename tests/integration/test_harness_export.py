@@ -48,7 +48,7 @@ from voxint.speakers.matching import (
     roster_centroids,
 )
 
-SPACE = "titanet-large-v1"
+SPACE = "titanet-large-v2"
 GATES = MatchingGates()
 
 

@@ -337,6 +337,7 @@ class TestTitanetRoutes:
                 engine_version="test-engine-ver",
                 runtime="torch",
                 runtime_version="test-runtime-ver",
+                window_cap_seconds=30.0,
                 embed_windows=fake_embed,
                 cleanup_memory=lambda: None,
             ),
@@ -356,7 +357,7 @@ class TestTitanetRoutes:
         )
         assert response.status_code == 200
         body = response.json()
-        assert body["embedding_space"] == "titanet-large-v1"
+        assert body["embedding_space"] == "titanet-large-v2"
         assert len(body["results"]) == 2
         assert body["results"][0]["skip_reason"] is None
         assert body["results"][1]["skip_reason"] == "too_short"

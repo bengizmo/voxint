@@ -74,7 +74,7 @@ def test_page_lists_roster_with_evidence_and_confirms(
     assert page.status_code == 200
     assert "Alice" in page.text and "Bob" in page.text
     assert "1 enrollment" in page.text
-    assert "titanet-large-v1" in page.text
+    assert "titanet-large-v2" in page.text
     # The signature voiceprint strip renders from real centroid data.
     assert 'class="voiceprint"' in page.text
     # Destructive actions carry hx-confirm (first use in the console).

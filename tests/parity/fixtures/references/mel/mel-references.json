@@ -1,12 +1,12 @@
 {
-  "generated": "2026-08-13",
+  "generated": "2026-09-02",
   "generator": "tools/generate_mel_references.py",
   "nemo_version": "1.22.0",
   "device": "cpu",
-  "note": "NeMo AudioToMelSpectrogramPreprocessor outputs (eval mode, dither inert) on titanet-large-v1-preprocessed corpus windows; comparator for services/titanet/app/mel.py in tests/parity/test_titanet_onnx.py",
+  "note": "NeMo AudioToMelSpectrogramPreprocessor outputs (eval mode, dither inert) on titanet-large-v2-preprocessed corpus windows; comparator for services/titanet/app/mel.py in tests/parity/test_titanet_onnx.py",
   "corpus_files_sha256": {
     "embed-corpus.wav": "4cd3dd6d8f074c43902ae5a395dd3f9d839a630424ed28a6d1d26d06d969a080",
-    "embed-windows.json": "348bad9b063649550325ec7f1c8fb0cbefeb163431dfea39dd2fac8d74d93568"
+    "embed-windows.json": "c4a53ef1153542dddddbb414fc97441eebce3dbecd3e777b8d38d889e3d6ea88"
   },
   "windows": [
     {
@@ -20,9 +20,9 @@
       "mel_valid_frames": 101
     },
     {
-      "id": "sub_utt_02_0",
-      "start_seconds": 9.505312,
-      "end_seconds": 11.005312,
+      "id": "sub_utt_07_0",
+      "start_seconds": 40.227687,
+      "end_seconds": 41.727687,
       "mel_shape": [
         80,
         160
@@ -30,9 +30,9 @@
       "mel_valid_frames": 151
     },
     {
-      "id": "sub_utt_18_0",
-      "start_seconds": 119.27825,
-      "end_seconds": 120.77825,
+      "id": "sub_utt_19_0",
+      "start_seconds": 125.187875,
+      "end_seconds": 126.687875,
       "mel_shape": [
         80,
         160
@@ -40,19 +40,19 @@
       "mel_valid_frames": 151
     },
     {
-      "id": "snrb_noisy_6_sub",
-      "start_seconds": 199.231187,
-      "end_seconds": 200.981187,
+      "id": "clean_utt_04",
+      "start_seconds": 27.891437,
+      "end_seconds": 30.015875,
       "mel_shape": [
         80,
-        176
+        224
       ],
-      "mel_valid_frames": 176
+      "mel_valid_frames": 213
     },
     {
-      "id": "sub_utt_02_1",
-      "start_seconds": 9.805312,
-      "end_seconds": 12.305312,
+      "id": "sub_utt_09_1",
+      "start_seconds": 55.76725,
+      "end_seconds": 58.26725,
       "mel_shape": [
         80,
         256
@@ -60,9 +60,9 @@
       "mel_valid_frames": 251
     },
     {
-      "id": "sub_utt_15_1",
-      "start_seconds": 96.607938,
-      "end_seconds": 99.107938,
+      "id": "sub_utt_21_1",
+      "start_seconds": 142.861312,
+      "end_seconds": 145.361312,
       "mel_shape": [
         80,
         256
@@ -70,19 +70,9 @@
       "mel_valid_frames": 251
     },
     {
-      "id": "clean_utt_12",
-      "start_seconds": 81.85,
-      "end_seconds": 84.83825,
-      "mel_shape": [
-        80,
-        304
-      ],
-      "mel_valid_frames": 299
-    },
-    {
-      "id": "sub_utt_07_2",
-      "start_seconds": 48.025563,
-      "end_seconds": 51.225563,
+      "id": "sub_utt_05_2",
+      "start_seconds": 31.6445,
+      "end_seconds": 34.8445,
       "mel_shape": [
         80,
         336
@@ -90,9 +80,9 @@
       "mel_valid_frames": 321
     },
     {
-      "id": "sub_utt_19_2",
-      "start_seconds": 135.40525,
-      "end_seconds": 138.60525,
+      "id": "sub_utt_14_2",
+      "start_seconds": 92.007937,
+      "end_seconds": 95.207937,
       "mel_shape": [
         80,
         336
@@ -100,34 +90,44 @@
       "mel_valid_frames": 321
     },
     {
-      "id": "clean_utt_14",
-      "start_seconds": 90.486312,
-      "end_seconds": 95.607937,
+      "id": "clean_utt_22",
+      "start_seconds": 147.296562,
+      "end_seconds": 151.842875,
       "mel_shape": [
         80,
-        528
+        464
       ],
-      "mel_valid_frames": 513
+      "mel_valid_frames": 455
     },
     {
-      "id": "clean_utt_17",
-      "start_seconds": 111.723812,
-      "end_seconds": 118.57825,
+      "id": "dup_utt_01",
+      "start_seconds": 2.976875,
+      "end_seconds": 8.805312,
       "mel_shape": [
         80,
-        688
+        592
       ],
-      "mel_valid_frames": 686
+      "mel_valid_frames": 583
     },
     {
-      "id": "clean_utt_19",
-      "start_seconds": 124.987875,
-      "end_seconds": 139.00525,
+      "id": "clean_utt_11",
+      "start_seconds": 67.472437,
+      "end_seconds": 81.35,
       "mel_shape": [
         80,
-        1408
+        1392
       ],
-      "mel_valid_frames": 1402
+      "mel_valid_frames": 1388
+    },
+    {
+      "id": "long_full",
+      "start_seconds": 0.0,
+      "end_seconds": 220.241938,
+      "mel_shape": [
+        80,
+        22032
+      ],
+      "mel_valid_frames": 22025
     }
   ]
 }

@@ -1,7 +1,7 @@
 # Pinned stack for the ONNX-only CPU image (Dockerfile.cpu) — no NeMo, no
 # torch. The preprocessing pins MUST stay identical to requirements.txt and to
 # pyproject.toml's `parity` extra: the parity verdict that keeps
-# titanet-large-v1 on the ONNX engine was measured against exactly this
+# titanet-large-v2 on the ONNX engine was measured against exactly this
 # chain, so version skew here is embedding-space drift.
 numpy==1.24.3
 
@@ -10,13 +10,13 @@ soundfile==0.12.1
 scipy==1.11.4
 numba==0.58.1
 
-# Embedding-space preprocessing (part of the titanet-large-v1 definition)
+# Embedding-space preprocessing (part of the titanet-large-v2 definition)
 pyloudnorm==0.1.0
 noisereduce==2.0.1
 
 # Inference engine — MUST match the version the parity harness actually
 # measured (pyproject's parity extra / uv.lock), which is what keeps the
-# titanet-large-v1 verdict binding for this image; a contract test pins the
+# titanet-large-v2 verdict binding for this image; a contract test pins the
 # three together. provenance.json's onnxruntime_version records the
 # EXPORT-time ORT (graph fidelity), which may lag this runtime pin.
 onnxruntime==1.28.0

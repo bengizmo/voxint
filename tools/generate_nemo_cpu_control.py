@@ -40,6 +40,7 @@ def main() -> None:
         raise SystemExit("run WITHOUT --gpus: this control must execute NeMo on CPU")
 
     from app.embedding import create_embedder
+    from app.schemas import EMBEDDING_SPACE
 
     embedder = create_embedder()  # EMBED_ENGINE default: nemo
     embedder.load_model()
@@ -60,7 +61,7 @@ def main() -> None:
             "device": embedder.device_name,
             "note": "NeMo reference engine on CPU — drift-attribution control, not a serving path",
         },
-        "embedding_space": "titanet-large-v1",
+        "embedding_space": EMBEDDING_SPACE,
         "windows": [
             {
                 "id": w["id"],

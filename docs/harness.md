@@ -268,7 +268,7 @@ by every artifact and at least one lane:
 ```json
 {
   "schema_version": 1,
-  "embedding_space": "titanet-large-v1",
+  "embedding_space": "titanet-large-v2",
   "name_accuracy": {
     "truth_anchoring": "independent",
     "run_ids": ["<run-uuid>", "..."]

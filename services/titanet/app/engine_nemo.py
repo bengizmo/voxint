@@ -1,4 +1,4 @@
-"""NeMo engine — the CUDA reference runtime for ``titanet-large-v1``.
+"""NeMo engine — the CUDA reference runtime for ``titanet-large-v2``.
 
 This is the exact model-invocation path the embedding space was defined on
 (NeMo ``get_embedding`` over a temp wav); it must not change behaviorally

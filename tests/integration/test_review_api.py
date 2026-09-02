@@ -36,7 +36,7 @@ from voxint.db.models import (
 )
 
 CREDS = ("reviewer", "s3cret")
-SPACE = "titanet-large-v1"
+SPACE = "titanet-large-v2"
 _CSRF_KEY = "review-api-test-csrf-key"  # low-entropy; a known secret lets tests mint
 
 

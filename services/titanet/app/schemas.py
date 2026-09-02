@@ -19,7 +19,7 @@ CONTRACT_VERSION = "v1"
 
 # Versions the vector semantics: any model OR preprocessing change requires a
 # new space id, never a silent swap.
-EMBEDDING_SPACE = "titanet-large-v1"
+EMBEDDING_SPACE = "titanet-large-v2"
 EMBEDDING_DIM = 192
 
 
@@ -94,6 +94,9 @@ class HealthResponse(BaseModel):
     engine_version: str | None = None
     runtime: str | None = None
     runtime_version: str | None = None
+    # Additive provenance fields. Consumers tolerate absence on older services.
+    embedding_space: str | None = None
+    window_cap_seconds: float | None = None
     model_loaded: bool
     # Additive v1 field (hardware-aware processing, W1): optional nested
     # hardware telemetry. Absent on older services; an upgraded service always

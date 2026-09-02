@@ -116,7 +116,7 @@ def seed_snapshot(session_factory: sessionmaker[Session]) -> None:
                 end_seconds=8.0,
                 label="S0",
                 embedding=vector,
-                embedding_space="titanet-large-v1",
+                embedding_space="titanet-large-v2",
             )
         )
         session.commit()

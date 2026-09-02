@@ -40,7 +40,7 @@ item-clustered bootstrap CI on the mean per-slot delta.
 ## 2. Acoustic agreement (one voter per embedding space)
 
 Two enrollment files describe the *same* two curated hosts in two different
-embedding spaces (`titanet-large-v1`, `ecapa-tdnn-v2`); each has a matching slots
+embedding spaces (`titanet-large-v2`, `ecapa-tdnn-v2`); each has a matching slots
 file covering the same five items. Run the voter once per space:
 
 ```bash

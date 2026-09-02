@@ -214,7 +214,7 @@ def test_seed_does_not_disturb_existing_roster(
         session.add(
             SpeakerEmbedding(
                 speaker_id=real.id,
-                embedding_space="titanet-large-v1",
+                embedding_space="titanet-large-v2",
                 embedding=[1.0] + [0.0] * 191,
             )
         )
@@ -238,7 +238,7 @@ def test_seed_does_not_disturb_existing_roster(
             .all()
         )
         assert len(real_embs) == 1  # untouched
-        assert real_embs[0].embedding_space == "titanet-large-v1"
+        assert real_embs[0].embedding_space == "titanet-large-v2"
 
 
 # --- media-serve + export through the real API --------------------------------

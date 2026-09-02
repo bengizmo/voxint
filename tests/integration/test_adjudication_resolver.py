@@ -26,7 +26,7 @@ from voxint.db.models import (
     SpeakerAssignment,
 )
 
-SPACE = "titanet-large-v1"
+SPACE = "titanet-large-v2"
 
 
 def make_completed_run(session: Session) -> uuid.UUID:

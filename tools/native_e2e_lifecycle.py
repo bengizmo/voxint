@@ -99,7 +99,7 @@ DEFAULT_DB_NAME = "voxint"
 DEFAULT_API_USER = "admin"
 LOOPBACK = "127.0.0.1"
 STATIC_APP_PREFIX = "/static/app/"
-TITANET_SPACE = "titanet-large-v1"
+TITANET_SPACE = "titanet-large-v2"
 POLL_INTERVAL_DEFAULT = 5.0
 POLL_TIMEOUT_DEFAULT = 600.0
 

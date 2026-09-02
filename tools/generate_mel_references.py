@@ -8,7 +8,7 @@ Runs INSIDE the pinned titanet image (NeMo 1.22.0) — same invocation pattern a
         python3 tools/generate_mel_references.py
 
 For a diverse subset of the golden corpus's embeddable windows, this applies the
-exact ``titanet-large-v1`` runtime chain up to the model input (slice →
+exact ``titanet-large-v2`` runtime chain up to the model input (slice →
 noise-reduce → LUFS → peak, via ``services/titanet/app/preprocess.py``) and then
 records the checkpoint's own ``AudioToMelSpectrogramPreprocessor`` output. The
 reimplemented front-end (``services/titanet/app/mel.py``) is measured against
@@ -133,7 +133,7 @@ def main() -> None:
         "device": "cpu",
         "note": (
             "NeMo AudioToMelSpectrogramPreprocessor outputs (eval mode, dither inert) on "
-            "titanet-large-v1-preprocessed corpus windows; comparator for services/titanet/"
+            "titanet-large-v2-preprocessed corpus windows; comparator for services/titanet/"
             "app/mel.py in tests/parity/test_titanet_onnx.py"
         ),
         "corpus_files_sha256": {

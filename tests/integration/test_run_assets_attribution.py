@@ -38,7 +38,7 @@ from voxint.enrichment.run_assets import (
 )
 from voxint.speakers.roster import merge_speakers, rename_speaker
 
-SPACE = "titanet-large-v1"
+SPACE = "titanet-large-v2"
 NOW = datetime.now(tz=UTC)
 
 

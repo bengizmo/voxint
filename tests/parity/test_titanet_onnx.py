@@ -1,6 +1,6 @@
 """3-level measured-equivalence gate: TitaNet ONNX engine vs the CUDA reference.
 
-This is the parity harness that decides whether ``titanet-large-v1`` survives
+This is the parity harness that decides whether ``titanet-large-v2`` survives
 onto non-NVIDIA backends (plan decision #3; policy in docs/gpu-contracts.md):
 
 * **Mel level** — ``services/titanet/app/mel.py`` output vs the NeMo
@@ -122,7 +122,7 @@ def cuda_reference() -> dict[str, Any]:
         actual = _sha256(CORPUS_DIR / name)
         bound = ref["meta"]["corpus_files_sha256"][name]
         assert actual == bound, f"{name} does not match the committed CUDA reference"
-    assert ref["embedding_space"] == "titanet-large-v1"
+    assert ref["embedding_space"] == "titanet-large-v2"
     return ref
 
 

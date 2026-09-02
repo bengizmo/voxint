@@ -99,6 +99,10 @@ same contract.
     `ctranslate2` / `4.4.0`, `onnxruntime` / `1.20.1`), `null` when the
     engine has no separable runtime. Best-effort diagnostics: host-driver
     provenance is **not** readiness truth and is never required for `"ok"`.
+  - **titanet only** additionally carries `embedding_space` and
+    `window_cap_seconds`. They report the space id and effective per-window cap
+    used by the loaded service. Both fields are additive and optional;
+    consumers tolerate their absence on older services.
   - The four fields are additive within `v1`; consumers must tolerate their
     absence (older services) and any future additive values.
   - **whisper only** additionally carries a cached *decode identity* (#33
@@ -443,11 +447,15 @@ Response:
 ## titanet: `POST /v1/embed` (port 8021)
 
 Model: **TitaNet-Large** (`nvidia/speakerverification_en_titanet_large`
-weights), 192-dim. Embedding space id: **`titanet-large-v1`**, persisted with
+weights), 192-dim. Embedding space id: **`titanet-large-v2`**, persisted with
 every vector; changing the model weights *or any parameter of the space
 definition below* means a new space id, never a silent swap.
 
-### The `titanet-large-v1` space definition (normative)
+### The `titanet-large-v2` space definition (normative)
+
+`titanet-large-v2` supersedes `titanet-large-v1` on 2026-09-02. It adds the
+step 3a capped sub-windows and step 9 pooling defined below. v1 and v2 vectors
+must never be compared or mixed under one space id.
 
 The space is defined **parametrically**: by the written parameters below, not
 by any single engine or hardware. Every implementation (NeMo/CUDA, ONNX
@@ -473,7 +481,8 @@ Per-window processing chain, in order:
    timeline: `start = int(start_seconds × 16000)`,
    `end = min(int(end_seconds × 16000), len)` (truncating int conversion, not
    rounding).
-3. **Skip gates** (checked in this order, before any normalization):
+3. **Skip gates** (checked in this order, before any normalization, once on
+   the whole requested slice):
    `too_short` for slices `< 1.0 s` (SNR not measured); `low_snr` for
    estimated SNR below the threshold (default 5 dB, `TITANET_SNR_THRESHOLD_DB`).
    SNR estimator: full-window RMS over the noise floor = mean of the quietest
@@ -484,27 +493,44 @@ Per-window processing chain, in order:
    `start < len(window) - 2048`. The tail partial frame (and a final frame
    that would fit exactly) is excluded. The CUDA references were generated
    with this exact tiling; changing it changes `snr_db` values and gate
-   outcomes.
+   outcomes. A successful result reports this whole-window `snr_db`.
+3a. **Capped sub-windows**: let `cap = 30.0` s (the `WINDOW_CAP_SECONDS`
+   constant in `preprocess.py`) and `cap_samples = int(cap * 16000) = 480000`.
+   The cap is a fixed parameter of this space definition. A gated slice longer than
+   `cap_samples` is cut into contiguous, non-overlapping pieces
+   `[i, min(i + cap_samples, n))` for `i = 0, cap_samples, 2 * cap_samples, ...`.
+   A final piece shorter than 1.0 s (16000 samples) is dropped. The first piece
+   is always a full `cap_samples`, so at least one piece survives and this step
+   adds no skip reason. The cap applies to every engine, so the parity gate
+   compares identical piece boundaries.
 4. **Noise reduction**: stationary spectral gating (`noisereduce`,
-   `prop_decrease=0.75`).
+   `prop_decrease=0.75`), applied per piece.
 5. **Loudness**: integrated-loudness normalization to −16 LUFS (BS.1770;
-   skipped only when the meter returns non-finite loudness).
-6. **Peak**: peak normalization to 0.95.
-7. **Model**: TitaNet-Large forward pass on the processed 16 kHz mono window;
+   skipped only when the meter returns non-finite loudness), applied per piece.
+6. **Peak**: peak normalization to 0.95, applied per piece.
+7. **Model**: TitaNet-Large forward pass on each processed 16 kHz mono piece;
    mel-spectrogram front-end per the pinned NeMo 1.22 preprocessor config
    (dither 1e-5, per-feature normalization, log with zero-guard,
    n_fft/hop/window per the checkpoint's config). Implementations that do
    not embed NeMo must reproduce this front-end and prove it at the mel level.
-8. **Output**: L2 normalization of the 192-dim vector.
+8. **Piece output**: L2 normalization of each 192-dim vector.
+9. **Window output**: when more than one piece survives, average the per-piece
+   unit vectors elementwise (equal weight per piece, not per sample) and
+   L2-normalize the result again. A single piece returns its vector unchanged.
+   Every window at or below the cap therefore remains byte-identical to the
+   v1 chain.
 
 The reference implementation of steps 1–6 is
-`services/titanet/app/preprocess.py` (shared by every engine); step 7's
-reference is the pinned NeMo checkpoint.
+`services/titanet/app/preprocess.py` (shared by every engine), including
+`subwindow_bounds` for step 3a. Step 7's reference is the pinned NeMo
+checkpoint. `TitanetEmbedderBase._embed_one_window` implements the per-piece
+steps 4–8, and `TitanetEmbedderBase.embed_windows` implements step 9 in
+`services/titanet/app/embedding.py`.
 
 ### Equivalence policy (measured, not bit-identical)
 
 Bit-identity is not the bar. It is already false across CUDA hardware
-generations. An alternative implementation may keep `titanet-large-v1` **iff**
+generations. An alternative implementation may keep `titanet-large-v2` **iff**
 it passes the 3-level parity gate (`tests/parity/test_titanet_onnx.py`)
 against reference outputs produced by the NeMo/CUDA implementation
 (fixtures: `tests/parity/fixtures/`):
@@ -513,15 +539,42 @@ against reference outputs produced by the NeMo/CUDA implementation
   mel features within tolerance on the golden corpus;
 - **vector level**: per-window cosine similarity above the ratcheted
   threshold (≥ 0.999 baseline), identical `skip_reason` per window, `snr_db`
-  within ±0.5 dB, on amd64 and arm64;
+  within ±0.5 dB, on amd64 and arm64. The golden corpus includes windows at
+  the cap through the direct path and above the cap through the pooled path,
+  so this level measures step 9;
 - **decision level**: replaying voxint's matching gates (0.60/0.70
   thresholds) on labeled same/different-speaker pairs produces no
   merge/split changes, no threshold crossings, and stable top-1/top-2
   margins, within percentile and worst-case tolerances recorded in the
   harness.
 
-A failed gate means a new space id (`titanet-large-v2`) plus a re-embed
+A failed gate means a new space id (`titanet-large-v3`) plus a re-embed
 migration, never shipping a drifted implementation under the old id.
+
+#### Verdict: ONNX Runtime engine PASS for `titanet-large-v2` (2026-09-02, amd64)
+
+The ONNX engine keeps `titanet-large-v2`. Measured on a maintainer workstation
+(amd64, onnxruntime CPU EP) against 2026-09-02 CUDA references (RTX 3090,
+NeMo 1.22.0). Full golden corpus: 99 embedded / 114 windows, 465 labeled
+pairs, 7 long windows (30 s cap exact, 30.5 s runt, 31 s, 60 s, 90 s,
+175 s, 220 s pooled).
+
+| Level | Measured | Ratcheted gate |
+|---|---|---|
+| mel max abs diff | 1.76e-4 | 1e-3 |
+| vector cosine (min / p50) | 0.999997 / 0.999999 | ≥ 0.9995 |
+| `skip_reason` mismatches | 0 | 0 |
+| `snr_db` max diff | 0.0 dB | ±0.5 dB |
+| pair-cosine drift (max) | 4.6e-4 | ≤ 2e-3 |
+| 0.60/0.70 gate crossings | 0 | 0 |
+| top-1 flips / margin drift (max) | 0 / 3.53e-4 | 0 / ≤ 2e-3 |
+| repeat determinism (max abs diff) | 0.0 | 0.0 |
+
+The 7 long windows exercise the 30 s cap and pooled sub-window path
+introduced in v2. `long_cap_runt` (30.5 s, 0.5 s tail dropped) produces
+the same embedding as `long_cap_exact` (30 s) on both engines, confirming
+the runt-discard path. Pooled windows (31 s through 220 s) fall within the
+same cosine floor as the single-window corpus.
 
 #### Verdict: ONNX Runtime engine PASS (2026-08-13, amd64)
 
@@ -593,7 +646,7 @@ callers index results by window position):
 
 ```json
 {
-  "embedding_space": "titanet-large-v1",
+  "embedding_space": "titanet-large-v2",
   "results": [
     {
       "embedding": [0.013, "... exactly 192 finite floats, L2-normalized ..."],
@@ -614,10 +667,9 @@ callers index results by window position):
   windows under 1.0 s skip as `too_short` (with `snr_db: null`, SNR is not
   measured); windows with SNR below the threshold (default 5 dB) skip as
   `low_snr` with the measured `snr_db`.
-- Per-window processing follows the normative `titanet-large-v1` space
-  definition above (resample 16 kHz mono → slice → noise reduction → LUFS −16
-  → peak 0.95 → TitaNet → L2); reference code in
-  `services/titanet/app/preprocess.py`.
+- Per-window processing follows the normative `titanet-large-v2` space
+  definition above; reference code is in `services/titanet/app/preprocess.py`
+  and `services/titanet/app/embedding.py`.
 
 ## Metal tier (bare-metal Apple Silicon): measured status
 

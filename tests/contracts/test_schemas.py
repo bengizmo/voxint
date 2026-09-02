@@ -127,7 +127,7 @@ class TestTitanetSchemas:
         response = titanet_schemas.EmbedResponse.model_validate(
             _fill_embedding(fixture["response"])
         )
-        assert response.embedding_space == "titanet-large-v1"
+        assert response.embedding_space == "titanet-large-v2"
         assert len(response.results) == len(request.windows)
         assert response.results[1].embedding is None
         assert response.results[1].snr_db is None  # too_short → SNR not measured

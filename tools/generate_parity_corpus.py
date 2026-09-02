@@ -36,6 +36,7 @@ dedicated to CC0 (see tests/parity/fixtures/corpus/README.md).
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import importlib.util
 import json
@@ -264,61 +265,16 @@ def _expected_skip(
     return None, round(snr, 2)
 
 
-def main() -> int:
-    CORPUS_DIR.mkdir(parents=True, exist_ok=True)
-    rng = np.random.default_rng(NOISE_SEED)
-    speakers = list(VOICES)
-
-    # --- synthesize the 24 base utterances -------------------------------
-    utterances: list[dict[str, Any]] = []
-    clips: dict[str, np.ndarray] = {}
-    with tempfile.TemporaryDirectory() as tmp:
-        for i, text in enumerate(UTTERANCE_TEXTS):
-            speaker = speakers[i // 4]
-            args = VOICES[speaker]
-            dest = Path(tmp) / f"utt_{i:02d}.wav"
-            _synthesize(text, args["voice"], args["speed"], args["pitch"], dest)
-            clip = _read_float(dest)
-            utt_id = f"utt_{i:02d}"
-            clips[utt_id] = clip
-            utterances.append(
-                {"id": utt_id, "speaker": speaker, "text": text,
-                 "duration_seconds": round(len(clip) / SAMPLE_RATE, 3)}
-            )
-
-    # --- build the embed timeline ----------------------------------------
-    timeline = Timeline()
-    placed: dict[str, tuple[float, float]] = {}
-    for utt in utterances:
-        placed[utt["id"]] = timeline.append(clips[utt["id"]])
-        utt["start_seconds"], utt["end_seconds"] = placed[utt["id"]]
-
-    # Noise-mixed copies straddling the 5 dB gate (and one clearly below,
-    # one clearly above), calibrated against the service's own estimator.
-    snr_targets = [3.0, 4.0, 4.7, 5.3, 6.0, 8.0, 12.0, 20.0]
-    noisy_entries: list[dict[str, Any]] = []
-    for j, target in enumerate(snr_targets):
-        utt = utterances[(j * 5) % len(utterances)]
-        speech = clips[utt["id"]]
-        noise = rng.normal(0.0, 1.0, len(speech)).astype(np.float32) * 0.05
-        mixed, achieved = _mix_to_target_snr(speech, noise, target)
-        start, end = timeline.append(mixed)
-        noisy_entries.append(
-            {"id": f"noisy_{j}", "source_utterance": utt["id"], "speaker": utt["speaker"],
-             "target_snr_db": target, "calibrated_snr_db": round(achieved, 2),
-             "start_seconds": start, "end_seconds": end}
-        )
-
-    # A dedicated 2 s digital-silence region: pure-zero windows must hit the
-    # 0 dB -> low_snr path (RMS < 1e-6), which the 0.5 s gaps are too short for.
-    silence_start, silence_end = timeline.append(
-        np.zeros(2 * SAMPLE_RATE, dtype=np.float32)
-    )
-
-    audio = timeline.audio
-    total_seconds = len(audio) / SAMPLE_RATE
-
-    # --- window manifest --------------------------------------------------
+def _build_windows_and_pairs(
+    audio: np.ndarray,
+    utterances: list[dict[str, Any]],
+    placed: dict[str, tuple[float, float]],
+    noisy_entries: list[dict[str, Any]],
+    silence_start: float,
+    silence_end: float,
+    total_seconds: float,
+) -> tuple[list[dict[str, Any]], list[list[str]], list[list[str]]]:
+    """Build embedding windows and decision pairs from an existing timeline."""
     windows: list[dict[str, Any]] = []
 
     def add(win_id: str, category: str, start_s: float, end_s: float,
@@ -380,6 +336,20 @@ def main() -> int:
         s, e = placed[utt["id"]]
         add(f"dup_{utt['id']}", "duplicate", s, e, utt["speaker"], utt["id"])
 
+    # 8. long windows (cap boundary and pooled path). long_cap_runt has the
+    # same vector as long_cap_exact because its trailing 0.5 s piece is dropped.
+    cap = float(preprocess.WINDOW_CAP_SECONDS)
+    for win_id, end_s in [
+        ("long_cap_exact", cap),
+        ("long_cap_runt", cap + 0.5),
+        ("long_31", cap + 1.0),
+        ("long_60", 2 * cap),
+        ("long_90", 3 * cap),
+        ("long_175", 175.0),
+        ("long_full", total_seconds),
+    ]:
+        add(win_id, "long", 0.0, end_s, None, None)
+
     # --- decision-level pairs ---------------------------------------------
     clean_by_speaker: dict[str, list[str]] = {}
     for w in windows:
@@ -399,6 +369,181 @@ def main() -> int:
             b_ids = clean_by_speaker[spk_list[b_idx]]
             diff_pairs.append([a_ids[0], b_ids[0]])
             diff_pairs.append([a_ids[-1], b_ids[len(b_ids) // 2]])
+
+    return windows, same_pairs, diff_pairs
+
+
+def _write_windows_and_pairs(
+    windows: list[dict[str, Any]],
+    same_pairs: list[list[str]],
+    diff_pairs: list[list[str]],
+) -> None:
+    (CORPUS_DIR / "embed-windows.json").write_text(
+        json.dumps({"wav": "embed-corpus.wav", "windows": windows}, indent=2) + "\n"
+    )
+    (CORPUS_DIR / "embed-pairs.json").write_text(
+        json.dumps(
+            {"same_speaker_pairs": same_pairs, "different_speaker_pairs": diff_pairs},
+            indent=2,
+        ) + "\n"
+    )
+
+
+def _print_embed_summary(
+    total_seconds: float,
+    windows: list[dict[str, Any]],
+    same_pairs: list[list[str]],
+    diff_pairs: list[list[str]],
+) -> None:
+    n_skip = sum(1 for window in windows if window["expected_skip_reason"])
+    long_durations = [
+        window["end_seconds"] - window["start_seconds"]
+        for window in windows
+        if window["category"] == "long"
+    ]
+    durations = ", ".join(f"{duration:g}s" for duration in long_durations)
+    print(
+        f"embed-corpus.wav: {total_seconds:.1f}s, {len(windows)} windows "
+        f"({n_skip} expected skips), {len(same_pairs)} same / {len(diff_pairs)} diff pairs; "
+        f"{len(long_durations)} long windows ({durations})"
+    )
+
+
+def _run_windows_only() -> int:
+    wav_path = CORPUS_DIR / "embed-corpus.wav"
+    provenance = json.loads((CORPUS_DIR / "provenance.json").read_text())
+    expected_sha = provenance["wav_sha256"][wav_path.name]
+    actual_sha = hashlib.sha256(wav_path.read_bytes()).hexdigest()
+    if actual_sha != expected_sha:
+        print(
+            f"error: {wav_path} SHA-256 mismatch: expected {expected_sha}, got {actual_sha}",
+            file=sys.stderr,
+        )
+        return 1
+
+    audio = _read_float(wav_path)
+    manifest = json.loads((CORPUS_DIR / "manifest.json").read_text())
+    embed = manifest["embed"]
+    utterances = [dict(utterance) for utterance in embed["utterances"]]
+    placed = {
+        utterance["id"]: (utterance["start_seconds"], utterance["end_seconds"])
+        for utterance in utterances
+    }
+    noisy_entries = [dict(entry) for entry in embed["noisy_copies"]]
+    total_seconds = len(audio) / SAMPLE_RATE
+    if round(total_seconds, 3) != embed["duration_seconds"]:
+        print(
+            f"error: {wav_path} duration does not match manifest.json: "
+            f"expected {embed['duration_seconds']}s, got {total_seconds:.6f}s",
+            file=sys.stderr,
+        )
+        return 1
+
+    silence_start = noisy_entries[-1]["end_seconds"] + GAP_SECONDS
+    silence_end = silence_start + 2.0
+    silence_lo, silence_hi = preprocess.window_sample_bounds(
+        silence_start, silence_end, SAMPLE_RATE, len(audio)
+    )
+    if not np.all(audio[silence_lo:silence_hi] == 0.0):
+        print(
+            "error: derived digital-silence region contains nonzero samples",
+            file=sys.stderr,
+        )
+        return 1
+
+    windows, same_pairs, diff_pairs = _build_windows_and_pairs(
+        audio,
+        utterances,
+        placed,
+        noisy_entries,
+        silence_start,
+        silence_end,
+        total_seconds,
+    )
+    _write_windows_and_pairs(windows, same_pairs, diff_pairs)
+    _print_embed_summary(total_seconds, windows, same_pairs, diff_pairs)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--windows-only",
+        action="store_true",
+        help="reuse committed audio and regenerate only embedding window and pair JSON",
+    )
+    args = parser.parse_args(argv)
+    if args.windows_only:
+        return _run_windows_only()
+
+    CORPUS_DIR.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(NOISE_SEED)
+    speakers = list(VOICES)
+
+    # --- synthesize the 24 base utterances -------------------------------
+    utterances: list[dict[str, Any]] = []
+    clips: dict[str, np.ndarray] = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, text in enumerate(UTTERANCE_TEXTS):
+            speaker = speakers[i // 4]
+            voice_args = VOICES[speaker]
+            dest = Path(tmp) / f"utt_{i:02d}.wav"
+            _synthesize(
+                text,
+                voice_args["voice"],
+                voice_args["speed"],
+                voice_args["pitch"],
+                dest,
+            )
+            clip = _read_float(dest)
+            utt_id = f"utt_{i:02d}"
+            clips[utt_id] = clip
+            utterances.append(
+                {"id": utt_id, "speaker": speaker, "text": text,
+                 "duration_seconds": round(len(clip) / SAMPLE_RATE, 3)}
+            )
+
+    # --- build the embed timeline ----------------------------------------
+    timeline = Timeline()
+    placed: dict[str, tuple[float, float]] = {}
+    for utterance in utterances:
+        placed[utterance["id"]] = timeline.append(clips[utterance["id"]])
+        utterance["start_seconds"], utterance["end_seconds"] = placed[utterance["id"]]
+
+    # Noise-mixed copies straddling the 5 dB gate (and one clearly below,
+    # one clearly above), calibrated against the service's own estimator.
+    snr_targets = [3.0, 4.0, 4.7, 5.3, 6.0, 8.0, 12.0, 20.0]
+    noisy_entries: list[dict[str, Any]] = []
+    for j, target in enumerate(snr_targets):
+        utterance = utterances[(j * 5) % len(utterances)]
+        speech = clips[utterance["id"]]
+        noise = rng.normal(0.0, 1.0, len(speech)).astype(np.float32) * 0.05
+        mixed, achieved = _mix_to_target_snr(speech, noise, target)
+        start, end = timeline.append(mixed)
+        noisy_entries.append(
+            {"id": f"noisy_{j}", "source_utterance": utterance["id"],
+             "speaker": utterance["speaker"], "target_snr_db": target,
+             "calibrated_snr_db": round(achieved, 2),
+             "start_seconds": start, "end_seconds": end}
+        )
+
+    # A dedicated 2 s digital-silence region: pure-zero windows must hit the
+    # 0 dB -> low_snr path (RMS < 1e-6), which the 0.5 s gaps are too short for.
+    silence_start, silence_end = timeline.append(
+        np.zeros(2 * SAMPLE_RATE, dtype=np.float32)
+    )
+
+    audio = timeline.audio
+    total_seconds = len(audio) / SAMPLE_RATE
+    windows, same_pairs, diff_pairs = _build_windows_and_pairs(
+        audio,
+        utterances,
+        placed,
+        noisy_entries,
+        silence_start,
+        silence_end,
+        total_seconds,
+    )
 
     # --- transcription + diarization clips --------------------------------
     with tempfile.TemporaryDirectory() as tmp:
@@ -421,15 +566,7 @@ def main() -> int:
     transcribe_sha = _write_wav(CORPUS_DIR / "transcribe-short.wav", transcribe_audio)
     diarize_sha = _write_wav(CORPUS_DIR / "diarize-3speaker.wav", d_timeline.audio)
 
-    (CORPUS_DIR / "embed-windows.json").write_text(
-        json.dumps({"wav": "embed-corpus.wav", "windows": windows}, indent=2) + "\n"
-    )
-    (CORPUS_DIR / "embed-pairs.json").write_text(
-        json.dumps(
-            {"same_speaker_pairs": same_pairs, "different_speaker_pairs": diff_pairs},
-            indent=2,
-        ) + "\n"
-    )
+    _write_windows_and_pairs(windows, same_pairs, diff_pairs)
     (CORPUS_DIR / "manifest.json").write_text(
         json.dumps(
             {
@@ -466,9 +603,7 @@ def main() -> int:
         ) + "\n"
     )
 
-    n_skip = sum(1 for w in windows if w["expected_skip_reason"])
-    print(f"embed-corpus.wav: {total_seconds:.1f}s, {len(windows)} windows "
-          f"({n_skip} expected skips), {len(same_pairs)} same / {len(diff_pairs)} diff pairs")
+    _print_embed_summary(total_seconds, windows, same_pairs, diff_pairs)
     print(f"transcribe-short.wav: {len(transcribe_audio) / SAMPLE_RATE:.1f}s")
     print(f"diarize-3speaker.wav: {len(d_timeline.audio) / SAMPLE_RATE:.1f}s, "
           f"{len(d_turns)} turns")

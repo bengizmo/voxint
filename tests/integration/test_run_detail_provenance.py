@@ -228,7 +228,7 @@ def test_render_surfaces_diarizer_and_embedder_identity(
                             "reachable": True,
                             "model": "pyannote/speaker-diarization-3.1",
                         },
-                        embedder={"reachable": True, "model": "titanet-large-v1"},
+                        embedder={"reachable": True, "model": "titanet-large-v2"},
                     )
                 },
             ),
@@ -236,7 +236,7 @@ def test_render_surfaces_diarizer_and_embedder_identity(
     )
     body = client.get(f"/runs/{run_id}").text
     assert "pyannote/speaker-diarization-3.1" in body
-    assert "titanet-large-v1" in body
+    assert "titanet-large-v2" in body
 
 
 def _seed_run_with_prompt(

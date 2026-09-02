@@ -43,7 +43,7 @@ def _stages() -> dict[str, StageProvenance]:
                     reachable=True, model="speaker-diarization-3.1"
                 ),
                 "embedder": StageRole(
-                    reachable=True, model="titanet-large-v1"
+                    reachable=True, model="titanet-large-v2"
                 ),
             },
         ),

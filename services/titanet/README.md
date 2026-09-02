@@ -8,7 +8,7 @@ Speaker embeddings. Contract:
 
 NVIDIA NeMo **TitaNet-Large** (`nvidia/speakerverification_en_titanet_large`),
 192-dim, weights baked into the image (ungated). Embedding space id:
-**`titanet-large-v1`**. The id versions the model *and* the preprocessing chain
+**`titanet-large-v2`**. The id versions the model *and* the preprocessing chain
 (noise reduction → −16 LUFS → peak 0.95 → L2). Change either one and you get a
 new space id; vectors from different spaces must never be compared.
 

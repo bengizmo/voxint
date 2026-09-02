@@ -8,7 +8,7 @@
     ]
   },
   "response": {
-    "embedding_space": "titanet-large-v1",
+    "embedding_space": "titanet-large-v2",
     "results": [
       {"embedding": "__FILL_192__", "snr_db": 21.4, "skip_reason": null},
       {"embedding": null, "snr_db": null, "skip_reason": "too_short"},

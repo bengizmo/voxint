@@ -34,7 +34,7 @@ from voxint.db.models import (
 )
 from voxint.speakers.roster import merge_speakers
 
-SPACE = "titanet-large-v1"
+SPACE = "titanet-large-v2"
 WORDS = ["alpha ", "beta ", "gamma ", "delta"]
 RAW = "alpha beta gamma delta"
 

@@ -256,7 +256,7 @@ It is built in lanes; **landed so far:**
   runs PREPARE → transcribe → diarize → embed in-process against the running
   services, and asserts the persistence invariants: run COMPLETED, exactly one
   `preprocessed_audio` artifact normalized to 16 kHz mono, non-empty transcript
-  segments, diarization turns all embedded in `titanet-large-v1`, and a
+  segments, diarization turns all embedded in `titanet-large-v2`, and a
   `duration_seconds` populated by the real PREPARE stage. Assertions are on
   *ranges and shape*, never exact transcript text (real ASR is not
   bit-deterministic). Two serial runs are checked for clean repetition with no
@@ -310,7 +310,7 @@ It is built in lanes; **landed so far:**
   (mint CSRF from `state.env` → onboard → `/submit` → poll `export.json`), so it
   exercises the API→enqueue→**Celery worker** path the in-process pipeline lane
   above never touches, and reads back the durable invariants (run + all six stages
-  `completed`, non-empty ASR text, diarization turns embedded in `titanet-large-v1`
+  `completed`, non-empty ASR text, diarization turns embedded in `titanet-large-v2`
   at 192 dims, and zero operator-enrollment rows). Finally it checks `backup` +
   **restart-survival** persistence (down → up → re-verify), and in the opt-in
   **`--with-restore`** rung (Part C) an honest destructive-recovery gate:

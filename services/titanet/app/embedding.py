@@ -1,7 +1,7 @@
 """TitaNet embedding core — engine-independent pieces + the engine factory.
 
 Model: NVIDIA NeMo TitaNet-Large, 192-dim speaker embeddings. The per-window
-preprocessing chain is part of the ``titanet-large-v1`` embedding-space
+preprocessing chain is part of the ``titanet-large-v2`` embedding-space
 definition and lives in ``app.preprocess`` (the normative definition is in
 ``docs/gpu-contracts.md``) — every engine consumes that module; changing any
 step means a new space id, never a silent swap.
@@ -14,11 +14,12 @@ Engines (``EMBED_ENGINE`` env var, fail-fast on unknown values):
   self-exported graph (``tools/export_titanet_onnx.py``) + the reimplemented
   mel front-end (``app.mel``); torch-free.
 
-The window loop itself (decode → slice → skip gates → normalize → model → L2)
-is implemented ONCE in :class:`TitanetEmbedderBase`; an engine only supplies
-audio decoding and the model call. That keeps the skip semantics and the
-preprocessing chain structurally identical across engines instead of relying
-on review to catch drift.
+The window loop itself (decode → slice → skip gates → split into capped
+sub-windows → normalize → model → L2 → mean-pool and re-normalize) is
+implemented ONCE in :class:`TitanetEmbedderBase`; an engine only supplies audio
+decoding and the model call. That keeps the skip semantics and preprocessing
+chain structurally identical across engines instead of relying on review to
+catch drift.
 
 This module stays importable without torch/NeMo/onnxruntime (contract-test
 requirement); engine modules import their stacks lazily.
@@ -28,14 +29,17 @@ import logging
 import os
 import threading
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
 from app.preprocess import (
     MIN_WINDOW_SECONDS,
+    WINDOW_CAP_SECONDS,
     calculate_snr_db,
     l2_normalize,
     normalize_audio_for_embedding,
+    subwindow_bounds,
     window_sample_bounds,
 )
 
@@ -66,7 +70,7 @@ def resolve_device_name(device_type: str) -> str:
 class WindowOutcome:
     embedding: list[float] | None
     snr_db: float | None
-    skip_reason: str | None
+    skip_reason: Literal["too_short", "low_snr"] | None
 
 
 class TitanetEmbedderBase:
@@ -79,6 +83,7 @@ class TitanetEmbedderBase:
         self.model_name = MODEL_NAME
         self.device_name = "cpu"
         self.snr_threshold_db = float(os.getenv("TITANET_SNR_THRESHOLD_DB", "5.0"))
+        self.window_cap_seconds = WINDOW_CAP_SECONDS
         # Model inference is single-flight on every engine: NeMo is not
         # concurrency-safe, and keeping ONNX identical removes a behavioral
         # variable from parity comparisons.
@@ -105,6 +110,14 @@ class TitanetEmbedderBase:
     def cleanup_memory(self) -> None:
         """Post-request memory hook; engines override when their runtime needs it."""
 
+    def _embed_one_window(self, segment: np.ndarray) -> np.ndarray:
+        """Preprocess and embed one model-safe window, returning a unit vector."""
+        normalized = normalize_audio_for_embedding(segment, SAMPLE_RATE)
+        embedding_np = self._embed_normalized(normalized.astype(np.float32))
+        if embedding_np.ndim > 1:
+            embedding_np = embedding_np.mean(axis=0)
+        return l2_normalize(embedding_np)
+
     def embed_windows(
         self, audio_path: str, windows: list[tuple[float, float]]
     ) -> list[WindowOutcome]:
@@ -113,7 +126,7 @@ class TitanetEmbedderBase:
 
         outcomes: list[WindowOutcome] = []
         with self._lock:
-            for start_s, end_s in windows:
+            for window_index, (start_s, end_s) in enumerate(windows):
                 # Skip precedence (contract): too_short (no SNR measured) → low_snr.
                 start_sample, end_sample = window_sample_bounds(
                     start_s, end_s, SAMPLE_RATE, len(audio)
@@ -132,11 +145,30 @@ class TitanetEmbedderBase:
                     )
                     continue
 
-                normalized = normalize_audio_for_embedding(segment, SAMPLE_RATE)
-                embedding_np = self._embed_normalized(normalized.astype(np.float32))
-                if embedding_np.ndim > 1:
-                    embedding_np = embedding_np.mean(axis=0)
-                embedding_np = l2_normalize(embedding_np)
+                cap_samples = int(self.window_cap_seconds * SAMPLE_RATE)
+                bounds = subwindow_bounds(
+                    len(segment), cap_samples, int(MIN_WINDOW_SECONDS * SAMPLE_RATE)
+                )
+                if not bounds:
+                    raise RuntimeError(
+                        f"subwindow_bounds produced no pieces "
+                        f"(n={len(segment)}, cap={cap_samples})"
+                    )
+                if len(segment) > cap_samples:
+                    logger.debug(
+                        "Splitting window %d into %d pieces", window_index, len(bounds)
+                    )
+                piece_embeddings = [
+                    self._embed_one_window(segment[piece_start:piece_end])
+                    for piece_start, piece_end in bounds
+                ]
+                if len(piece_embeddings) == 1:
+                    embedding_np = piece_embeddings[0]
+                else:
+                    stacked = np.stack(piece_embeddings).astype(np.float32, copy=False)
+                    embedding_np = l2_normalize(
+                        np.mean(stacked, axis=0, dtype=np.float32)
+                    )
 
                 outcomes.append(
                     WindowOutcome(
