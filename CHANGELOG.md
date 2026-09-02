@@ -13,7 +13,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   tooltips between 800px and 1120px, and the narrow-screen disclosure
   shows labels too instead of unlabelled icons. The theme switch
   (System / Light / Dark) moves out of the top bar into the rail footer,
-  so it is in the same place on every page and for every user; the
+  so it is in the same place on every page that has the rail, for
+  every user (the setup wizard has no rail, as before); the
   Settings Appearance radios still mirror it. The Runs activity badge
   stays attached to its icon at every width.
 - **Media library search and status filter** (#380). Server-side search

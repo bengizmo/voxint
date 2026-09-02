@@ -293,9 +293,11 @@
        hamburger (<=50rem, the block below; labels stay visible in the open
        disclosure). 70rem = the .lib-rail two-column floor (60rem) plus the
        expanded rail width, so a wide rail never squeezes two-column pages.
-       The two-sided band keeps the tiers disjoint: no reset needed below. */
+       The two-sided range keeps the tiers disjoint and gap-free (a fractional
+       viewport width between 800px and 801px still lands in a tier): no
+       reset needed below. */
     .icon-rail .rail-tip { display: none; }
-    @media screen and (min-width: 50.0625rem) and (max-width: 70rem) {
+    @media screen and (50rem < width <= 70rem) {
       :root { --rail-w: 52px; }
       .icon-rail { align-items: center; padding: var(--space-3) 0; }
       .icon-rail nav, .icon-rail .rail-bottom { align-items: center; }
@@ -316,14 +318,17 @@
               position: static; width: auto; max-height: none; gap: var(--space-2);
               border-right: 0; border-bottom: 1px solid var(--line);
               padding: var(--space-2); }
-      :root.js[data-mobile-nav="open"] .icon-rail nav { flex-direction: row; }
+      :root.js[data-mobile-nav="open"] .icon-rail nav { flex-direction: row;
+              flex-wrap: wrap; justify-content: center; }
       :root.js[data-mobile-nav="open"] .rail-bottom { margin-top: 0;
               flex-direction: row; }
       :root.js[data-mobile-nav="open"] .icon-rail .rail-tip { display: none; }
       .icon-rail { position: static; width: auto; max-height: none;
               flex-direction: row; justify-content: center; flex-wrap: wrap;
               border-right: 0; border-bottom: 1px solid var(--line); }
-      .icon-rail nav { flex-direction: row; }
+      .icon-rail nav { flex-direction: row; flex-wrap: wrap;
+              justify-content: center; }
+      .icon-rail .rail-link { flex: none; }
       .icon-rail .rail-tip { display: none; }
     }
     /* Print: content only — no shell chrome */
