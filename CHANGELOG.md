@@ -7,6 +7,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Labelled navigation rail and one theme control** (#384, UX audit S15).
+  The left rail now shows text labels next to its icons at desktop width
+  (wider than 1120px), collapses to the familiar icon-only rail with hover
+  tooltips between 800px and 1120px, and the narrow-screen disclosure
+  shows labels too instead of unlabelled icons. The theme switch
+  (System / Light / Dark) moves out of the top bar into the rail footer,
+  so it is in the same place on every page that has the rail, for
+  every user (the setup wizard has no rail, as before); the
+  Settings Appearance radios still mirror it. The Runs activity badge
+  stays attached to its icon at every width.
 - **Media library search and status filter** (#380). Server-side search
   (case-insensitive substring over display name, source path, and folder
   name) and a status filter (Needs review / Failed / Reviewed / All).
