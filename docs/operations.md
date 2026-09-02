@@ -827,14 +827,16 @@ with the presentation seam, so neither can drift from the other exports.
 The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
 `VOXINT_PASSWORD`) for operators who prefer not to shell into a container:
 
-- **`GET /runs`**: an execution-history browser, newest-first, keyset-paged
-  (`RUNS_PAGE_SIZE`, default 50), with **orthogonal** filters `status=`,
+- **`GET /runs`**: the canonical lifecycle browser, keyset-paged
+  (`RUNS_PAGE_SIZE`, default 50), with `view=needs_attention|active|failed|all`
+  tabs, a collapsible filter bar, a pipeline health summary, and filters `status=`,
   `review=needed|resolved|claimed`, and `language=` (an exact match on the
   language whisper detected, its options limited to codes some run actually
   carries; #124). Each row carries a **Language** column showing the detected
   language, or a dash for a run not yet transcribed or one that predates the
-  feature. **`GET /runs/{id}`** shows the run detail and
-  the per-stage attempt ledger (the same data as `voxint status`), with
+  feature. **`GET /runs/{id}`** shows the run detail, with the per-stage attempt
+  ledger inside the collapsed **Technical details** section (the same data as
+  `voxint status`), with
   transcript and audio links when present. A **Pipeline models** block renders
   the per-attempt model identity recorded for the transcription and diarization
   stages (from each stage's latest completed attempt, so a retried stage shows
@@ -1608,9 +1610,9 @@ All commands run under `voxint user`:
 
 | Command | Description |
 |---|---|
-| `voxint user create <username> [--role admin\|reviewer]` | Create a user. Prompts for password via `getpass` (never a CLI argument). Default role is `reviewer`. |
+| `voxint user create <username> [--role admin\|reviewer\|viewer]` | Create a user. Prompts for password via `getpass` (never a CLI argument). Default role is `reviewer`. |
 | `voxint user list` | List all accounts with role and status. |
-| `voxint user set-role <username> <admin\|reviewer>` | Change a user's role. Revokes all active sessions. |
+| `voxint user set-role <username> <admin\|reviewer\|viewer>` | Change a user's role. Revokes all active sessions. |
 | `voxint user set-password <username>` | Reset a user's password. Revokes all active sessions. |
 | `voxint user delete <username>` | Soft-disable a user (sets `disabled_at`). Revokes all active sessions. The last admin cannot be deleted. |
 
@@ -1623,9 +1625,14 @@ rejected. Passwords are hashed with Argon2id.
 |---|---|---|---|
 | `admin` | Full | Yes | Yes |
 | `reviewer` | Full | No (403) | No (403) |
+| `viewer` | Read-only | No (403) | No (403) |
 
-Both roles can claim runs, make decisions, enroll speakers, and export
-transcripts. The Settings page (`/settings`) and plugin mutation routes
+Admins and reviewers can claim runs, make decisions, enroll speakers, and
+export transcripts. Viewers can browse transcripts, results, and exports, but
+cannot submit media, adjudicate, correct, annotate, or change settings. This is
+enforced server-side for console and API mutation routes. Migration 0057 adds
+the `viewer` value to the database role constraint. The Settings page
+(`/settings`) and plugin mutation routes
 (synthdetect settings toggle, manual scoring trigger) are restricted to
 admins.
 
@@ -1677,12 +1684,14 @@ by their per-run claim token.
 | `GET /` | Home: needs-attention cards (continue review, unidentified voices, failed runs), quick actions, windowed activity counts (`?window=hour|day|week|all`), recent activity |
 | `GET /dashboard` | Permanent 303 redirect to `/` (the dashboard folded into Home) |
 | `GET /resources` | Permanent 303 redirect to `/settings/status` (the hardware view folded into Settings) |
-| `GET /runs` | Execution-history browser (keyset-paged; `status=` / `review=` filters) |
-| `GET /runs/{run_id}` | Run detail + per-stage attempt ledger |
+| `GET /runs` | Canonical lifecycle browser: `view=needs_attention\|active\|failed\|all` tabs, collapsible filters, and a pipeline health summary |
+| `GET /jobs`, `GET /jobs/{run_id}` | Compatibility routes; 303 redirects to `/runs` or `/runs/{run_id}` |
+| `GET /runs/{run_id}` | Run detail; the per-stage attempt ledger is in the collapsed Technical details section |
 | `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML); `&read=1&timestamps=false` renders the on-screen read-mode prose view |
 | `POST /submit` | Bounded browser file upload → immutable uuid-namespaced media item (redirects to `/media` when `console_media_enabled` is on) |
 | `POST /fetch` | yt-dlp URL ingestion (redirects to `/media` when `console_media_enabled` is on) |
 | `POST /runs/{run_id}/requeue` | Exact-revision (CAS) requeue of a FAILED run |
+| `POST /runs/bulk-retry` | Bulk retry for a grouped failure on the Failed tab; each item carries its expected revision |
 | `GET /review` | Review queue |
 | `POST /review/{run_id}/claim` · `/release` | Claim / release an exclusive review slot |
 | `GET /review/{run_id}` | Adjudication workbench |
@@ -1690,6 +1699,10 @@ by their per-run claim token.
 | `POST /review/{run_id}/labels/{label}/enroll` | Enroll a label's audio as a roster speaker |
 | `GET /review/{run_id}/export.{txt,md,srt,vtt,json}?text=corrected\|raw\|enhanced` | Speaker-attributed transcript export (plain text, Markdown, SubRip, WebVTT, JSON); `txt`/`md` accept `&timestamps=false` for the reading copy |
 | `GET /review/{run_id}/export.rttm` | Diarization RTTM (raw labels, run-UUID file id) |
+| `GET /review/{run_id}/annotations/evidence-pack` | Printable evidence pack for the run's highlights and provenance; repeated `tag=` parameters filter it |
+| `GET /review/{run_id}/annotations/{annotation_id}/export.zip` | One highlight's Markdown quote, JSON provenance manifest, and extracted clip in a ZIP |
+| `GET /review/{run_id}/annotations/export.zip` | ZIP for all highlights matching repeated `tag=` filters |
+| `GET /media?q={search}&status=needs_review\|failed\|reviewed` | Media library search and status filter; omit `status` for All |
 | `GET /media/{id}/editor` | Media detail page: run selection (latest completed by default, `?run=` override), claim-token verification (stale/absent = read-only), transcript with speaker palette and verified-progress counter, run chooser, media metadata rail (#156) |
 | `GET /media/{run_id}` | Gated media serving (Range-aware) for the workbench player |
 | `GET /login` · `POST /login` · `POST /logout` | Multi-user session auth (login form, session create, session destroy); returns 404 when `VOXINT_MULTI_USER` is false |

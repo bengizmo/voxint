@@ -6,6 +6,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+
+## [0.32.0] - 2026-09-02
+
 ### Added
 - **Low-data rendering for project widgets** (#385, UX audit S16). With the
   one to ten recordings a new project actually has, the overview widgets
@@ -45,7 +48,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   all NVIDIA and AMD GPUs, measures free VRAM, and recommends the compute tier
   that fits. When a GPU is occupied (e.g. by a local LLM), the installer
   explains why and defaults to CPU.
-
 - **Runs canonical lifecycle surface** (#381, part 1). `/runs` becomes the
   canonical lifecycle view: four lifecycle tabs (Needs attention / Active /
   Failed / All), title-first rows with the run ID demoted to a copyable
@@ -60,6 +62,40 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   error label, count, and a "Retry all" button. The bulk retry endpoint
   uses per-item CAS with savepoints for partial-failure safety, CSRF
   protection, and a per-item result page.
+- **Single-operator auto-claim** (#374). When multi-user mode is off, the
+  editor and workbench auto-claim on mount, removing the manual "Claim for
+  editing" / "Claim for review" friction. The review queue hides the
+  "Claimed by" column. A non-rotating `refresh` endpoint replaces the
+  heartbeat's previous re-claim, so a stale tab receives 409 and drops to a
+  manual "Resume editing here" action with no two-tab heartbeat fight.
+  Visibility-aware: the heartbeat pauses while the tab is hidden and fires
+  an immediate refresh on re-visible. Multi-user behavior is unchanged.
+- **Viewer role** (#363). A new read-only `viewer` role: viewers can browse
+  transcripts, results, and exports but cannot submit media, adjudicate,
+  correct, annotate, or change any settings. Enforced server-side with a
+  blanket write gate on all mutation routes (console and API); the gate
+  allowlists only auth routes (login/logout). Template context exposes a
+  `can_write` boolean for UI affordance hiding. CLI `user create --role`
+  and `user set-role` accept `viewer`. Migration 0057 widens the DB CHECK
+  constraint. Dark-shipped behind the existing `console_users_enabled` flag
+  (user management page only).
+- **Evidence pack** (#331, Phase 7 remainder). A printable page of a run's
+  highlights with their provenance (speakers, timing, tags, notes, source
+  text hash, clip references, pipeline model identity), linked from the
+  review transcript. Print or save it as a PDF from the browser; no PDF
+  library added. Stale highlights print with a visible warning instead of
+  blocking the document.
+- **Bundled quote export** (#281). One click downloads a highlight's Markdown
+  pull-quote, JSON provenance manifest, and audio clip (when one has been
+  extracted) as a single ZIP, per highlight or for every highlight matching
+  the current tag filter. The bundled files match the standalone exports
+  byte for byte (the manifest differs only in its export timestamp). No new
+  dependencies (stdlib zipfile).
+- **Highlight tag rollup on Explore** (#331, Phase 7 remainder). The Explore
+  page now shows how many highlights carry each tag, corpus-wide or narrowed
+  by the project filter. Computed live with one SQL query (no cache, no new
+  dependencies); archived tags and deleted highlights are excluded, and
+  highlights on runs still under review count from the moment they exist.
 
 ### Changed
 - **Queue, speakers, explore polish** (#383). Review queue rows show the
@@ -72,10 +108,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   capability hint.
 - `/jobs` now redirects to the canonical `/runs` surface; old bookmarks and
   links continue to work (#382)
-
-### Removed
-- `CONSOLE_JOBS_ENABLED` dark-ship flag; the sidebar Jobs entry now always
-  points at `/runs` (#382)
 - **Settings control model** (#379). Every tri-state feature setting
   (On / Off / Use installation setting) is now a toggle switch showing
   the effective state. Overridden settings show a "Changed" badge and a
@@ -117,21 +149,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   disclosure). The breadcrumb shows run status instead of duplicating the
   live progress counter. A new Run card shows status, error, and
   Retry/Re-run actions directly on the editor page.
-
-### Added
-- **Single-operator auto-claim** (#374). When multi-user mode is off, the
-  editor and workbench auto-claim on mount, removing the manual "Claim for
-  editing" / "Claim for review" friction. The review queue hides the
-  "Claimed by" column. A non-rotating `refresh` endpoint replaces the
-  heartbeat's previous re-claim, so a stale tab receives 409 and drops to a
-  manual "Resume editing here" action with no two-tab heartbeat fight.
-  Visibility-aware: the heartbeat pauses while the tab is hidden and fires
-  an immediate refresh on re-visible. Multi-user behavior is unchanged.
-
-### Changed
 - **Type foundation** (#373). Base font raised from 13px to 15px for reading
   surfaces; grid-tables and HTML tables use a new dense token (13px) so they
   keep their compact density.
+
+### Removed
+- `CONSOLE_JOBS_ENABLED` dark-ship flag; the sidebar Jobs entry now always
+  points at `/runs` (#382)
 
 ### Fixed
 - **Three review-console islands never hydrated** (found by #385). The
@@ -163,36 +187,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - **Contradictory empty-state copy** (#370). "No runs for this media file
   yet." appeared alongside listed failed runs. Now reads "No completed runs
   yet." when runs exist but none completed.
-
-### Added
-- **Viewer role** (#363). A new read-only `viewer` role: viewers can browse
-  transcripts, results, and exports but cannot submit media, adjudicate,
-  correct, annotate, or change any settings. Enforced server-side with a
-  blanket write gate on all mutation routes (console and API); the gate
-  allowlists only auth routes (login/logout). Template context exposes a
-  `can_write` boolean for UI affordance hiding. CLI `user create --role`
-  and `user set-role` accept `viewer`. Migration 0057 widens the DB CHECK
-  constraint. Dark-shipped behind the existing `console_users_enabled` flag
-  (user management page only).
-- **Evidence pack** (#331, Phase 7 remainder). A printable page of a run's
-  highlights with their provenance (speakers, timing, tags, notes, source
-  text hash, clip references, pipeline model identity), linked from the
-  review transcript. Print or save it as a PDF from the browser; no PDF
-  library added. Stale highlights print with a visible warning instead of
-  blocking the document.
-- **Bundled quote export** (#281). One click downloads a highlight's Markdown
-  pull-quote, JSON provenance manifest, and audio clip (when one has been
-  extracted) as a single ZIP, per highlight or for every highlight matching
-  the current tag filter. The bundled files match the standalone exports
-  byte for byte (the manifest differs only in its export timestamp). No new
-  dependencies (stdlib zipfile).
-- **Highlight tag rollup on Explore** (#331, Phase 7 remainder). The Explore
-  page now shows how many highlights carry each tag, corpus-wide or narrowed
-  by the project filter. Computed live with one SQL query (no cache, no new
-  dependencies); archived tags and deleted highlights are excluded, and
-  highlights on runs still under review count from the moment they exist.
-
-### Fixed
 - **Copy and behavior bug batch** (#371). Explore header now pluralizes
   correctly ("1 hour" not "1 hours"). `/login` redirects to `/` with a 302
   when multi-user mode is off (was a raw 404). Backups copy on the Database

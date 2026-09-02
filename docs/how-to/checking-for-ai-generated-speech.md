@@ -106,5 +106,5 @@ Go to **Settings → Synthetic-speech detection** and turn off **Enabled**.
 No new recordings will be scored. Scores that were already produced remain
 visible on the recordings that have them.
 
-> Jobs that were already queued when you turned it off may still complete. This
+> Runs that were already queued when you turned it off may still complete. This
 > is normal and not a sign that the setting did not take effect.

@@ -32,7 +32,7 @@ Two things to understand from the start:
 Open **Speakers** in the sidebar (or go to
 [http://127.0.0.1:8080/speakers](http://127.0.0.1:8080/speakers)). The roster
 is a table showing each speaker's initials badge, name, status (verified,
-needs you, or unknown), file count, minutes of speech, voice match strength,
+needs review, or unknown), file count, minutes of speech, voice match strength,
 and when they were last heard. An amber TO DO strip at the top calls out
 voices waiting for a name and pending name suggestions. If two or more
 speakers look like they might be the same person (high voice-match similarity),
@@ -173,6 +173,12 @@ the **timed** version.
 If you have translated the transcript, the menu also lists a row of downloads
 per translated language. See
 [Translate transcripts](translating-transcripts.md).
+
+The **Highlights** panel also offers a bundled quote download. Click **Bundle**
+on one highlight to download its Markdown pull quote, a JSON file recording
+where it came from, and its audio clip when you have extracted one, all in a
+single ZIP file. Click **Download all (.zip)** to do the same for every
+highlight shown by your current tag filter.
 
 | Format | Use this when… |
 |---|---|

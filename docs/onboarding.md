@@ -179,7 +179,8 @@ is the durable entry point for configuration. Settings are organized into tabs:
   translation, corrections, glossary, and semantic search.
 
 Additional read-only tabs (Status, Hardware, Database, Plugins) show system
-health and configuration. All settings save in place with their own CSRF tokens.
+health and configuration. When multi-user mode is on, the tab strip also has a
+**Users** tab. All settings save in place with their own CSRF tokens.
 
 Key actions available after onboarding:
 
