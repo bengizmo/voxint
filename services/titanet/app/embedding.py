@@ -26,7 +26,6 @@ requirement); engine modules import their stacks lazily.
 """
 
 import logging
-import math
 import os
 import threading
 from dataclasses import dataclass
@@ -84,22 +83,7 @@ class TitanetEmbedderBase:
         self.model_name = MODEL_NAME
         self.device_name = "cpu"
         self.snr_threshold_db = float(os.getenv("TITANET_SNR_THRESHOLD_DB", "5.0"))
-        cap_value = os.getenv("TITANET_WINDOW_CAP_SECONDS", str(WINDOW_CAP_SECONDS))
-        try:
-            self.window_cap_seconds = float(cap_value)
-        except ValueError as exc:
-            raise ValueError(
-                "TITANET_WINDOW_CAP_SECONDS must be a finite float greater than or equal "
-                f"to {MIN_WINDOW_SECONDS}"
-            ) from exc
-        if (
-            not math.isfinite(self.window_cap_seconds)
-            or self.window_cap_seconds < MIN_WINDOW_SECONDS
-        ):
-            raise ValueError(
-                "TITANET_WINDOW_CAP_SECONDS must be a finite float greater than or equal "
-                f"to {MIN_WINDOW_SECONDS}"
-            )
+        self.window_cap_seconds = WINDOW_CAP_SECONDS
         # Model inference is single-flight on every engine: NeMo is not
         # concurrency-safe, and keeping ONNX identical removes a behavioral
         # variable from parity comparisons.
@@ -165,6 +149,11 @@ class TitanetEmbedderBase:
                 bounds = subwindow_bounds(
                     len(segment), cap_samples, int(MIN_WINDOW_SECONDS * SAMPLE_RATE)
                 )
+                if not bounds:
+                    raise RuntimeError(
+                        f"subwindow_bounds produced no pieces "
+                        f"(n={len(segment)}, cap={cap_samples})"
+                    )
                 if len(segment) > cap_samples:
                     logger.debug(
                         "Splitting window %d into %d pieces", window_index, len(bounds)
@@ -176,8 +165,9 @@ class TitanetEmbedderBase:
                 if len(piece_embeddings) == 1:
                     embedding_np = piece_embeddings[0]
                 else:
+                    stacked = np.stack(piece_embeddings).astype(np.float32, copy=False)
                     embedding_np = l2_normalize(
-                        np.mean(np.stack(piece_embeddings), axis=0)
+                        np.mean(stacked, axis=0, dtype=np.float32)
                     )
 
                 outcomes.append(

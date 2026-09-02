@@ -48,7 +48,7 @@ def window_sample_bounds(
     clamped to the media length. Changing this math changes which samples every
     engine embeds, so it lives here rather than inline in any engine.
     """
-    start_sample = int(start_seconds * sample_rate)
+    start_sample = min(int(start_seconds * sample_rate), total_samples)
     end_sample = min(int(end_seconds * sample_rate), total_samples)
     return start_sample, end_sample
 

@@ -444,9 +444,12 @@ def _run_windows_only() -> int:
     silence_lo, silence_hi = preprocess.window_sample_bounds(
         silence_start, silence_end, SAMPLE_RATE, len(audio)
     )
-    assert np.all(audio[silence_lo:silence_hi] == 0.0), (
-        "derived digital-silence region contains nonzero samples"
-    )
+    if not np.all(audio[silence_lo:silence_hi] == 0.0):
+        print(
+            "error: derived digital-silence region contains nonzero samples",
+            file=sys.stderr,
+        )
+        return 1
 
     windows, same_pairs, diff_pairs = _build_windows_and_pairs(
         audio,

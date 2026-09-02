@@ -1,7 +1,8 @@
-"""Torch-free service logic: whisper's repetition detector, pyannote's post-processing.
+"""Torch-free service logic: whisper, pyannote, and titanet contract behaviors.
 
 Not wire-schema tests, but they pin the behaviors the contract documents
-(suspect tagging semantics, post-processing operation order, overlap_seconds).
+(suspect tagging semantics, post-processing operation order, overlap_seconds,
+titanet window-cap sub-windowing and pooling).
 """
 
 import sys
@@ -188,7 +189,6 @@ class TestWindowCapSubwindowing:
 
         monkeypatch.setattr(embedding, "normalize_audio_for_embedding", identity)
         monkeypatch.setattr(embedding, "calculate_snr_db", high_snr)
-        monkeypatch.delenv("TITANET_WINDOW_CAP_SECONDS", raising=False)
         return preprocess_lengths, snr_lengths
 
     @pytest.mark.parametrize(
@@ -326,11 +326,13 @@ class TestWindowCapSubwindowing:
         assert stub.model_input_lengths == []
         assert preprocess_lengths == []
 
-    def test_env_override_lowers_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_smaller_cap_produces_more_pieces(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         preprocess_lengths, _ = self._patch_happy_path(monkeypatch)
-        monkeypatch.setenv("TITANET_WINDOW_CAP_SECONDS", "10")
         length = 25 * embedding.SAMPLE_RATE
         stub = self.StubEmbedder(length)
+        stub.window_cap_seconds = 10.0
 
         stub.embed_windows("unused", [(0.0, 25.0)])
 
@@ -341,13 +343,46 @@ class TestWindowCapSubwindowing:
         ]
         assert preprocess_lengths == stub.model_input_lengths
 
-    @pytest.mark.parametrize("value", ["0.5", "abc", "inf"])
-    def test_invalid_env_fails_at_construction(
-        self, monkeypatch: pytest.MonkeyPatch, value: str
+    def test_runt_dropped_equals_exact_cap(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("TITANET_WINDOW_CAP_SECONDS", value)
-        with pytest.raises(ValueError, match="TITANET_WINDOW_CAP_SECONDS"):
-            self.StubEmbedder(embedding.SAMPLE_RATE)
+        """A cap+0.5s window must produce the same vector as an exact-cap window."""
+        self._patch_happy_path(monkeypatch)
+        cap_samples = int(preprocess.WINDOW_CAP_SECONDS * embedding.SAMPLE_RATE)
+        runt_length = cap_samples + embedding.SAMPLE_RATE // 2
+
+        stub_exact = self.StubEmbedder(cap_samples)
+        stub_runt = self.StubEmbedder(runt_length)
+
+        exact_end = cap_samples / embedding.SAMPLE_RATE
+        runt_end = runt_length / embedding.SAMPLE_RATE
+        out_exact = stub_exact.embed_windows("unused", [(0.0, exact_end)])[0]
+        out_runt = stub_runt.embed_windows("unused", [(0.0, runt_end)])[0]
+
+        assert np.array_equal(np.asarray(out_exact.embedding), np.asarray(out_runt.embedding))
+        assert stub_runt.model_input_lengths == [cap_samples]
+
+    def test_heterogeneous_pieces_pool_correctly(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pooling with unequal piece lengths exercises re-L2 on divergent vectors."""
+        self._patch_happy_path(monkeypatch)
+        cap_samples = int(preprocess.WINDOW_CAP_SECONDS * embedding.SAMPLE_RATE)
+        tail = 2 * embedding.SAMPLE_RATE
+        decoded_length = cap_samples + tail
+        stub = self.StubEmbedder(decoded_length)
+
+        outcome = stub.embed_windows(
+            "unused", [(0.0, decoded_length / embedding.SAMPLE_RATE)]
+        )[0]
+
+        u1 = preprocess.l2_normalize(stub.vector_for_length(cap_samples))
+        u2 = preprocess.l2_normalize(stub.vector_for_length(tail))
+        expected = preprocess.l2_normalize(np.mean(np.stack([u1, u2]), axis=0))
+        actual = np.asarray(outcome.embedding)
+
+        assert np.allclose(actual, expected)
+        assert np.linalg.norm(actual) == pytest.approx(1.0)
 
 
 class TestWindowSampleBounds:
@@ -1765,7 +1800,7 @@ class TestOrtProviderSelection:
 class TestMelConstantsPinnedToCheckpoint:
     """app/mel.py constants must match the checkpoint's dumped preprocessor
     config (tests/parity/fixtures/onnx/preprocessor-config.json) — the mel
-    front-end is part of the titanet-large-v1 space definition."""
+    front-end is part of the titanet-large-v2 space definition."""
 
     def test_constants_match_dumped_config(self) -> None:
         import json
@@ -2149,7 +2184,7 @@ class TestCpuImageProvenance:
             return out
 
         cuda, cpu = pins("requirements.txt"), pins("requirements.cpu.txt")
-        # The full preprocessing chain that DEFINES titanet-large-v1, plus its
+        # The full preprocessing chain that DEFINES titanet-large-v2, plus its
         # numerics substrate — every one must match the CUDA image exactly.
         for pkg in ("numpy", "librosa", "soundfile", "scipy", "numba",
                     "pyloudnorm", "noisereduce"):

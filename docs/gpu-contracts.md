@@ -494,9 +494,9 @@ Per-window processing chain, in order:
    that would fit exactly) is excluded. The CUDA references were generated
    with this exact tiling; changing it changes `snr_db` values and gate
    outcomes. A successful result reports this whole-window `snr_db`.
-3a. **Capped sub-windows**: let `cap = TITANET_WINDOW_CAP_SECONDS` (default
-   30.0 s) and `cap_samples = int(cap * 16000)`. The service validates `cap` at
-   startup as finite and at least 1.0 s. A gated slice longer than
+3a. **Capped sub-windows**: let `cap = 30.0` s (the `WINDOW_CAP_SECONDS`
+   constant in `preprocess.py`) and `cap_samples = int(cap * 16000) = 480000`.
+   The cap is a fixed parameter of this space definition. A gated slice longer than
    `cap_samples` is cut into contiguous, non-overlapping pieces
    `[i, min(i + cap_samples, n))` for `i = 0, cap_samples, 2 * cap_samples, ...`.
    A final piece shorter than 1.0 s (16000 samples) is dropped. The first piece
@@ -515,9 +515,10 @@ Per-window processing chain, in order:
    not embed NeMo must reproduce this front-end and prove it at the mel level.
 8. **Piece output**: L2 normalization of each 192-dim vector.
 9. **Window output**: when more than one piece survives, average the per-piece
-   unit vectors elementwise and L2-normalize the result again. A single piece
-   returns its vector unchanged. Every window at or below the cap therefore
-   remains byte-identical to the v1 chain.
+   unit vectors elementwise (equal weight per piece, not per sample) and
+   L2-normalize the result again. A single piece returns its vector unchanged.
+   Every window at or below the cap therefore remains byte-identical to the
+   v1 chain.
 
 The reference implementation of steps 1–6 is
 `services/titanet/app/preprocess.py` (shared by every engine), including
