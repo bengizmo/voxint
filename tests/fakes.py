@@ -98,11 +98,14 @@ class FakeDiarizer:
 
 
 class FakeEmbedder:
+    def __init__(self, embedding_space: str = FAKE_EMBEDDING_SPACE) -> None:
+        self.embedding_space = embedding_space
+
     def embed(
         self, audio_path: Path, windows: tuple[tuple[float, float], ...]
     ) -> EmbeddingResult:
         return EmbeddingResult(
-            embedding_space=FAKE_EMBEDDING_SPACE,
+            embedding_space=self.embedding_space,
             entries=tuple(
                 # Sub-second windows are skipped, mirroring the titanet service's
                 # quality gate, so pipeline code must handle skipped entries.

@@ -1063,6 +1063,129 @@ def _speakers_auto_enroll_backfill(args: argparse.Namespace) -> int:
         engine.dispose()
 
 
+def _speakers_reembed(args: argparse.Namespace) -> int:
+    """Migrate turn vectors and their derived roster centroids in place."""
+    from voxint.api.health_probe import probe_embedding_service
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.session import build_session_factory
+    from voxint.pipeline.stages.context import build_stage_context
+    from voxint.speakers.reembed import (
+        EmbeddingSpaceDriftError,
+        build_plan,
+        candidate_run_ids,
+        discover_space_from_run,
+        reembed_run,
+        refresh_run_matches,
+    )
+
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    factory = build_session_factory(engine)
+    ctx = build_stage_context(settings)
+    try:
+        health = probe_embedding_service(settings)
+        target_space = health.embedding_space if health.up else None
+        with factory() as session:
+            candidates = candidate_run_ids(session, args.run)
+            if target_space is None:
+                if not candidates:
+                    print(
+                        "error: titanet health did not report embedding_space and no "
+                        "completed run is available for real-response discovery"
+                    )
+                    return 2
+                target_space = discover_space_from_run(
+                    session, candidates[0], ctx.embedder, settings.media_root
+                )
+            plan = build_plan(session, target_space, args.run)
+
+        print(f"target space: {plan.target_space}")
+        print(
+            f"summary: {len(plan.run_ids)} run(s), {plan.turn_count} turn(s), "
+            f"{plan.enrollment_count} enrolment row(s) affected"
+        )
+        if plan.unmigratable_count:
+            print(
+                f"unmigratable: {plan.unmigratable_count} enrolment row(s) have no "
+                "source pipeline run and will be left unchanged"
+            )
+        if args.dry_run:
+            print("dry run: no changes written")
+            return 0
+        if not plan.run_ids:
+            print("nothing to re-embed")
+            return 0
+        if not args.yes:
+            try:
+                confirmed = input("Proceed? [y/N] ").strip().lower() == "y"
+            except EOFError:
+                confirmed = False
+            if not confirmed:
+                print("aborted")
+                return 1
+
+        migrated_turns = 0
+        migrated_enrollments = 0
+        stale: list[uuid.UUID] = []
+        failures = 0
+        migrated_run_ids: list[uuid.UUID] = []
+        for run_id in plan.run_ids:
+            with factory() as session:
+                try:
+                    result = reembed_run(
+                        session,
+                        run_id,
+                        plan.target_space,
+                        ctx.embedder,
+                        settings.media_root,
+                        ctx.matching_gates,
+                    )
+                    session.commit()
+                except EmbeddingSpaceDriftError as exc:
+                    session.rollback()
+                    print(f"error: embedding space changed during migration: {exc}")
+                    print("aborting -- re-probe titanet and re-run re-embed")
+                    return 1
+                except Exception as exc:
+                    session.rollback()
+                    failures += 1
+                    print(f"{run_id}: failed - {exc}")
+                    continue
+            migrated_run_ids.append(run_id)
+            migrated_turns += result.turns
+            migrated_enrollments += result.enrollments
+            stale.extend(result.stale_enrollment_ids)
+            print(
+                f"{run_id}: {result.turns} turn(s), "
+                f"{result.enrollments} enrolment row(s) updated"
+            )
+        for run_id in migrated_run_ids:
+            with factory() as session:
+                try:
+                    refresh_run_matches(session, run_id, ctx.matching_gates)
+                    session.commit()
+                except Exception as exc:
+                    session.rollback()
+                    failures += 1
+                    print(f"{run_id}: match refresh failed - {exc}")
+        print(
+            f"result: {migrated_turns} turn(s), {migrated_enrollments} enrolment "
+            f"row(s) updated, {len(stale)} stale (manual attention), {failures} failed"
+        )
+        for row_id in stale:
+            print(f"  stale enrolment: {row_id}")
+        return 1 if failures else 0
+    finally:
+        engine.dispose()
+
+
 def _serve(args: argparse.Namespace) -> int:
     """Run the review console. The bind host/port come from Settings, so the
     default-credentials-off-loopback refusal inspects the REAL bind address —
@@ -2130,6 +2253,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="process at most N runs",
     )
     backfill_ae_p.set_defaults(fn=_speakers_auto_enroll_backfill)
+    reembed_p = speakers_sub.add_parser(
+        "re-embed",
+        help="migrate stored voice vectors to the embedder's current space",
+    )
+    reembed_p.add_argument(
+        "--run",
+        type=uuid.UUID,
+        help="process only this pipeline run UUID",
+    )
+    reembed_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report stale rows without writing them",
+    )
+    reembed_p.add_argument(
+        "--yes",
+        action="store_true",
+        help="skip the interactive confirmation",
+    )
+    reembed_p.set_defaults(fn=_speakers_reembed)
     tutorial_p = sub.add_parser("tutorial", help="bundled guided-tutorial fixtures")
     tutorial_sub = tutorial_p.add_subparsers(dest="tutorial_command", required=True)
     seed_p = tutorial_sub.add_parser(

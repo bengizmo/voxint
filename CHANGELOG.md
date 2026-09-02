@@ -6,6 +6,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **In-place voice embedding-space migration.** `voxint speakers re-embed`
+  discovers titanet's current embedding space, previews stale runs, replaces
+  stored turn vectors and sourced enrolment centroids without re-transcription,
+  and refreshes speaker matches. `voxint doctor` now warns about mixed or
+  service-stale voice embedding spaces.
+
 ### Fixed
 - **TitaNet ONNX embedding no longer crashes on diarization turns longer than
   about 120 s.** ONNX Runtime failed with a `BroadcastIterator::Init` shape
