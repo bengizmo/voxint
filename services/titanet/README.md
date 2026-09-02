@@ -8,7 +8,7 @@ Speaker embeddings. Contract:
 
 NVIDIA NeMo **TitaNet-Large** (`nvidia/speakerverification_en_titanet_large`),
 192-dim, weights baked into the image (ungated). Embedding space id:
-**`titanet-large-v1`**. The id versions the model *and* the preprocessing chain
+**`titanet-large-v2`**. The id versions the model *and* the preprocessing chain
 (noise reduction → −16 LUFS → peak 0.95 → L2). Change either one and you get a
 new space id; vectors from different spaces must never be compared.
 
@@ -22,6 +22,7 @@ positional alignment with the request is always preserved.
 |---|---|---|
 | `MEDIA_ROOT` | `/data/media` | Shared media volume (mount read-only) |
 | `TITANET_SNR_THRESHOLD_DB` | `5.0` | Windows below this SNR skip as `low_snr` |
+| `TITANET_WINDOW_CAP_SECONDS` | `30.0` | Windows longer than this are embedded as contiguous <= cap sub-windows whose unit vectors are mean-pooled and re-normalized; must be >= 1.0 |
 | `MAX_PENDING_REQUESTS` | `8` | Admission bound; beyond it → retryable 503 |
 | `PORT` | `8021` | Listen port |
 

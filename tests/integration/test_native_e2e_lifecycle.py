@@ -122,7 +122,7 @@ def _seed_completed_native_run(session: Session) -> uuid.UUID:
             end_seconds=5.0,
             label="SPEAKER_00",
             embedding=[0.01] * EMBEDDING_DIM,
-            embedding_space="titanet-large-v1",
+            embedding_space="titanet-large-v2",
         )
     )
     session.add(
@@ -133,7 +133,7 @@ def _seed_completed_native_run(session: Session) -> uuid.UUID:
             end_seconds=10.0,
             label="SPEAKER_01",
             embedding=[0.02] * EMBEDDING_DIM,
-            embedding_space="titanet-large-v1",
+            embedding_space="titanet-large-v2",
         )
     )
     session.add(
@@ -233,7 +233,7 @@ def test_invariant_wrong_embedding_space(session_factory: sessionmaker[Session])
         session.commit()
     with session_factory() as session:
         problems = check_run_invariants(session, run_id)
-    assert any("expected 'titanet-large-v1'" in p for p in problems)
+    assert any("expected 'titanet-large-v2'" in p for p in problems)
 
 
 def test_invariant_enrollment_rows_present(session_factory: sessionmaker[Session]) -> None:

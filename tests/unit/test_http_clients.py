@@ -530,7 +530,7 @@ def test_diarize_rejects_non_integer_num_speakers() -> None:
 # ---------------------------------------------------------------- embedder
 
 
-def embed_response(count: int, space: str = "titanet-large-v1") -> dict[str, Any]:
+def embed_response(count: int, space: str = "titanet-large-v2") -> dict[str, Any]:
     return {
         "embedding_space": space,
         "results": [
@@ -545,7 +545,7 @@ def test_embed_single_batch() -> None:
         HttpEmbedderClient, lambda r: httpx.Response(200, json=embed_response(2))
     )
     result = client.embed(AUDIO, ((0.0, 1.0), (1.0, 2.5)))
-    assert result.embedding_space == "titanet-large-v1"
+    assert result.embedding_space == "titanet-large-v2"
     assert len(result.entries) == 2
     assert result.entries[0].embedding is not None
     assert len(result.entries[0].embedding) == 192
@@ -553,7 +553,7 @@ def test_embed_single_batch() -> None:
 
 def test_embed_skip_entries_mapped() -> None:
     body = {
-        "embedding_space": "titanet-large-v1",
+        "embedding_space": "titanet-large-v2",
         "results": [
             {"embedding": None, "snr_db": None, "skip_reason": "too_short"},
             {"embedding": None, "snr_db": 1.2, "skip_reason": "low_snr"},
@@ -598,7 +598,7 @@ def test_embed_count_mismatch_is_protocol_error() -> None:
 
 def test_embed_wrong_dimension_is_protocol_error() -> None:
     body = {
-        "embedding_space": "titanet-large-v1",
+        "embedding_space": "titanet-large-v2",
         "results": [{"embedding": [0.01] * 191, "snr_db": 20.0, "skip_reason": None}],
     }
     client = make_client(HttpEmbedderClient, lambda r: httpx.Response(200, json=body))
@@ -608,7 +608,7 @@ def test_embed_wrong_dimension_is_protocol_error() -> None:
 
 def test_embed_both_embedding_and_skip_is_protocol_error() -> None:
     body = {
-        "embedding_space": "titanet-large-v1",
+        "embedding_space": "titanet-large-v2",
         "results": [{"embedding": [0.01] * 192, "snr_db": 20.0, "skip_reason": "low_snr"}],
     }
     client = make_client(HttpEmbedderClient, lambda r: httpx.Response(200, json=body))

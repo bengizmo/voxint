@@ -17,7 +17,7 @@ references together.
 | File | Role |
 |------|------|
 | `embed-corpus.wav` | One 16 kHz mono timeline: 24 utterances across 6 synthetic espeak-ng voices, noise-mixed copies calibrated against the titanet service's own SNR estimator to straddle the 5 dB `low_snr` gate, and a dedicated digital-silence region. |
-| `embed-windows.json` | ~107 windows over the timeline (clean, sub-windows, 1.0 s `too_short` straddles, SNR straddles, pure silence, gap straddles, past-end, determinism duplicates), each with its expected `skip_reason`/`snr_db` computed with the service's exact slice + SNR math. |
+| `embed-windows.json` | ~114 windows over the timeline (clean, sub-windows, 1.0 s `too_short` straddles, SNR straddles, pure silence, gap straddles, past-end, determinism duplicates, and long windows at and above the 30 s model-input cap (cap-exact, cap + runt, cap + 1 s, 60 s, 90 s, 175 s, full timeline) for the pooled path), each with its expected `skip_reason`/`snr_db` computed with the service's exact slice + SNR math. |
 | `embed-pairs.json` | Labeled same/different-speaker window pairs for the decision-level parity gate. |
 | `transcribe-short.wav` | Single-voice scripted passage for ASR tolerance checks (script text in `manifest.json`). |
 | `diarize-3speaker.wav` | Three voices alternating with a sample-accurate turn layout for diarization tolerance checks. |
@@ -27,6 +27,13 @@ references together.
 Reference *outputs* live in `../references/` and are produced by
 `tools/generate_parity_references.py` against running CUDA services on maintainer
 NVIDIA hardware.
+
+Run `python tools/generate_parity_corpus.py --windows-only` to reuse the
+committed WAV after window-definition changes. This mode verifies the WAV
+checksum and rewrites only `embed-windows.json` and `embed-pairs.json`. The WAV,
+`manifest.json`, and `provenance.json` remain untouched, so mel references stay
+valid. References under `../references/*/embed.json` must still be regenerated
+on CUDA hardware after any window change.
 
 ## License and provenance
 

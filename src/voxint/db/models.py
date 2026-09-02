@@ -1006,7 +1006,7 @@ class SpeakerEmbedding(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     speaker_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("speakers.id"), index=True)
-    # Cosine comparisons are only valid within one embedding_space (e.g. "titanet-large-v1").
+    # Cosine comparisons are only valid within one embedding_space (e.g. "titanet-large-v2").
     embedding_space: Mapped[str] = mapped_column(Text, index=True)
     embedding: Mapped[Any] = mapped_column(Vector(EMBEDDING_DIM))
     source_pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("pipeline_runs.id"))

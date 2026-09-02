@@ -238,7 +238,7 @@ def test_unreachable_role_passes_the_detail_through() -> None:
             {
                 METRICS_KEY: _identity(
                     diarizer={"reachable": False, "detail": "degraded (model not loaded)"},
-                    embedder=_asr(model="titanet-large-v1", engine=None),
+                    embedder=_asr(model="titanet-large-v2", engine=None),
                 )
             },
         )
@@ -251,7 +251,7 @@ def test_unreachable_role_passes_the_detail_through() -> None:
     # The embedder role is recorded for completeness even though it is fixed.
     embedder = _role(stage, "embedder")
     assert embedder.reachable is True
-    assert embedder.model == "titanet-large-v1"
+    assert embedder.model == "titanet-large-v2"
     assert embedder.engine is None
 
 
@@ -338,7 +338,7 @@ def test_both_stages_render_independently() -> None:
             {
                 METRICS_KEY: _identity(
                     diarizer=_asr(model="pyannote/speaker-diarization-3.1", engine=None),
-                    embedder=_asr(model="titanet-large-v1", engine=None),
+                    embedder=_asr(model="titanet-large-v2", engine=None),
                 )
             },
         ),

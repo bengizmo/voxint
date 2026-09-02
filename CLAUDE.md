@@ -72,7 +72,7 @@ touch inference numerics needs **measured equivalence** evidence, not reasoning:
 
 - **Parity gates**: `tests/parity/` (strict in CI via `VOXINT_PARITY_REQUIRED=1`)
   plus committed CUDA references (`tests/parity/fixtures/references/`). The
-  titanet ONNX engine holds the `titanet-large-v1` embedding-space id on a
+  titanet ONNX engine holds the `titanet-large-v2` embedding-space id on a
   measured 3-level gate (mel/vector/decision). See `docs/gpu-contracts.md`.
 - **Contract tests** (`tests/contracts/`) pin invariants that would otherwise
   rot silently: version-pin parity across pyproject/compose/.env.example,

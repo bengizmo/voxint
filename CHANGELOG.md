@@ -7,6 +7,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **TitaNet ONNX embedding no longer crashes on diarization turns longer than
+  about 120 s.** ONNX Runtime failed with a `BroadcastIterator::Init` shape
+  mismatch. Long turns are now embedded as capped sub-windows.
 - **Timeline deep links now jump to the correct transcript row** (#420).
   The speaker timeline, Explore, and Quote Board pages linked to the
   transcript with `#t=` (a URL fragment) but the transcript island only
@@ -122,6 +125,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   highlights on runs still under review count from the moment they exist.
 
 ### Changed
+- **TitaNet embeddings now use the `titanet-large-v2` space.** After the
+  whole-window skip gates, slices longer than `TITANET_WINDOW_CAP_SECONDS`
+  (30.0 s by default) are split into contiguous, non-overlapping capped pieces;
+  a final piece shorter than 1.0 s is dropped. Each piece runs through the
+  existing normalization, model, and L2 chain, then multiple unit vectors are
+  averaged and L2-normalized again. Existing v1 vectors are not matched against
+  new v2 runs until they are re-embedded; a `voxint speakers re-embed` migration
+  command is planned. TitaNet `/healthz` now reports the additive optional
+  `embedding_space` and `window_cap_seconds` provenance fields.
 - **Queue, speakers, explore polish** (#383). Review queue rows show the
   folder name instead of the raw file path. Confidence scores throughout
   the review workbench are humanized to bands (likely / possible / low)

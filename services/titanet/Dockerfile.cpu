@@ -1,6 +1,6 @@
 # Voxint titanet service — CPU flavor (multi-arch: amd64 + arm64).
 # ONNX Runtime engine ONLY: no NeMo, no torch. Same embedding space id
-# (titanet-large-v1) as the CUDA image — kept on measured equivalence, see the
+# (titanet-large-v2) as the CUDA image — kept on measured equivalence, see the
 # parity verdict in docs/gpu-contracts.md and tests/parity/test_titanet_onnx.py.
 # Contract: docs/gpu-contracts.md (POST /v1/embed, GET /healthz).
 #

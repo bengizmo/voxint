@@ -20,7 +20,7 @@ from tools.export_match_evidence import ManifestError, main, parse_manifest, wri
 from voxint.harness.score_cli import _dumps as harness_dumps
 from voxint.harness_export import TruthAnchoring
 
-SPACE = "titanet-large-v1"
+SPACE = "titanet-large-v2"
 ANCHOR = TruthAnchoring.INDEPENDENT.value
 
 

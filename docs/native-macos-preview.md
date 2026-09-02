@@ -281,7 +281,7 @@ skill driving `tools/native_e2e_lifecycle.py`. It has two rungs:
   launchd-supervised Celery worker through the real Metal pipeline, and
   `verify --run-id <id>` reads back the durable invariants (run + all six stages
   `completed`, non-empty transcript text, diarization turns embedded in
-  `titanet-large-v1`, and zero operator-enrollment rows). It then checks `backup`
+  `titanet-large-v2`, and zero operator-enrollment rows). It then checks `backup`
   and restart-survival persistence.
 
 The verifier is **read-back only** (SELECT against the live `voxint` database, with

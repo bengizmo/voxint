@@ -104,9 +104,12 @@ What changes relative to the GPU overlay, and what doesn't:
   quality gates are identical. whisper runs the same faster-whisper/CTranslate2
   engine (int8) on CPU, pyannote runs the same pipeline on torch-CPU, and
   titanet runs on **ONNX Runtime** (`/healthz` reports `engine: onnxruntime`)
-  under the **same embedding space id** (`titanet-large-v1`). That id is held by
-  a measured three-level parity gate against the CUDA engine
-  (see [gpu-contracts.md](gpu-contracts.md)).
+  under the **same embedding space id** (`titanet-large-v2`). That id must pass
+  the three-level parity gate against the CUDA engine
+  (see [gpu-contracts.md](gpu-contracts.md)). After the titanet image reports
+  v2, matching ignores existing v1 vectors. A `voxint speakers re-embed`
+  migration command is planned; until it is available and those vectors are
+  regenerated under v2, enrolled speakers are not recognized on new runs.
 - **No `HF_TOKEN` needed.** The diarization weights are vendored into the
   pyannote image (sha256-pinned from the `pyannote-models-v1` asset release).
 - **Mixing tiers is fine.** The overlays are per-service compositions; an

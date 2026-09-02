@@ -46,7 +46,7 @@ from voxint.pipeline.stages.context import StageContext, build_stage_fns
 # Tutorial clip ground truth (Phase 0 canary, 0.16.0 model images).
 EXPECTED_DURATION_SECONDS = 68.4
 DURATION_TOLERANCE = 0.5
-EMBEDDING_SPACE = "titanet-large-v1"
+EMBEDDING_SPACE = "titanet-large-v2"
 # Generous bounds around the canary (3 whisper segments, 7 diarization turns for
 # this 68 s / 3-speaker clip). Wide enough that ASR sampling noise never trips
 # them; tight enough to catch a degenerate service (0 output, or one full-clip

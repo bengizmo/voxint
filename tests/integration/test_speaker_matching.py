@@ -49,7 +49,7 @@ from voxint.speakers.matching import (
     replace_run_proposals,
 )
 
-SPACE = "titanet-large-v1"
+SPACE = "titanet-large-v2"
 GATES = MatchingGates()
 
 

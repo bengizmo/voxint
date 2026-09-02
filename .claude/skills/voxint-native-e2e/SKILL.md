@@ -9,7 +9,7 @@ description: >-
   up (healthz + doctor + every island bundle serves 200); the full usage lane
   submits a media file over HTTP, drives the real Metal pipeline through the
   launchd-supervised Celery worker, reads back the durable DB invariants (all six
-  stages completed, real titanet-large-v1 embeddings), then checks backup +
+  stages completed, real titanet-large-v2 embeddings), then checks backup +
   restart-survival persistence. macOS/Apple-Silicon only; serial; never public
   CI; fail-not-skip if a prerequisite is absent.
 ---
@@ -174,7 +174,7 @@ uv run python tools/native_e2e_lifecycle.py drive --file media/diarize-3speaker.
 #   → prints RUN_ID=<uuid>; DRIVE PASS when the run reaches 'completed'
 uv run python tools/native_e2e_lifecycle.py verify --run-id "<RUN_ID>"
 #   → VERIFY PASS: run completed; all 6 stages completed; non-empty ASR text;
-#     ≥1 diarization turn embedded in titanet-large-v1 (192-dim); 0 enrollment rows
+#     ≥1 diarization turn embedded in titanet-large-v2 (192-dim); 0 enrollment rows
 ```
 
 `submit` fails loudly if the run comes back `?enqueue=deferred` — that means the

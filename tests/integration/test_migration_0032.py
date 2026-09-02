@@ -82,7 +82,7 @@ def _accepted_row(run_id: uuid.UUID, speaker_id: uuid.UUID, label: str) -> dict[
         "diarization_label": label,
         "decision": "accepted",
         "reason": "accepted",
-        "embedding_space": "titanet-large-v1",
+        "embedding_space": "titanet-large-v2",
         "top_speaker_id": speaker_id,
         "similarity": 0.92,
         "margin": 0.3,

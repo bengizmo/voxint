@@ -34,7 +34,7 @@ from voxint.db.models import (
 )
 
 CREDS = ("reviewer", "s3cret")
-SPACE = "titanet-large-v1"
+SPACE = "titanet-large-v2"
 BASE = datetime(2026, 1, 1, tzinfo=UTC)
 
 

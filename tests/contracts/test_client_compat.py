@@ -77,4 +77,4 @@ def test_titanet_response_to_embedding_result(titanet_schemas: ModuleType) -> No
     assert len(result.entries[0].embedding) == 192
     assert result.entries[1].skip_reason == "too_short"
     assert result.entries[2].skip_reason == "low_snr"
-    assert result.embedding_space == "titanet-large-v1"
+    assert result.embedding_space == "titanet-large-v2"

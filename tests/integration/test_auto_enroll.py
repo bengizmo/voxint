@@ -29,7 +29,7 @@ from voxint.db.models import (
 from voxint.speakers.auto_enroll import auto_enroll_run
 from voxint.speakers.matching import MatchingGates
 
-SPACE = "titanet-large-v1"
+SPACE = "titanet-large-v2"
 GATES = MatchingGates()
 
 

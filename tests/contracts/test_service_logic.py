@@ -5,6 +5,7 @@ Not wire-schema tests, but they pin the behaviors the contract documents
 """
 
 import sys
+from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -147,6 +148,206 @@ class TestSnrGate:
         bursts[8000:24000] = rng.normal(0.0, 0.5, 16000).astype(np.float32)
         snr = preprocess.calculate_snr_db(floor + bursts)
         assert snr > 5.0
+
+
+class TestWindowCapSubwindowing:
+    class StubEmbedder(embedding.TitanetEmbedderBase):
+        engine = "stub"
+
+        def __init__(self, decoded_length: int) -> None:
+            self.decoded_length = decoded_length
+            self.model_input_lengths: list[int] = []
+            super().__init__()
+
+        def _decode(self, audio_path: str) -> np.ndarray:
+            return np.zeros(self.decoded_length, dtype=np.float32)
+
+        @staticmethod
+        def vector_for_length(length: int) -> np.ndarray:
+            vector = np.arange(1, 193, dtype=np.float32)
+            vector[0] += np.float32(length)
+            return vector
+
+        def _embed_normalized(self, audio_np: np.ndarray) -> np.ndarray:
+            self.model_input_lengths.append(len(audio_np))
+            return self.vector_for_length(len(audio_np))
+
+    def _patch_happy_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[list[int], list[int]]:
+        preprocess_lengths: list[int] = []
+        snr_lengths: list[int] = []
+
+        def identity(audio_np: np.ndarray, sample_rate: int) -> np.ndarray:
+            preprocess_lengths.append(len(audio_np))
+            return audio_np
+
+        def high_snr(audio_np: np.ndarray) -> float:
+            snr_lengths.append(len(audio_np))
+            return 30.0
+
+        monkeypatch.setattr(embedding, "normalize_audio_for_embedding", identity)
+        monkeypatch.setattr(embedding, "calculate_snr_db", high_snr)
+        monkeypatch.delenv("TITANET_WINDOW_CAP_SECONDS", raising=False)
+        return preprocess_lengths, snr_lengths
+
+    @pytest.mark.parametrize(
+        ("n_samples", "expected"),
+        [
+            (10 * embedding.SAMPLE_RATE - 1, [(0, 10 * embedding.SAMPLE_RATE - 1)]),
+            (10 * embedding.SAMPLE_RATE, [(0, 10 * embedding.SAMPLE_RATE)]),
+            (10.5 * embedding.SAMPLE_RATE, [(0, 10 * embedding.SAMPLE_RATE)]),
+            (
+                15 * embedding.SAMPLE_RATE,
+                [
+                    (0, 10 * embedding.SAMPLE_RATE),
+                    (10 * embedding.SAMPLE_RATE, 15 * embedding.SAMPLE_RATE),
+                ],
+            ),
+            (
+                30 * embedding.SAMPLE_RATE,
+                [
+                    (0, 10 * embedding.SAMPLE_RATE),
+                    (10 * embedding.SAMPLE_RATE, 20 * embedding.SAMPLE_RATE),
+                    (20 * embedding.SAMPLE_RATE, 30 * embedding.SAMPLE_RATE),
+                ],
+            ),
+        ],
+    )
+    def test_subwindow_bounds_cases(
+        self, n_samples: float, expected: list[tuple[int, int]]
+    ) -> None:
+        cap_samples = 10 * embedding.SAMPLE_RATE
+        bounds = preprocess.subwindow_bounds(
+            int(n_samples), cap_samples, int(preprocess.MIN_WINDOW_SECONDS * embedding.SAMPLE_RATE)
+        )
+        assert bounds == expected
+        assert all(end - start <= cap_samples for start, end in bounds)
+        assert all(left[1] == right[0] for left, right in pairwise(bounds))
+        if n_samples > cap_samples:
+            assert bounds[0] == (0, cap_samples)
+
+    def test_at_or_below_cap_preserves_historical_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        preprocess_lengths, snr_lengths = self._patch_happy_path(monkeypatch)
+        length = 20 * embedding.SAMPLE_RATE
+        stub = self.StubEmbedder(length)
+
+        outcome = stub.embed_windows("unused", [(0.0, 20.0)])[0]
+        expected = preprocess.l2_normalize(stub.vector_for_length(length))
+
+        assert stub.model_input_lengths == [length]
+        assert preprocess_lengths == [length]
+        assert snr_lengths == [length]
+        assert np.array_equal(np.asarray(outcome.embedding), expected)
+
+    def test_three_caps_are_embedded_then_pooled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        preprocess_lengths, snr_lengths = self._patch_happy_path(monkeypatch)
+        cap_samples = int(preprocess.WINDOW_CAP_SECONDS * embedding.SAMPLE_RATE)
+        length = 3 * cap_samples
+        stub = self.StubEmbedder(length)
+
+        outcome = stub.embed_windows(
+            "unused", [(0.0, length / embedding.SAMPLE_RATE)]
+        )[0]
+        unit_vectors = [
+            preprocess.l2_normalize(stub.vector_for_length(cap_samples)) for _ in range(3)
+        ]
+        expected = preprocess.l2_normalize(np.mean(np.stack(unit_vectors), axis=0))
+        actual = np.asarray(outcome.embedding)
+
+        assert stub.model_input_lengths == [cap_samples] * 3
+        assert preprocess_lengths == [cap_samples] * 3
+        assert all(piece_length <= cap_samples for piece_length in stub.model_input_lengths)
+        assert np.allclose(actual, expected)
+        assert np.isfinite(actual).all()
+        assert np.linalg.norm(actual) == pytest.approx(1.0)
+        assert snr_lengths == [length]
+        assert outcome.snr_db == 30.0
+        assert outcome.skip_reason is None
+
+    def test_half_second_runt_is_dropped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        preprocess_lengths, _ = self._patch_happy_path(monkeypatch)
+        cap_samples = int(preprocess.WINDOW_CAP_SECONDS * embedding.SAMPLE_RATE)
+        length = cap_samples + embedding.SAMPLE_RATE // 2
+        stub = self.StubEmbedder(length)
+
+        stub.embed_windows("unused", [(0.0, length / embedding.SAMPLE_RATE)])
+
+        assert stub.model_input_lengths == [cap_samples]
+        assert preprocess_lengths == [cap_samples]
+
+    def test_media_end_is_clamped_before_splitting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        preprocess_lengths, snr_lengths = self._patch_happy_path(monkeypatch)
+        cap_samples = int(preprocess.WINDOW_CAP_SECONDS * embedding.SAMPLE_RATE)
+        decoded_length = cap_samples + 2 * embedding.SAMPLE_RATE
+        stub = self.StubEmbedder(decoded_length)
+
+        stub.embed_windows("unused", [(0.0, 100.0)])
+
+        assert stub.model_input_lengths == [cap_samples, 2 * embedding.SAMPLE_RATE]
+        assert preprocess_lengths == stub.model_input_lengths
+        assert snr_lengths == [decoded_length]
+
+    def test_too_short_precedes_snr_and_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        preprocess_lengths, snr_lengths = self._patch_happy_path(monkeypatch)
+        length = embedding.SAMPLE_RATE // 2
+        stub = self.StubEmbedder(length)
+
+        outcome = stub.embed_windows("unused", [(0.0, 0.5)])[0]
+
+        assert outcome.skip_reason == "too_short"
+        assert outcome.snr_db is None
+        assert stub.model_input_lengths == []
+        assert preprocess_lengths == []
+        assert snr_lengths == []
+
+    def test_low_snr_precedes_splitting_and_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        preprocess_lengths, _ = self._patch_happy_path(monkeypatch)
+        monkeypatch.setattr(embedding, "calculate_snr_db", lambda audio_np: 0.0)
+        length = int(2 * preprocess.WINDOW_CAP_SECONDS * embedding.SAMPLE_RATE)
+        stub = self.StubEmbedder(length)
+
+        outcome = stub.embed_windows(
+            "unused", [(0.0, length / embedding.SAMPLE_RATE)]
+        )[0]
+
+        assert outcome.skip_reason == "low_snr"
+        assert outcome.snr_db == 0.0
+        assert stub.model_input_lengths == []
+        assert preprocess_lengths == []
+
+    def test_env_override_lowers_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        preprocess_lengths, _ = self._patch_happy_path(monkeypatch)
+        monkeypatch.setenv("TITANET_WINDOW_CAP_SECONDS", "10")
+        length = 25 * embedding.SAMPLE_RATE
+        stub = self.StubEmbedder(length)
+
+        stub.embed_windows("unused", [(0.0, 25.0)])
+
+        assert stub.model_input_lengths == [
+            10 * embedding.SAMPLE_RATE,
+            10 * embedding.SAMPLE_RATE,
+            5 * embedding.SAMPLE_RATE,
+        ]
+        assert preprocess_lengths == stub.model_input_lengths
+
+    @pytest.mark.parametrize("value", ["0.5", "abc", "inf"])
+    def test_invalid_env_fails_at_construction(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        monkeypatch.setenv("TITANET_WINDOW_CAP_SECONDS", value)
+        with pytest.raises(ValueError, match="TITANET_WINDOW_CAP_SECONDS"):
+            self.StubEmbedder(embedding.SAMPLE_RATE)
 
 
 class TestWindowSampleBounds:

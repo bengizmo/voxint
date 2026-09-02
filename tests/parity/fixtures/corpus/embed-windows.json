@@ -1070,6 +1070,76 @@
       "utterance": "utt_09",
       "expected_skip_reason": null,
       "expected_snr_db": 28.75
+    },
+    {
+      "id": "long_cap_exact",
+      "category": "long",
+      "start_seconds": 0.0,
+      "end_seconds": 30.0,
+      "speaker": null,
+      "utterance": null,
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "long_cap_runt",
+      "category": "long",
+      "start_seconds": 0.0,
+      "end_seconds": 30.5,
+      "speaker": null,
+      "utterance": null,
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "long_31",
+      "category": "long",
+      "start_seconds": 0.0,
+      "end_seconds": 31.0,
+      "speaker": null,
+      "utterance": null,
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "long_60",
+      "category": "long",
+      "start_seconds": 0.0,
+      "end_seconds": 60.0,
+      "speaker": null,
+      "utterance": null,
+      "expected_skip_reason": null,
+      "expected_snr_db": 60.0
+    },
+    {
+      "id": "long_90",
+      "category": "long",
+      "start_seconds": 0.0,
+      "end_seconds": 90.0,
+      "speaker": null,
+      "utterance": null,
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "long_175",
+      "category": "long",
+      "start_seconds": 0.0,
+      "end_seconds": 175.0,
+      "speaker": null,
+      "utterance": null,
+      "expected_skip_reason": null,
+      "expected_snr_db": 60.0
+    },
+    {
+      "id": "long_full",
+      "category": "long",
+      "start_seconds": 0.0,
+      "end_seconds": 220.241938,
+      "speaker": null,
+      "utterance": null,
+      "expected_skip_reason": null,
+      "expected_snr_db": 60.0
     }
   ]
 }

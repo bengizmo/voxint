@@ -30,7 +30,7 @@ from voxint.db.models import (
 )
 from voxint.speakers.roster import RosterError, alias_ids
 
-SPACE = "titanet-large-v1"
+SPACE = "titanet-large-v2"
 BASE = datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC)
 
 

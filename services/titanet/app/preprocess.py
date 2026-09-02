@@ -1,10 +1,11 @@
-"""Reference implementation of ``titanet-large-v1`` window preprocessing.
+"""Reference implementation of ``titanet-large-v2`` window preprocessing.
 
 This module is the code half of the space definition in
 ``docs/gpu-contracts.md`` (steps 1-6 plus the final L2 normalization):
 whole-file resample to 16 kHz mono → slice → skip gates (too_short / low_snr)
-→ stationary spectral-gating noise reduction → LUFS normalization to -16 LUFS
-→ peak normalization to 0.95 → model → L2 normalization. Every engine (NeMo/CUDA,
+→ split into capped sub-windows → stationary spectral-gating noise reduction
+→ LUFS normalization to -16 LUFS → peak normalization to 0.95 → model → L2
+normalization → mean-pool unit vectors and re-normalize. Every engine (NeMo/CUDA,
 ONNX Runtime, future backends) must consume THIS module — a parallel
 implementation of any step is a new embedding space, never a silent swap.
 
@@ -19,6 +20,23 @@ ONNX image ships it without torch.
 import numpy as np
 
 MIN_WINDOW_SECONDS = 1.0
+WINDOW_CAP_SECONDS = 30.0
+
+
+def subwindow_bounds(
+    n_samples: int, cap_samples: int, min_samples: int
+) -> list[tuple[int, int]]:
+    """Contiguous capped spans, dropping only a final span below ``min_samples``."""
+    if n_samples <= cap_samples:
+        return [(0, n_samples)]
+
+    bounds: list[tuple[int, int]] = []
+    for start in range(0, n_samples, cap_samples):
+        end = min(start + cap_samples, n_samples)
+        if end - start < min_samples:
+            break
+        bounds.append((start, end))
+    return bounds
 
 
 def window_sample_bounds(
@@ -61,7 +79,7 @@ def calculate_snr_db(audio: np.ndarray, frame_length: int = 2048) -> float:
 def normalize_audio_for_embedding(audio_np: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
     """Noise-reduce + loudness-normalize a window before embedding.
 
-    This chain is part of the titanet-large-v1 space definition, so failures
+    This chain is part of the titanet-large-v2 space definition, so failures
     are request-fatal: silently skipping a stage would emit vectors with
     different preprocessing semantics under the same space id. (The one
     tolerated no-op: pyloudnorm returning -inf loudness for content it cannot

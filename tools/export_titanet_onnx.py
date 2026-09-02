@@ -3,7 +3,7 @@
 
 Runs INSIDE the voxint titanet service image (NeMo 1.22.0, torch cu118,
 Python 3.10) so the export comes from the exact runtime that defines the
-``titanet-large-v1`` embedding space — never from an ad-hoc environment:
+``titanet-large-v2`` embedding space — never from an ad-hoc environment:
 
     docker run --rm --gpus '"device=1"' \
         -v $PWD:/repo -w /repo \

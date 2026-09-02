@@ -18,7 +18,7 @@ Manifest (schema_version 1)::
 
     {
       "schema_version": 1,
-      "embedding_space": "titanet-large-v1",
+      "embedding_space": "titanet-large-v2",
       "name_accuracy": {
         "truth_anchoring": "independent",
         "run_ids": ["<uuid>", "..."]

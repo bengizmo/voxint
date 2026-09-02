@@ -48,9 +48,11 @@ also offline-bound at runtime (`HF_HUB_OFFLINE=1`) because the service calls
 `from_pretrained` again at startup, so it loads the baked, verified snapshot
 rather than re-resolving the hub. That gate is drift **detection**, not a
 numerics proof: CI has no GPU runner, so the CUDA image's embedding space cannot
-be parity-gated in the workflow. Confirming it stays the measured
-`titanet-large-v1` space is Gate A below, a hard maintainer-run precondition to
-tagging.
+be parity-gated in the workflow. Confirming it realizes the
+`titanet-large-v2` space is Gate A below, a hard maintainer-run precondition to
+tagging. An embedding-space bump requires regenerating
+`tests/parity/fixtures/references/` on CUDA hardware before the parity gate can
+pass.
 
 ### The pyannote model asset (release dependency)
 

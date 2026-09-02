@@ -77,7 +77,7 @@ def _titanet_ready() -> httpx.Response:
         json={
             "status": "ok",
             "service": "titanet",
-            "model": "titanet-large-v1",
+            "model": "titanet-large-v2",
             "engine": "onnxruntime",
             "model_loaded": True,
         },
@@ -128,7 +128,7 @@ def test_diarize_embed_captures_both_roles() -> None:
         "engine": "pyannote.audio",
         "decode_config_hash": None,
     }
-    assert result["embedder"]["model"] == "titanet-large-v1"
+    assert result["embedder"]["model"] == "titanet-large-v2"
     assert result["embedder"]["reachable"] is True
 
 

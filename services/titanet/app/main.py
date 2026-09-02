@@ -91,7 +91,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="Voxint titanet service",
-    description="TitaNet-Large speaker embeddings (192-dim, titanet-large-v1)",
+    description="TitaNet-Large speaker embeddings (192-dim, titanet-large-v2)",
     version=SERVICE_VERSION,
     lifespan=lifespan,
 )
@@ -115,6 +115,8 @@ async def healthz() -> HealthResponse | JSONResponse:
         engine_version=embedder.engine_version,
         runtime=embedder.runtime,
         runtime_version=embedder.runtime_version,
+        embedding_space=EMBEDDING_SPACE,
+        window_cap_seconds=embedder.window_cap_seconds,
         model_loaded=loaded,
         resources=build_resources(sampler, admission),
     )
