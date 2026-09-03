@@ -74,6 +74,28 @@ def _seed_flags(session_factory: sessionmaker[Session], **columns: object) -> No
         session.commit()
 
 
+def _switch_row(body: str, flag_name: str) -> str:
+    """Return the rendered switch-row containing ``flag_name``."""
+    marker = f'id="sw-{flag_name}"'
+    marker_at = body.index(marker)
+    row_start = body.rfind('<div class="switch-row', 0, marker_at)
+    assert row_start >= 0, flag_name
+    next_row = body.find('<div class="switch-row', marker_at)
+    section_end = body.find("</section>", marker_at)
+    if next_row < 0 or (section_end >= 0 and section_end < next_row):
+        next_row = section_end
+    return body[row_start:] if next_row < 0 else body[row_start:next_row]
+
+
+def _checkbox(body: str, flag_name: str) -> str:
+    """Return the checkbox input tag for ``flag_name``."""
+    marker = f'id="sw-{flag_name}"'
+    marker_at = body.index(marker)
+    input_start = body.rfind("<input", 0, marker_at)
+    assert input_start >= 0, flag_name
+    return body[input_start : body.index(">", marker_at) + 1]
+
+
 def test_features_section_renders_tristate(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
@@ -278,9 +300,7 @@ def test_inherit_reverts_a_stored_override_to_null(
     assert _row(session_factory).enrichment_run_assets_enabled is None  # type: ignore[union-attr]
 
 
-def test_off_stores_false(
-    session_factory: sessionmaker[Session], media_root: Path
-) -> None:
+def test_off_stores_false(session_factory: sessionmaker[Session], media_root: Path) -> None:
     # env names default on; storing an explicit Off override must persist False.
     client, _ = make_client(session_factory, media_root)
     resp = client.post(
@@ -371,9 +391,7 @@ def test_bundled_override_round_trips_in_the_rendered_form(
     assert ">Changed</span>" in body
 
 
-def test_features_requires_csrf(
-    session_factory: sessionmaker[Session], media_root: Path
-) -> None:
+def test_features_requires_csrf(session_factory: sessionmaker[Session], media_root: Path) -> None:
     client, _ = make_client(session_factory, media_root)
     resp = client.post(
         "/settings/features",
@@ -408,3 +426,120 @@ def test_saving_features_preserves_llm_section(
     assert row.llm_model == "kept-model"
     assert row.llm_enabled is True
     assert row.enrichment_run_assets_enabled is True
+
+
+def test_llm_off_disables_dependent_controls(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    client, _ = make_client(session_factory, media_root, seed_llm_enabled=False)
+    response = client.get("/settings")
+    assert response.status_code == 200
+    body = response.text
+
+    disabled_flags = (
+        "enrichment_names_llm_enabled",
+        "enrichment_run_assets_enabled",
+        "enrichment_run_assets_autogenerate",
+    )
+    enabled_flags = ("enrichment_names_enabled", "ytdlp_enabled", "llm_bundled_enabled")
+
+    for name in disabled_flags:
+        assert f'id="sw-{name}"' in body
+        assert "disabled" in _checkbox(body, name)
+        row = _switch_row(body, name)
+        assert "switch-disabled" in row
+        assert f'name="_rendered" value="{name}"' not in row
+
+    for name in enabled_flags:
+        assert f'id="sw-{name}"' in body
+        assert "disabled" not in _checkbox(body, name)
+        row = _switch_row(body, name)
+        assert "switch-disabled" not in row
+        assert f'name="_rendered" value="{name}"' in row
+
+
+def test_llm_on_names_off_disables_only_llm_name_pass(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    client, _ = make_client(
+        session_factory,
+        media_root,
+        seed_llm_enabled=True,
+        enrichment_names_enabled=False,
+    )
+    response = client.get("/settings")
+    assert response.status_code == 200
+    body = response.text
+
+    assert "disabled" in _checkbox(body, "enrichment_names_llm_enabled")
+    assert "disabled" not in _checkbox(body, "enrichment_run_assets_enabled")
+    assert "speaker name suggestions" in _switch_row(body, "enrichment_names_llm_enabled")
+
+
+def test_run_assets_off_disables_autogenerate(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    client, _ = make_client(session_factory, media_root, seed_llm_enabled=True)
+    response = client.get("/settings")
+    assert response.status_code == 200
+    assert "disabled" in _checkbox(response.text, "enrichment_run_assets_autogenerate")
+    assert "disabled" not in _checkbox(response.text, "enrichment_run_assets_enabled")
+
+    _seed_flags(session_factory, enrichment_run_assets_enabled=True)
+    response = client.get("/settings")
+    assert response.status_code == 200
+    assert "disabled" not in _checkbox(response.text, "enrichment_run_assets_autogenerate")
+
+
+def test_same_section_children_get_dependent_class(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    client, _ = make_client(session_factory, media_root)
+    response = client.get("/settings")
+    assert response.status_code == 200
+    body = response.text
+
+    dependent_flags = (
+        "enrichment_names_llm_enabled",
+        "enrichment_run_assets_autogenerate",
+    )
+    other_flags = (
+        "enrichment_names_enabled",
+        "enrichment_run_assets_enabled",
+        "llm_bundled_enabled",
+        "ytdlp_enabled",
+    )
+    for name in dependent_flags:
+        assert "switch-dependent" in _switch_row(body, name)
+    for name in other_flags:
+        assert "switch-dependent" not in _switch_row(body, name)
+
+
+def test_disabled_flag_preserved_on_save(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    make_client(session_factory, media_root, seed_llm_enabled=True)
+    _seed_flags(
+        session_factory,
+        enrichment_names_enabled=True,
+        enrichment_names_llm_enabled=True,
+    )
+
+    # Turning LLM off makes the stored-on name pass disabled. The canonical
+    # General-tab form omits its _rendered marker, so reconciling a save of an
+    # unrelated standalone flag must retain the raw stored override.
+    client, _ = make_client(session_factory, media_root, seed_llm_enabled=False)
+    body = client.get("/settings").text
+    assert "disabled" in _checkbox(body, "enrichment_names_llm_enabled")
+
+    response = client.post(
+        "/settings",
+        data=_form(_rendered="ytdlp_enabled", ytdlp_enabled="off"),
+        follow_redirects=False,
+    )
+    # The preserved pre-existing value still violates the LLM invariant, so the
+    # tab re-renders instead of committing the unrelated edit.
+    assert response.status_code == 200
+    row = _row(session_factory)
+    assert row is not None
+    assert row.enrichment_names_llm_enabled is True
