@@ -379,12 +379,14 @@ def test_auto_enroll_two_labels_same_voice_consolidate(
         speaker_ids = {d.speaker_id for d in decisions}
         assert len(speaker_ids) == 1
 
-        embedding_count = session.scalar(
-            select(func.count()).select_from(SpeakerEmbedding).where(
+        embeddings = session.execute(
+            select(SpeakerEmbedding).where(
                 SpeakerEmbedding.source_pipeline_run_id == run_id
             )
-        )
-        assert embedding_count == 1
+        ).scalars().all()
+        assert len(embeddings) == 2
+        labels = {e.source_diarization_label for e in embeddings}
+        assert labels == {"S0", "S1"}
 
 
 # -- Per-label failure containment --------------------------------------------

@@ -18,6 +18,7 @@ from voxint.harness_export.export import _truth_from_state
 
 # -- Decision enum -----------------------------------------------------------
 
+
 def test_auto_enroll_in_decision_enum() -> None:
     assert Decision.AUTO_ENROLL.value == "auto_enroll"
     assert Decision("auto_enroll") is Decision.AUTO_ENROLL
@@ -29,6 +30,7 @@ def test_auto_enroll_in_resolution_enum() -> None:
 
 
 # -- Resolver dispatch -------------------------------------------------------
+
 
 def test_resolver_exhaustive_dispatch_unknown_decision() -> None:
     """An unrecognized decision value must raise, not silently resolve."""
@@ -46,18 +48,15 @@ def test_resolver_exhaustive_dispatch_unknown_decision() -> None:
 
 # -- Attribution propagation -------------------------------------------------
 
+
 def _label_state(
     resolution: Resolution, speaker_id: uuid.UUID | None, speaker_name: str | None
 ) -> SimpleNamespace:
-    return SimpleNamespace(
-        resolution=resolution, speaker_id=speaker_id, speaker_name=speaker_name
-    )
+    return SimpleNamespace(resolution=resolution, speaker_id=speaker_id, speaker_name=speaker_name)
 
 
 def _emission(*, label_state: object = None) -> SimpleNamespace:
-    return SimpleNamespace(
-        range_override=None, seg_override=None, label_state=label_state
-    )
+    return SimpleNamespace(range_override=None, seg_override=None, label_state=label_state)
 
 
 def test_attribution_auto_enroll_propagates_speaker() -> None:
@@ -82,6 +81,7 @@ def test_attribution_auto_enroll_no_name_propagates_id() -> None:
 
 # -- Transcript display name -------------------------------------------------
 
+
 def _seg(label: str | None) -> SimpleNamespace:
     return SimpleNamespace(diarization_label=label)
 
@@ -101,6 +101,7 @@ def test_display_name_auto_enroll_no_name_falls_back_to_label() -> None:
 
 
 # -- Harness export (eval truth) ---------------------------------------------
+
 
 def test_harness_export_auto_enroll_is_none() -> None:
     """AUTO_ENROLL is not human truth and must not contaminate eval scoring."""
@@ -125,6 +126,7 @@ def test_harness_export_no_decision_is_none() -> None:
 
 
 # -- Aggregate tracking ------------------------------------------------------
+
 
 def test_aggregate_auto_enrolled_flag_on_appearance() -> None:
     from voxint.speakers.aggregate import SpeakerAppearance
@@ -183,6 +185,7 @@ def test_speaker_aggregate_auto_enrolled_default_false() -> None:
 
 # -- Auto-enroll module pure helpers -----------------------------------------
 
+
 def test_cosine_match_empty_roster_returns_none() -> None:
     import numpy as np
 
@@ -238,7 +241,129 @@ def test_cosine_match_margin_gate_rejects_close_pair() -> None:
     assert result is None
 
 
+def test_cosine_match_standard_tier_links_cross_episode() -> None:
+    """Cosine 0.669 with unanimous vote links at standard tier (#433)."""
+    import numpy as np
+
+    from voxint.speakers.auto_enroll import _cosine_match
+    from voxint.speakers.matching import MatchingGates
+
+    # Build vectors with cosine ~0.669 between centroid and speaker A,
+    # and a second speaker far away so margin is large.
+    a = np.array([1.0, 0.0, 0.0])
+    b = np.array([0.0, 1.0, 0.0])
+    # cos(theta) = 0.669 => theta ~48 deg; blend to hit that.
+    centroid = 0.669 * a + np.sqrt(1 - 0.669**2) * b
+    centroid = centroid / np.linalg.norm(centroid)
+    assert abs(float(centroid @ a) - 0.669) < 0.001
+
+    sid_a = uuid.uuid4()
+    sid_far = uuid.uuid4()
+    roster = {sid_a: a, sid_far: -a}
+
+    entries = [(centroid, 5.0)] * 5
+    result = _cosine_match(centroid, roster, entries, MatchingGates())
+    assert result == sid_a
+
+
+def test_cosine_match_singleton_guard_requires_grounded_cosine() -> None:
+    """With only one roster speaker, the cosine bar rises to grounded (0.70)."""
+    import numpy as np
+
+    from voxint.speakers.auto_enroll import _cosine_match
+    from voxint.speakers.matching import MatchingGates
+
+    a = np.array([1.0, 0.0, 0.0])
+    b = np.array([0.0, 1.0, 0.0])
+    # cos = 0.669 < grounded_min_cosine (0.70) => rejected for singleton
+    centroid = 0.669 * a + np.sqrt(1 - 0.669**2) * b
+    centroid = centroid / np.linalg.norm(centroid)
+
+    sid = uuid.uuid4()
+    roster = {sid: a}
+    entries = [(centroid, 5.0)] * 5
+    assert _cosine_match(centroid, roster, entries, MatchingGates()) is None
+
+
+def test_cosine_match_singleton_above_grounded_accepts() -> None:
+    """Singleton roster with cosine above grounded threshold links."""
+    import numpy as np
+
+    from voxint.speakers.auto_enroll import _cosine_match
+    from voxint.speakers.matching import MatchingGates
+
+    a = np.array([1.0, 0.0, 0.0])
+    b = np.array([0.0, 1.0, 0.0])
+    # cos = 0.75 > grounded_min_cosine (0.70) => accepted
+    centroid = 0.75 * a + np.sqrt(1 - 0.75**2) * b
+    centroid = centroid / np.linalg.norm(centroid)
+
+    sid = uuid.uuid4()
+    roster = {sid: a}
+    entries = [(centroid, 5.0)] * 5
+    result = _cosine_match(centroid, roster, entries, MatchingGates())
+    assert result == sid
+
+
+def test_cosine_match_margin_in_standard_band_accepts() -> None:
+    """Margin ~0.068 passes at standard tier (>= 0.05) but would fail grounded (>= 0.08)."""
+    import math
+
+    import numpy as np
+
+    from voxint.speakers.auto_enroll import _cosine_match
+    from voxint.speakers.matching import MatchingGates
+
+    # Place centroid at angle 0.15 rad from speaker_a, speaker_b at -0.25 rad.
+    # margin = cos(0.15) - cos(0.40) ≈ 0.989 - 0.921 ≈ 0.068
+    speaker_a = np.array([1.0, 0.0])
+    speaker_b = np.array([math.cos(-0.25), math.sin(-0.25)])
+    centroid = np.array([math.cos(0.15), math.sin(0.15)])
+
+    sid_a = uuid.uuid4()
+    sid_b = uuid.uuid4()
+    roster = {sid_a: speaker_a, sid_b: speaker_b}
+
+    margin = float(centroid @ speaker_a) - float(centroid @ speaker_b)
+    assert 0.05 <= margin < 0.08
+
+    entries = [(centroid, 5.0)] * 5
+    result = _cosine_match(centroid, roster, entries, MatchingGates())
+    assert result == sid_a
+
+
+def test_cosine_match_vote_in_standard_band_accepts() -> None:
+    """Vote agreement 0.625 passes at standard tier (>= 0.60) but would fail grounded (>= 0.67)."""
+    import numpy as np
+
+    from voxint.speakers.auto_enroll import _cosine_match
+    from voxint.speakers.matching import MatchingGates
+
+    a = np.array([1.0, 0.0, 0.0])
+    b = np.array([0.0, 1.0, 0.0])
+    c = np.array([0.0, 0.0, 1.0])
+
+    sid_a = uuid.uuid4()
+    sid_b = uuid.uuid4()
+    roster = {sid_a: a, sid_b: -a}
+
+    # Centroid well above cosine and margin thresholds
+    centroid = 0.80 * a + np.sqrt(1 - 0.80**2) * b
+    centroid = centroid / np.linalg.norm(centroid)
+
+    # 5 of 8 turns vote for speaker A => vote_agreement = 5/8 = 0.625
+    vote_a = (centroid, 5.0)
+    vote_b_vec = 0.80 * (-a) + np.sqrt(1 - 0.80**2) * c
+    vote_b_vec = vote_b_vec / np.linalg.norm(vote_b_vec)
+    vote_b = (vote_b_vec, 5.0)
+    entries = [vote_a] * 5 + [vote_b] * 3
+
+    result = _cosine_match(centroid, roster, entries, MatchingGates())
+    assert result == sid_a
+
+
 # -- Settings ----------------------------------------------------------------
+
 
 def test_auto_enroll_setting_default_true() -> None:
     from voxint.config import Settings
@@ -264,6 +389,7 @@ def test_auto_enroll_setting_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # -- Idempotency key format -------------------------------------------------
+
 
 def test_idempotency_key_format() -> None:
     run_id = uuid.uuid4()
