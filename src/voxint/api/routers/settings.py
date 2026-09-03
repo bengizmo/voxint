@@ -630,6 +630,33 @@ _FEATURE_FLAG_META: tuple[tuple[str, str, str], ...] = (
 )
 _FEATURE_FLAG_NAMES: tuple[str, ...] = tuple(name for name, _, _ in _FEATURE_FLAG_META)
 
+# Structured dependency map for the Features section UI (issue #406). Each key
+# is a flag that requires ALL listed prerequisites to be effectively on before
+# it can be toggled. Flags not listed here are standalone. Kept separate from
+# ``_FEATURE_FLAG_META`` to preserve the three-tuple arity and the plugin
+# ``FeatureFlag`` seam (#138). ``llm_enabled`` is a cross-section dependency
+# (AI tab), resolved from the row/settings namespace, not from this section.
+_FEATURE_DEPS: dict[str, tuple[str, ...]] = {
+    "enrichment_names_llm_enabled": ("llm_enabled", "enrichment_names_enabled"),
+    "enrichment_run_assets_enabled": ("llm_enabled",),
+    "enrichment_run_assets_autogenerate": ("enrichment_run_assets_enabled",),
+    "llm_bundled_enabled": ("llm_enabled",),
+}
+
+_DEP_LABELS: dict[str, str] = {
+    "llm_enabled": "LLM transcript enhancement",
+    "enrichment_names_enabled": "speaker name suggestions",
+    "enrichment_run_assets_enabled": "run assets",
+}
+
+# Flags whose prerequisite is another flag visible in the Features section
+# (not a cross-section dependency like ``llm_enabled``). These get the
+# ``switch-dependent`` CSS class for visual indentation under their parent.
+_FEATURE_SECTION_CHILDREN: frozenset[str] = frozenset({
+    "enrichment_names_llm_enabled",
+    "enrichment_run_assets_autogenerate",
+})
+
 
 def _effective_feature_flag_meta(
     registry: PluginRegistry,
@@ -1904,23 +1931,49 @@ def _settings_context(
     # (``features_submitted``); otherwise render the stored raw tri-state. The
     # effective meta (issue #138) appends any plugin-contributed flags to the
     # core set; empty registry => the core set unchanged.
+    #
+    # Dependency nesting (issue #406): compute which flags should be disabled
+    # based on their prerequisites' effective state. Two passes: first build
+    # states and resolve to effective booleans, then derive disabled/reason.
     features_submitted: dict[str, str] | None = overrides.pop("features_submitted", None)
-    feature_flags = [
-        {
+    flag_meta = _effective_feature_flag_meta(request.app.state.plugins)
+
+    # Pass 1: build tri-state and effective-boolean maps.
+    flag_states: dict[str, str] = {}
+    flag_effective: dict[str, bool] = {}
+    for name, _, _ in flag_meta:
+        state = (
+            features_submitted.get(name, "inherit")
+            if features_submitted is not None
+            else feature_flag_state(row, name)
+        )
+        env_default = bool(getattr(settings, name))
+        flag_states[name] = state
+        flag_effective[name] = state == "on" or (state == "inherit" and env_default)
+
+    # Seed cross-section dependencies into the effective namespace.
+    flag_effective["llm_enabled"] = resolve_effective_llm_enabled(row, settings)
+
+    # Pass 2: derive disabled state and build the template dicts.
+    feature_flags: list[dict[str, object]] = []
+    for name, label, help_text in flag_meta:
+        deps = _FEATURE_DEPS.get(name, ())
+        missing = [d for d in deps if not flag_effective.get(d, False)]
+        if missing:
+            parts = [_DEP_LABELS.get(d, d) for d in missing]
+            reason = "Needs " + " and ".join(parts) + " to be on."
+        else:
+            reason = ""
+        feature_flags.append({
             "name": name,
             "label": label,
             "help": help_text,
-            "state": (
-                features_submitted.get(name, "inherit")
-                if features_submitted is not None
-                else feature_flag_state(row, name)
-            ),
+            "state": flag_states[name],
             "env_default": bool(getattr(settings, name)),
-        }
-        for name, label, help_text in _effective_feature_flag_meta(
-            request.app.state.plugins
-        )
-    ]
+            "disabled": bool(missing),
+            "disabled_reason": reason,
+            "dependent": name in _FEATURE_SECTION_CHILDREN,
+        })
     # Semantic search section (issue #121): two tri-state rows (the feature +
     # its autogenerate rider). On an invariant-rejected save, render the
     # operator's submitted choices back (``semantic_index_submitted``); otherwise
