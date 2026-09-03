@@ -6,6 +6,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+
+## [0.33.0] - 2026-09-03
+
 ### Added
 - **In-place voice embedding-space migration.** `voxint speakers re-embed`
   discovers titanet's current embedding space, previews stale runs, replaces
