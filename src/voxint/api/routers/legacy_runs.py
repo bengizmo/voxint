@@ -158,6 +158,8 @@ from voxint.ingest import (
     RunNotPausableError,
     RunNotPausedError,
     RunNotRestartableError,
+    RunRestartBlockedError,
+    RunRestartLabelRiskError,
     UploadConflictError,
     UploadTooLargeError,
     UploadValidationError,
@@ -1416,15 +1418,29 @@ def restart_run_route(
     session: SessionDep,
     revision: Annotated[int, Form()],
     csrf_token: Annotated[str | None, Form()] = None,
+    acknowledge_label_risk: Annotated[bool, Form()] = False,
 ) -> RedirectResponse:
-    """Restart a terminal run from scratch — re-processes all stages from ACQUIRE."""
+    """Restart a terminal run from scratch — re-processes all stages from ACQUIRE.
+
+    Returns 409 when segment-scope rulings or enrichment evidence block restart
+    (append-only, cannot be deleted), or when label-scope rulings exist and
+    *acknowledge_label_risk* is not set. The restart templates do not yet render
+    an acknowledgement control; the 409 error page explains the situation.
+    """
     _require_csrf(request, CSRF_RESTART, csrf_token)
     run = _run_or_404(session, run_id)
     _reject_if_archived(run)
     try:
-        restart_run(session, run_id, expected_revision=revision)
+        restart_run(
+            session,
+            run_id,
+            expected_revision=revision,
+            acknowledge_label_risk=acknowledge_label_risk,
+        )
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RunRestartBlockedError, RunRestartLabelRiskError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (
         RunNotRestartableError, RunArchivedError,
         StaleRevisionError, InvalidTransitionError,

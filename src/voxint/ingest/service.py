@@ -35,7 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
@@ -206,6 +206,58 @@ class RunNotRestartableError(IngestError):
         )
         self.run_id = run_id
         self.status = status
+
+
+@dataclass(frozen=True, slots=True)
+class RestartImpact:
+    """What a restart would destroy or invalidate for a given run."""
+
+    label_scope_decisions: int
+    segment_scope_decisions: int
+    enrichment_evidence: int
+
+    @property
+    def has_blockers(self) -> bool:
+        return self.segment_scope_decisions > 0 or self.enrichment_evidence > 0
+
+
+class RunRestartBlockedError(IngestError):
+    """Restart blocked by immutable segment-scope data that cannot be deleted."""
+
+    def __init__(self, run_id: uuid.UUID, impact: RestartImpact) -> None:
+        parts: list[str] = []
+        if impact.segment_scope_decisions > 0:
+            parts.append(
+                f"{impact.segment_scope_decisions} segment/word-range"
+                " adjudication decision(s)"
+            )
+        if impact.enrichment_evidence > 0:
+            parts.append(
+                f"{impact.enrichment_evidence} enrichment evidence row(s)"
+                " linked to transcript segments"
+            )
+        detail = " and ".join(parts)
+        super().__init__(
+            f"cannot restart: {detail} reference transcript segments that"
+            " would be deleted. These rows are append-only and cannot be"
+            " removed. Submit the media item as a new run instead."
+        )
+        self.run_id = run_id
+        self.impact = impact
+
+
+class RunRestartLabelRiskError(IngestError):
+    """Restart has label-scope rulings that may be invalidated by re-diarization."""
+
+    def __init__(self, run_id: uuid.UUID, count: int) -> None:
+        super().__init__(
+            f"this run has {count} label-scope adjudication decision(s)."
+            " Re-diarization may reassign speaker labels, causing existing"
+            " rulings to apply to different voices. Acknowledge this risk"
+            " to proceed."
+        )
+        self.run_id = run_id
+        self.count = count
 
 
 class RunNotArchivableError(IngestError):
@@ -917,17 +969,67 @@ _RESTARTABLE_STATUSES = frozenset(
 )
 
 
+def restart_impact(session: Session, run_id: uuid.UUID) -> RestartImpact:
+    """Inspect what a restart would destroy or invalidate for *run_id*."""
+    from voxint.db.models import (
+        AdjudicationDecision,
+        EnrichmentCandidateEvidence,
+        TranscriptSegment,
+    )
+
+    label_scope = session.scalar(
+        select(func.count()).select_from(AdjudicationDecision).where(
+            AdjudicationDecision.pipeline_run_id == run_id,
+            AdjudicationDecision.transcript_segment_id.is_(None),
+        )
+    ) or 0
+    segment_scope = session.scalar(
+        select(func.count()).select_from(AdjudicationDecision).where(
+            AdjudicationDecision.pipeline_run_id == run_id,
+            AdjudicationDecision.transcript_segment_id.is_not(None),
+        )
+    ) or 0
+    evidence = session.scalar(
+        select(func.count())
+        .select_from(EnrichmentCandidateEvidence)
+        .join(
+            TranscriptSegment,
+            EnrichmentCandidateEvidence.transcript_segment_id
+            == TranscriptSegment.id,
+        )
+        .where(TranscriptSegment.pipeline_run_id == run_id)
+    ) or 0
+    return RestartImpact(
+        label_scope_decisions=label_scope,
+        segment_scope_decisions=segment_scope,
+        enrichment_evidence=evidence,
+    )
+
+
 def restart_run(
     session: Session,
     run_id: uuid.UUID,
     *,
     expected_revision: int | None = None,
+    acknowledge_label_risk: bool = False,
 ) -> RunSnapshot:
     """CAS-restart a terminal run from scratch (stage=None → starts at ACQUIRE).
 
     Unlike requeue (which retries the failed stage), restart clears the stage and
     error so the full pipeline runs again. Prior StageRun rows are preserved as
     earlier attempts. The caller commits then lazily publishes.
+
+    Raises :class:`RunRestartBlockedError` when segment-scope adjudication
+    decisions or enrichment evidence reference transcript segments that would be
+    deleted (both tables are append-only and cannot be purged).
+
+    Raises :class:`RunRestartLabelRiskError` when label-scope decisions exist and
+    *acknowledge_label_risk* is not set, since re-diarization may reassign labels.
+
+    The preflight reads are not serialized with adjudication writers: a concurrent
+    insert between the count and the CAS commit could slip through. This is
+    acceptable under Voxint's single-operator design; the transcribe stage's FK
+    constraint is the hard backstop.
     """
     run = session.get(PipelineRun, run_id)
     if run is None:
@@ -939,6 +1041,13 @@ def restart_run(
         raise RunNotRestartableError(run_id, held.status)
     if expected_revision is not None and held.revision != expected_revision:
         raise StaleRevisionError(run_id, expected_revision)
+
+    impact = restart_impact(session, run_id)
+    if impact.has_blockers:
+        raise RunRestartBlockedError(run_id, impact)
+    if impact.label_scope_decisions > 0 and not acknowledge_label_risk:
+        raise RunRestartLabelRiskError(run_id, impact.label_scope_decisions)
+
     return cas_update_run(
         session, held, status=RunStatus.QUEUED, current_stage=None, error=None,
     )
