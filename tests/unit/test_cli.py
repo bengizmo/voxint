@@ -145,6 +145,41 @@ def test_speakers_reembed_parser_wiring() -> None:
     assert args.yes is True
 
 
+def test_speakers_dedup_parser_wiring() -> None:
+    args = build_parser().parse_args([
+        "speakers", "dedup", "--threshold", "0.75",
+        "--merge", "--merge-threshold", "0.90", "--yes",
+    ])
+    assert args.threshold == 0.75
+    assert args.merge is True
+    assert args.merge_threshold == 0.90
+    assert args.yes is True
+
+
+def test_speakers_dedup_parser_defaults() -> None:
+    args = build_parser().parse_args(["speakers", "dedup"])
+    assert args.threshold is None
+    assert args.merge is False
+    assert args.merge_threshold is None
+    assert args.yes is False
+
+
+def test_speakers_dedup_merge_threshold_without_merge(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _block_db(monkeypatch)
+    assert main(["speakers", "dedup", "--merge-threshold", "0.90"]) == 2
+    assert "--merge-threshold requires --merge" in capsys.readouterr().out
+
+
+def test_speakers_dedup_yes_without_merge(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _block_db(monkeypatch)
+    assert main(["speakers", "dedup", "--yes"]) == 2
+    assert "--yes requires --merge" in capsys.readouterr().out
+
+
 def test_list_rejects_unknown_status_before_db(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

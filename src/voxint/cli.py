@@ -8,6 +8,7 @@ exception: file-based offline scoring that never touches settings or the DB.
 
 import argparse
 import math
+import re
 import sys
 import time
 import uuid
@@ -1186,6 +1187,182 @@ def _speakers_reembed(args: argparse.Namespace) -> int:
         engine.dispose()
 
 
+def _speakers_dedup(args: argparse.Namespace) -> int:
+    """Report probable duplicate speakers and optionally merge safe pairs."""
+    from sqlalchemy import func, select
+
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.models import Speaker, SpeakerEmbedding
+    from voxint.db.session import build_session_factory
+    from voxint.speakers.matching import (
+        DuplicatePair,
+        find_possible_duplicates,
+        gates_from_settings,
+    )
+    from voxint.speakers.roster import RosterError, merge_speakers
+
+    if args.merge_threshold is not None and not args.merge:
+        print("error: --merge-threshold requires --merge")
+        return 2
+    if args.yes and not args.merge:
+        print("error: --yes requires --merge")
+        return 2
+
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    gates = gates_from_settings(settings)
+    threshold = args.threshold if args.threshold is not None else gates.grounded_min_cosine
+    if not 0.0 <= threshold <= 1.0:
+        print("error: --threshold must be between 0 and 1")
+        return 2
+
+    merge_threshold: float | None = None
+    if args.merge:
+        merge_threshold = args.merge_threshold if args.merge_threshold is not None else 0.85
+        if not 0.0 <= merge_threshold <= 1.0:
+            print("error: --merge-threshold must be between 0 and 1")
+            return 2
+        if merge_threshold < threshold:
+            print("error: --merge-threshold must be greater than or equal to --threshold")
+            return 2
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    factory = build_session_factory(engine)
+    try:
+        with factory() as session:
+            pairs: list[DuplicatePair] = find_possible_duplicates(session, threshold)
+            if not pairs:
+                print(f"no duplicate pairs found above threshold {threshold:.2f}")
+                return 0
+
+            speaker_ids = {
+                speaker_id
+                for pair in pairs
+                for speaker_id in (pair.speaker_a_id, pair.speaker_b_id)
+            }
+            speakers = {
+                speaker_id: display_name
+                for speaker_id, display_name in session.execute(
+                    select(Speaker.id, Speaker.display_name).where(Speaker.id.in_(speaker_ids))
+                )
+            }
+            embedding_counts: dict[uuid.UUID, int] = {
+                speaker_id: count
+                for speaker_id, count in session.execute(
+                    select(SpeakerEmbedding.speaker_id, func.count())
+                    .where(SpeakerEmbedding.speaker_id.in_(speaker_ids))
+                    .group_by(SpeakerEmbedding.speaker_id)
+                )
+            }
+
+        def speaker_label(speaker_id: uuid.UUID) -> str:
+            name = speakers.get(speaker_id) or "<unknown>"
+            return f"{name} ({str(speaker_id)[:8]}...)"
+
+        print(f"Duplicate pairs (threshold {threshold:.2f}):")
+        print()
+        print(f"  {'Similarity':<12}{'Speaker A':<39}{'Speaker B':<39}Embeddings")
+        for pair in pairs:
+            print(
+                f"  {pair.similarity:<12.2f}"
+                f"{speaker_label(pair.speaker_a_id):<39}"
+                f"{speaker_label(pair.speaker_b_id):<39}"
+                f"{embedding_counts.get(pair.speaker_a_id, 0)} / "
+                f"{embedding_counts.get(pair.speaker_b_id, 0)}"
+            )
+
+        if not args.merge:
+            print(f"{len(pairs)} duplicate pair(s) found")
+            return 0
+
+        assert merge_threshold is not None
+        _PLACEHOLDER_RE = re.compile(r"^Voice \d+$")
+        planned_merges: list[tuple[uuid.UUID, uuid.UUID, DuplicatePair]] = []
+        skipped: list[str] = []
+        seen_speaker_ids: set[uuid.UUID] = set()
+        for pair in sorted(pairs, key=lambda item: -item.similarity):
+            if pair.similarity < merge_threshold:
+                continue
+            name_a = speakers[pair.speaker_a_id]
+            name_b = speakers[pair.speaker_b_id]
+            a_is_placeholder = _PLACEHOLDER_RE.fullmatch(name_a) is not None
+            b_is_placeholder = _PLACEHOLDER_RE.fullmatch(name_b) is not None
+            if a_is_placeholder == b_is_placeholder:
+                skipped.append(f"{name_a} / {name_b} — ambiguous direction")
+                continue
+            if pair.speaker_a_id in seen_speaker_ids or pair.speaker_b_id in seen_speaker_ids:
+                skipped.append(
+                    f"{name_a} / {name_b} — overlaps with prior merge, rerun after completion"
+                )
+                continue
+            if a_is_placeholder:
+                source_id, target_id = pair.speaker_a_id, pair.speaker_b_id
+            else:
+                source_id, target_id = pair.speaker_b_id, pair.speaker_a_id
+            planned_merges.append((source_id, target_id, pair))
+            seen_speaker_ids.update((source_id, target_id))
+
+        print()
+        print(f"Merge plan (merge-threshold {merge_threshold:.2f}):")
+        print()
+        for source_id, target_id, pair in planned_merges:
+            print(
+                f"  {speaker_label(source_id)} → {speaker_label(target_id)}  "
+                f"[{pair.similarity:.2f}]"
+            )
+        if skipped:
+            print()
+            print("Skipped:")
+            for reason in skipped:
+                print(f"  {reason}")
+        if not planned_merges:
+            print("no unambiguous merges planned")
+            return 0
+
+        if not args.yes:
+            try:
+                confirmed = (
+                    input(f"Proceed with {len(planned_merges)} merge(s)? [y/N] ").strip().lower()
+                    == "y"
+                )
+            except EOFError:
+                confirmed = False
+            if not confirmed:
+                print("aborted")
+                return 1
+
+        results = []
+        with factory() as session:
+            for source_id, target_id, _pair in planned_merges:
+                try:
+                    results.append(merge_speakers(session, source_id, target_id))
+                except RosterError as exc:
+                    session.rollback()
+                    print(f"error: conflict during merge — {exc}")
+                    print("no merges were applied; rerun after resolving the conflict")
+                    return 1
+            session.commit()
+
+        for result in results:
+            status = "already merged" if result.already_merged else "merged"
+            print(
+                f"{status}: {speaker_label(result.source_id)} → "
+                f"{speaker_label(result.target_id)} "
+                f"({result.embeddings_moved} embedding(s), "
+                f"{result.assignments_moved} assignment(s), "
+                f"{result.aliases_collapsed} alias(es))"
+            )
+        return 0
+    finally:
+        engine.dispose()
+
+
 def _serve(args: argparse.Namespace) -> int:
     """Run the review console. The bind host/port come from Settings, so the
     default-credentials-off-loopback refusal inspects the REAL bind address —
@@ -2273,6 +2450,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip the interactive confirmation",
     )
     reembed_p.set_defaults(fn=_speakers_reembed)
+    dedup_p = speakers_sub.add_parser(
+        "dedup",
+        help="find and optionally merge probable duplicate speakers",
+    )
+    dedup_p.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="detection threshold (default: configured grounded_min_cosine)",
+    )
+    dedup_p.add_argument(
+        "--merge",
+        action="store_true",
+        help="merge safe duplicate pairs (default: report only)",
+    )
+    dedup_p.add_argument(
+        "--merge-threshold",
+        type=float,
+        default=None,
+        help="auto-merge floor (default: 0.85)",
+    )
+    dedup_p.add_argument(
+        "--yes",
+        action="store_true",
+        help="skip the interactive confirmation in merge mode",
+    )
+    dedup_p.set_defaults(fn=_speakers_dedup)
     tutorial_p = sub.add_parser("tutorial", help="bundled guided-tutorial fixtures")
     tutorial_sub = tutorial_p.add_subparsers(dest="tutorial_command", required=True)
     seed_p = tutorial_sub.add_parser(
