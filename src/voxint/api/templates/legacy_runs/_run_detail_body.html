@@ -124,6 +124,33 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
 <section class="card">
 <h2>Manage</h2>
 {% if not run_archived %}
+{% if restart_impact and restart_impact.has_blockers %}
+<div class="restart action-row">
+  <button type="button" disabled>Run again from the beginning</button>
+  <span class="oc-muted notice-warn">Blocked: this run has
+    {{ restart_impact.segment_scope_decisions }} segment-scope ruling(s) and
+    {{ restart_impact.enrichment_evidence }} enrichment evidence row(s) that
+    reference specific transcript segments and cannot be deleted.
+    Submit the file as a new run instead.</span>
+</div>
+{% elif restart_impact and restart_impact.label_scope_decisions > 0 %}
+<form method="post" action="/runs/{{ run.id }}/restart" class="restart action-row"
+      onsubmit="return confirm('Restart this run from scratch? It will re-process all stages from the beginning. Existing results from prior attempts are preserved in the stage ledger.')">
+  <input type="hidden" name="revision" value="{{ run.revision }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_restart }}">
+  <div class="notice-warn" style="margin-bottom: 0.5em">
+    <label>
+      <input type="checkbox" name="acknowledge_label_risk" value="true" required>
+      This run has {{ restart_impact.label_scope_decisions }} speaker ruling(s).
+      Re-processing may reassign speaker labels, causing those rulings to apply
+      to different voices.
+    </label>
+  </div>
+  <button type="submit">Run again from the beginning</button>
+  <span class="oc-muted">Queues the run to re-process all stages from the beginning.
+    Prior stage results are kept in the ledger as earlier attempts.</span>
+</form>
+{% else %}
 <form method="post" action="/runs/{{ run.id }}/restart" class="restart action-row"
       onsubmit="return confirm('Restart this run from scratch? It will re-process all stages from the beginning. Existing results from prior attempts are preserved in the stage ledger.')">
   <input type="hidden" name="revision" value="{{ run.revision }}">
@@ -132,6 +159,7 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
   <span class="oc-muted">Queues the run to re-process all stages from the beginning.
     Prior stage results are kept in the ledger as earlier attempts.</span>
 </form>
+{% endif %}
 {% endif %}
 {% if run_archived %}
 <form method="post" action="/runs/{{ run.id }}/unarchive" class="unarchive action-row">
