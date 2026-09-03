@@ -1322,3 +1322,279 @@ def test_restart_archived_run_raises_archived(
 
     with session_factory() as session, pytest.raises(RunArchivedError):
         restart_run(session, run_id)
+
+
+# ── restart_run preflight (#422) ──────────────────────────────────────────
+
+
+def _completed_run_with_segments(
+    session: Session, path: str, segment_count: int = 2
+) -> tuple[uuid.UUID, list[uuid.UUID]]:
+    """Create a COMPLETED run with transcript segments, return (run_id, segment_ids)."""
+    from voxint.db.models import TranscriptSegment
+
+    run_id = submit_media_item(session, path).run_id
+    session.commit()
+    held = _drive_to_running(session, run_id, Stage.FINALIZE)
+    cas_update_run(session, held, status=RunStatus.COMPLETED, current_stage=None)
+    session.commit()
+
+    seg_ids: list[uuid.UUID] = []
+    for i in range(segment_count):
+        seg = TranscriptSegment(
+            pipeline_run_id=run_id,
+            segment_index=i,
+            start_seconds=float(i * 10),
+            end_seconds=float(i * 10 + 8),
+            raw_text=f"segment {i}",
+            diarization_label=f"S{i}",
+        )
+        session.add(seg)
+        session.flush()
+        seg_ids.append(seg.id)
+    session.commit()
+    return run_id, seg_ids
+
+
+def test_restart_blocked_by_segment_scope_ruling(
+    session_factory: sessionmaker[Session],
+) -> None:
+    from voxint.db.models import AdjudicationDecision, Speaker
+    from voxint.ingest import RunRestartBlockedError
+
+    with session_factory() as session:
+        run_id, seg_ids = _completed_run_with_segments(session, "incoming/restart-seg.wav")
+        speaker = Speaker(display_name="test-spk")
+        session.add(speaker)
+        session.flush()
+        session.add(
+            AdjudicationDecision(
+                pipeline_run_id=run_id,
+                diarization_label="S0",
+                decision="assign",
+                speaker_id=speaker.id,
+                transcript_segment_id=seg_ids[0],
+                operator="reviewer",
+                idempotency_key=uuid.uuid4().hex,
+            )
+        )
+        session.commit()
+
+    with session_factory() as session:
+        with pytest.raises(RunRestartBlockedError) as exc_info:
+            restart_run(session, run_id)
+        assert exc_info.value.impact.segment_scope_decisions == 1
+        assert exc_info.value.impact.has_blockers
+
+
+def test_restart_blocked_by_word_range_ruling(
+    session_factory: sessionmaker[Session],
+) -> None:
+    from voxint.db.models import AdjudicationDecision, Speaker
+    from voxint.ingest import RunRestartBlockedError
+
+    with session_factory() as session:
+        run_id, seg_ids = _completed_run_with_segments(session, "incoming/restart-word.wav")
+        speaker = Speaker(display_name="test-spk")
+        session.add(speaker)
+        session.flush()
+        session.add(
+            AdjudicationDecision(
+                pipeline_run_id=run_id,
+                diarization_label="S0",
+                decision="assign",
+                speaker_id=speaker.id,
+                transcript_segment_id=seg_ids[0],
+                start_word_index=0,
+                end_word_index=3,
+                operator="reviewer",
+                idempotency_key=uuid.uuid4().hex,
+            )
+        )
+        session.commit()
+
+    with session_factory() as session:
+        with pytest.raises(RunRestartBlockedError) as exc_info:
+            restart_run(session, run_id)
+        assert exc_info.value.impact.segment_scope_decisions == 1
+        assert exc_info.value.impact.has_blockers
+
+
+def test_restart_blocked_by_enrichment_evidence(
+    session_factory: sessionmaker[Session],
+) -> None:
+    from datetime import UTC, datetime
+
+    from voxint.db.models import (
+        EnrichmentCandidate,
+        EnrichmentCandidateEvidence,
+        EnrichmentProducerRun,
+        Speaker,
+    )
+    from voxint.ingest import RunRestartBlockedError
+
+    with session_factory() as session:
+        run_id, seg_ids = _completed_run_with_segments(session, "incoming/restart-evid.wav")
+        speaker = Speaker(display_name="test-spk")
+        session.add(speaker)
+        session.flush()
+        now = datetime.now(UTC)
+        producer_run = EnrichmentProducerRun(
+            producer="test",
+            producer_version="1.0",
+            target_kind="speaker",
+            speaker_id=speaker.id,
+            covered_fields=["name"],
+            generation=1,
+            outcome="found",
+            idempotency_key=uuid.uuid4().hex,
+            started_at=now,
+            completed_at=now,
+        )
+        session.add(producer_run)
+        session.flush()
+        candidate = EnrichmentCandidate(
+            producer_run_id=producer_run.id,
+            target_kind="speaker",
+            speaker_id=speaker.id,
+            field="name",
+            value="Test Speaker",
+        )
+        session.add(candidate)
+        session.flush()
+        session.add(
+            EnrichmentCandidateEvidence(
+                candidate_id=candidate.id,
+                ordinal=0,
+                kind="transcript_segment",
+                transcript_segment_id=seg_ids[0],
+            )
+        )
+        session.commit()
+
+    with session_factory() as session:
+        with pytest.raises(RunRestartBlockedError) as exc_info:
+            restart_run(session, run_id)
+        assert exc_info.value.impact.enrichment_evidence == 1
+        assert exc_info.value.impact.has_blockers
+
+
+def test_restart_label_risk_requires_acknowledgement(
+    session_factory: sessionmaker[Session],
+) -> None:
+    from voxint.db.models import AdjudicationDecision
+    from voxint.ingest import RunRestartLabelRiskError
+
+    with session_factory() as session:
+        run_id, _ = _completed_run_with_segments(session, "incoming/restart-label.wav")
+        session.add(
+            AdjudicationDecision(
+                pipeline_run_id=run_id,
+                diarization_label="S0",
+                decision="exclude",
+                operator="reviewer",
+                idempotency_key=uuid.uuid4().hex,
+            )
+        )
+        session.commit()
+
+    with session_factory() as session:
+        with pytest.raises(RunRestartLabelRiskError) as exc_info:
+            restart_run(session, run_id)
+        assert exc_info.value.count == 1
+
+    with session_factory() as session:
+        result = restart_run(session, run_id, acknowledge_label_risk=True)
+        session.commit()
+        assert result.status is RunStatus.QUEUED
+
+
+def test_restart_ack_does_not_bypass_segment_blockers(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """acknowledge_label_risk=True must NOT bypass RunRestartBlockedError."""
+    from voxint.db.models import AdjudicationDecision, Speaker
+    from voxint.ingest import RunRestartBlockedError
+
+    with session_factory() as session:
+        run_id, seg_ids = _completed_run_with_segments(
+            session, "incoming/restart-ack-block.wav"
+        )
+        session.add(
+            AdjudicationDecision(
+                pipeline_run_id=run_id,
+                diarization_label="S0",
+                decision="exclude",
+                operator="reviewer",
+                idempotency_key=uuid.uuid4().hex,
+            )
+        )
+        speaker = Speaker(display_name="test-spk")
+        session.add(speaker)
+        session.flush()
+        session.add(
+            AdjudicationDecision(
+                pipeline_run_id=run_id,
+                diarization_label="S0",
+                decision="assign",
+                speaker_id=speaker.id,
+                transcript_segment_id=seg_ids[0],
+                operator="reviewer",
+                idempotency_key=uuid.uuid4().hex,
+            )
+        )
+        session.commit()
+
+    with session_factory() as session:
+        with pytest.raises(RunRestartBlockedError) as exc_info:
+            restart_run(session, run_id, acknowledge_label_risk=True)
+        assert exc_info.value.impact.segment_scope_decisions == 1
+        assert exc_info.value.impact.label_scope_decisions == 1
+
+
+def test_restart_clean_run_succeeds(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A completed run with segments but no rulings restarts without issue."""
+    with session_factory() as session:
+        run_id, _ = _completed_run_with_segments(session, "incoming/restart-clean.wav")
+
+    with session_factory() as session:
+        result = restart_run(session, run_id)
+        session.commit()
+        assert result.status is RunStatus.QUEUED
+
+
+def test_restart_unrelated_run_rulings_do_not_block(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Segment rulings on a DIFFERENT run do not block this run's restart."""
+    from voxint.db.models import AdjudicationDecision, Speaker, TranscriptSegment
+
+    with session_factory() as session:
+        run_id, _ = _completed_run_with_segments(session, "incoming/restart-other-a.wav")
+        other_id, _ = _completed_run_with_segments(session, "incoming/restart-other-b.wav")
+
+        other_segs = session.scalars(
+            select(TranscriptSegment.id).where(TranscriptSegment.pipeline_run_id == other_id)
+        ).all()
+        speaker = Speaker(display_name="test-spk")
+        session.add(speaker)
+        session.flush()
+        session.add(
+            AdjudicationDecision(
+                pipeline_run_id=other_id,
+                diarization_label="S0",
+                decision="assign",
+                speaker_id=speaker.id,
+                transcript_segment_id=other_segs[0],
+                operator="reviewer",
+                idempotency_key=uuid.uuid4().hex,
+            )
+        )
+        session.commit()
+
+    with session_factory() as session:
+        result = restart_run(session, run_id)
+        session.commit()
+        assert result.status is RunStatus.QUEUED
