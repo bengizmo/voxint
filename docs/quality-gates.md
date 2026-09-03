@@ -85,6 +85,11 @@ An unmatched or ineligible label produces **no proposal row**: absence of
 evidence is not a low-confidence proposal. P4 never creates `speakers` rows for
 unknown voices; that is the adjudication UI's job (P5).
 
+Auto-enrollment (see [operations.md](operations.md#auto-enrollment)) uses the
+**proposal-tier** thresholds when deciding whether a label matches an existing
+roster speaker. A label that meets proposal but not grounding is linked to the
+matched speaker (growing its centroid), not skipped.
+
 > Separately, every run records an observational `match_candidates` row per
 > label (issue #113): what the matcher decided (accepted / rejected /
 > ineligible), the top candidate, and the cosine / margin / vote-agreement

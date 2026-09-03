@@ -15,7 +15,7 @@ the image workflow only runs on GitHub (`release.yml` is guarded by
 | `ghcr.io/bengizmo/voxint-whisper:X.Y.Z-rocm` (AMD GPU, amd64, build-only in CI; see Gate R) | GHCR | `release.yml` `publish-whisper-rocm` |
 | `ghcr.io/bengizmo/voxint-llm:X.Y.Z` (optional bundled LLM, amd64, build-only; issue #67) | GHCR | `release.yml` `publish-llm` |
 | `ghcr.io/bengizmo/voxint-synthdetect:X.Y.Z` (optional synthdetect, amd64, build-only; issue #143) | GHCR | `release.yml` `publish-synthdetect` |
-| `voxint X.Y.Z` sdist + wheel | PyPI | manual `uv build` + `uv publish` (not in CI) |
+| `voxint X.Y.Z` wheel (sdist excluded, see [Gotchas](#gotchas)) | PyPI | manual `uv build` + `uv publish` (not in CI) |
 | Release notes | GitHub Releases | manual `gh release create` |
 
 Tag semantics (immutable exact-semver, per the non-NVIDIA plan): unsuffixed
@@ -385,12 +385,17 @@ model assets) voids it for the gate it feeds.
    cp -r frontend/dist/. src/voxint/api/static/app/
    rm -rf dist && uv build
    python -m zipfile -l dist/voxint-*.whl | grep static/app/.vite/manifest.json  # MUST be present
-   uv publish --token <pypi-token> dist/*
+   uv publish --token <pypi-token> dist/voxint-*.whl
    ```
+   Publish the **wheel only** (`dist/voxint-*.whl`), not `dist/*`. The sdist
+   that `uv build` produces is unusably large on a maintainer host (see the
+   sdist gotcha under [Gotchas](#gotchas)). Users install from the wheel; the
+   sdist adds no value.
+
    A wheel that ships only `static/app/.gitkeep` cannot hydrate the review-console
    islands from a `pip install`; verify the manifest is in the wheel before
    publishing. Then check `https://pypi.org/pypi/voxint/json` reports the new
-   version **and lists both files** under the release. That JSON check and the
+   version and lists the wheel. That JSON check and the
    `uv publish` exit code are the only honest success signals: `uv publish`
    prints `Uploaded <file>` progress lines even when the server then rejects
    the upload (observed with a 403 on a bad token), so never judge a publish
@@ -418,6 +423,14 @@ model assets) voids it for the gate it feeds.
   previous release.
 - PyPI publishing is deliberately manual (no long-lived token in CI). If that
   changes, prefer PyPI trusted publishing over a stored secret.
+- **Publish wheel-only, not the sdist.** `uv build` produces both a wheel and an
+  sdist. On a maintainer host the sdist is many GB (v0.33.0 produced an 18 GB
+  tarball) because `uv build` copies the entire working tree, unfiltered, into
+  its isolation temp dir before hatchling applies exclusions. PyPI rejects
+  files over ~60 MB anyway. Until `pyproject.toml` gains explicit sdist
+  exclusions (a `[tool.hatch.build.targets.sdist] exclude` list for
+  `services/*/models/`, `.venv`, `corpus-src/`, etc.), publish only the wheel:
+  `uv publish --token <token> dist/voxint-*.whl`.
 - **Build the wheel from a clean checkout.** `uv build` copies the entire working
   directory into a build-isolation temp copy before the backend runs, and that
   copy is NOT filtered by `.gitignore` (only hatchling's *output* respects the

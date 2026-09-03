@@ -107,9 +107,10 @@ What changes relative to the GPU overlay, and what doesn't:
   under the **same embedding space id** (`titanet-large-v2`). That id must pass
   the three-level parity gate against the CUDA engine
   (see [gpu-contracts.md](gpu-contracts.md)). After the titanet image reports
-  v2, matching ignores existing v1 vectors. A `voxint speakers re-embed`
-  migration command is planned; until it is available and those vectors are
-  regenerated under v2, enrolled speakers are not recognized on new runs.
+  v2, matching ignores existing v1 vectors. Run
+  `voxint speakers re-embed` (see [Upgrading the titanet embedding space](#upgrading-the-titanet-embedding-space)
+  below) to regenerate them under v2; until that is done, enrolled speakers
+  are not recognized on new runs.
 - **No `HF_TOKEN` needed.** The diarization weights are vendored into the
   pyannote image (sha256-pinned from the `pyannote-models-v1` asset release).
 - **Mixing tiers is fine.** The overlays are per-service compositions; an
@@ -1529,9 +1530,11 @@ this over raising the timeout.
 When a pipeline run completes and its diarization labels have no matching
 enrolled speaker, auto-enrollment creates unnamed speaker profiles ("Voice 1",
 "Voice 2", ...) and resolves those labels automatically. Labels that match an
-existing enrolled speaker are assigned to that speaker. Labels that do not meet
-the grounding-tier quality gates (minimum turns, duration, cosine similarity,
-margin, vote agreement) are skipped and left for manual review.
+existing enrolled speaker at the **proposal-tier** thresholds (cosine >= 0.60,
+see [quality-gates.md](quality-gates.md)) are linked to that speaker and grow
+its centroid with the new embedding. Labels that do not meet the proposal-tier
+quality gates (minimum turns, duration, cosine similarity, margin, vote
+agreement) are skipped and left for manual review.
 
 Auto-enrollment is on by default (`AUTO_ENROLL=true` in `.env`). Set
 `AUTO_ENROLL=false` to disable it and leave all labels for human adjudication.
