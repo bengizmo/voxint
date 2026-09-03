@@ -1190,7 +1190,7 @@ That triggers the browser acceptance lane and not the pipeline lane.
   browser-verified at the landing commit `af60c45`, which is the release
   content minus version pins, changelog, docs, and screenshots.
 
-#### Verdict: v0.33.0, Gate A re-run required, Gate R/M carry, Gate E deferred (2026-09-03)
+#### Verdict: v0.33.0, Gate A PASS, Gate R/M carry, Gate E deferred (2026-09-03)
 
 v0.33.0 ships the TitaNet v2 window-cap and embedding-space bump (#424), the
 `voxint speakers re-embed` migration tool (#425), and the auto-enroll
@@ -1200,16 +1200,14 @@ standard-gate fix for cross-episode speaker matching (#433, #431).
 changed (window-cap embedding, preprocess refactor, embedding-space bump to
 `titanet-large-v2`). Whisper and pyannote service code are unchanged.
 
-- **Gate A (CUDA titanet regression)**: the titanet service changed. Gate A
-  requires a fresh parity reference regeneration on CUDA hardware against the
-  tagged image. The `titanet-large-v2` embedding space was validated on CUDA
-  hardware (maintainer GPU workstation, RTX 3090) during the 15-episode reprocessing validation
-  run: all three podcasts' hosts linked correctly across episodes via
-  auto-enroll with the new standard-tier thresholds. Committed CUDA references
-  (`tests/parity/fixtures/references/`) were generated at `bd7d7b2` against
-  the v2-dev NeMo container. **Formal Gate A re-run against the tagged v0.33.0
-  image deferred to post-release** (CI parity gate covers the ONNX CPU path;
-  the CUDA sha256 build-time gate detects drift).
+- **Gate A (CUDA titanet regression): PASS.** Formal re-run completed
+  2026-09-03 against the tagged `ghcr.io/bengizmo/voxint-titanet:0.33.0`
+  image on maintainer CUDA hardware (RTX 3090). 99/114 windows
+  embedded (15 skipped by SNR/duration gates, matching committed corpus
+  expectations). All 99 embeddings are cosine 1.000000 against the
+  committed `v2-dev` references at `bd7d7b2`. References updated in-place
+  to record the `0.33.0` tag (embeddings byte-identical, only metadata
+  changed). Embedding space: `titanet-large-v2`, dim 192.
 - **Gate R (ROCm)**: whisper and pyannote services unchanged from v0.32.0.
   **Carries** the standing ROCm verdict.
 - **Gate M (Metal)**: no metal-lane paths changed. **Carries** the standing
@@ -1220,8 +1218,8 @@ changed (window-cap embedding, preprocess refactor, embedding-space bump to
   unchanged from v0.32.0 (no `frontend/` or console-path changes). **Pipeline
   lane deferred** (no AMD GPU available); browser lane carries from v0.32.0.
 
-Gates A/R/M carried on byte-identical services; Gate E browser lane green.
-Clear to tag v0.32.0.
+Gates A PASS, R/M carried on byte-identical services; Gate E browser lane
+carries from v0.32.0.
 
 #### Verdict: v0.27.0, Gates A/R/M carry, Gate E browser lane PASS (2026-08-27)
 

@@ -1,8 +1,8 @@
 {
   "meta": {
-    "generated_on": "2026-09-02",
+    "generated_on": "2026-09-03",
     "tier": "cuda",
-    "image_tag": "v2-dev",
+    "image_tag": "0.33.0",
     "image_digest": null,
     "hardware": "maintainer NVIDIA hardware",
     "corpus_sha256": {
@@ -51,12 +51,12 @@
           "pending": 0,
           "max_pending": 8,
           "rejected_since_start": 0,
-          "process_started_at": "2026-09-02T21:56:24.976231+00:00"
+          "process_started_at": "2026-09-03T10:53:00.041305+00:00"
         },
         "cpu": {
           "availability": "ok",
           "logical_cores": 32,
-          "load_average_1m": 8.48974609375
+          "load_average_1m": 15.92041015625
         }
       }
     },
