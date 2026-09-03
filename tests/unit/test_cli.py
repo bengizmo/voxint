@@ -180,6 +180,24 @@ def test_speakers_dedup_yes_without_merge(
     assert "--yes requires --merge" in capsys.readouterr().out
 
 
+def test_speakers_reconcile_parser_wiring() -> None:
+    args = build_parser().parse_args([
+        "speakers", "reconcile",
+        "--run", "12345678-1234-1234-1234-123456789abc",
+        "--dry-run", "--yes",
+    ])
+    assert args.run == uuid.UUID("12345678-1234-1234-1234-123456789abc")
+    assert args.dry_run is True
+    assert args.yes is True
+
+
+def test_speakers_reconcile_parser_defaults() -> None:
+    args = build_parser().parse_args(["speakers", "reconcile"])
+    assert args.run is None
+    assert args.dry_run is False
+    assert args.yes is False
+
+
 def test_list_rejects_unknown_status_before_db(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
