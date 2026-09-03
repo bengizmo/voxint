@@ -18,7 +18,7 @@
        label=flag.label,
        help_text=flag.help,
        state=flag.state,
-       effective=flag.env_default if flag.state == "inherit" else (flag.state == "on"),
+       effective=flag.effective,
        env_default=flag.env_default,
        disabled=flag.disabled,
        disabled_reason=flag.disabled_reason,

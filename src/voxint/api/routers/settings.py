@@ -636,26 +636,21 @@ _FEATURE_FLAG_NAMES: tuple[str, ...] = tuple(name for name, _, _ in _FEATURE_FLA
 # ``_FEATURE_FLAG_META`` to preserve the three-tuple arity and the plugin
 # ``FeatureFlag`` seam (#138). ``llm_enabled`` is a cross-section dependency
 # (AI tab), resolved from the row/settings namespace, not from this section.
+#
+# ``llm_bundled_enabled`` is deliberately absent: the bundled model is routing
+# intent, not an invariant — the #67 keyless-adoption flow requires enabling
+# the bundle FIRST (with LLM off) so a keyless operator can then flip LLM on.
 _FEATURE_DEPS: dict[str, tuple[str, ...]] = {
     "enrichment_names_llm_enabled": ("llm_enabled", "enrichment_names_enabled"),
     "enrichment_run_assets_enabled": ("llm_enabled",),
     "enrichment_run_assets_autogenerate": ("enrichment_run_assets_enabled",),
-    "llm_bundled_enabled": ("llm_enabled",),
 }
 
 _DEP_LABELS: dict[str, str] = {
-    "llm_enabled": "LLM transcript enhancement",
+    "llm_enabled": "LLM transcript enhancement (AI tab)",
     "enrichment_names_enabled": "speaker name suggestions",
     "enrichment_run_assets_enabled": "run assets",
 }
-
-# Flags whose prerequisite is another flag visible in the Features section
-# (not a cross-section dependency like ``llm_enabled``). These get the
-# ``switch-dependent`` CSS class for visual indentation under their parent.
-_FEATURE_SECTION_CHILDREN: frozenset[str] = frozenset({
-    "enrichment_names_llm_enabled",
-    "enrichment_run_assets_autogenerate",
-})
 
 
 def _effective_feature_flag_meta(
@@ -1954,25 +1949,32 @@ def _settings_context(
     # Seed cross-section dependencies into the effective namespace.
     flag_effective["llm_enabled"] = resolve_effective_llm_enabled(row, settings)
 
-    # Pass 2: derive disabled state and build the template dicts.
+    # Pass 2: derive disabled state and build the template dicts. Flags are
+    # processed in display order (parent before child), so propagating
+    # effective=False for disabled flags gives transitive disablement: if
+    # run_assets is disabled (LLM off), autogenerate sees it as unavailable.
     feature_flags: list[dict[str, object]] = []
     for name, label, help_text in flag_meta:
         deps = _FEATURE_DEPS.get(name, ())
         missing = [d for d in deps if not flag_effective.get(d, False)]
-        if missing:
-            parts = [_DEP_LABELS.get(d, d) for d in missing]
-            reason = "Needs " + " and ".join(parts) + " to be on."
+        disabled = bool(missing)
+        if disabled:
+            parts = [_DEP_LABELS[d] for d in missing]
+            reason = f"Needs {_join_operator_labels(parts)} to be on."
+            flag_effective[name] = False
         else:
             reason = ""
+        effective = flag_effective[name]
         feature_flags.append({
             "name": name,
             "label": label,
             "help": help_text,
             "state": flag_states[name],
             "env_default": bool(getattr(settings, name)),
-            "disabled": bool(missing),
+            "effective": effective,
+            "disabled": disabled,
             "disabled_reason": reason,
-            "dependent": name in _FEATURE_SECTION_CHILDREN,
+            "dependent": any(d in flag_states for d in deps),
         })
     # Semantic search section (issue #121): two tri-state rows (the feature +
     # its autogenerate rider). On an invariant-rejected save, render the

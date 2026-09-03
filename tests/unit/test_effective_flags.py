@@ -512,3 +512,56 @@ def test_effective_web_search_key_source(monkeypatch) -> None:
         )
         == "stored"
     )
+
+
+# ---------------------------------------- _FEATURE_DEPS / validator drift guard
+
+
+def test_feature_deps_match_validator_invariants() -> None:
+    """Every Features-section dependency in ``_FEATURE_DEPS`` must also be
+    enforced by ``validate_effective_flags`` (issue #406 drift guard).
+
+    For each flag→dep pair, build a valid-except-for-this-dep combination
+    (flag on, dep off) and assert the validator rejects it. A new invariant
+    added to the validator without updating ``_FEATURE_DEPS`` (or vice versa)
+    breaks this test.
+    """
+    from voxint.api.routers.settings import _DEP_LABELS, _FEATURE_DEPS
+
+    # Build a fully-enabled baseline that passes validation.
+    valid_base = _flags(
+        llm_enabled=True,
+        enrichment_names_enabled=True,
+        enrichment_names_llm_enabled=True,
+        enrichment_run_assets_enabled=True,
+        enrichment_run_assets_autogenerate=True,
+        voxint_web_research=True,
+        enrichment_web_research_enabled=True,
+        web_search_base_url="http://searx.lan:8888",
+    )
+    assert validate_effective_flags(valid_base) == []
+
+    for flag, deps in _FEATURE_DEPS.items():
+        if not hasattr(valid_base, flag):
+            continue
+        for dep in deps:
+            if not hasattr(valid_base, dep):
+                continue
+            # Flag on, dep off — validator must reject this.
+            base_vals = {
+                f.name: getattr(valid_base, f.name)
+                for f in valid_base.__dataclass_fields__.values()
+            }
+            base_vals[flag] = True
+            base_vals[dep] = False
+            combo = _flags(**base_vals)
+            errors = validate_effective_flags(combo)
+            assert errors, (
+                f"_FEATURE_DEPS says {flag} requires {dep}, but "
+                f"validate_effective_flags accepts {flag}=True with {dep}=False"
+            )
+
+    # Every dep in _FEATURE_DEPS has a label in _DEP_LABELS.
+    all_deps = {d for deps in _FEATURE_DEPS.values() for d in deps}
+    missing_labels = all_deps - set(_DEP_LABELS)
+    assert not missing_labels, f"_DEP_LABELS missing: {missing_labels}"

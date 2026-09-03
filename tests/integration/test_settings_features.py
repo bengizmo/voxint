@@ -81,6 +81,9 @@ def _switch_row(body: str, flag_name: str) -> str:
     row_start = body.rfind('<div class="switch-row', 0, marker_at)
     assert row_start >= 0, flag_name
     next_row = body.find('<div class="switch-row', marker_at)
+    section_end = body.find("</section>", marker_at)
+    if next_row < 0 or (section_end >= 0 and section_end < next_row):
+        next_row = section_end
     return body[row_start:] if next_row < 0 else body[row_start:next_row]
 
 
@@ -437,9 +440,8 @@ def test_llm_off_disables_dependent_controls(
         "enrichment_names_llm_enabled",
         "enrichment_run_assets_enabled",
         "enrichment_run_assets_autogenerate",
-        "llm_bundled_enabled",
     )
-    enabled_flags = ("enrichment_names_enabled", "ytdlp_enabled")
+    enabled_flags = ("enrichment_names_enabled", "ytdlp_enabled", "llm_bundled_enabled")
 
     for name in disabled_flags:
         assert f'id="sw-{name}"' in body
