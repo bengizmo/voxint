@@ -1,0 +1,469 @@
+"""Settings tab-level composite POST endpoints (#407): dispatch, rollback, reset.
+
+Covers the three tab-level composite routes added in #379 — ``POST /settings``
+(General), ``POST /settings/ai`` (AI), ``POST /settings/media`` (Media) — plus
+``_reconcile_switches`` idempotency and the ``_handle_reset_flag`` reset paths.
+Per-section validation matrices are NOT repeated here (siblings cover those);
+these tests verify the composite dispatch wiring, multi-section transaction
+boundaries, and reset contracts.
+"""
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session, sessionmaker
+
+from tests.integration.conftest import seed_onboarded
+from voxint.api.app import create_app
+from voxint.api.csrf import CSRF_SETTINGS, mint_csrf_token
+from voxint.app_settings import get_app_settings, get_or_create
+from voxint.config import Settings
+from voxint.db.models import AppSettings
+
+CREDS = ("reviewer", "s3cret")
+_CSRF_KEY = "settings-tab-save-test-csrf-key"
+
+_FEATURE_FLAG_NAMES = (
+    "enrichment_names_enabled",
+    "enrichment_names_llm_enabled",
+    "enrichment_run_assets_enabled",
+    "enrichment_run_assets_autogenerate",
+    "llm_bundled_enabled",
+    "ytdlp_enabled",
+)
+
+
+@pytest.fixture()
+def media_root(tmp_path: Path) -> Path:
+    return tmp_path
+
+
+def make_client(
+    session_factory: sessionmaker[Session],
+    media_root: Path,
+    *,
+    onboarded: bool = True,
+    seed_llm_enabled: bool = False,
+    **overrides: object,
+) -> tuple[TestClient, Settings]:
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+        csrf_secret=_CSRF_KEY,
+        media_root=media_root,
+        **overrides,
+    )
+    client = TestClient(create_app(settings=settings, session_factory=session_factory))
+    client.auth = CREDS
+    if onboarded:
+        seed_onboarded(session_factory, llm_enabled=seed_llm_enabled)
+    return client, settings
+
+
+def _form(
+    rendered: list[str] | None = None, **fields: str
+) -> dict[str, str | list[str]]:
+    """Build form data supporting repeated ``_rendered`` keys."""
+    result: dict[str, str | list[str]] = {
+        "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETTINGS),
+    }
+    if rendered:
+        result["_rendered"] = rendered
+    result.update(fields)
+    return result
+
+
+def _row(session_factory: sessionmaker[Session]) -> AppSettings | None:
+    with session_factory() as session:
+        return get_app_settings(session)
+
+
+def _seed_cols(session_factory: sessionmaker[Session], **columns: object) -> None:
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        for name, value in columns.items():
+            setattr(row, name, value)
+        session.commit()
+
+
+def _snapshot(session_factory: sessionmaker[Session]) -> dict[str, Any]:
+    """Full-row snapshot through a fresh session for rollback comparison."""
+    with session_factory() as session:
+        row = get_app_settings(session)
+        if row is None:
+            return {}
+        return {
+            c.key: getattr(row, c.key)
+            for c in row.__table__.columns  # type: ignore[union-attr]
+        }
+
+
+# ---------------------------------------------------------------------------
+# General tab: POST /settings
+# ---------------------------------------------------------------------------
+
+
+class TestGeneralTabSave:
+    def test_success_dispatch_all_flags_off(
+        self, session_factory: sessionmaker[Session], media_root: Path
+    ) -> None:
+        """All feature flags flipped from on to off via the composite route."""
+        client, _ = make_client(session_factory, media_root)
+        _seed_cols(
+            session_factory,
+            **{name: True for name in _FEATURE_FLAG_NAMES},
+        )
+        data = _form(rendered=list(_FEATURE_FLAG_NAMES))
+        resp = client.post("/settings", data=data, follow_redirects=False)
+        assert resp.status_code == 303
+        assert "/settings#features" in resp.headers["location"]
+        row = _row(session_factory)
+        assert row is not None
+        for name in _FEATURE_FLAG_NAMES:
+            assert getattr(row, name) is False, f"{name} should be False"
+
+    def test_idempotency_inherit_preserved(
+        self, session_factory: sessionmaker[Session], media_root: Path
+    ) -> None:
+        """Save without changes preserves NULL (inherit) — no silent override."""
+        client, _ = make_client(
+            session_factory,
+            media_root,
+            enrichment_names_enabled=True,
+            ytdlp_enabled=False,
+        )
+        data = _form(
+            rendered=list(_FEATURE_FLAG_NAMES),
+            enrichment_names_enabled="on",
+        )
+        resp = client.post("/settings", data=data, follow_redirects=False)
+        assert resp.status_code == 303
+        row = _row(session_factory)
+        assert row is not None
+        assert row.enrichment_names_enabled is None, "should stay inherit (NULL)"
+        assert row.ytdlp_enabled is None, "should stay inherit (NULL)"
+
+
+# ---------------------------------------------------------------------------
+# AI tab: POST /settings/ai
+# ---------------------------------------------------------------------------
+
+
+class TestAiTabSave:
+    def test_happy_path_all_sections(
+        self, session_factory: sessionmaker[Session], media_root: Path
+    ) -> None:
+        """Valid LLM + semantic + translation + glossary all persist together."""
+        client, _ = make_client(
+            session_factory,
+            media_root,
+            seed_llm_enabled=True,
+            semantic_index_enabled=False,
+            semantic_index_autogenerate=False,
+            translation_autogenerate=False,
+        )
+        _seed_cols(session_factory, semantic_index_enabled=False)
+        data = _form(
+            rendered=["semantic_index_enabled", "semantic_index_autogenerate",
+                      "translation_autogenerate"],
+            enabled="true",
+            llm_base_url="https://llm.example.org/v1",
+            llm_model="gpt-test",
+            llm_api_key="sk-test-key-1234",
+            semantic_index_enabled="on",
+            translation_target_language="es",
+            translation_autogenerate="on",
+            vocabulary="HVAC\nDuct",
+        )
+        resp = client.post("/settings/ai", data=data, follow_redirects=False)
+        assert resp.status_code == 303
+        assert "/settings/ai#llm" in resp.headers["location"]
+        row = _row(session_factory)
+        assert row is not None
+        assert row.llm_enabled is True
+        assert row.llm_base_url == "https://llm.example.org/v1"
+        assert row.llm_model == "gpt-test"
+        assert row.llm_api_key == "sk-test-key-1234"
+        assert row.semantic_index_enabled is True
+        assert row.translation_target_language == "es"
+        assert row.translation_autogenerate is True
+        assert row.vocabulary == ["HVAC", "Duct"]
+
+    def test_semantic_failure_rolls_back_llm(
+        self, session_factory: sessionmaker[Session], media_root: Path
+    ) -> None:
+        """Invalid semantic (autogenerate on, enabled off) rolls back LLM mutation."""
+        client, _ = make_client(
+            session_factory, media_root, seed_llm_enabled=True
+        )
+        _seed_cols(
+            session_factory,
+            llm_base_url="https://original.example.org/v1",
+            llm_model="original-model",
+            llm_api_key="sk-original-key",
+        )
+        before = _snapshot(session_factory)
+        data = _form(
+            rendered=["semantic_index_enabled", "semantic_index_autogenerate",
+                      "translation_autogenerate"],
+            enabled="true",
+            llm_base_url="https://replacement.example.org/v1",
+            llm_model="replacement-model",
+            llm_api_key="sk-replacement-key",
+            semantic_index_autogenerate="on",
+            translation_target_language="inherit",
+            translation_autogenerate="inherit",
+            vocabulary="",
+        )
+        resp = client.post("/settings/ai", data=data, follow_redirects=False)
+        assert resp.status_code == 200
+        after = _snapshot(session_factory)
+        assert after["llm_base_url"] == before["llm_base_url"]
+        assert after["llm_model"] == before["llm_model"]
+        assert after["llm_api_key"] == before["llm_api_key"]
+        assert after["semantic_index_enabled"] == before["semantic_index_enabled"]
+        assert after["semantic_index_autogenerate"] == before["semantic_index_autogenerate"]
+
+    def test_translation_failure_rolls_back_llm_and_semantic(
+        self, session_factory: sessionmaker[Session], media_root: Path
+    ) -> None:
+        """Auto-translate on without target rolls back LLM + semantic mutations."""
+        client, _ = make_client(
+            session_factory, media_root, seed_llm_enabled=True
+        )
+        _seed_cols(
+            session_factory,
+            llm_base_url="https://original.example.org/v1",
+            llm_api_key="sk-original-key",
+        )
+        before = _snapshot(session_factory)
+        data = _form(
+            rendered=["semantic_index_enabled", "semantic_index_autogenerate",
+                      "translation_autogenerate"],
+            enabled="true",
+            llm_base_url="https://replacement.example.org/v1",
+            llm_model="",
+            llm_api_key="sk-replacement-key",
+            semantic_index_enabled="on",
+            translation_target_language="inherit",
+            translation_autogenerate="on",
+            vocabulary="",
+        )
+        resp = client.post("/settings/ai", data=data, follow_redirects=False)
+        assert resp.status_code == 200
+        after = _snapshot(session_factory)
+        assert after["llm_base_url"] == before["llm_base_url"]
+        assert after["llm_api_key"] == before["llm_api_key"]
+        assert after["semantic_index_enabled"] == before["semantic_index_enabled"]
+
+    def test_glossary_failure_rolls_back_all_prior(
+        self, session_factory: sessionmaker[Session], media_root: Path
+    ) -> None:
+        """Overlong glossary term (422) rolls back LLM + semantic + translation."""
+        client, _ = make_client(
+            session_factory, media_root, seed_llm_enabled=True
+        )
+        _seed_cols(
+            session_factory,
+            llm_base_url="https://original.example.org/v1",
+            llm_api_key="sk-original-key",
+        )
+        before = _snapshot(session_factory)
+        overlong_term = "x" * 121
+        data = _form(
+            rendered=["semantic_index_enabled", "semantic_index_autogenerate",
+                      "translation_autogenerate"],
+            enabled="true",
+            llm_base_url="https://replacement.example.org/v1",
+            llm_model="",
+            llm_api_key="sk-replacement-key",
+            semantic_index_enabled="on",
+            translation_target_language="es",
+            translation_autogenerate="on",
+            vocabulary=overlong_term,
+        )
+        resp = client.post("/settings/ai", data=data, follow_redirects=False)
+        assert resp.status_code == 422
+        after = _snapshot(session_factory)
+        assert after["llm_base_url"] == before["llm_base_url"]
+        assert after["llm_api_key"] == before["llm_api_key"]
+        assert after["semantic_index_enabled"] == before["semantic_index_enabled"]
+        assert after["translation_target_language"] == before["translation_target_language"]
+        assert after["translation_autogenerate"] == before["translation_autogenerate"]
+
+
+# ---------------------------------------------------------------------------
+# Media tab: POST /settings/media
+# ---------------------------------------------------------------------------
+
+
+class TestMediaTabSave:
+    def test_success_dispatch(
+        self, session_factory: sessionmaker[Session], media_root: Path
+    ) -> None:
+        """Watch-folder + web-research all persist in one POST."""
+        client, _ = make_client(session_factory, media_root, seed_llm_enabled=True)
+        data = _form(
+            rendered=["watch_folder_enabled", "voxint_web_research",
+                      "enrichment_web_research_enabled"],
+            watch_folder_enabled="on",
+            voxint_web_research="on",
+            enrichment_web_research_enabled="on",
+            web_search_base_url="https://searxng.example.org",
+            web_search_api_key="",
+            source_authority_domains="example.com",
+        )
+        resp = client.post("/settings/media", data=data, follow_redirects=False)
+        assert resp.status_code == 303
+        assert "/settings/media#folders" in resp.headers["location"]
+        row = _row(session_factory)
+        assert row is not None
+        assert row.watch_folder_enabled is True
+        assert row.voxint_web_research is True
+        assert row.enrichment_web_research_enabled is True
+        assert row.web_search_base_url == "https://searxng.example.org"
+        assert row.source_authority_domains == "example.com"
+
+    def test_research_failure_rolls_back_watch_folder(
+        self, session_factory: sessionmaker[Session], media_root: Path
+    ) -> None:
+        """Invalid web-research (bad choice) rolls back watch-folder change."""
+        client, _ = make_client(session_factory, media_root)
+        _seed_cols(session_factory, watch_folder_enabled=False)
+        before = _snapshot(session_factory)
+        data = _form(
+            rendered=["watch_folder_enabled", "voxint_web_research",
+                      "enrichment_web_research_enabled"],
+            watch_folder_enabled="on",
+            voxint_web_research="bad_value",
+            enrichment_web_research_enabled="on",
+            web_search_base_url="",
+            web_search_api_key="",
+            source_authority_domains="",
+        )
+        resp = client.post("/settings/media", data=data, follow_redirects=False)
+        assert resp.status_code == 200
+        after = _snapshot(session_factory)
+        assert after["watch_folder_enabled"] == before["watch_folder_enabled"]
+
+
+# ---------------------------------------------------------------------------
+# Reset paths
+# ---------------------------------------------------------------------------
+
+
+class TestResetPaths:
+    @pytest.mark.parametrize(
+        ("flag", "tab", "endpoint"),
+        [
+            ("ytdlp_enabled", "", "/settings"),
+            ("semantic_index_enabled", "ai", "/settings/ai"),
+            ("watch_folder_enabled", "media", "/settings/media"),
+        ],
+    )
+    def test_happy_reset_clears_to_null(
+        self,
+        session_factory: sessionmaker[Session],
+        media_root: Path,
+        flag: str,
+        tab: str,
+        endpoint: str,
+    ) -> None:
+        """Resetting a flag sets its column to NULL and redirects correctly."""
+        client, _ = make_client(session_factory, media_root)
+        _seed_cols(session_factory, **{flag: True})
+        row_before = _row(session_factory)
+        assert row_before is not None
+        assert getattr(row_before, flag) is True
+
+        data = _form(reset_flag=flag)
+        resp = client.post(endpoint, data=data, follow_redirects=False)
+        assert resp.status_code == 303
+        assert f"#sw-{flag}" in resp.headers["location"]
+        if tab:
+            assert f"/settings/{tab}" in resp.headers["location"]
+
+        row_after = _row(session_factory)
+        assert row_after is not None
+        assert getattr(row_after, flag) is None
+
+    def test_reset_ignores_dirty_fields(
+        self, session_factory: sessionmaker[Session], media_root: Path
+    ) -> None:
+        """Reset is an early return — other form fields are not processed."""
+        client, _ = make_client(session_factory, media_root)
+        _seed_cols(session_factory, ytdlp_enabled=True, enrichment_names_enabled=False)
+        data = _form(
+            rendered=list(_FEATURE_FLAG_NAMES),
+            reset_flag="ytdlp_enabled",
+            enrichment_names_enabled="on",
+        )
+        resp = client.post("/settings", data=data, follow_redirects=False)
+        assert resp.status_code == 303
+        row = _row(session_factory)
+        assert row is not None
+        assert row.ytdlp_enabled is None
+        assert row.enrichment_names_enabled is False, "dirty field must not be processed"
+
+    def test_reset_invariant_violation_rolls_back(
+        self, session_factory: sessionmaker[Session], media_root: Path
+    ) -> None:
+        """Resetting a prerequisite flag while dependent is on rolls back."""
+        client, _ = make_client(
+            session_factory,
+            media_root,
+            seed_llm_enabled=True,
+        )
+        _seed_cols(
+            session_factory,
+            enrichment_run_assets_enabled=True,
+            enrichment_run_assets_autogenerate=True,
+        )
+        data = _form(reset_flag="enrichment_run_assets_enabled")
+        resp = client.post("/settings", data=data, follow_redirects=False)
+        assert resp.status_code == 303
+        row = _row(session_factory)
+        assert row is not None
+        assert row.enrichment_run_assets_enabled is True, "should not have been reset"
+
+    def test_non_resettable_flag_ignored(
+        self, session_factory: sessionmaker[Session], media_root: Path
+    ) -> None:
+        """Submitting a non-resettable flag name redirects safely, no change."""
+        client, _ = make_client(
+            session_factory, media_root, seed_llm_enabled=True
+        )
+        data = _form(reset_flag="llm_enabled")
+        resp = client.post("/settings/ai", data=data, follow_redirects=False)
+        assert resp.status_code == 303
+        row = _row(session_factory)
+        assert row is not None
+        assert row.llm_enabled is True, "non-resettable flag must be unchanged"
+
+
+# ---------------------------------------------------------------------------
+# CSRF
+# ---------------------------------------------------------------------------
+
+
+class TestCsrf:
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["/settings", "/settings/ai", "/settings/media"],
+    )
+    def test_missing_csrf_rejected(
+        self,
+        session_factory: sessionmaker[Session],
+        media_root: Path,
+        endpoint: str,
+    ) -> None:
+        """POST without CSRF token returns 403 and writes nothing."""
+        client, _ = make_client(session_factory, media_root)
+        before = _snapshot(session_factory)
+        resp = client.post(endpoint, data={}, follow_redirects=False)
+        assert resp.status_code == 403
+        after = _snapshot(session_factory)
+        assert after == before
