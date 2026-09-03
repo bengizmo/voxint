@@ -169,6 +169,7 @@ from voxint.ingest import (
     delete_run_derived_media,
     pause_run,
     requeue_failed_run,
+    restart_impact,
     restart_run,
     resume_run,
     submit_upload,
@@ -912,6 +913,12 @@ def build_run_detail_context(
     transcript_available = bool(
         session.scalar(select(exists().where(TranscriptSegment.pipeline_run_id == run_id)))
     )
+    run_archived = run.archived_at is not None
+    run_terminal = run.status in (
+        RunStatus.COMPLETED.value,
+        RunStatus.FAILED.value,
+        RunStatus.CANCELLED.value,
+    )
     context: dict[str, Any] = {
         "request": request,
         "run": run,
@@ -945,12 +952,12 @@ def build_run_detail_context(
         # Soft-archive + derived-media deletion (issue #5, slice 2). The
         # buttons render only for a terminal run; un-archive replaces
         # archive once the run carries a stamp.
-        "run_archived": run.archived_at is not None,
-        "run_terminal": run.status
-        in (
-            RunStatus.COMPLETED.value,
-            RunStatus.FAILED.value,
-            RunStatus.CANCELLED.value,
+        "run_archived": run_archived,
+        "run_terminal": run_terminal,
+        "restart_impact": (
+            restart_impact(session, run.id)
+            if run_terminal and not run_archived
+            else None
         ),
         "csrf_run_archive": mint_csrf_token(
             request.app.state.csrf_secret, CSRF_RUN_ARCHIVE
@@ -1424,8 +1431,9 @@ def restart_run_route(
 
     Returns 409 when segment-scope rulings or enrichment evidence block restart
     (append-only, cannot be deleted), or when label-scope rulings exist and
-    *acknowledge_label_risk* is not set. The restart templates do not yet render
-    an acknowledgement control; the 409 error page explains the situation.
+    *acknowledge_label_risk* is not set. Both restart forms (run detail and
+    editor) render a required checkbox when label-scope rulings exist and
+    disable the button entirely when hard blockers are present.
     """
     _require_csrf(request, CSRF_RESTART, csrf_token)
     run = _run_or_404(session, run_id)

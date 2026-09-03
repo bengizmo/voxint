@@ -61,6 +61,7 @@ from voxint.enrichment.translation_jobs import (
     normalized_language,
     translation_gates_open,
 )
+from voxint.ingest import restart_impact
 from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import active_speakers
 
@@ -209,6 +210,17 @@ def media_detail_page(
         if selected_run_obj is not None
         else None
     )
+    _TERMINAL = {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
+    _run_restartable = (
+        selected_run_obj is not None
+        and selected_run_obj.status in _TERMINAL
+        and selected_run_obj.archived_at is None
+    )
+    ri = (
+        restart_impact(session, selected_run_obj.id)
+        if selected_run_obj is not None and _run_restartable
+        else None
+    )
 
     return templates.TemplateResponse(
         request,
@@ -222,6 +234,7 @@ def media_detail_page(
             "token": token if claim_valid else None,
             "progress": {"verified": verified_n, "total": total},
             "csrf_restart": csrf_restart,
+            "restart_impact": ri,
             "active_nav": "media",
         },
     )

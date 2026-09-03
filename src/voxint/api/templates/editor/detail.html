@@ -65,6 +65,33 @@
     </dl>
     {% set restartable = selected_run.status in ('completed', 'failed', 'cancelled') and not selected_run.archived_at %}
     {% if restartable and csrf_restart %}
+    {% if restart_impact and restart_impact.has_blockers %}
+    <div class="mt-2">
+      <button type="button" class="text-sm" disabled>
+        {% if selected_run.status == 'failed' %}Retry{% else %}Re-run{% endif %}
+      </button>
+      <span class="text-sm notice-warn">Blocked:
+        {{ restart_impact.segment_scope_decisions }} segment-scope ruling(s) and
+        {{ restart_impact.enrichment_evidence }} enrichment evidence row(s)
+        prevent restart. Submit as a new run instead.</span>
+    </div>
+    {% elif restart_impact and restart_impact.label_scope_decisions > 0 %}
+    <form method="post" action="/runs/{{ selected_run.id }}/restart" class="mt-2">
+      <input type="hidden" name="revision" value="{{ selected_run.revision }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_restart }}">
+      <div class="notice-warn text-sm" style="margin-bottom: 0.25em">
+        <label>
+          <input type="checkbox" name="acknowledge_label_risk" value="true" required>
+          {{ restart_impact.label_scope_decisions }} speaker ruling(s) may apply
+          to different voices after re-processing.
+        </label>
+      </div>
+      <button type="submit" class="text-sm"
+        onclick="return confirm('Restart from scratch? This re-processes all stages.')">
+        {% if selected_run.status == 'failed' %}Retry{% else %}Re-run{% endif %}
+      </button>
+    </form>
+    {% else %}
     <form method="post" action="/runs/{{ selected_run.id }}/restart" class="mt-2">
       <input type="hidden" name="revision" value="{{ selected_run.revision }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_restart }}">
@@ -73,6 +100,7 @@
         {% if selected_run.status == 'failed' %}Retry{% else %}Re-run{% endif %}
       </button>
     </form>
+    {% endif %}
     {% endif %}
     <p class="mt-1"><a href="/runs/{{ selected_run.id }}" class="text-sm">Run details</a></p>
     {% endif %}

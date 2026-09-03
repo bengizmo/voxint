@@ -8,7 +8,6 @@ exception: file-based offline scoring that never touches settings or the DB.
 
 import argparse
 import math
-import re
 import sys
 import time
 import uuid
@@ -26,6 +25,7 @@ if TYPE_CHECKING:
     from voxint.app_settings import EffectiveWebResearch
     from voxint.config import Settings
     from voxint.db.models import MediaItem, Stage
+    from voxint.speakers.dedup import SkippedPair
 
 # Operational imports (settings, SQLAlchemy, DB models) live inside the
 # handlers: `voxint score …` is file-only and must not pay for — or be able to
@@ -1187,6 +1187,20 @@ def _speakers_reembed(args: argparse.Namespace) -> int:
         engine.dispose()
 
 
+def _format_skip(
+    skip: "SkippedPair", speakers: dict[uuid.UUID, str]
+) -> str:
+    """Format a skipped-pair reason for CLI display."""
+    name_a = speakers.get(skip.pair.speaker_a_id, "<unknown>")
+    name_b = speakers.get(skip.pair.speaker_b_id, "<unknown>")
+    if skip.reason == "ambiguous_direction":
+        return f"{name_a} / {name_b} — ambiguous direction"
+    elif skip.reason == "overlaps_prior":
+        return f"{name_a} / {name_b} — overlaps with prior merge, rerun after completion"
+    else:
+        return f"{name_a} / {name_b} — {skip.reason}"
+
+
 def _speakers_dedup(args: argparse.Namespace) -> int:
     """Report probable duplicate speakers and optionally merge safe pairs."""
     from sqlalchemy import func, select
@@ -1194,6 +1208,7 @@ def _speakers_dedup(args: argparse.Namespace) -> int:
     from voxint.config import SettingsError, get_settings
     from voxint.db.models import Speaker, SpeakerEmbedding
     from voxint.db.session import build_session_factory
+    from voxint.speakers.dedup import plan_dedup_merges
     from voxint.speakers.matching import (
         DuplicatePair,
         find_possible_duplicates,
@@ -1282,53 +1297,29 @@ def _speakers_dedup(args: argparse.Namespace) -> int:
             return 0
 
         assert merge_threshold is not None
-        _PLACEHOLDER_RE = re.compile(r"^Voice \d+$")
-        planned_merges: list[tuple[uuid.UUID, uuid.UUID, DuplicatePair]] = []
-        skipped: list[str] = []
-        seen_speaker_ids: set[uuid.UUID] = set()
-        for pair in sorted(pairs, key=lambda item: -item.similarity):
-            if pair.similarity < merge_threshold:
-                continue
-            name_a = speakers[pair.speaker_a_id]
-            name_b = speakers[pair.speaker_b_id]
-            a_is_placeholder = _PLACEHOLDER_RE.fullmatch(name_a) is not None
-            b_is_placeholder = _PLACEHOLDER_RE.fullmatch(name_b) is not None
-            if a_is_placeholder == b_is_placeholder:
-                skipped.append(f"{name_a} / {name_b} — ambiguous direction")
-                continue
-            if pair.speaker_a_id in seen_speaker_ids or pair.speaker_b_id in seen_speaker_ids:
-                skipped.append(
-                    f"{name_a} / {name_b} — overlaps with prior merge, rerun after completion"
-                )
-                continue
-            if a_is_placeholder:
-                source_id, target_id = pair.speaker_a_id, pair.speaker_b_id
-            else:
-                source_id, target_id = pair.speaker_b_id, pair.speaker_a_id
-            planned_merges.append((source_id, target_id, pair))
-            seen_speaker_ids.update((source_id, target_id))
+        plan = plan_dedup_merges(pairs, speakers, merge_threshold)
 
         print()
         print(f"Merge plan (merge-threshold {merge_threshold:.2f}):")
         print()
-        for source_id, target_id, pair in planned_merges:
+        for merge in plan.merges:
             print(
-                f"  {speaker_label(source_id)} → {speaker_label(target_id)}  "
-                f"[{pair.similarity:.2f}]"
+                f"  {speaker_label(merge.source_id)} → {speaker_label(merge.target_id)}  "
+                f"[{merge.pair.similarity:.2f}]"
             )
-        if skipped:
+        if plan.skipped:
             print()
             print("Skipped:")
-            for reason in skipped:
-                print(f"  {reason}")
-        if not planned_merges:
+            for skip in plan.skipped:
+                print(f"  {_format_skip(skip, speakers)}")
+        if not plan.merges:
             print("no unambiguous merges planned")
             return 0
 
         if not args.yes:
             try:
                 confirmed = (
-                    input(f"Proceed with {len(planned_merges)} merge(s)? [y/N] ").strip().lower()
+                    input(f"Proceed with {len(plan.merges)} merge(s)? [y/N] ").strip().lower()
                     == "y"
                 )
             except EOFError:
@@ -1339,9 +1330,9 @@ def _speakers_dedup(args: argparse.Namespace) -> int:
 
         results = []
         with factory() as session:
-            for source_id, target_id, _pair in planned_merges:
+            for merge in plan.merges:
                 try:
-                    results.append(merge_speakers(session, source_id, target_id))
+                    results.append(merge_speakers(session, merge.source_id, merge.target_id))
                 except RosterError as exc:
                     session.rollback()
                     print(f"error: conflict during merge — {exc}")
@@ -1359,6 +1350,85 @@ def _speakers_dedup(args: argparse.Namespace) -> int:
                 f"{result.aliases_collapsed} alias(es))"
             )
         return 0
+    finally:
+        engine.dispose()
+
+
+def _speakers_reconcile(args: argparse.Namespace) -> int:
+    """Re-derive proposals for runs matched against a cold roster."""
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.session import build_session_factory
+    from voxint.speakers.matching import gates_from_settings
+    from voxint.speakers.reconcile import cold_start_affected_runs, reconcile_run
+
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    gates = gates_from_settings(settings)
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    factory = build_session_factory(engine)
+    try:
+        with factory() as session:
+            plan = cold_start_affected_runs(session, run_id=args.run)
+
+        if not plan.affected_run_ids:
+            print("no cold-start-affected runs found")
+            return 0
+
+        print(f"roster sizes: {plan.current_roster_sizes}")
+        print(
+            f"{len(plan.affected_run_ids)} run(s) matched against a smaller roster "
+            f"(max deficit: {plan.max_deficit})"
+        )
+
+        if not args.yes and not args.dry_run:
+            try:
+                confirmed = (
+                    input(f"Reconcile {len(plan.affected_run_ids)} run(s)? [y/N] ")
+                    .strip()
+                    .lower()
+                    == "y"
+                )
+            except EOFError:
+                confirmed = False
+            if not confirmed:
+                print("aborted")
+                return 1
+
+        failures = 0
+        for run_id in plan.affected_run_ids:
+            with factory() as session:
+                try:
+                    result = reconcile_run(session, run_id, gates)
+                    if args.dry_run:
+                        session.rollback()
+                    else:
+                        session.commit()
+                except Exception as exc:
+                    session.rollback()
+                    failures += 1
+                    print(f"{run_id}: failed - {exc}")
+                    continue
+            if result.unchanged:
+                print(f"{run_id}: unchanged")
+            else:
+                print(
+                    f"{run_id}: {result.added} added, {result.removed} removed, "
+                    f"{result.changed} changed"
+                )
+        reconciled = len(plan.affected_run_ids) - failures
+        if args.dry_run:
+            print(f"dry run: {reconciled} run(s) would change, no writes applied")
+        elif failures:
+            print(f"result: {reconciled} reconciled, {failures} failed")
+        else:
+            print(f"result: {reconciled} run(s) reconciled")
+        return 1 if failures else 0
     finally:
         engine.dispose()
 
@@ -2477,6 +2547,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip the interactive confirmation in merge mode",
     )
     dedup_p.set_defaults(fn=_speakers_dedup)
+    reconcile_p = speakers_sub.add_parser(
+        "reconcile",
+        help="re-derive proposals for runs matched against a cold roster",
+    )
+    reconcile_p.add_argument(
+        "--run",
+        type=uuid.UUID,
+        help="process only this pipeline run UUID (discovery filter)",
+    )
+    reconcile_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report affected runs without writing changes",
+    )
+    reconcile_p.add_argument(
+        "--yes",
+        action="store_true",
+        help="skip the interactive confirmation",
+    )
+    reconcile_p.set_defaults(fn=_speakers_reconcile)
     tutorial_p = sub.add_parser("tutorial", help="bundled guided-tutorial fixtures")
     tutorial_sub = tutorial_p.add_subparsers(dest="tutorial_command", required=True)
     seed_p = tutorial_sub.add_parser(
