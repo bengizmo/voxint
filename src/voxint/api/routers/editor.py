@@ -218,7 +218,7 @@ def media_detail_page(
     )
     ri = (
         restart_impact(session, selected_run_obj.id)
-        if _run_restartable and selected_run_obj is not None
+        if selected_run_obj is not None and _run_restartable
         else None
     )
 

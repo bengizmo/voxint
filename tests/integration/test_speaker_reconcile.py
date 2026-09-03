@@ -1,7 +1,8 @@
-"""Integration tests for the speakers reconcile command.
+"""Integration tests for cold-start speaker reconcile discovery.
 
-Tests cold-start detection, per-run reconciliation, embedding-space
-isolation, idempotency, dry-run rollback, and the --run filter.
+Covers embedding-space-aware detection, false-positive exclusion,
+NULL roster_size handling, and the --run filter.  Per-run reconciliation,
+idempotency, and CLI dry-run tests are a follow-up.
 """
 
 from __future__ import annotations
@@ -13,20 +14,14 @@ import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.db.models import (
-    DiarizationTurn,
     MatchCandidate,
     MediaItem,
     PipelineRun,
     RunStatus,
     Speaker,
-    SpeakerAssignment,
     SpeakerEmbedding,
 )
-from voxint.speakers.reconcile import (
-    ReconcilePlan,
-    cold_start_affected_runs,
-    reconcile_run,
-)
+from voxint.speakers.reconcile import cold_start_affected_runs
 
 SPACE = "test-reconcile-v1"
 SPACE_B = "test-reconcile-v2"

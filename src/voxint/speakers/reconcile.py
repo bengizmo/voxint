@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import distinct, func, select
+from sqlalchemy import and_, distinct, func, or_, select
 from sqlalchemy.orm import Session
 
 from voxint.db.models import (
@@ -71,13 +71,12 @@ def cold_start_affected_runs(
     flag runs matched in space B.
 
     When *run_id* is given it acts as a discovery filter: only that run is
-    returned, and only if it qualifies.
+    returned, and only if it qualifies.  Archived runs are included
+    (consistent with auto-enroll-backfill).
     """
     sizes = _current_roster_sizes(session)
     if not sizes:
         return ReconcilePlan({}, (), 0)
-
-    from sqlalchemy import and_, or_
 
     space_predicates = [
         and_(
@@ -95,6 +94,7 @@ def cold_start_affected_runs(
             MatchCandidate.roster_size.isnot(None),
             or_(*space_predicates),
         )
+        .order_by(MatchCandidate.pipeline_run_id)
     )
     if run_id is not None:
         query = query.where(MatchCandidate.pipeline_run_id == run_id)

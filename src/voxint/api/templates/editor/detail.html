@@ -70,8 +70,10 @@
       <button type="button" class="text-sm" disabled>
         {% if selected_run.status == 'failed' %}Retry{% else %}Re-run{% endif %}
       </button>
-      <span class="text-sm notice-warn">Blocked: segment-scope rulings or
-        enrichment evidence prevent restart. Submit as a new run instead.</span>
+      <span class="text-sm notice-warn">Blocked:
+        {{ restart_impact.segment_scope_decisions }} segment-scope ruling(s) and
+        {{ restart_impact.enrichment_evidence }} enrichment evidence row(s)
+        prevent restart. Submit as a new run instead.</span>
     </div>
     {% elif restart_impact and restart_impact.label_scope_decisions > 0 %}
     <form method="post" action="/runs/{{ selected_run.id }}/restart" class="mt-2">

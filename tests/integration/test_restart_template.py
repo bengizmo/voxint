@@ -186,4 +186,4 @@ class TestRestartPost:
             },
             follow_redirects=False,
         )
-        assert resp.status_code in (303, 200)
+        assert resp.status_code == 303

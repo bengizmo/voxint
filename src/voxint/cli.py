@@ -1195,7 +1195,10 @@ def _format_skip(
     name_b = speakers.get(skip.pair.speaker_b_id, "<unknown>")
     if skip.reason == "ambiguous_direction":
         return f"{name_a} / {name_b} — ambiguous direction"
-    return f"{name_a} / {name_b} — overlaps with prior merge, rerun after completion"
+    elif skip.reason == "overlaps_prior":
+        return f"{name_a} / {name_b} — overlaps with prior merge, rerun after completion"
+    else:
+        return f"{name_a} / {name_b} — {skip.reason}"
 
 
 def _speakers_dedup(args: argparse.Namespace) -> int:
@@ -1418,8 +1421,13 @@ def _speakers_reconcile(args: argparse.Namespace) -> int:
                     f"{run_id}: {result.added} added, {result.removed} removed, "
                     f"{result.changed} changed"
                 )
+        reconciled = len(plan.affected_run_ids) - failures
         if args.dry_run:
-            print("dry run: no changes written")
+            print(f"dry run: {reconciled} run(s) would change, no writes applied")
+        elif failures:
+            print(f"result: {reconciled} reconciled, {failures} failed")
+        else:
+            print(f"result: {reconciled} run(s) reconciled")
         return 1 if failures else 0
     finally:
         engine.dispose()

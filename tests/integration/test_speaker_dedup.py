@@ -7,10 +7,9 @@ all preceding merges in the same transaction are also rolled back.
 from __future__ import annotations
 
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
-import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.db.models import Speaker, SpeakerEmbedding
@@ -49,7 +48,7 @@ def test_batch_rollback_on_mid_merge_error(
     """When the second merge raises RosterError, the first merge must
     also be rolled back (no partial batch)."""
     from voxint.cli import main
-    from voxint.speakers.roster import MergeResult, RosterError
+    from voxint.speakers.roster import RosterError
 
     with session_factory() as session:
         voice1 = _add_speaker(session, "Voice 1", E0)
@@ -68,16 +67,15 @@ def test_batch_rollback_on_mid_merge_error(
             raise RosterError("simulated conflict on second merge")
         return original_merge(session, source_id, target_id)
 
-    with patch("voxint.cli._speakers_dedup.__module__", "voxint.cli"):
-        import voxint.speakers.roster as roster_mod
+    import voxint.speakers.roster as roster_mod
 
-        original_merge = roster_mod.merge_speakers
-        with patch.object(roster_mod, "merge_speakers", side_effect=_merge_with_second_failure):
-            exit_code = main([
-                "speakers", "dedup",
-                "--threshold", "0.50",
-                "--merge", "--merge-threshold", "0.50", "--yes",
-            ])
+    original_merge = roster_mod.merge_speakers
+    with patch.object(roster_mod, "merge_speakers", side_effect=_merge_with_second_failure):
+        exit_code = main([
+            "speakers", "dedup",
+            "--threshold", "0.50",
+            "--merge", "--merge-threshold", "0.50", "--yes",
+        ])
 
     assert exit_code == 1
 
