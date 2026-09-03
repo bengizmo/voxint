@@ -132,4 +132,9 @@ commits = [
     # manifest with "hvac". Benign deployment config and demo-vertical name;
     # files do not exist in the current worktree.
     "035a4b94a23da5fcd9938dab476964439f8b6c74",
+    # 1c903b0f: #407 settings tab integration tests used "HVAC" as a
+    # vocabulary fixture token. Scrubbed to "Alpha"/"Beta" in a follow-up
+    # commit; the historical commit is allowlisted because published
+    # history is never rewritten.
+    "1c903b0f2972c2437bb4d4be1dac50424d1cca16",
 ]
