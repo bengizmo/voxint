@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
-from voxint.api.csrf import CSRF_SETTINGS, mint_csrf_token
+from voxint.api.csrf import CSRF_SETTINGS, CSRF_SETUP, mint_csrf_token
 from voxint.app_settings import get_app_settings, get_or_create
 from voxint.config import Settings
 from voxint.db.models import AppSettings
@@ -25,19 +25,16 @@ from voxint.db.models import AppSettings
 CREDS = ("reviewer", "s3cret")
 _CSRF_KEY = "settings-tab-save-test-csrf-key"
 
-_FEATURE_FLAG_NAMES = (
-    "enrichment_names_enabled",
-    "enrichment_names_llm_enabled",
-    "enrichment_run_assets_enabled",
-    "enrichment_run_assets_autogenerate",
-    "llm_bundled_enabled",
-    "ytdlp_enabled",
-)
-
 
 @pytest.fixture()
 def media_root(tmp_path: Path) -> Path:
     return tmp_path
+
+
+def _feature_flag_names() -> tuple[str, ...]:
+    from voxint.api.routers.settings import _FEATURE_FLAG_NAMES
+
+    return _FEATURE_FLAG_NAMES
 
 
 def make_client(
@@ -54,6 +51,7 @@ def make_client(
         voxint_password=CREDS[1],
         csrf_secret=_CSRF_KEY,
         media_root=media_root,
+        console_settings_enabled=True,
         **overrides,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
@@ -111,24 +109,26 @@ class TestGeneralTabSave:
         self, session_factory: sessionmaker[Session], media_root: Path
     ) -> None:
         """All feature flags flipped from on to off via the composite route."""
+        flag_names = _feature_flag_names()
         client, _ = make_client(session_factory, media_root)
         _seed_cols(
             session_factory,
-            **{name: True for name in _FEATURE_FLAG_NAMES},
+            **{name: True for name in flag_names},
         )
-        data = _form(rendered=list(_FEATURE_FLAG_NAMES))
+        data = _form(rendered=list(flag_names))
         resp = client.post("/settings", data=data, follow_redirects=False)
         assert resp.status_code == 303
         assert "/settings#features" in resp.headers["location"]
         row = _row(session_factory)
         assert row is not None
-        for name in _FEATURE_FLAG_NAMES:
+        for name in flag_names:
             assert getattr(row, name) is False, f"{name} should be False"
 
     def test_idempotency_inherit_preserved(
         self, session_factory: sessionmaker[Session], media_root: Path
     ) -> None:
         """Save without changes preserves NULL (inherit) — no silent override."""
+        flag_names = _feature_flag_names()
         client, _ = make_client(
             session_factory,
             media_root,
@@ -136,15 +136,15 @@ class TestGeneralTabSave:
             ytdlp_enabled=False,
         )
         data = _form(
-            rendered=list(_FEATURE_FLAG_NAMES),
+            rendered=list(flag_names),
             enrichment_names_enabled="on",
         )
         resp = client.post("/settings", data=data, follow_redirects=False)
         assert resp.status_code == 303
         row = _row(session_factory)
         assert row is not None
-        assert row.enrichment_names_enabled is None, "should stay inherit (NULL)"
-        assert row.ytdlp_enabled is None, "should stay inherit (NULL)"
+        for name in flag_names:
+            assert getattr(row, name) is None, f"{name} should stay inherit (NULL)"
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +204,7 @@ class TestAiTabSave:
             llm_base_url="https://original.example.org/v1",
             llm_model="original-model",
             llm_api_key="sk-original-key",
+            semantic_index_enabled=True,
         )
         before = _snapshot(session_factory)
         data = _form(
@@ -220,6 +221,7 @@ class TestAiTabSave:
         )
         resp = client.post("/settings/ai", data=data, follow_redirects=False)
         assert resp.status_code == 200
+        assert "auto-index" in resp.text.lower() or "semantic search on" in resp.text.lower()
         after = _snapshot(session_factory)
         assert after["llm_base_url"] == before["llm_base_url"]
         assert after["llm_model"] == before["llm_model"]
@@ -238,6 +240,7 @@ class TestAiTabSave:
             session_factory,
             llm_base_url="https://original.example.org/v1",
             llm_api_key="sk-original-key",
+            semantic_index_enabled=True,
         )
         before = _snapshot(session_factory)
         data = _form(
@@ -254,6 +257,7 @@ class TestAiTabSave:
         )
         resp = client.post("/settings/ai", data=data, follow_redirects=False)
         assert resp.status_code == 200
+        assert "preferred language" in resp.text.lower()
         after = _snapshot(session_factory)
         assert after["llm_base_url"] == before["llm_base_url"]
         assert after["llm_api_key"] == before["llm_api_key"]
@@ -270,6 +274,7 @@ class TestAiTabSave:
             session_factory,
             llm_base_url="https://original.example.org/v1",
             llm_api_key="sk-original-key",
+            semantic_index_enabled=True,
         )
         before = _snapshot(session_factory)
         overlong_term = "x" * 121
@@ -287,6 +292,7 @@ class TestAiTabSave:
         )
         resp = client.post("/settings/ai", data=data, follow_redirects=False)
         assert resp.status_code == 422
+        assert "120 characters" in resp.text
         after = _snapshot(session_factory)
         assert after["llm_base_url"] == before["llm_base_url"]
         assert after["llm_api_key"] == before["llm_api_key"]
@@ -330,7 +336,7 @@ class TestMediaTabSave:
     def test_research_failure_rolls_back_watch_folder(
         self, session_factory: sessionmaker[Session], media_root: Path
     ) -> None:
-        """Invalid web-research (bad choice) rolls back watch-folder change."""
+        """Master-on with no base URL rolls back watch-folder change."""
         client, _ = make_client(session_factory, media_root)
         _seed_cols(session_factory, watch_folder_enabled=False)
         before = _snapshot(session_factory)
@@ -338,14 +344,15 @@ class TestMediaTabSave:
             rendered=["watch_folder_enabled", "voxint_web_research",
                       "enrichment_web_research_enabled"],
             watch_folder_enabled="on",
-            voxint_web_research="bad_value",
-            enrichment_web_research_enabled="on",
+            voxint_web_research="on",
+            enrichment_web_research_enabled="off",
             web_search_base_url="",
             web_search_api_key="",
             source_authority_domains="",
         )
         resp = client.post("/settings/media", data=data, follow_redirects=False)
         assert resp.status_code == 200
+        assert "search provider" in resp.text.lower() or "base_url" in resp.text.lower()
         after = _snapshot(session_factory)
         assert after["watch_folder_enabled"] == before["watch_folder_enabled"]
 
@@ -394,10 +401,11 @@ class TestResetPaths:
         self, session_factory: sessionmaker[Session], media_root: Path
     ) -> None:
         """Reset is an early return — other form fields are not processed."""
+        flag_names = _feature_flag_names()
         client, _ = make_client(session_factory, media_root)
         _seed_cols(session_factory, ytdlp_enabled=True, enrichment_names_enabled=False)
         data = _form(
-            rendered=list(_FEATURE_FLAG_NAMES),
+            rendered=list(flag_names),
             reset_flag="ytdlp_enabled",
             enrichment_names_enabled="on",
         )
@@ -422,12 +430,38 @@ class TestResetPaths:
             enrichment_run_assets_enabled=True,
             enrichment_run_assets_autogenerate=True,
         )
+        before = _snapshot(session_factory)
         data = _form(reset_flag="enrichment_run_assets_enabled")
         resp = client.post("/settings", data=data, follow_redirects=False)
         assert resp.status_code == 303
+        after = _snapshot(session_factory)
+        assert after["enrichment_run_assets_enabled"] is True, "should not have been reset"
+        assert (
+            after["enrichment_run_assets_autogenerate"]
+            == before["enrichment_run_assets_autogenerate"]
+        )
+
+    def test_reset_semantic_invariant_violation_rolls_back(
+        self, session_factory: sessionmaker[Session], media_root: Path
+    ) -> None:
+        """Resetting semantic_index_enabled while autogenerate is on rolls back."""
+        client, _ = make_client(
+            session_factory,
+            media_root,
+            semantic_index_enabled=False,
+            semantic_index_autogenerate=False,
+        )
+        _seed_cols(
+            session_factory,
+            semantic_index_enabled=True,
+            semantic_index_autogenerate=True,
+        )
+        data = _form(reset_flag="semantic_index_enabled")
+        resp = client.post("/settings/ai", data=data, follow_redirects=False)
+        assert resp.status_code == 303
         row = _row(session_factory)
         assert row is not None
-        assert row.enrichment_run_assets_enabled is True, "should not have been reset"
+        assert row.semantic_index_enabled is True, "should not have been reset"
 
     def test_non_resettable_flag_ignored(
         self, session_factory: sessionmaker[Session], media_root: Path
@@ -436,12 +470,12 @@ class TestResetPaths:
         client, _ = make_client(
             session_factory, media_root, seed_llm_enabled=True
         )
+        before = _snapshot(session_factory)
         data = _form(reset_flag="llm_enabled")
         resp = client.post("/settings/ai", data=data, follow_redirects=False)
         assert resp.status_code == 303
-        row = _row(session_factory)
-        assert row is not None
-        assert row.llm_enabled is True, "non-resettable flag must be unchanged"
+        after = _snapshot(session_factory)
+        assert after == before
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +498,27 @@ class TestCsrf:
         client, _ = make_client(session_factory, media_root)
         before = _snapshot(session_factory)
         resp = client.post(endpoint, data={}, follow_redirects=False)
+        assert resp.status_code == 403
+        after = _snapshot(session_factory)
+        assert after == before
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["/settings", "/settings/ai", "/settings/media"],
+    )
+    def test_wrong_scope_csrf_rejected(
+        self,
+        session_factory: sessionmaker[Session],
+        media_root: Path,
+        endpoint: str,
+    ) -> None:
+        """CSRF token from a different scope returns 403 and writes nothing."""
+        client, _ = make_client(session_factory, media_root)
+        before = _snapshot(session_factory)
+        wrong_token = mint_csrf_token(_CSRF_KEY, CSRF_SETUP)
+        resp = client.post(
+            endpoint, data={"csrf_token": wrong_token}, follow_redirects=False
+        )
         assert resp.status_code == 403
         after = _snapshot(session_factory)
         assert after == before
