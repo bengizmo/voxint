@@ -14,6 +14,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   service-stale voice embedding spaces.
 
 ### Fixed
+- **Cross-episode speaker matching no longer creates duplicate "Voice N"
+  entries** (#433). Auto-enroll's link-or-create decision was using
+  grounding-tier cosine thresholds (>= 0.70), rejecting same-speaker
+  matches in the empirical 0.60-0.70 variance band. Now uses standard
+  thresholds with a singleton-roster guard.
+- **Auto-enrolled speaker centroids now grow over time** (#431). When
+  auto-enroll matched a label to an existing speaker, it recorded the
+  decision but did not add a `SpeakerEmbedding`, leaving the centroid
+  frozen at first enrollment. Matched labels now contribute embeddings.
 - **TitaNet ONNX embedding no longer crashes on diarization turns longer than
   about 120 s.** ONNX Runtime failed with a `BroadcastIterator::Init` shape
   mismatch. Long turns are now embedded as capped sub-windows.
