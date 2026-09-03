@@ -11,7 +11,6 @@ Failure here never fails the run (caller catches and logs).
 """
 
 import logging
-import math
 import uuid
 from dataclasses import dataclass
 
@@ -71,10 +70,13 @@ def _cosine_match(
     entries: list[tuple[np.ndarray, float]],
     gates: MatchingGates,
 ) -> uuid.UUID | None:
-    """Check if a label centroid matches an existing roster speaker at grounding tier.
+    """Check if a label centroid matches an existing roster speaker.
 
-    Returns the matched speaker_id or None. Uses the same cosine/margin/vote
-    math as ``evaluate_run`` but with grounding-tier thresholds.
+    Returns the matched speaker_id or None. Uses standard-tier thresholds
+    for the link-or-create decision (grounding tier is reserved for the
+    ``grounded`` flag in ``evaluate_run``). When the roster has only one
+    speaker, the margin gate is meaningless so the cosine bar rises to the
+    grounding tier as a singleton guard.
     """
     if not roster:
         return None
@@ -85,12 +87,17 @@ def _cosine_match(
     )
     top_sim, top_speaker = ranked[0]
     top_sim = max(-1.0, min(1.0, top_sim))
-    margin = top_sim - ranked[1][0] if len(ranked) > 1 else math.inf
 
-    if top_sim < gates.grounded_min_cosine:
+    # Singleton guard: with only one roster speaker the margin is infinite
+    # and provides no discrimination, so require the higher grounding cosine.
+    cosine_floor = gates.grounded_min_cosine if len(ranked) == 1 else gates.min_cosine
+    if top_sim < cosine_floor:
         return None
-    if margin < gates.grounded_min_margin:
-        return None
+
+    if len(ranked) > 1:
+        margin = top_sim - ranked[1][0]
+        if margin < gates.min_margin:
+            return None
 
     weighted = [(v, min(usable, gates.turn_weight_cap_seconds)) for v, usable in entries]
 
@@ -104,7 +111,7 @@ def _cosine_match(
     total_weight = sum(w for _, w in weighted)
     vote_agreement = agree_weight / total_weight if total_weight > 0 else 0.0
 
-    if vote_agreement < gates.grounded_min_vote_agreement:
+    if vote_agreement < gates.min_vote_agreement:
         return None
 
     return top_speaker
@@ -112,11 +119,7 @@ def _cosine_match(
 
 def _lock_run(session: Session, run_id: uuid.UUID) -> None:
     """Acquire FOR UPDATE on the run row, serializing with operator rulings."""
-    session.execute(
-        select(PipelineRun.id)
-        .where(PipelineRun.id == run_id)
-        .with_for_update()
-    )
+    session.execute(select(PipelineRun.id).where(PipelineRun.id == run_id).with_for_update())
 
 
 def _lock_speaker(session: Session, speaker_id: uuid.UUID) -> Speaker | None:
@@ -126,18 +129,14 @@ def _lock_speaker(session: Session, speaker_id: uuid.UUID) -> Speaker | None:
     roster was read.
     """
     speaker = session.execute(
-        select(Speaker)
-        .where(Speaker.id == speaker_id)
-        .with_for_update(read=True)
+        select(Speaker).where(Speaker.id == speaker_id).with_for_update(read=True)
     ).scalar_one_or_none()
     if speaker is None or not is_active(speaker):
         return None
     return speaker
 
 
-def _label_has_decision(
-    session: Session, run_id: uuid.UUID, label: str
-) -> bool:
+def _label_has_decision(session: Session, run_id: uuid.UUID, label: str) -> bool:
     """Re-check: did a decision appear for this label since we started?"""
     return (
         session.execute(
@@ -211,7 +210,7 @@ def auto_enroll_run(
                     if locked is None:
                         skipped += 1
                         continue
-                    record_decision(
+                    decision = record_decision(
                         session,
                         pipeline_run_id=run_id,
                         diarization_label=label,
@@ -220,10 +219,23 @@ def auto_enroll_run(
                         idempotency_key=f"auto_enroll:{run_id}:{label}",
                         speaker_id=match_speaker_id,
                     )
+                    session.add(
+                        SpeakerEmbedding(
+                            speaker_id=match_speaker_id,
+                            embedding_space=space,
+                            embedding=centroid,
+                            source_pipeline_run_id=run_id,
+                            source_diarization_label=label,
+                            source_adjudication_decision_id=decision.id,
+                        )
+                    )
+                    session.flush()
                     matched += 1
                     logger.debug(
                         "auto-enroll run %s label %s: matched existing speaker %s",
-                        run_id, label, match_speaker_id,
+                        run_id,
+                        label,
+                        match_speaker_id,
                     )
                 else:
                     voice_number = _next_voice_number(session)
@@ -242,7 +254,9 @@ def auto_enroll_run(
                     if speaker is None:
                         logger.warning(
                             "auto-enroll run %s label %s: naming collision after %d retries",
-                            run_id, label, MAX_NAME_RETRIES,
+                            run_id,
+                            label,
+                            MAX_NAME_RETRIES,
                         )
                         skipped += 1
                         continue
@@ -270,17 +284,24 @@ def auto_enroll_run(
                     created += 1
                     logger.debug(
                         "auto-enroll run %s label %s: created speaker %s (%s)",
-                        run_id, label, speaker.id, speaker.display_name,
+                        run_id,
+                        label,
+                        speaker.id,
+                        speaker.display_name,
                     )
         except Exception:
             logger.exception(
                 "auto-enroll run %s label %s: failed, continuing",
-                run_id, label,
+                run_id,
+                label,
             )
             skipped += 1
 
     logger.info(
         "auto-enroll run %s: %d created, %d matched, %d skipped",
-        run_id, created, matched, skipped,
+        run_id,
+        created,
+        matched,
+        skipped,
     )
     return AutoEnrollResult(created=created, matched=matched, skipped=skipped)
