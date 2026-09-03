@@ -12,19 +12,17 @@
 {% for error in features_errors %}
   <p class="notice" role="alert">{{ error }}</p>
 {% endfor %}
-{% if not llm_enabled %}
-  <p class="muted">LLM transcript enhancement is currently off, so the LLM name
-     pass and run assets stay inactive even when turned on here — enable it in the
-     AI tab to use them.</p>
-{% endif %}
 {% for flag in feature_flags %}
   {{ tri_switch(
        name=flag.name,
        label=flag.label,
        help_text=flag.help,
        state=flag.state,
-       effective=flag.env_default if flag.state == "inherit" else (flag.state == "on"),
+       effective=flag.effective,
        env_default=flag.env_default,
+       disabled=flag.disabled,
+       disabled_reason=flag.disabled_reason,
+       dependent=flag.dependent,
   ) }}
 {% endfor %}
 </section>

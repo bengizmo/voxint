@@ -1,5 +1,5 @@
-{%- macro tri_switch(name, label, help_text, state, effective, env_default, disabled=False, disabled_reason="") -%}
-<div class="switch-row{% if disabled %} switch-disabled{% endif %}">
+{%- macro tri_switch(name, label, help_text, state, effective, env_default, disabled=False, disabled_reason="", dependent=False) -%}
+<div class="switch-row{% if disabled %} switch-disabled{% endif %}{% if dependent %} switch-dependent{% endif %}">
   <div class="switch-header">
     <label class="switch-label" for="sw-{{ name }}">{{ label }}</label>
     <div class="switch-meta">
