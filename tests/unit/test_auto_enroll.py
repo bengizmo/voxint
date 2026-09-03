@@ -186,33 +186,44 @@ def test_speaker_aggregate_auto_enrolled_default_false() -> None:
 # -- Auto-enroll module pure helpers -----------------------------------------
 
 
-def test_cosine_match_empty_roster_returns_none() -> None:
+def test_cosine_match_empty_roster_returns_no_match() -> None:
     import numpy as np
 
-    from voxint.speakers.auto_enroll import _cosine_match
+    from voxint.speakers.auto_enroll import AE_REASON_NO_ROSTER, _cosine_match
     from voxint.speakers.matching import MatchingGates
 
     centroid = np.array([1.0, 0.0, 0.0])
     entries = [(np.array([1.0, 0.0, 0.0]), 5.0)]
-    assert _cosine_match(centroid, {}, entries, MatchingGates()) is None
+    result = _cosine_match(centroid, {}, entries, MatchingGates())
+    assert result.matched_speaker_id is None
+    assert result.reason == AE_REASON_NO_ROSTER
+    assert result.roster_size == 0
+    assert result.top_speaker_id is None
+    assert result.similarity is None
 
 
-def test_cosine_match_below_threshold_returns_none() -> None:
+def test_cosine_match_below_threshold_returns_diagnostics() -> None:
     import numpy as np
 
-    from voxint.speakers.auto_enroll import _cosine_match
+    from voxint.speakers.auto_enroll import AE_REASON_BELOW_COSINE, _cosine_match
     from voxint.speakers.matching import MatchingGates
 
+    sid = uuid.uuid4()
     centroid = np.array([1.0, 0.0, 0.0])
-    roster = {uuid.uuid4(): np.array([0.0, 1.0, 0.0])}
+    roster = {sid: np.array([0.0, 1.0, 0.0])}
     entries = [(np.array([1.0, 0.0, 0.0]), 5.0)]
-    assert _cosine_match(centroid, roster, entries, MatchingGates()) is None
+    result = _cosine_match(centroid, roster, entries, MatchingGates())
+    assert result.matched_speaker_id is None
+    assert result.reason == AE_REASON_BELOW_COSINE
+    assert result.top_speaker_id == sid
+    assert result.similarity is not None
+    assert result.roster_size == 1
 
 
-def test_cosine_match_above_threshold_returns_speaker() -> None:
+def test_cosine_match_above_threshold_returns_match() -> None:
     import numpy as np
 
-    from voxint.speakers.auto_enroll import _cosine_match
+    from voxint.speakers.auto_enroll import AE_REASON_MATCHED, _cosine_match
     from voxint.speakers.matching import MatchingGates
 
     sid = uuid.uuid4()
@@ -220,13 +231,17 @@ def test_cosine_match_above_threshold_returns_speaker() -> None:
     roster = {sid: np.array([1.0, 0.0, 0.0])}
     entries = [(np.array([1.0, 0.0, 0.0]), 5.0)] * 5
     result = _cosine_match(centroid, roster, entries, MatchingGates())
-    assert result == sid
+    assert result.matched_speaker_id == sid
+    assert result.reason == AE_REASON_MATCHED
+    assert result.top_speaker_id == sid
+    assert result.similarity is not None
+    assert result.vote_agreement is not None
 
 
 def test_cosine_match_margin_gate_rejects_close_pair() -> None:
     import numpy as np
 
-    from voxint.speakers.auto_enroll import _cosine_match
+    from voxint.speakers.auto_enroll import AE_REASON_BELOW_MARGIN, _cosine_match
     from voxint.speakers.matching import MatchingGates
 
     v1 = np.array([1.0, 0.01, 0.0])
@@ -238,7 +253,10 @@ def test_cosine_match_margin_gate_rejects_close_pair() -> None:
     roster = {uuid.uuid4(): v1, uuid.uuid4(): v2}
     entries = [(centroid, 5.0)] * 5
     result = _cosine_match(centroid, roster, entries, MatchingGates())
-    assert result is None
+    assert result.matched_speaker_id is None
+    assert result.reason == AE_REASON_BELOW_MARGIN
+    assert result.margin is not None
+    assert result.vote_agreement is None
 
 
 def test_cosine_match_standard_tier_links_cross_episode() -> None:
@@ -263,14 +281,14 @@ def test_cosine_match_standard_tier_links_cross_episode() -> None:
 
     entries = [(centroid, 5.0)] * 5
     result = _cosine_match(centroid, roster, entries, MatchingGates())
-    assert result == sid_a
+    assert result.matched_speaker_id == sid_a
 
 
 def test_cosine_match_singleton_guard_requires_grounded_cosine() -> None:
     """With only one roster speaker, the cosine bar rises to grounded (0.70)."""
     import numpy as np
 
-    from voxint.speakers.auto_enroll import _cosine_match
+    from voxint.speakers.auto_enroll import AE_REASON_BELOW_COSINE, _cosine_match
     from voxint.speakers.matching import MatchingGates
 
     a = np.array([1.0, 0.0, 0.0])
@@ -282,7 +300,10 @@ def test_cosine_match_singleton_guard_requires_grounded_cosine() -> None:
     sid = uuid.uuid4()
     roster = {sid: a}
     entries = [(centroid, 5.0)] * 5
-    assert _cosine_match(centroid, roster, entries, MatchingGates()) is None
+    result = _cosine_match(centroid, roster, entries, MatchingGates())
+    assert result.matched_speaker_id is None
+    assert result.reason == AE_REASON_BELOW_COSINE
+    assert result.roster_size == 1
 
 
 def test_cosine_match_singleton_above_grounded_accepts() -> None:
@@ -302,7 +323,8 @@ def test_cosine_match_singleton_above_grounded_accepts() -> None:
     roster = {sid: a}
     entries = [(centroid, 5.0)] * 5
     result = _cosine_match(centroid, roster, entries, MatchingGates())
-    assert result == sid
+    assert result.matched_speaker_id == sid
+    assert result.margin is None
 
 
 def test_cosine_match_margin_in_standard_band_accepts() -> None:
@@ -329,7 +351,7 @@ def test_cosine_match_margin_in_standard_band_accepts() -> None:
 
     entries = [(centroid, 5.0)] * 5
     result = _cosine_match(centroid, roster, entries, MatchingGates())
-    assert result == sid_a
+    assert result.matched_speaker_id == sid_a
 
 
 def test_cosine_match_vote_in_standard_band_accepts() -> None:
@@ -359,7 +381,43 @@ def test_cosine_match_vote_in_standard_band_accepts() -> None:
     entries = [vote_a] * 5 + [vote_b] * 3
 
     result = _cosine_match(centroid, roster, entries, MatchingGates())
-    assert result == sid_a
+    assert result.matched_speaker_id == sid_a
+    assert result.vote_agreement is not None
+    assert 0.60 <= result.vote_agreement <= 0.67
+
+
+def test_cosine_match_below_vote_agreement_returns_diagnostics() -> None:
+    """Vote agreement below threshold returns full diagnostics."""
+    import numpy as np
+
+    from voxint.speakers.auto_enroll import AE_REASON_BELOW_VOTE_AGREEMENT, _cosine_match
+    from voxint.speakers.matching import MatchingGates
+
+    a = np.array([1.0, 0.0, 0.0])
+    b = np.array([0.0, 1.0, 0.0])
+    c = np.array([0.0, 0.0, 1.0])
+
+    sid_a = uuid.uuid4()
+    sid_b = uuid.uuid4()
+    roster = {sid_a: a, sid_b: -a}
+
+    centroid = 0.80 * a + np.sqrt(1 - 0.80**2) * b
+    centroid = centroid / np.linalg.norm(centroid)
+
+    # 2 of 8 turns vote for speaker A => vote_agreement = 2/8 = 0.25
+    vote_a = (centroid, 5.0)
+    vote_b_vec = 0.80 * (-a) + np.sqrt(1 - 0.80**2) * c
+    vote_b_vec = vote_b_vec / np.linalg.norm(vote_b_vec)
+    vote_b = (vote_b_vec, 5.0)
+    entries = [vote_a] * 2 + [vote_b] * 6
+
+    result = _cosine_match(centroid, roster, entries, MatchingGates())
+    assert result.matched_speaker_id is None
+    assert result.reason == AE_REASON_BELOW_VOTE_AGREEMENT
+    assert result.similarity is not None
+    assert result.margin is not None
+    assert result.vote_agreement is not None
+    assert result.vote_agreement < 0.60
 
 
 # -- Settings ----------------------------------------------------------------

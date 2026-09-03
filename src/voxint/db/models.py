@@ -3315,3 +3315,68 @@ class SavedQuote(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(),
     )
+
+
+class AutoEnrollEvidence(Base):
+    """Diagnostic evidence for every label processed by auto-enrollment (#434).
+
+    The auto-enroll counterpart to :class:`MatchCandidate`: one row per label
+    records the comparison numbers and final linked/created/skipped outcome.
+    Purely diagnostic, written by a per-label upsert, and cascades with its run.
+    """
+
+    __tablename__ = "auto_enroll_evidence"
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline_run_id",
+            "diarization_label",
+            name="auto_enroll_evidence_label_key",
+        ),
+        CheckConstraint(
+            "decision IN ('linked', 'created', 'skipped')",
+            name="auto_enroll_evidence_decision_check",
+        ),
+        CheckConstraint(
+            "(top_speaker_id IS NULL) = (similarity IS NULL)",
+            name="auto_enroll_evidence_comparison_shape_check",
+        ),
+        CheckConstraint(
+            "decision != 'linked' OR top_speaker_id IS NOT NULL",
+            name="auto_enroll_evidence_linked_speaker_check",
+        ),
+        CheckConstraint(
+            "similarity IS NULL OR (similarity >= -1 AND similarity <= 1)",
+            name="auto_enroll_evidence_similarity_range_check",
+        ),
+        CheckConstraint(
+            "vote_agreement IS NULL OR (vote_agreement >= 0 AND vote_agreement <= 1)",
+            name="auto_enroll_evidence_vote_range_check",
+        ),
+        CheckConstraint(
+            "eligible_turns >= 0 AND eligible_seconds >= 0",
+            name="auto_enroll_evidence_eligibility_nonneg_check",
+        ),
+        CheckConstraint(
+            "roster_size IS NULL OR roster_size >= 0",
+            name="auto_enroll_evidence_roster_size_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pipeline_runs.id", ondelete="CASCADE"), index=True
+    )
+    diarization_label: Mapped[str] = mapped_column(Text)
+    decision: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
+    embedding_space: Mapped[str | None] = mapped_column(Text)
+    top_speaker_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("speakers.id"))
+    similarity: Mapped[float | None] = mapped_column(Float)
+    margin: Mapped[float | None] = mapped_column(Float)
+    vote_agreement: Mapped[float | None] = mapped_column(Float)
+    eligible_turns: Mapped[int] = mapped_column(Integer, default=0)
+    eligible_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    roster_size: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
