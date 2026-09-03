@@ -176,7 +176,7 @@ class TestAiTabSave:
             semantic_index_enabled="on",
             translation_target_language="es",
             translation_autogenerate="on",
-            vocabulary="HVAC\nDuct",
+            vocabulary="Alpha\nBeta",
         )
         resp = client.post("/settings/ai", data=data, follow_redirects=False)
         assert resp.status_code == 303
@@ -190,7 +190,7 @@ class TestAiTabSave:
         assert row.semantic_index_enabled is True
         assert row.translation_target_language == "es"
         assert row.translation_autogenerate is True
-        assert row.vocabulary == ["HVAC", "Duct"]
+        assert row.vocabulary == ["Alpha", "Beta"]
 
     def test_semantic_failure_rolls_back_llm(
         self, session_factory: sessionmaker[Session], media_root: Path
