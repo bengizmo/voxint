@@ -141,4 +141,5 @@ def test_single_alembic_head() -> None:
     # 0055 = corpus_analysis_artifacts table for viz cache, issue #332.
     # 0056 = saved_quotes table for quote board, issue #338.
     # 0057 = widen users_role_check for viewer role, issue #363.
-    assert list(heads) == ["0057"]
+    # 0058 = auto_enroll_evidence table for threshold calibration, issue #434.
+    assert list(heads) == ["0058"]

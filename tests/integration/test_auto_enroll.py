@@ -18,6 +18,7 @@ from voxint.adjudication.resolver import Resolution, label_states
 from voxint.db.models import (
     EMBEDDING_DIM,
     AdjudicationDecision,
+    AutoEnrollEvidence,
     Decision,
     DiarizationTurn,
     MediaItem,
@@ -26,7 +27,18 @@ from voxint.db.models import (
     Speaker,
     SpeakerEmbedding,
 )
-from voxint.speakers.auto_enroll import auto_enroll_run
+from voxint.speakers.auto_enroll import (
+    AE_DECISION_CREATED,
+    AE_DECISION_LINKED,
+    AE_DECISION_SKIPPED,
+    AE_REASON_BELOW_COSINE,
+    AE_REASON_EXCEPTION,
+    AE_REASON_MATCHED,
+    AE_REASON_NO_ROSTER,
+    AE_REASON_TOO_FEW_TURNS,
+    AE_REASON_TOO_LITTLE_SPEECH,
+    auto_enroll_run,
+)
 from voxint.speakers.matching import MatchingGates
 
 SPACE = "titanet-large-v2"
@@ -572,3 +584,353 @@ def test_auto_enroll_skips_label_below_seconds_floor(
         s1 = next(s for s in states if s.label == "S1")
         assert s0.resolution is Resolution.AUTO_ENROLL
         assert s1.resolution is Resolution.UNRESOLVED
+
+
+# -- Evidence persistence (#434) -----------------------------------------------
+
+
+def _evidence_for(
+    session: Session, run_id: uuid.UUID
+) -> dict[str, AutoEnrollEvidence]:
+    rows = session.execute(
+        select(AutoEnrollEvidence).where(
+            AutoEnrollEvidence.pipeline_run_id == run_id
+        )
+    ).scalars().all()
+    return {r.diarization_label: r for r in rows}
+
+
+def test_evidence_created_for_new_speakers(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Created labels store the match rejection reason, not a generic 'created'."""
+    with session_factory() as session:
+        run_id = _make_run(session)
+        _add_turns(session, run_id, "S0", vector=_unit(0), start_index=0)
+        _add_turns(session, run_id, "S1", vector=_unit(1), start_index=10)
+        session.commit()
+
+    with session_factory() as session:
+        auto_enroll_run(session, run_id, GATES)
+        session.commit()
+
+    with session_factory() as session:
+        evidence = _evidence_for(session, run_id)
+        assert len(evidence) == 2
+        for label in ("S0", "S1"):
+            e = evidence[label]
+            assert e.decision == AE_DECISION_CREATED
+            assert e.embedding_space == SPACE
+            assert e.eligible_turns >= GATES.grounded_min_turns
+            assert e.eligible_seconds >= GATES.grounded_min_seconds
+        # S0 is created first with no roster
+        assert evidence["S0"].reason == AE_REASON_NO_ROSTER
+        # S1 runs after S0 created a speaker; orthogonal vector => below cosine
+        assert evidence["S1"].reason == AE_REASON_BELOW_COSINE
+
+
+def test_evidence_linked_for_matched_speaker(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A linked label produces evidence with the matched speaker and cosine."""
+    vec = _unit(3)
+    with session_factory() as session:
+        existing_id = _enroll_speaker(session, "Known Speaker", vector=vec)
+        run_id = _make_run(session)
+        _add_turns(session, run_id, "S0", vector=vec, start_index=0)
+        session.commit()
+
+    with session_factory() as session:
+        auto_enroll_run(session, run_id, GATES)
+        session.commit()
+
+    with session_factory() as session:
+        evidence = _evidence_for(session, run_id)
+        assert len(evidence) == 1
+        e = evidence["S0"]
+        assert e.decision == AE_DECISION_LINKED
+        assert e.reason == AE_REASON_MATCHED
+        assert e.top_speaker_id == existing_id
+        assert e.similarity is not None
+        assert e.similarity > GATES.min_cosine
+        assert e.vote_agreement is not None
+
+
+def test_evidence_skipped_for_eligibility_failures(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Labels failing eligibility produce skipped evidence with the right reason."""
+    with session_factory() as session:
+        run_id = _make_run(session)
+        _add_turns(session, run_id, "S0", vector=_unit(0), count=4, start_index=0)
+        _add_turns(
+            session, run_id, "S1", vector=_unit(1),
+            count=GATES.grounded_min_turns - 1,
+            duration=GATES.grounded_min_seconds + 1.0,
+            start_index=10,
+        )
+        session.commit()
+
+    with session_factory() as session:
+        auto_enroll_run(session, run_id, GATES)
+        session.commit()
+
+    with session_factory() as session:
+        evidence = _evidence_for(session, run_id)
+        assert "S0" in evidence
+        assert "S1" in evidence
+        e_s1 = evidence["S1"]
+        assert e_s1.decision == AE_DECISION_SKIPPED
+        assert e_s1.reason == AE_REASON_TOO_FEW_TURNS
+        assert e_s1.top_speaker_id is None
+        assert e_s1.similarity is None
+
+
+def test_evidence_skipped_below_seconds(
+    session_factory: sessionmaker[Session],
+) -> None:
+    seconds_per_turn = (GATES.grounded_min_seconds - 1.0) / (GATES.grounded_min_turns + 1)
+    with session_factory() as session:
+        run_id = _make_run(session)
+        _add_turns(session, run_id, "S0", vector=_unit(0), count=4, start_index=0)
+        _add_turns(
+            session, run_id, "S1", vector=_unit(1),
+            count=GATES.grounded_min_turns + 1,
+            duration=seconds_per_turn,
+            start_index=10,
+        )
+        session.commit()
+
+    with session_factory() as session:
+        auto_enroll_run(session, run_id, GATES)
+        session.commit()
+
+    with session_factory() as session:
+        evidence = _evidence_for(session, run_id)
+        e_s1 = evidence["S1"]
+        assert e_s1.decision == AE_DECISION_SKIPPED
+        assert e_s1.reason == AE_REASON_TOO_LITTLE_SPEECH
+
+
+def test_evidence_skipped_existing_decision(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Labels with an existing human decision produce skipped/existing_decision evidence."""
+    with session_factory() as session:
+        run_id = _make_run(session)
+        _add_turns(session, run_id, "S0", vector=_unit(0), start_index=0)
+
+        human_speaker = Speaker(display_name="Alice")
+        session.add(human_speaker)
+        session.flush()
+        record_decision(
+            session,
+            pipeline_run_id=run_id,
+            diarization_label="S0",
+            decision=Decision.ASSIGN,
+            operator="ben",
+            idempotency_key="human-assign-s0",
+            speaker_id=human_speaker.id,
+        )
+        session.commit()
+
+    with session_factory() as session:
+        auto_enroll_run(session, run_id, GATES)
+        session.commit()
+
+    with session_factory() as session:
+        evidence = _evidence_for(session, run_id)
+        # S0 already resolved pre-filter, so no evidence (not even a candidate)
+        assert len(evidence) == 0
+
+
+def test_evidence_skipped_mid_run_decision_injection(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A decision injected between candidate selection and the advisory lock
+    is caught by the post-lock re-derivation: the label drops from the
+    candidate list entirely, so no evidence row is written (the concurrent
+    worker's own evidence, if any, is preserved)."""
+    with session_factory() as session:
+        run_id = _make_run(session)
+        _add_turns(session, run_id, "S0", vector=_unit(0), start_index=0)
+        session.commit()
+
+    from voxint.speakers import auto_enroll as _ae
+    from voxint.speakers.matching import eligible_label_vectors as _real_elv
+
+    def _elv_with_injection(session: Session, rid: uuid.UUID, gates: MatchingGates) -> dict:  # type: ignore[type-arg]
+        result = _real_elv(session, rid, gates)
+        with session_factory() as s2:
+            speaker = Speaker(display_name="Injected")
+            s2.add(speaker)
+            s2.flush()
+            record_decision(
+                s2,
+                pipeline_run_id=rid,
+                diarization_label="S0",
+                decision=Decision.ASSIGN,
+                operator="ben",
+                idempotency_key="injected-decision",
+                speaker_id=speaker.id,
+            )
+            s2.commit()
+        return result
+
+    monkeypatch.setattr(_ae, "eligible_label_vectors", _elv_with_injection)
+
+    with session_factory() as session:
+        auto_enroll_run(session, run_id, GATES)
+        session.commit()
+
+    with session_factory() as session:
+        evidence = _evidence_for(session, run_id)
+        # Post-lock re-derivation drops the resolved label; no evidence written
+        assert len(evidence) == 0
+
+
+def test_evidence_for_exception(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exception during processing produces skipped/exception evidence."""
+    with session_factory() as session:
+        run_id = _make_run(session)
+        _add_turns(session, run_id, "S0", vector=_unit(0), start_index=0)
+        _add_turns(session, run_id, "S1", vector=_unit(1), start_index=10)
+        session.commit()
+
+    from voxint.speakers import auto_enroll as _ae
+
+    real_record = record_decision
+
+    def _fail_on_s0(*args: object, **kwargs: object) -> object:
+        if kwargs.get("diarization_label") == "S0":
+            raise RuntimeError("injected failure for S0")
+        return real_record(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(_ae, "record_decision", _fail_on_s0)
+
+    with session_factory() as session:
+        auto_enroll_run(session, run_id, GATES)
+        session.commit()
+
+    with session_factory() as session:
+        evidence = _evidence_for(session, run_id)
+        assert len(evidence) == 2
+        e_s0 = evidence["S0"]
+        assert e_s0.decision == AE_DECISION_SKIPPED
+        assert e_s0.reason == AE_REASON_EXCEPTION
+        e_s1 = evidence["S1"]
+        assert e_s1.decision == AE_DECISION_CREATED
+        # S0 failed (exception); S1 created with no roster (S0 never enrolled)
+        assert e_s1.reason == AE_REASON_NO_ROSTER
+
+
+def test_evidence_consolidation_first_created_second_linked(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Intra-run: first label creates, second links. Evidence reflects both."""
+    vec = _unit(5)
+    with session_factory() as session:
+        run_id = _make_run(session)
+        _add_turns(session, run_id, "S0", vector=vec, start_index=0)
+        _add_turns(session, run_id, "S1", vector=vec, start_index=10)
+        session.commit()
+
+    with session_factory() as session:
+        auto_enroll_run(session, run_id, GATES)
+        session.commit()
+
+    with session_factory() as session:
+        evidence = _evidence_for(session, run_id)
+        assert len(evidence) == 2
+        decisions = {e.decision for e in evidence.values()}
+        assert AE_DECISION_CREATED in decisions
+        assert AE_DECISION_LINKED in decisions
+        linked = [e for e in evidence.values() if e.decision == AE_DECISION_LINKED]
+        assert len(linked) == 1
+        assert linked[0].top_speaker_id is not None
+        assert linked[0].similarity is not None
+
+
+def test_evidence_idempotent_second_run_no_duplicates(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Second invocation is a no-op and does not duplicate evidence rows."""
+    with session_factory() as session:
+        run_id = _make_run(session)
+        _add_turns(session, run_id, "S0", vector=_unit(0), start_index=0)
+        session.commit()
+
+    with session_factory() as session:
+        auto_enroll_run(session, run_id, GATES)
+        session.commit()
+
+    with session_factory() as session:
+        auto_enroll_run(session, run_id, GATES)
+        session.commit()
+
+    with session_factory() as session:
+        evidence = _evidence_for(session, run_id)
+        assert len(evidence) == 1
+        assert evidence["S0"].decision == AE_DECISION_CREATED
+
+
+def test_evidence_near_miss_captures_diagnostics(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A near-miss (cosine between accept and noise floor) persists diagnostics."""
+    import numpy as np
+
+    near_miss_vec = [0.0] * EMBEDDING_DIM
+    near_miss_vec[0] = 0.55
+    near_miss_vec[1] = np.sqrt(1 - 0.55**2)
+    roster_vec = _unit(0)
+
+    with session_factory() as session:
+        _enroll_speaker(session, "Roster Person", vector=roster_vec)
+        run_id = _make_run(session)
+        _add_turns(session, run_id, "S0", vector=near_miss_vec, start_index=0)
+        session.commit()
+
+    with session_factory() as session:
+        auto_enroll_run(session, run_id, GATES)
+        session.commit()
+
+    with session_factory() as session:
+        evidence = _evidence_for(session, run_id)
+        e = evidence["S0"]
+        assert e.decision == AE_DECISION_CREATED
+        assert e.reason == AE_REASON_BELOW_COSINE
+        assert e.top_speaker_id is not None
+        assert e.similarity is not None
+        assert e.similarity < GATES.min_cosine
+        assert e.similarity > 0.0
+        assert e.roster_size == 1
+
+
+def test_evidence_check_constraints_reject_bad_decision(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The decision CHECK constraint rejects values outside the taxonomy."""
+    from sqlalchemy.exc import IntegrityError as SAIntegrityError
+
+    with session_factory() as session:
+        run_id = _make_run(session)
+        session.commit()
+
+    with session_factory() as session:
+        session.add(
+            AutoEnrollEvidence(
+                pipeline_run_id=run_id,
+                diarization_label="BAD",
+                decision="invalid_decision",
+                reason="test",
+                eligible_turns=0,
+                eligible_seconds=0.0,
+            )
+        )
+        with pytest.raises(SAIntegrityError, match="auto_enroll_evidence_decision_check"):
+            session.flush()
