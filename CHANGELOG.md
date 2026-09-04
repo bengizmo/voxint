@@ -6,6 +6,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+
+## [0.34.0] - 2026-09-04
+
 ### Added
 - **Auto-enroll near-miss evidence** (#434). Every auto-enrollment decision
   now persists per-label diagnostic data (similarity, margin, vote agreement,
