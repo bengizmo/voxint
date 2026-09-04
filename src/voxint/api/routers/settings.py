@@ -100,6 +100,7 @@ from voxint.app_settings import (
     resolve_effective_web_search_base_url,
     semantic_index_flags_ok,
     str_flag_form_field,
+    synthdetect_flags_ok,
     translation_flags_ok,
     validate_effective_flags,
     validate_web_search_base_url,
@@ -749,7 +750,25 @@ _FEATURE_INVARIANT_COPY: dict[str, str] = {
     "web_search_base_url must be a bare endpoint (no query/fragment)": (
         "Enter just the endpoint address — no “?query” or “#fragment” at the end."
     ),
+    "synthdetect_autogenerate requires synthdetect_enabled=true"
+    " — the post-finalize step only enqueues the feature it rides on": (
+        "Turn AI-content detection on before auto-detecting new runs"
+        " — the automatic step only runs the feature it rides on."
+    ),
 }
+
+_SEMANTIC_INVARIANT_COPY = (
+    "Turn semantic search on before auto-indexing new runs — the automatic"
+    " step only runs the feature it rides on."
+)
+_TRANSLATION_INVARIANT_COPY = (
+    "Pick a preferred language before turning auto-translate on — the"
+    " automatic step needs to know which language to translate into."
+)
+_SYNTHDETECT_INVARIANT_COPY = (
+    "Turn AI-content detection on before auto-detecting new runs"
+    " — the automatic step only runs the feature it rides on."
+)
 
 
 # Issue #61: plain-language remediation for the wizard SERVICES step's readiness
@@ -1110,18 +1129,27 @@ def _handle_reset_flag(
 
     After setting the column to NULL the resulting effective combination is
     validated through the same invariant web the persist paths use.  If the
-    reset would create a violation (e.g. re-enabling a dependent flag whose
-    prerequisite is off) the transaction is rolled back and the flag keeps its
-    stored value.
+    reset would NEWLY introduce a violation the transaction is rolled back and
+    the page re-renders with a section notice (matching the tab POST save
+    error pattern).  The before/after delta discipline (cf.
+    ``_llm_disable_strand_error``) ensures a pre-existing unrelated violation
+    never blocks or mislabels the cause (#404).
     """
     if flag_name in _RESETTABLE_FLAGS:
         row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
-        setattr(row, flag_name, None)
-
-        if _reset_violates_invariants(row, settings):
+        errors = _reset_invariant_errors(row, settings, flag_name)
+        if errors:
             session.rollback()
-        else:
-            session.commit()
+            section_key = _RESET_ERROR_SECTION.get(flag_name, "features_errors")
+            overrides: dict[str, Any] = {
+                section_key: [f"Reset not applied — {e}" for e in errors],
+            }
+            return templates.TemplateResponse(
+                request,
+                _settings_page_template(request),
+                _settings_context(request, session, **overrides),
+            )
+        session.commit()
 
     anchor = f"sw-{flag_name}"
     return RedirectResponse(
@@ -1130,52 +1158,80 @@ def _handle_reset_flag(
     )
 
 
-def _reset_violates_invariants(row: AppSettings, settings: Settings) -> bool:
-    """True when the row's current effective state violates any cross-flag invariant.
+def _effective_invariant_messages(
+    row: AppSettings | None, settings: Settings
+) -> list[str]:
+    """Operator-plain invariant violations for the row's current effective state.
 
-    Called after tentatively setting a flag to NULL (inherit) so the caller can
-    rollback before committing a broken combination.
+    Collects translated messages from all four invariant domains (feature flags,
+    semantic index, translation, synthdetect) so the reset path can compute a
+    delta without duplicating validator wiring.
     """
-    feature_errors = validate_effective_flags(
-        EffectiveFlags(
-            llm_enabled=resolve_effective_llm_enabled(row, settings),
-            enrichment_names_enabled=resolve_effective_enrichment_names_enabled(
-                row, settings
-            ),
-            enrichment_names_llm_enabled=resolve_effective_enrichment_names_llm_enabled(
-                row, settings
-            ),
-            enrichment_run_assets_enabled=resolve_effective_enrichment_run_assets_enabled(
-                row, settings
-            ),
-            enrichment_run_assets_autogenerate=resolve_effective_enrichment_run_assets_autogenerate(
-                row, settings
-            ),
-            voxint_web_research=resolve_effective_voxint_web_research(row, settings),
-            enrichment_web_research_enabled=resolve_effective_enrichment_web_research_enabled(
-                row, settings
-            ),
-            web_search_base_url=resolve_effective_web_search_base_url(row, settings),
+    errors = [
+        _FEATURE_INVARIANT_COPY.get(message, message)
+        for message in validate_effective_flags(
+            EffectiveFlags(
+                llm_enabled=resolve_effective_llm_enabled(row, settings),
+                enrichment_names_enabled=resolve_effective_enrichment_names_enabled(
+                    row, settings
+                ),
+                enrichment_names_llm_enabled=resolve_effective_enrichment_names_llm_enabled(
+                    row, settings
+                ),
+                enrichment_run_assets_enabled=resolve_effective_enrichment_run_assets_enabled(
+                    row, settings
+                ),
+                enrichment_run_assets_autogenerate=resolve_effective_enrichment_run_assets_autogenerate(
+                    row, settings
+                ),
+                voxint_web_research=resolve_effective_voxint_web_research(row, settings),
+                enrichment_web_research_enabled=resolve_effective_enrichment_web_research_enabled(
+                    row, settings
+                ),
+                web_search_base_url=resolve_effective_web_search_base_url(row, settings),
+            )
         )
-    )
-    if feature_errors:
-        return True
-    semantic_error = semantic_index_flags_ok(
-        enabled=resolve_effective_semantic_index_enabled(row, settings),
-        autogenerate=resolve_effective_semantic_index_autogenerate(row, settings),
-    )
-    if semantic_error is not None:
-        return True
-    translation_error = translation_flags_ok(
-        autogenerate=resolve_effective_translation_autogenerate(row, settings),
-        target_language=resolve_effective_translation_target_language(row, settings),
-    )
-    if translation_error is not None:
-        return True
-    return bool(
-        resolve_effective_synthdetect_autogenerate(row, settings)
-        and not resolve_effective_synthdetect_enabled(row, settings)
-    )
+    ]
+    if (
+        semantic_index_flags_ok(
+            enabled=resolve_effective_semantic_index_enabled(row, settings),
+            autogenerate=resolve_effective_semantic_index_autogenerate(row, settings),
+        )
+        is not None
+    ):
+        errors.append(_SEMANTIC_INVARIANT_COPY)
+    if (
+        translation_flags_ok(
+            autogenerate=resolve_effective_translation_autogenerate(row, settings),
+            target_language=resolve_effective_translation_target_language(row, settings),
+        )
+        is not None
+    ):
+        errors.append(_TRANSLATION_INVARIANT_COPY)
+    if (
+        synthdetect_flags_ok(
+            enabled=resolve_effective_synthdetect_enabled(row, settings),
+            autogenerate=resolve_effective_synthdetect_autogenerate(row, settings),
+        )
+        is not None
+    ):
+        errors.append(_SYNTHDETECT_INVARIANT_COPY)
+    return errors
+
+
+def _reset_invariant_errors(
+    row: AppSettings, settings: Settings, flag_name: str
+) -> list[str]:
+    """Violations the reset would NEWLY introduce (delta discipline, #404).
+
+    Snapshots the current invariant surface, applies the tentative NULL, then
+    returns only the messages that were absent before.  A pre-existing unrelated
+    violation never blocks an unrelated reset and never mislabels the cause.
+    The caller is responsible for rollback on a non-empty return.
+    """
+    before = set(_effective_invariant_messages(row, settings))
+    setattr(row, flag_name, None)
+    return [m for m in _effective_invariant_messages(row, settings) if m not in before]
 
 
 def _persist_feature_flags(
@@ -1272,6 +1328,16 @@ _RESETTABLE_FLAGS: frozenset[str] = frozenset(
     )
 )
 
+_RESET_ERROR_SECTION: dict[str, str] = {
+    **{name: "features_errors" for name in _FEATURE_FLAG_NAMES},
+    **{name: "semantic_index_errors" for name in _SEMANTIC_FLAG_NAMES},
+    "translation_autogenerate": "translation_errors",
+    "synthdetect_enabled": "synthdetect_errors",
+    "synthdetect_autogenerate": "synthdetect_errors",
+    "voxint_web_research": "web_research_errors",
+    "enrichment_web_research_enabled": "web_research_errors",
+}
+
 
 def _persist_semantic_index(
     session: Session,
@@ -1316,10 +1382,7 @@ def _persist_semantic_index(
         )
         is not None
     ):
-        return [
-            "Turn semantic search on before auto-indexing new runs — the automatic"
-            " step only runs the feature it rides on."
-        ]
+        return [_SEMANTIC_INVARIANT_COPY]
     row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
     for name, value in candidates.items():
         setattr(row, name, value)
@@ -1373,10 +1436,7 @@ def _persist_translation(
         translation_flags_ok(autogenerate=effective_auto, target_language=effective_target)
         is not None
     ):
-        return [
-            "Pick a preferred language before turning auto-translate on — the"
-            " automatic step needs to know which language to translate into."
-        ]
+        return [_TRANSLATION_INVARIANT_COPY]
     row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
     row.translation_target_language = target_candidate
     row.translation_autogenerate = auto_candidate

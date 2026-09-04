@@ -253,6 +253,21 @@ def semantic_index_flags_ok(*, enabled: bool, autogenerate: bool) -> str | None:
     return None
 
 
+def synthdetect_flags_ok(*, enabled: bool, autogenerate: bool) -> str | None:
+    """The self-contained synthdetect-flag invariant, in one place (#404).
+
+    Mirrors :func:`semantic_index_flags_ok`: autogenerate rides on the feature
+    it enqueues, so it requires the feature enabled. Shared by the runtime
+    settings boundary so the reset and persist paths can never drift.
+    """
+    if autogenerate and not enabled:
+        return (
+            "synthdetect_autogenerate requires synthdetect_enabled=true"
+            " — the post-finalize step only enqueues the feature it rides on"
+        )
+    return None
+
+
 def resolve_effective_synthdetect_enabled(
     row: AppSettings | None, settings: Settings
 ) -> bool:
