@@ -456,3 +456,18 @@ def test_media_retention_seconds_not_tier_scaled() -> None:
     assert (
         Settings(_env_file=None, compute_tier="cpu").media_retention_seconds == 2592000
     )
+
+
+def test_rerun_publish_batch_size_must_be_positive() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, rerun_publish_batch_size=0)
+    assert Settings(_env_file=None, rerun_publish_batch_size=1).rerun_publish_batch_size == 1
+
+
+def test_recovery_publish_batch_size_must_be_positive() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, recovery_publish_batch_size=0)
+    assert Settings(_env_file=None).recovery_publish_batch_size == 50
+    assert (
+        Settings(_env_file=None, recovery_publish_batch_size=1).recovery_publish_batch_size == 1
+    )

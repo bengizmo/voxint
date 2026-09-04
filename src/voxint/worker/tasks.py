@@ -390,10 +390,13 @@ def recovery_sweep() -> dict[str, int]:
     with factory() as session:
         stale_queued = (
             session.execute(
-                select(PipelineRun.id).where(
+                select(PipelineRun.id)
+                .where(
                     PipelineRun.status == RunStatus.QUEUED.value,
                     PipelineRun.updated_at < cutoff,
                 )
+                .order_by(PipelineRun.updated_at)
+                .limit(settings.recovery_publish_batch_size)
             )
             .scalars()
             .all()
@@ -413,12 +416,17 @@ def recovery_sweep() -> dict[str, int]:
         # One unavailable broker must not abort the sweep midway through this
         # durable set. Each row stays QUEUED and becomes eligible again after the
         # stale grace, while the remaining rows still get their publish attempt.
+        # Cap total dispatches per sweep so a mass stranding drains gradually.
+        dispatched = 0
         for rid, stage_value in resumable:
+            if dispatched >= settings.recovery_publish_batch_size:
+                break
             stage = Stage(stage_value) if stage_value else None
             try:
                 pipeline_task_for_stage(stage).apply_async(
                     (str(rid),), ignore_result=True
                 )
+                dispatched += 1
             except OperationalError:
                 logger.warning(
                     "recovery enqueue deferred (broker unavailable); run %s stays "

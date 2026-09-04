@@ -313,6 +313,10 @@ class Settings(BaseSettings):
     retry_backoff_max_seconds: float = 1800.0
     # How often beat sweeps expired leases and stranded QUEUED runs.
     recovery_sweep_seconds: int = 300
+    # Maximum pipeline runs published per recovery sweep. Bounds one sweep's
+    # broker traffic so a mass recovery after a long outage does not flood the
+    # model services. Remaining QUEUED runs stay eligible for the next sweep.
+    recovery_publish_batch_size: int = Field(default=50, ge=1)
     # A QUEUED run untouched this long has no live task on the broker
     # (covers pending retry countdowns; keep it above retry_backoff_max_seconds).
     # Also the grace after which the recovery sweep re-dispatches a QUEUED
@@ -416,6 +420,10 @@ class Settings(BaseSettings):
     # on subsequent sweeps. Default 8 matches the model services' default
     # MAX_PENDING_REQUESTS admission limit.
     watch_folder_batch_size: int = Field(default=8, ge=1)
+    # Maximum pipeline runs published per batch re-run confirm. Caps the
+    # publish loop after commit so a large re-run selection does not flood the
+    # model services. Remaining runs stay QUEUED for the recovery sweep.
+    rerun_publish_batch_size: int = Field(default=8, ge=1)
 
     # Media operations reconciler (ADR 0007). Drives interrupted journal rows
     # (move, trash, restore) to a consistent terminal state by classifying
