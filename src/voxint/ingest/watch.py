@@ -168,10 +168,9 @@ def sweep_watch_folders(
         raced_known = 0
         sidecar_errors = 0
         hit_file_cap = result.hit_file_cap
+        batch_limit = min(settings.watch_folder_batch_size, settings.setup_scan_max_files)
         for rel in settled:
-            if len(pending) >= settings.setup_scan_max_files:
-                # The submission cap: everything beyond it simply waits for the
-                # next sweep (same operator-facing meaning hit_file_cap always had).
+            if len(pending) >= batch_limit:
                 hit_file_cap = True
                 break
             outcome = _paired_sidecar(
