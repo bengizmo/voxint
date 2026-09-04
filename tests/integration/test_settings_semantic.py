@@ -8,9 +8,8 @@ This covers the ``POST /settings/semantic`` candidate -> validate -> ONE mutatio
 contract against real Postgres: a UI On/Off applies with no restart, "use
 installation setting" writes NULL, the one reachable invariant violation is refused
 server-side with the operator's choices preserved and NOTHING written, CSRF is
-required, and the drift guard that every rendered radio round-trips through the
-route (an undeclared Form param is silently dropped by Starlette and reverts to
-inherit).
+required, and the drift guard that every rendered switch round-trips through the
+route (a flag missing from the reconcile list silently reverts to inherit on save).
 """
 
 from pathlib import Path
@@ -52,8 +51,17 @@ def make_client(
     return client, settings
 
 
-def _form(**fields: str) -> dict[str, str]:
-    return {"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETTINGS), **fields}
+def _form(
+    rendered: list[str] | None = None, **fields: str
+) -> dict[str, str | list[str]]:
+    """Build form data supporting repeated ``_rendered`` keys."""
+    result: dict[str, str | list[str]] = {
+        "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETTINGS),
+    }
+    if rendered:
+        result["_rendered"] = rendered
+    result.update(fields)
+    return result
 
 
 def _row(session_factory: sessionmaker[Session]) -> AppSettings | None:
@@ -87,15 +95,16 @@ def test_semantic_route_declares_every_flag(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
     # Behavioral drift guard: every radio the Semantic section RENDERS must
-    # round-trip through POST /settings/semantic. A rendered radio whose name the
-    # route does not declare as a Form param is silently dropped by Starlette and
-    # reverts to inherit (NULL) — the way llm_bundled_enabled once shipped broken.
-    # Submitting an explicit On for both flags (which satisfies the invariant) and
-    # asserting each column stored True catches any flag the route fails to accept.
+    # round-trip through POST /settings/semantic. Seed off first so turning on
+    # is a real change (idempotency would keep inherit for a no-op save).
     client, _ = make_client(session_factory, tmp_path)
+    _seed_flags(session_factory, **{name: False for name in _SEMANTIC_FLAG_NAMES})
     resp = client.post(
         "/settings/semantic",
-        data=_form(**{name: "on" for name in _SEMANTIC_FLAG_NAMES}),
+        data=_form(
+            rendered=list(_SEMANTIC_FLAG_NAMES),
+            **{name: "on" for name in _SEMANTIC_FLAG_NAMES},
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303, resp.text
@@ -111,7 +120,11 @@ def test_off_stores_false(
     client, _ = make_client(session_factory, tmp_path)
     resp = client.post(
         "/settings/semantic",
-        data=_form(semantic_index_enabled="off", semantic_index_autogenerate="off"),
+        data=_form(
+            rendered=["semantic_index_enabled", "semantic_index_autogenerate"],
+            semantic_index_enabled="off",
+            semantic_index_autogenerate="off",
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -121,27 +134,28 @@ def test_off_stores_false(
     assert row.semantic_index_autogenerate is False
 
 
-def test_inherit_reverts_a_stored_override_to_null(
+def test_unchecking_stored_overrides_stores_off(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
+    # Checkbox encoding: unchecked = rendered but no value → "off".
     client, _ = make_client(session_factory, tmp_path)
     _seed_flags(
         session_factory,
-        semantic_index_enabled=False,
-        semantic_index_autogenerate=False,
+        semantic_index_enabled=True,
+        semantic_index_autogenerate=True,
     )
     resp = client.post(
         "/settings/semantic",
         data=_form(
-            semantic_index_enabled="inherit", semantic_index_autogenerate="inherit"
+            rendered=["semantic_index_enabled", "semantic_index_autogenerate"],
         ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
     row = _row(session_factory)
     assert row is not None
-    assert row.semantic_index_enabled is None
-    assert row.semantic_index_autogenerate is None
+    assert row.semantic_index_enabled is False
+    assert row.semantic_index_autogenerate is False
 
 
 def test_autogenerate_without_feature_is_refused_and_writes_nothing(
@@ -153,7 +167,11 @@ def test_autogenerate_without_feature_is_refused_and_writes_nothing(
     _seed_flags(session_factory, semantic_index_enabled=False)
     resp = client.post(
         "/settings/semantic",
-        data=_form(semantic_index_enabled="off", semantic_index_autogenerate="on"),
+        data=_form(
+            rendered=["semantic_index_enabled", "semantic_index_autogenerate"],
+            semantic_index_enabled="off",
+            semantic_index_autogenerate="on",
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 200
@@ -169,20 +187,24 @@ def test_autogenerate_without_feature_is_refused_and_writes_nothing(
     assert ">Changed</span>" in resp.text
 
 
-def test_malformed_choice_is_rejected_without_writing(
+def test_malformed_choice_treated_as_off(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
+    # _reconcile_switches sanitises rendered values: anything != "on" is off.
+    # Also render autogenerate unchecked to avoid the autogenerate-on invariant.
     client, _ = make_client(session_factory, tmp_path)
     resp = client.post(
         "/settings/semantic",
-        data=_form(semantic_index_enabled="maybe"),
+        data=_form(
+            rendered=["semantic_index_enabled", "semantic_index_autogenerate"],
+            semantic_index_enabled="maybe",
+        ),
         follow_redirects=False,
     )
-    assert resp.status_code == 200
-    assert "Unrecognized semantic-search setting" in resp.text
+    assert resp.status_code == 303
     row = _row(session_factory)
     assert row is not None
-    assert row.semantic_index_enabled is None
+    assert row.semantic_index_enabled is False
 
 
 def test_stored_override_round_trips_in_the_rendered_form(
