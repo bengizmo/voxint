@@ -65,8 +65,17 @@ def make_client(
     return client, settings
 
 
-def _form(**fields: str) -> dict[str, str]:
-    return {"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETTINGS), **fields}
+def _form(
+    rendered: list[str] | None = None, **fields: str
+) -> dict[str, str | list[str]]:
+    """Build form data supporting repeated ``_rendered`` keys."""
+    result: dict[str, str | list[str]] = {
+        "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETTINGS),
+    }
+    if rendered:
+        result["_rendered"] = rendered
+    result.update(fields)
+    return result
 
 
 def _row(session_factory: sessionmaker[Session]) -> AppSettings | None:
@@ -153,8 +162,15 @@ def test_web_research_contract_matrix(
     message: str | None,
 ) -> None:
     client, _ = make_client(session_factory, media_root, seed_llm_enabled=seed_llm)
+    rendered = [
+        name
+        for name in ("voxint_web_research", "enrichment_web_research_enabled")
+        if name in fields
+    ]
     resp = client.post(
-        "/settings/web-research", data=_form(**fields), follow_redirects=False
+        "/settings/web-research",
+        data=_form(rendered=rendered, **fields),
+        follow_redirects=False,
     )
     row = _row(session_factory)
     if expect_commit:
@@ -184,7 +200,11 @@ def test_master_on_valid_persists_override(
     client, _ = make_client(session_factory, media_root, seed_llm_enabled=True)
     resp = client.post(
         "/settings/web-research",
-        data=_form(voxint_web_research="on", web_search_base_url=_VALID_URL),
+        data=_form(
+            rendered=["voxint_web_research"],
+            voxint_web_research="on",
+            web_search_base_url=_VALID_URL,
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -305,16 +325,18 @@ def test_inherit_reverts_stored_overrides_to_null(
     client.post(
         "/settings/web-research",
         data=_form(
+            rendered=["voxint_web_research"],
             voxint_web_research="on",
             web_search_base_url=_VALID_URL,
             source_authority_domains="example.com",
         ),
     )
     assert _row(session_factory).web_search_base_url == _VALID_URL  # type: ignore[union-attr]
+    # Checkbox encoding: unchecked = rendered but no value → "off".
     resp = client.post(
         "/settings/web-research",
         data=_form(
-            voxint_web_research="inherit",
+            rendered=["voxint_web_research"],
             web_search_base_url="",
             source_authority_domains="",
         ),
@@ -323,7 +345,7 @@ def test_inherit_reverts_stored_overrides_to_null(
     assert resp.status_code == 303
     row = _row(session_factory)
     assert row is not None
-    assert row.voxint_web_research is None
+    assert row.voxint_web_research is False
     assert row.web_search_base_url is None
     assert row.source_authority_domains is None
 
@@ -340,9 +362,15 @@ def test_env_echo_base_url_collapses_to_null(
         voxint_web_research=True,
         web_search_base_url=_VALID_URL,
     )
+    # Checkbox encoding: the master switch is checked (env default True)
+    # → "on", but idempotency keeps it as inherit since stored is NULL.
     resp = client.post(
         "/settings/web-research",
-        data=_form(voxint_web_research="inherit", web_search_base_url=_VALID_URL),
+        data=_form(
+            rendered=["voxint_web_research"],
+            voxint_web_research="on",
+            web_search_base_url=_VALID_URL,
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -404,6 +432,7 @@ def test_key_never_rendered_on_get_or_error(
     resp = client.post(
         "/settings/web-research",
         data=_form(
+            rendered=["voxint_web_research"],
             web_search_api_key=sentinel,
             voxint_web_research="on",
             web_search_base_url="",  # invalid → forces the error re-render
@@ -427,6 +456,7 @@ def test_toggle_reaches_research_gate_without_restart(
     client.post(
         "/settings/web-research",
         data=_form(
+            rendered=["voxint_web_research", "enrichment_web_research_enabled"],
             voxint_web_research="on",
             enrichment_web_research_enabled="on",
             web_search_base_url=_VALID_URL,
@@ -437,7 +467,11 @@ def test_toggle_reaches_research_gate_without_restart(
     # itself invalid, so an operator disabling retrieval turns both off).
     resp = client.post(
         "/settings/web-research",
-        data=_form(voxint_web_research="off", enrichment_web_research_enabled="off"),
+        data=_form(
+            rendered=["voxint_web_research", "enrichment_web_research_enabled"],
+            voxint_web_research="off",
+            enrichment_web_research_enabled="off",
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303

@@ -1246,13 +1246,10 @@ def _persist_feature_flags(
     error re-render). A valid submission then performs the single mutation and the
     caller commits.
 
-    An unexpected choice value (a stale client, a hand-crafted POST — never the
-    shipped radios) is REJECTED rather than silently coerced: mapping it to "off"
-    would quietly disable a feature, and to "inherit" would quietly drop an
-    override. Missing fields still default to ``"inherit"`` — this is a full-form
-    replace, and the real form always submits every radio in ``_FEATURE_FLAG_META``
-    (the POST route must declare a matching ``Form`` param for each, or Starlette
-    drops the field and this loop silently reverts it — see ``settings_features``).
+    Choice-membership validation is retained as defense in depth, but callers
+    now pass through ``_reconcile_switches`` first, which normalises checkbox
+    encoding to ``"on"``/``"off"``/``"inherit"`` — so the reject branch is
+    unreachable under normal operation.
 
     The flags NOT edited here (``llm_enabled`` and the web-research provider trio)
     are resolved at their CURRENT effective value so a dependency invariant fires
@@ -2551,82 +2548,44 @@ def settings_llm(
     return RedirectResponse(_settings_redirect(request, "llm", "ai"), status_code=303)
 
 @router.post("/settings/features")
-def settings_features(
+async def settings_features(
     request: Request,
     operator: OperatorDep,
     session: SessionDep,
-    enrichment_names_enabled: Annotated[str, Form()] = "inherit",
-    enrichment_names_llm_enabled: Annotated[str, Form()] = "inherit",
-    enrichment_run_assets_enabled: Annotated[str, Form()] = "inherit",
-    enrichment_run_assets_autogenerate: Annotated[str, Form()] = "inherit",
-    llm_bundled_enabled: Annotated[str, Form()] = "inherit",
-    ytdlp_enabled: Annotated[str, Form()] = "inherit",
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> Response:
+    # Plugin seam (#138): reconcile list must cover every rendered flag (#141).
+    form = await request.form()
     _require_csrf(request, CSRF_SETTINGS, csrf_token)
     settings: Settings = request.app.state.settings
-    # Every flag the Features section RENDERS (_FEATURE_FLAG_META) must have a
-    # matching Form param here and a key in `submitted`: a rendered radio whose
-    # name is not declared is silently dropped by Starlette, and
-    # _persist_feature_flags then reads it as "inherit" and clears any stored
-    # override. test_features_route_declares_every_flag guards this pairing.
-    #
-    # ⚠ Plugin seam (issue #138): the Features section renders the EFFECTIVE
-    # meta (core + plugin flags), but this handler stays core-only. That is
-    # sound only because the registry is empty, so no plugin flag renders or is
-    # submitted. The conversion (#141) that contributes the first plugin
-    # FeatureFlag MUST, in the same change, add its AppSettings column + its
-    # resolve_effective_* helper, a Form param / generic read + persistence for
-    # it here, and its candidate invariant validation — render and save wire
-    # together, never one without the other.
-    submitted = {
-        "enrichment_names_enabled": enrichment_names_enabled,
-        "enrichment_names_llm_enabled": enrichment_names_llm_enabled,
-        "enrichment_run_assets_enabled": enrichment_run_assets_enabled,
-        "enrichment_run_assets_autogenerate": enrichment_run_assets_autogenerate,
-        "llm_bundled_enabled": llm_bundled_enabled,
-        "ytdlp_enabled": ytdlp_enabled,
-    }
-    # Candidate → validate (shared invariants) → ONE mutation. On an invariant
-    # violation nothing is written and the operator's choices are re-rendered
-    # with the plain-language message(s) (issue #62).
-    errors = _persist_feature_flags(session, settings, submitted=submitted)
+    row = get_app_settings(session)
+    reconciled = _reconcile_switches(_FEATURE_FLAG_NAMES, form, settings, row)
+    errors = _persist_feature_flags(session, settings, submitted=reconciled)
     if errors:
         return templates.TemplateResponse(
             request,
             _settings_page_template(request),
             _settings_context(
-                request, session, features_errors=errors, features_submitted=submitted
+                request, session, features_errors=errors, features_submitted=reconciled
             ),
         )
     session.commit()
     return RedirectResponse(_settings_redirect(request, "features", ""), status_code=303)
 
 @router.post("/settings/semantic")
-def settings_semantic(
+async def settings_semantic(
     request: Request,
     operator: OperatorDep,
     session: SessionDep,
-    semantic_index_enabled: Annotated[str, Form()] = "inherit",
-    semantic_index_autogenerate: Annotated[str, Form()] = "inherit",
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> Response:
-    """Save the Semantic search section's two tri-state toggles (issue #121).
-
-    Scoped and CSRF-gated like every settings section. Both rendered radios have
-    a matching Form param here (a rendered radio whose name is undeclared is
-    dropped by Starlette and then read as "inherit", silently clearing an
-    override — test_semantic_route_declares_every_flag guards the pairing). On the
-    one reachable invariant violation (autogenerate on with the feature off)
-    nothing is written and the operator's choices re-render with a plain message.
-    """
+    """Save the Semantic search section's two tri-state toggles (issue #121)."""
+    form = await request.form()
     _require_csrf(request, CSRF_SETTINGS, csrf_token)
     settings: Settings = request.app.state.settings
-    submitted = {
-        "semantic_index_enabled": semantic_index_enabled,
-        "semantic_index_autogenerate": semantic_index_autogenerate,
-    }
-    errors = _persist_semantic_index(session, settings, submitted=submitted)
+    row = get_app_settings(session)
+    reconciled = _reconcile_switches(_SEMANTIC_FLAG_NAMES, form, settings, row)
+    errors = _persist_semantic_index(session, settings, submitted=reconciled)
     if errors:
         return templates.TemplateResponse(
             request,
@@ -2635,35 +2594,36 @@ def settings_semantic(
                 request,
                 session,
                 semantic_index_errors=errors,
-                semantic_index_submitted=submitted,
+                semantic_index_submitted=reconciled,
             ),
         )
     session.commit()
     return RedirectResponse(_settings_redirect(request, "semantic-search", "ai"), status_code=303)
 
 @router.post("/settings/translation")
-def settings_translation(
+async def settings_translation(
     request: Request,
     operator: OperatorDep,
     session: SessionDep,
-    translation_target_language: Annotated[str, Form()] = "inherit",
-    translation_autogenerate: Annotated[str, Form()] = "inherit",
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> Response:
     """Save the Translation section (#133): the preferred-language select
     (string override) + the auto-translate tri-state.
-
-    Scoped and CSRF-gated like every settings section. Both rendered
-    controls have a matching Form param here (an undeclared name would be
-    dropped by Starlette and read as "inherit", silently clearing an
-    override). On an invariant violation nothing is written and the
-    operator's choices re-render with a plain message.
     """
+    form = await request.form()
     _require_csrf(request, CSRF_SETTINGS, csrf_token)
     settings: Settings = request.app.state.settings
+    row = get_app_settings(session)
+    translation_auto = _reconcile_switches(
+        ("translation_autogenerate",), form, settings, row
+    )
     submitted = {
-        "translation_target_language": translation_target_language,
-        "translation_autogenerate": translation_autogenerate,
+        "translation_target_language": str(
+            form.get("translation_target_language", "inherit")
+        ),
+        "translation_autogenerate": translation_auto.get(
+            "translation_autogenerate", "inherit"
+        ),
     }
     errors = _persist_translation(session, settings, submitted=submitted)
     if errors:
@@ -2811,79 +2771,63 @@ def settings_glossary(
     return RedirectResponse(_settings_redirect(request, "glossary", "ai"), status_code=303)
 
 @router.post("/settings/watch-folder")
-def settings_watch_folder(
+async def settings_watch_folder(
     request: Request,
     operator: OperatorDep,
     session: SessionDep,
-    watch_folder_enabled: Annotated[str, Form()] = "inherit",
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> Response:
-    """Set the watch-folder ingest runtime override (issue #60).
-
-    A single tri-state toggle beside the media-folders panel: On/Off/inherit map
-    to the nullable ``app_settings.watch_folder_enabled`` column as
-    True/False/None (None = inherit the installation default). There is no
-    cross-flag invariant, so a valid choice writes the one column and redirects;
-    an unrecognized value (a stale client / hand-crafted POST) is rejected rather
-    than silently coerced, mirroring ``_persist_feature_flags``.
-    """
+    """Set the watch-folder ingest runtime override (issue #60)."""
+    form = await request.form()
     _require_csrf(request, CSRF_SETTINGS, csrf_token)
     settings: Settings = request.app.state.settings
-    if watch_folder_enabled not in _FEATURE_FLAG_CHOICES:
-        return templates.TemplateResponse(
-            request,
-            _settings_page_template(request),
-            _settings_context(
-                request,
-                session,
-                watch_folder_error=(
-                    "Unrecognized watch-folder setting — choose On, Off, or Use "
-                    "installation setting."
-                ),
-            ),
-        )
-    row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
-    row.watch_folder_enabled = (
-        None if watch_folder_enabled == "inherit" else (watch_folder_enabled == "on")
+    row = get_app_settings(session)
+    reconciled = _reconcile_switches(("watch_folder_enabled",), form, settings, row)
+    wf_choice = reconciled.get("watch_folder_enabled", "inherit")
+    wf_row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+    wf_row.watch_folder_enabled = (
+        None if wf_choice == "inherit" else (wf_choice == "on")
     )
     session.commit()
     return RedirectResponse(_settings_redirect(request, "watch-folder", "media"), status_code=303)
 
 @router.post("/settings/web-research")
-def settings_web_research(
+async def settings_web_research(
     request: Request,
     operator: OperatorDep,
     session: SessionDep,
-    voxint_web_research: Annotated[str, Form()] = "inherit",
-    enrichment_web_research_enabled: Annotated[str, Form()] = "inherit",
-    web_search_base_url: Annotated[str, Form()] = "",
-    web_search_api_key: Annotated[str, Form()] = "",
-    remove_web_search_api_key: Annotated[bool, Form()] = False,
-    source_authority_domains: Annotated[str, Form()] = "",
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> Response:
+    form = await request.form()
     _require_csrf(request, CSRF_SETTINGS, csrf_token)
     settings: Settings = request.app.state.settings
-    # Candidate → validate (all error sources) → ONE mutation. On any violation
-    # nothing is written and the operator's choices are re-rendered with the
-    # plain-language message(s) (issue #76). The re-render dict carries the four
-    # NON-SECRET fields only — the API key is never echoed back.
+    row = get_app_settings(session)
+    wr_master = _reconcile_switches(
+        ("voxint_web_research",), form, settings, row
+    )
+    wr_producer = _reconcile_switches(
+        ("enrichment_web_research_enabled",), form, settings, row
+    )
     errors = _persist_web_research(
         session,
         settings,
-        submitted_master=voxint_web_research,
-        submitted_producer=enrichment_web_research_enabled,
-        raw_base_url=web_search_base_url,
-        raw_key=web_search_api_key,
-        remove_key=remove_web_search_api_key,
-        raw_domains=source_authority_domains,
+        submitted_master=wr_master.get("voxint_web_research", "inherit"),
+        submitted_producer=wr_producer.get(
+            "enrichment_web_research_enabled", "inherit"
+        ),
+        raw_base_url=str(form.get("web_search_base_url", "")),
+        raw_key=str(form.get("web_search_api_key", "")),
+        remove_key=form.get("remove_web_search_api_key") == "true",
+        raw_domains=str(form.get("source_authority_domains", "")),
     )
     if errors:
         submitted = {
-            "voxint_web_research": voxint_web_research,
-            "enrichment_web_research_enabled": enrichment_web_research_enabled,
-            "web_search_base_url": web_search_base_url,
-            "source_authority_domains": source_authority_domains,
+            "voxint_web_research": wr_master.get("voxint_web_research", "inherit"),
+            "enrichment_web_research_enabled": wr_producer.get(
+                "enrichment_web_research_enabled", "inherit"
+            ),
+            "web_search_base_url": str(form.get("web_search_base_url", "")),
+            "source_authority_domains": str(form.get("source_authority_domains", "")),
         }
         return templates.TemplateResponse(
             request,
