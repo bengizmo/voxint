@@ -750,11 +750,6 @@ _FEATURE_INVARIANT_COPY: dict[str, str] = {
     "web_search_base_url must be a bare endpoint (no query/fragment)": (
         "Enter just the endpoint address — no “?query” or “#fragment” at the end."
     ),
-    "synthdetect_autogenerate requires synthdetect_enabled=true"
-    " — the post-finalize step only enqueues the feature it rides on": (
-        "Turn AI-content detection on before auto-detecting new runs"
-        " — the automatic step only runs the feature it rides on."
-    ),
 }
 
 _SEMANTIC_INVARIANT_COPY = (

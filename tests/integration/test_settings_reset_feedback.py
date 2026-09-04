@@ -9,7 +9,6 @@ unrelated violation never blocks or mislabels the cause.
 """
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -68,17 +67,6 @@ def _seed(session_factory: sessionmaker[Session], **columns: object) -> None:
 def _row(session_factory: sessionmaker[Session]) -> AppSettings | None:
     with session_factory() as session:
         return get_app_settings(session)
-
-
-def _snapshot(session_factory: sessionmaker[Session]) -> dict[str, Any]:
-    with session_factory() as session:
-        row = get_app_settings(session)
-        if row is None:
-            return {}
-        return {
-            c.key: getattr(row, c.key)
-            for c in row.__table__.columns  # type: ignore[union-attr]
-        }
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +247,7 @@ class TestInvariantCopyDrift:
         from voxint.api.routers.settings import _FEATURE_INVARIANT_COPY
         from voxint.app_settings import EffectiveFlags, validate_effective_flags
 
+        bad_urls = ["", "not a url", "ftp://x", "https://u:p@h", "https://h?q=1"]
         all_messages: list[str] = []
         for llm in (True, False):
             for names in (True, False):
@@ -267,19 +256,32 @@ class TestInvariantCopyDrift:
                         for auto_assets in (True, False):
                             for web in (True, False):
                                 for web_enrich in (True, False):
-                                    msgs = validate_effective_flags(
-                                        EffectiveFlags(
-                                            llm_enabled=llm,
-                                            enrichment_names_enabled=names,
-                                            enrichment_names_llm_enabled=llm_names,
-                                            enrichment_run_assets_enabled=assets,
-                                            enrichment_run_assets_autogenerate=auto_assets,
-                                            voxint_web_research=web,
-                                            enrichment_web_research_enabled=web_enrich,
-                                            web_search_base_url="http://example.com",
+                                    urls = ["http://example.com"]
+                                    if web:
+                                        urls.extend(bad_urls)
+                                    for url in urls:
+                                        msgs = validate_effective_flags(
+                                            EffectiveFlags(
+                                                llm_enabled=llm,
+                                                enrichment_names_enabled=names,
+                                                enrichment_names_llm_enabled=llm_names,
+                                                enrichment_run_assets_enabled=assets,
+                                                enrichment_run_assets_autogenerate=auto_assets,
+                                                voxint_web_research=web,
+                                                enrichment_web_research_enabled=web_enrich,
+                                                web_search_base_url=url,
+                                            )
                                         )
-                                    )
-                                    all_messages.extend(msgs)
+                                        all_messages.extend(msgs)
         unique = set(all_messages)
         unmapped = [m for m in unique if m not in _FEATURE_INVARIANT_COPY]
         assert unmapped == [], f"Unmapped messages: {unmapped}"
+
+    def test_reset_error_section_covers_resettable_flags(self) -> None:
+        """Every resettable flag with an invariant has a section mapping."""
+        from voxint.api.routers.settings import _RESET_ERROR_SECTION, _RESETTABLE_FLAGS
+
+        unmapped = set(_RESETTABLE_FLAGS) - set(_RESET_ERROR_SECTION)
+        assert unmapped == {"watch_folder_enabled"}, (
+            f"Unmapped resettable flags: {unmapped}"
+        )
