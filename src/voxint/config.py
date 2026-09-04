@@ -410,6 +410,12 @@ class Settings(BaseSettings):
     # producer workflow is an atomic rename into the watched folder. 0 disables
     # the wait (accept files immediately).
     watch_folder_settle_seconds: int = Field(default=60, ge=0)
+    # Maximum files submitted per watch sweep. Caps the number of pipeline
+    # runs created in a single pass so a large initial backlog does not flood
+    # the model services. Remaining files stay undiscovered and are picked up
+    # on subsequent sweeps. Default 8 matches the model services' default
+    # MAX_PENDING_REQUESTS admission limit.
+    watch_folder_batch_size: int = Field(default=8, ge=1)
 
     # Media operations reconciler (ADR 0007). Drives interrupted journal rows
     # (move, trash, restore) to a consistent terminal state by classifying
