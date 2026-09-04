@@ -419,7 +419,7 @@ class TestResetPaths:
     def test_reset_invariant_violation_rolls_back(
         self, session_factory: sessionmaker[Session], media_root: Path
     ) -> None:
-        """Resetting a prerequisite flag while dependent is on rolls back."""
+        """Resetting a prerequisite flag while dependent is on re-renders with error (#404)."""
         client, _ = make_client(
             session_factory,
             media_root,
@@ -433,7 +433,9 @@ class TestResetPaths:
         before = _snapshot(session_factory)
         data = _form(reset_flag="enrichment_run_assets_enabled")
         resp = client.post("/settings", data=data, follow_redirects=False)
-        assert resp.status_code == 303
+        assert resp.status_code == 200
+        assert "Reset not applied" in resp.text
+        assert "run assets" in resp.text.lower()
         after = _snapshot(session_factory)
         assert after["enrichment_run_assets_enabled"] is True, "should not have been reset"
         assert (
@@ -444,7 +446,7 @@ class TestResetPaths:
     def test_reset_semantic_invariant_violation_rolls_back(
         self, session_factory: sessionmaker[Session], media_root: Path
     ) -> None:
-        """Resetting semantic_index_enabled while autogenerate is on rolls back."""
+        """Resetting semantic_index_enabled while autogenerate is on re-renders (#404)."""
         client, _ = make_client(
             session_factory,
             media_root,
@@ -458,7 +460,9 @@ class TestResetPaths:
         )
         data = _form(reset_flag="semantic_index_enabled")
         resp = client.post("/settings/ai", data=data, follow_redirects=False)
-        assert resp.status_code == 303
+        assert resp.status_code == 200
+        assert "Reset not applied" in resp.text
+        assert "semantic search" in resp.text.lower()
         row = _row(session_factory)
         assert row is not None
         assert row.semantic_index_enabled is True, "should not have been reset"
