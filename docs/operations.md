@@ -567,6 +567,8 @@ docker compose exec api voxint doctor                    # read-only preflight f
 docker compose exec api voxint stats                     # aggregate health/throughput (--since, --json)
 docker compose exec api voxint watch <run-id>            # follow a run until it stops (--interval, --timeout)
 docker compose exec api voxint speakers auto-enroll-backfill --dry-run  # preview auto-enrollment on existing runs
+docker compose exec api voxint speakers dedup --dry-run               # report probable duplicate speakers (merge with --apply)
+docker compose exec api voxint speakers reconcile --dry-run           # re-derive proposals for cold-start-affected runs (apply with --apply)
 ```
 
 `submit` records the media item, creates a run, and enqueues it for the
@@ -898,7 +900,14 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   of a `COMPLETED`, `FAILED`, or `CANCELLED` run, from the Manage section on
   the run detail page. Drives the run to `QUEUED` with `current_stage=None`,
   so it re-processes from ACQUIRE. Prior `StageRun` rows are preserved as
-  earlier attempts, not deleted. A confirmation dialog guards the button.
+  earlier attempts, not deleted. A preflight check guards the button based on
+  adjudication state: when segment-scope rulings exist (tied to transcript
+  segments that will be regenerated), restart is **blocked** (disabled button
+  with a "Blocked" notice). When only label-scope rulings exist (speaker
+  assignments that may apply to different voices after re-processing),
+  restart requires a `acknowledge_label_risk` checkbox. When no adjudication
+  work exists, a plain confirmation dialog guards the button. Both the
+  run-detail and editor pages render these states.
 - **`POST /runs/{id}/cancel`**: an exact-revision (CAS) cancel of a *live* run
   (`QUEUED` / `RUNNING` / `PAUSED` / `AWAITING_ADJUDICATION`), from a button
   on the run detail page. Cancellation is **cooperative and pure DB state**: it
@@ -1061,6 +1070,9 @@ Failures split into two lanes (see architecture.md):
 
 - **Transient** (service outage, timeouts): retried automatically with
   exponential backoff up to `STAGE_MAX_ATTEMPTS`; nothing to do.
+  **Saturation** (a model service returning 503 at capacity) is classified
+  separately and does **not** count against the retry budget, so sustained
+  backpressure during batch ingest cannot permanently fail a run.
 - **Deterministic** (`inference_failed`, protocol violations, bad media):
   the run stays FAILED until a human decides, and `voxint requeue` is the
   explicit override after fixing the cause.
@@ -1084,9 +1096,13 @@ disabled installation only pays one DB read per sweep, and enabling it needs no
 restart. When on, it walks the operator's registered `media_folders`, submits
 each new file (skipping ones already ingested), waits out
 `WATCH_FOLDER_SETTLE_SECONDS` so a file still being copied in is not read
-mid-write, and records a one-line status summary shown in Settings. Like the
-other sweeps it needs `beat` running; a bare-host deployment without a beat
-process never ingests automatically.
+mid-write, and records a one-line status summary shown in Settings. Each sweep
+submits at most `WATCH_FOLDER_BATCH_SIZE` files (default 8, matching the
+model services' `MAX_PENDING_REQUESTS` admission limit); remaining files stay
+undiscovered until the next sweep. The sweep also short-circuits on the first
+broker failure so remaining files are deferred rather than paying repeated
+connect-timeout penalties. Like the other sweeps it needs `beat` running;
+a bare-host deployment without a beat process never ingests automatically.
 
 ### URL ingestion & egress security
 
@@ -1544,7 +1560,11 @@ cross-run matching the same way manually enrolled speakers do.
 
 Adjudication decisions from auto-enrollment use `Decision.AUTO_ENROLL` and
 `Resolution.AUTO_ENROLL`, keeping them distinct from human rulings in the
-ledger.
+ledger. Every auto-enrollment decision also persists per-label diagnostic
+data (similarity, margin, vote agreement, top candidate, roster size at
+decision time) in the `auto_enroll_evidence` table, including near-misses
+that did not meet thresholds. This evidence is retained for threshold tuning
+and debugging without re-running the pipeline.
 
 ### Backfill
 
