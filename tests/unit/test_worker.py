@@ -14,6 +14,7 @@ from voxint.worker.tasks import (
     backoff_seconds,
     finish_pipeline,
     gc_sweep,
+    is_saturation,
     notify_sweep,
     pipeline_task_for_stage,
     retryable_cause,
@@ -285,6 +286,69 @@ def test_retryable_cause_follows_service_verdict() -> None:
     assert not retryable_cause(wrap(ServiceError("inference_failed", "boom", retryable=False)))
     assert not retryable_cause(wrap(ProtocolError("bad shape")))
     assert not retryable_cause(wrap(ValueError("some stage bug")))
+
+
+def test_is_saturation_identifies_capacity_errors() -> None:
+    assert is_saturation(wrap(ServiceError("saturated", "at capacity", retryable=True)))
+    assert not is_saturation(wrap(ServiceError("transport_error", "timeout", retryable=True)))
+    assert not is_saturation(wrap(ServiceError("inference_failed", "boom", retryable=False)))
+    assert not is_saturation(wrap(ProtocolError("bad shape")))
+    assert not is_saturation(wrap(ValueError("some stage bug")))
+
+
+def test_saturation_skips_retry_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A saturated service does not exhaust stage_max_attempts (#418)."""
+    from celery.exceptions import Retry
+
+    import voxint.worker.tasks as tasks_mod
+
+    _factory, _ctx, run_id = _stub_segment_driver(monkeypatch)
+    cause = ServiceError("saturated", "Service at capacity; retry later", retryable=True)
+    snapshot = SimpleNamespace(
+        status=RunStatus.FAILED, current_stage=Stage.TRANSCRIBE, revision=1
+    )
+
+    monkeypatch.setattr(
+        tasks_mod,
+        "execute_run",
+        lambda *a, **k: (_ for _ in ()).throw(
+            StageFailedError(Stage.TRANSCRIBE, cause, failed_snapshot=snapshot)
+        ),
+    )
+    monkeypatch.setattr(tasks_mod, "stage_attempts", lambda session, rid, stage: 100)
+    monkeypatch.setattr(tasks_mod, "requeue_failed_stage", lambda factory, snap: True)
+
+    def fake_retry(*, exc: object, countdown: float) -> Retry:
+        return Retry("retrying", exc=exc)
+
+    fake_task = SimpleNamespace(retry=fake_retry)
+    with pytest.raises(Retry):
+        tasks_mod._drive_segment(fake_task, str(run_id), GPU_SEGMENT)
+
+
+def test_non_saturation_exhausts_retry_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-saturation retryable failure respects stage_max_attempts."""
+    import voxint.worker.tasks as tasks_mod
+
+    _factory, _ctx, run_id = _stub_segment_driver(monkeypatch)
+    cause = ServiceError("transport_error", "timeout", retryable=True)
+    snapshot = SimpleNamespace(
+        status=RunStatus.FAILED, current_stage=Stage.TRANSCRIBE, revision=1
+    )
+
+    monkeypatch.setattr(
+        tasks_mod,
+        "execute_run",
+        lambda *a, **k: (_ for _ in ()).throw(
+            StageFailedError(Stage.TRANSCRIBE, cause, failed_snapshot=snapshot)
+        ),
+    )
+    monkeypatch.setattr(tasks_mod, "stage_attempts", lambda session, rid, stage: 5)
+
+    fake_task = SimpleNamespace(retry=lambda exc, countdown: None)
+    monkeypatch.setattr(tasks_mod, "run_pipeline", fake_task)
+    with pytest.raises(StageFailedError):
+        tasks_mod._drive_segment(fake_task, str(run_id), GPU_SEGMENT)
 
 
 def test_backoff_is_exponential_and_capped() -> None:

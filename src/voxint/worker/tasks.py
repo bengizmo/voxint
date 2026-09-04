@@ -106,6 +106,15 @@ def retryable_cause(exc: StageFailedError) -> bool:
     return isinstance(exc.cause, ServiceError) and exc.cause.retryable
 
 
+def is_saturation(exc: StageFailedError) -> bool:
+    """True when the stage failed because a model service was at capacity.
+
+    Saturation is flow control, not evidence that the model or the media is
+    broken.  The retry budget should not be consumed by it.
+    """
+    return isinstance(exc.cause, ServiceError) and exc.cause.code == "saturated"
+
+
 def backoff_seconds(attempts: int, base: float, cap: float) -> float:
     """Exponential in completed attempts, capped; jitter is the caller's."""
     return float(min(base * 2 ** max(attempts - 1, 0), cap))
@@ -240,7 +249,7 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
             raise  # deterministic — the failure lane owns it now
         with factory() as session:
             attempts = stage_attempts(session, run_id, exc.stage)
-        if attempts >= settings.stage_max_attempts:
+        if not is_saturation(exc) and attempts >= settings.stage_max_attempts:
             raise  # transient budget exhausted; stays FAILED, honestly
         if not requeue_failed_stage(factory, exc.failed_snapshot):
             return "lost-requeue-race"
