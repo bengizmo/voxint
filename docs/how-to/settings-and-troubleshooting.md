@@ -94,6 +94,14 @@ The optional features are:
   Voxint fetches with yt-dlp. This is independent of the LLM features. Fetching a
   URL reaches out to the network (see the last troubleshooting entry).
 
+Features that depend on another feature are visually grouped under their
+prerequisite. When a prerequisite is off, the dependent features are greyed out
+and cannot be toggled until the prerequisite is turned on. If you try to reset a
+feature flag that is held in place by a dependency (for example, turning off LLM
+enhancement while Run assets is still On), the page shows a plain-language notice
+explaining which feature prevents the reset, rather than silently ignoring the
+change.
+
 If LLM enhancement is off, the page reminds you that the LLM-dependent features
 above stay inactive even if you switch them On here; turn on LLM enhancement
 first (on the AI tab).

@@ -458,7 +458,7 @@ services:
   worker:
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q celery --concurrency=1
   worker-post:
-    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.30.0}
+    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.34.0}
     pull_policy: missing
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q post --concurrency=2
     restart: unless-stopped
@@ -1605,6 +1605,57 @@ centroid, usually because every window was skipped. The row is retained in its
 old space. Manual imports and tutorial seed embeddings without a source run are
 reported as unmigratable and are also retained. Use `--run <uuid>` to restrict
 the migration to one completed run, and `--yes` to skip confirmation.
+
+## Deduplicating the speaker roster
+
+After batch ingest or a re-embed migration, the roster may contain duplicate
+speakers (separate entries for the same voice). `voxint speakers dedup` finds
+probable duplicates by comparing every pair of enrolled speakers using embedding
+cosine similarity:
+
+```bash
+docker compose exec api voxint speakers dedup                        # report only (dry-run is the default)
+docker compose exec api voxint speakers dedup --threshold 0.75       # tighter detection (default: configured grounded_min_cosine)
+docker compose exec api voxint speakers dedup --merge                # report and merge safe pairs (interactive confirmation)
+docker compose exec api voxint speakers dedup --merge --yes          # merge without confirmation
+docker compose exec api voxint speakers dedup --merge --merge-threshold 0.90  # raise the auto-merge floor (default: 0.85)
+```
+
+Without `--merge`, the command prints a table of probable duplicate pairs with
+their cosine similarity and exits. With `--merge`, it additionally merges pairs
+that meet the merge threshold, using a direction heuristic that prefers named
+speakers over placeholder names. Two safety guards prevent destructive merges:
+pairs where both speakers have a non-placeholder name are skipped (the operator
+should decide which name wins), and pairs that are not disjoint in their source
+runs are skipped (they may be distinct speakers who sound alike in different
+contexts). The merge is an atomic batch operation: all safe pairs commit together
+or not at all.
+
+## Reconciling cold-start proposals
+
+When speakers are processed while the roster is still small (the "cold start"
+period), their proposals may be weaker than what the same matcher would produce
+against today's larger roster. `voxint speakers reconcile` identifies those runs
+and re-derives their speaker proposals:
+
+```bash
+docker compose exec api voxint speakers reconcile --dry-run          # list affected runs, no writes
+docker compose exec api voxint speakers reconcile                    # apply (interactive confirmation)
+docker compose exec api voxint speakers reconcile --yes              # apply without confirmation
+docker compose exec api voxint speakers reconcile --run <uuid>       # restrict to one run
+```
+
+Cold-start detection works per embedding space: it compares the roster size at
+the time each run was matched against the current roster size and flags runs
+where the roster has grown significantly since. In `--dry-run` mode the command
+reports a semantic before/after diff for each affected run (added, removed, and
+changed speaker assignments) without writing anything. Without `--dry-run`, each
+run's proposals are replaced in a per-run transaction (safe to interrupt; runs
+reconcile independently).
+
+Run this after a large batch ingest or after merging duplicates with `dedup`,
+when the roster has stabilized enough that earlier runs would benefit from the
+richer context.
 
 ## Adjudication workflow
 

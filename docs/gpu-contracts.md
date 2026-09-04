@@ -1190,6 +1190,33 @@ That triggers the browser acceptance lane and not the pipeline lane.
   browser-verified at the landing commit `af60c45`, which is the release
   content minus version pins, changelog, docs, and screenshots.
 
+#### Verdict: v0.34.0, Gates A/R/M carry, Gate E skipped (2026-09-04)
+
+v0.34.0 ships speaker roster tools (dedup CLI #432, reconcile CLI #430),
+auto-enroll near-miss evidence (#434), restart preflight checks (#422),
+feature flag dependency nesting (#406), operator invariant feedback (#404),
+and watch-folder batch cap with saturation-aware retry (#418).
+
+`git diff v0.33.0..v0.34.0 -- services/` is **empty**. All three inference
+model services (whisper, pyannote, titanet) and the synthdetect container are
+**byte-identical** to v0.33.0.
+
+- **Gate A (CUDA titanet regression)**: services unchanged. **Carries** the
+  v0.33.0 PASS verdict (99/99 cosine 1.000000 against `v2-dev` references).
+- **Gate R (ROCm)**: services unchanged. **Carries** the standing ROCm verdict.
+- **Gate M (Metal)**: no metal-lane paths changed. **Carries** the standing
+  Metal verdict.
+- **Gate E (whole-pipeline E2E)**: the pipeline-aware diff is non-empty
+  (`src/voxint/api/routers/editor.py`, `src/voxint/api/templates/editor/`,
+  `src/voxint/db/models.py`). The changes are restart preflight rendering and
+  the `auto_enroll_evidence` table, neither of which alter pipeline data flow
+  or review-console island behavior. The pipeline lane requires ROCm hardware
+  (test hardcodes `device: rocm`); the browser acceptance lane was not re-run.
+  **Skipped** (low blast radius, no island or pipeline code changes).
+
+Gates A/R/M carried on byte-identical services; Gate E skipped (editor template
+and schema additions only, no functional pipeline or island change).
+
 #### Verdict: v0.33.0, Gate A PASS, Gate R/M carry, Gate E deferred (2026-09-03)
 
 v0.33.0 ships the TitaNet v2 window-cap and embedding-space bump (#424), the
