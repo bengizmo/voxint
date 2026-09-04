@@ -1,8 +1,8 @@
-"""Integration tests for cold-start speaker reconcile discovery.
+"""Integration tests for speaker reconcile: discovery and per-run counting.
 
 Covers embedding-space-aware detection, false-positive exclusion,
-NULL roster_size handling, and the --run filter.  Per-run reconciliation,
-idempotency, and CLI dry-run tests are a follow-up.
+NULL roster_size handling, the --run filter, and the snapshot-diff
+counting logic in ``reconcile_run``.
 """
 
 from __future__ import annotations
@@ -19,9 +19,15 @@ from voxint.db.models import (
     PipelineRun,
     RunStatus,
     Speaker,
+    SpeakerAssignment,
     SpeakerEmbedding,
 )
-from voxint.speakers.reconcile import cold_start_affected_runs
+from voxint.speakers.matching import MatchingGates
+from voxint.speakers.reconcile import (
+    RunReconcileResult,
+    cold_start_affected_runs,
+    reconcile_run,
+)
 
 SPACE = "test-reconcile-v1"
 SPACE_B = "test-reconcile-v2"
@@ -159,3 +165,216 @@ class TestColdStartDetection:
         plan = cold_start_affected_runs(session, run_id=run_a)
         assert run_a in plan.affected_run_ids
         assert run_b not in plan.affected_run_ids
+
+
+# ---------------------------------------------------------------------------
+# reconcile_run: snapshot-diff counting logic
+# ---------------------------------------------------------------------------
+
+def _add_assignment(
+    session: Session,
+    run_id: uuid.UUID,
+    label: str,
+    speaker_id: uuid.UUID | None,
+    *,
+    method: str = "cosine",
+    confidence: float | None = 0.85,
+    proposed_name: str | None = None,
+    grounded: bool = False,
+) -> None:
+    session.add(SpeakerAssignment(
+        pipeline_run_id=run_id,
+        diarization_label=label,
+        speaker_id=speaker_id,
+        method=method,
+        confidence=confidence,
+        proposed_name=proposed_name,
+        grounded=grounded,
+    ))
+    session.flush()
+
+
+class TestReconcileRun:
+    """Snapshot-diff counting exercised via monkeypatched refresh_run_matches."""
+
+    def test_no_change_returns_unchanged(
+        self, session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        alice = _add_speaker(session, "Alice", E0)
+        bob = _add_speaker(session, "Bob", E1)
+        run_id = _add_completed_run(session)
+        _add_assignment(session, run_id, "SPEAKER_00", alice)
+        _add_assignment(session, run_id, "SPEAKER_01", bob)
+
+        monkeypatch.setattr(
+            "voxint.speakers.reconcile.refresh_run_matches",
+            lambda s, rid, g: None,
+        )
+        result = reconcile_run(session, run_id, MatchingGates())
+        assert result == RunReconcileResult(run_id=run_id, added=0, removed=0, changed=0)
+        assert result.unchanged is True
+
+    def test_pure_additions(
+        self, session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        alice = _add_speaker(session, "Alice", E0)
+        bob = _add_speaker(session, "Bob", E1)
+        run_id = _add_completed_run(session)
+
+        def _mock_refresh(s: Session, rid: uuid.UUID, g: MatchingGates) -> None:
+            _add_assignment(s, rid, "SPEAKER_00", alice)
+            _add_assignment(s, rid, "SPEAKER_01", bob)
+
+        monkeypatch.setattr(
+            "voxint.speakers.reconcile.refresh_run_matches", _mock_refresh,
+        )
+        result = reconcile_run(session, run_id, MatchingGates())
+        assert result.added == 2
+        assert result.removed == 0
+        assert result.changed == 0
+
+    def test_pure_removals(
+        self, session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        alice = _add_speaker(session, "Alice", E0)
+        bob = _add_speaker(session, "Bob", E1)
+        run_id = _add_completed_run(session)
+        _add_assignment(session, run_id, "SPEAKER_00", alice)
+        _add_assignment(session, run_id, "SPEAKER_01", bob)
+
+        def _mock_refresh(s: Session, rid: uuid.UUID, g: MatchingGates) -> None:
+            s.query(SpeakerAssignment).filter_by(pipeline_run_id=rid).delete()
+
+        monkeypatch.setattr(
+            "voxint.speakers.reconcile.refresh_run_matches", _mock_refresh,
+        )
+        result = reconcile_run(session, run_id, MatchingGates())
+        assert result.added == 0
+        assert result.removed == 2
+        assert result.changed == 0
+
+    def test_label_reassignment_counts_as_changed(
+        self, session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        alice = _add_speaker(session, "Alice", E0)
+        bob = _add_speaker(session, "Bob", E1)
+        run_id = _add_completed_run(session)
+        _add_assignment(session, run_id, "SPEAKER_00", alice, confidence=0.85)
+
+        def _mock_refresh(s: Session, rid: uuid.UUID, g: MatchingGates) -> None:
+            s.query(SpeakerAssignment).filter_by(
+                pipeline_run_id=rid, diarization_label="SPEAKER_00",
+            ).delete()
+            _add_assignment(s, rid, "SPEAKER_00", bob, confidence=0.90)
+
+        monkeypatch.setattr(
+            "voxint.speakers.reconcile.refresh_run_matches", _mock_refresh,
+        )
+        result = reconcile_run(session, run_id, MatchingGates())
+        assert result.added == 0
+        assert result.removed == 0
+        assert result.changed == 1
+        assert result.unchanged is False
+
+    def test_mixed_adds_and_changes(
+        self, session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        alice = _add_speaker(session, "Alice", E0)
+        bob = _add_speaker(session, "Bob", E1)
+        carol = _add_speaker(session, "Carol", _unit(192, 2))
+        run_id = _add_completed_run(session)
+        _add_assignment(session, run_id, "SPEAKER_00", alice)
+
+        def _mock_refresh(s: Session, rid: uuid.UUID, g: MatchingGates) -> None:
+            s.query(SpeakerAssignment).filter_by(
+                pipeline_run_id=rid, diarization_label="SPEAKER_00",
+            ).delete()
+            _add_assignment(s, rid, "SPEAKER_00", bob)
+            _add_assignment(s, rid, "SPEAKER_01", carol)
+
+        monkeypatch.setattr(
+            "voxint.speakers.reconcile.refresh_run_matches", _mock_refresh,
+        )
+        result = reconcile_run(session, run_id, MatchingGates())
+        assert result.added == 1
+        assert result.removed == 0
+        assert result.changed == 1
+
+    def test_mixed_removes_and_changes(
+        self, session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        alice = _add_speaker(session, "Alice", E0)
+        bob = _add_speaker(session, "Bob", E1)
+        carol = _add_speaker(session, "Carol", _unit(192, 2))
+        run_id = _add_completed_run(session)
+        _add_assignment(session, run_id, "SPEAKER_00", alice)
+        _add_assignment(session, run_id, "SPEAKER_01", bob)
+
+        def _mock_refresh(s: Session, rid: uuid.UUID, g: MatchingGates) -> None:
+            s.query(SpeakerAssignment).filter_by(pipeline_run_id=rid).delete()
+            _add_assignment(s, rid, "SPEAKER_00", carol)
+
+        monkeypatch.setattr(
+            "voxint.speakers.reconcile.refresh_run_matches", _mock_refresh,
+        )
+        result = reconcile_run(session, run_id, MatchingGates())
+        assert result.added == 0
+        assert result.removed == 1
+        assert result.changed == 1
+
+    def test_mixed_all_three(
+        self, session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        alice = _add_speaker(session, "Alice", E0)
+        bob = _add_speaker(session, "Bob", E1)
+        carol = _add_speaker(session, "Carol", _unit(192, 2))
+        dave = _add_speaker(session, "Dave", _unit(192, 3))
+        run_id = _add_completed_run(session)
+        _add_assignment(session, run_id, "SPEAKER_00", alice)
+        _add_assignment(session, run_id, "SPEAKER_01", bob)
+
+        def _mock_refresh(s: Session, rid: uuid.UUID, g: MatchingGates) -> None:
+            s.query(SpeakerAssignment).filter_by(pipeline_run_id=rid).delete()
+            _add_assignment(s, rid, "SPEAKER_00", carol)
+            _add_assignment(s, rid, "SPEAKER_02", dave)
+
+        monkeypatch.setattr(
+            "voxint.speakers.reconcile.refresh_run_matches", _mock_refresh,
+        )
+        result = reconcile_run(session, run_id, MatchingGates())
+        assert result.added == 1
+        assert result.removed == 1
+        assert result.changed == 1
+
+    def test_empty_run_returns_unchanged(
+        self, session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run_id = _add_completed_run(session)
+
+        monkeypatch.setattr(
+            "voxint.speakers.reconcile.refresh_run_matches",
+            lambda s, rid, g: None,
+        )
+        result = reconcile_run(session, run_id, MatchingGates())
+        assert result.unchanged is True
+
+    def test_idempotent_second_call(
+        self, session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        alice = _add_speaker(session, "Alice", E0)
+        bob = _add_speaker(session, "Bob", E1)
+        run_id = _add_completed_run(session)
+        _add_assignment(session, run_id, "SPEAKER_00", alice)
+
+        def _mock_refresh(s: Session, rid: uuid.UUID, g: MatchingGates) -> None:
+            s.query(SpeakerAssignment).filter_by(pipeline_run_id=rid).delete()
+            _add_assignment(s, rid, "SPEAKER_00", bob)
+
+        monkeypatch.setattr(
+            "voxint.speakers.reconcile.refresh_run_matches", _mock_refresh,
+        )
+        r1 = reconcile_run(session, run_id, MatchingGates())
+        assert r1.changed == 1
+        assert r1.unchanged is False
+        r2 = reconcile_run(session, run_id, MatchingGates())
+        assert r2.unchanged is True

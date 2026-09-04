@@ -32,6 +32,38 @@ _CSRF_KEY = "restart-template-test-csrf-key"
 NOW = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
 
 
+def _seed_editor_run(session: Session) -> tuple[uuid.UUID, uuid.UUID]:
+    """Seed a completed run and return (media_id, run_id)."""
+    media = MediaItem(source_path=f"incoming/{uuid.uuid4().hex}/editor-restart.wav")
+    session.add(media)
+    session.flush()
+    run = PipelineRun(
+        media_item_id=media.id,
+        status=RunStatus.COMPLETED.value,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    session.add(run)
+    session.flush()
+    return media.id, run.id
+
+
+@pytest.fixture()
+def editor_client(session_factory: sessionmaker[Session]) -> TestClient:
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+        csrf_secret=_CSRF_KEY,
+        console_media_enabled=True,
+    )
+    app = create_app(settings=settings, session_factory=session_factory)
+    test_client = TestClient(app)
+    test_client.auth = CREDS
+    seed_onboarded(session_factory)
+    return test_client
+
+
 @pytest.fixture()
 def client(session_factory: sessionmaker[Session]) -> TestClient:
     settings = Settings(
@@ -187,3 +219,45 @@ class TestRestartPost:
             follow_redirects=False,
         )
         assert resp.status_code == 303
+
+
+class TestEditorRestart:
+    def test_clean_editor_shows_restart_without_checkbox(
+        self, editor_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            media_id, _run_id = _seed_editor_run(session)
+            session.commit()
+        resp = editor_client.get(f"/media/{media_id}/editor", follow_redirects=False)
+        assert resp.status_code == 200
+        html = resp.text
+        assert 'name="acknowledge_label_risk"' not in html
+        assert "Re-run" in html
+
+    def test_editor_label_risk_shows_checkbox(
+        self, editor_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            media_id, run_id = _seed_editor_run(session)
+            _add_label_scope_decision(session, run_id)
+            session.commit()
+        resp = editor_client.get(f"/media/{media_id}/editor", follow_redirects=False)
+        assert resp.status_code == 200
+        html = resp.text
+        assert 'name="acknowledge_label_risk"' in html
+        assert "required" in html
+        assert "speaker ruling" in html
+
+    def test_editor_segment_blocker_disables_button(
+        self, editor_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            media_id, run_id = _seed_editor_run(session)
+            _add_segment_scope_decision(session, run_id)
+            session.commit()
+        resp = editor_client.get(f"/media/{media_id}/editor", follow_redirects=False)
+        assert resp.status_code == 200
+        html = resp.text
+        assert 'disabled>' in html
+        assert "Blocked" in html
+        assert "Submit as a new run instead" in html
