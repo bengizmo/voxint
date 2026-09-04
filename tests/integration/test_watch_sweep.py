@@ -643,3 +643,100 @@ def test_blank_sidecar_file_ingests_and_stamps_empty_mapping(
     run = _run_for(session_factory, f"{FOLDER}/talk.wav")
     assert run.sidecar == {}
     assert run.operator_notes is None
+
+
+# --- Batch cap (issue #418) ---------------------------------------------------
+
+
+def test_batch_cap_limits_submissions_per_sweep(
+    session_factory: sessionmaker[Session], media_root: Path, publish_recorder: _PublishRecorder
+) -> None:
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    for i in range(20):
+        _drop(media_root, f"file{i:02d}.wav")
+
+    summary = sweep_watch_folders(
+        session_factory, _settings(media_root, watch_folder_batch_size=8)
+    )
+
+    assert summary.picked_up == 8
+    assert summary.hit_file_cap is True
+    assert len(publish_recorder.published) == 8
+    assert len(_runs(session_factory)) == 8
+
+
+def test_batch_cap_drains_across_sweeps(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    for i in range(20):
+        _drop(media_root, f"file{i:02d}.wav")
+    settings = _settings(media_root, watch_folder_batch_size=8)
+
+    first = sweep_watch_folders(session_factory, settings)
+    assert first.picked_up == 8
+
+    second = sweep_watch_folders(session_factory, settings)
+    assert second.picked_up == 8
+
+    third = sweep_watch_folders(session_factory, settings)
+    assert third.picked_up == 4
+    assert third.hit_file_cap is False
+
+    fourth = sweep_watch_folders(session_factory, settings)
+    assert fourth.picked_up == 0
+    assert fourth.already_known == 20
+
+
+def test_small_batch_under_cap_does_not_set_hit_file_cap(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    for i in range(5):
+        _drop(media_root, f"file{i}.wav")
+
+    summary = sweep_watch_folders(
+        session_factory, _settings(media_root, watch_folder_batch_size=8)
+    )
+
+    assert summary.picked_up == 5
+    assert summary.hit_file_cap is False
+
+
+def test_batch_cap_does_not_count_held_sidecars(
+    session_factory: sessionmaker[Session], media_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import voxint.ingest.watch as watch_mod
+
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    # 3 bad sidecars + 10 good files; batch_size=4.
+    for i in range(3):
+        _drop(media_root, f"bad{i}.wav")
+        _drop_sidecar(media_root, f"bad{i}.wav.yaml", "title: [unclosed\n")
+    for i in range(10):
+        _drop(media_root, f"good{i}.wav")
+
+    # Pin walk order: bad files first, then good files.
+    bad_rels = [f"{FOLDER}/bad{i}.wav" for i in range(3)]
+    good_rels = [f"{FOLDER}/good{i}.wav" for i in range(10)]
+
+    def _scan(*a: object, **kw: object) -> ScanResult:
+        return ScanResult(
+            candidates=bad_rels + good_rels,
+            inspected=13,
+            hit_entry_cap=False,
+            hit_file_cap=False,
+            root_missing=False,
+            already_known=0,
+        )
+
+    monkeypatch.setattr(watch_mod, "scan_media_folders", _scan)
+
+    summary = sweep_watch_folders(
+        session_factory, _settings(media_root, watch_folder_batch_size=4)
+    )
+
+    # 3 held sidecars do NOT consume batch slots; 4 good files are submitted.
+    assert summary.sidecar_errors == 3
+    assert summary.picked_up == 4
+    assert summary.hit_file_cap is True

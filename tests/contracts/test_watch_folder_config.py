@@ -45,6 +45,12 @@ def test_watch_folder_settle_allows_zero_but_not_negative() -> None:
         Settings(_env_file=None, watch_folder_settle_seconds=-1)
 
 
+def test_watch_folder_batch_size_has_floor() -> None:
+    assert Settings(_env_file=None).watch_folder_batch_size == 8
+    with pytest.raises(ValidationError, match="watch_folder_batch_size"):
+        Settings(_env_file=None, watch_folder_batch_size=0)
+
+
 def test_watch_folder_not_tier_scaled() -> None:
     """Wall-clock pickup latency, not a compute-tier timing budget — the sweep
     cadence must not be rescaled by the compute-tier profile."""
