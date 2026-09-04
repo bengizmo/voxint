@@ -1201,6 +1201,7 @@ def media_rerun_confirm(
         "any_deferred": any(
             r["status"] == "queued" and not r.get("published") for r in results
         ),
+        "broker_down": broker_down,
         "sort": _safe_sort(sort),
         "view": _safe_view(view),
         "search": q,
