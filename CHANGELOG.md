@@ -6,6 +6,52 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Auto-enroll near-miss evidence** (#434). Every auto-enrollment decision
+  now persists per-label diagnostic data (similarity, margin, vote agreement,
+  top candidate, roster size) in a new `auto_enroll_evidence` table. Previously
+  this evidence was computed and discarded, making threshold tuning guesswork.
+- **Speaker roster dedup CLI** (#432). `voxint speakers dedup` reports probable
+  duplicate speakers using embedding cosine similarity and optionally merges
+  safe pairs (placeholder-name direction heuristic, disjoint-pair safety,
+  configurable thresholds, atomic batch merge). Dry-run by default.
+- **Post-batch reconcile CLI** (#430). `voxint speakers reconcile` re-derives
+  speaker proposals for runs that were matched against a smaller roster than
+  today (cold-start detection per embedding space). Reports a semantic
+  before/after diff (added, removed, changed assignments). Dry-run by default
+  with explicit `--apply`.
+- **Restart preflight checks** (#422). Restarting a completed run now checks
+  for adjudication work that would be invalidated. Segment-scope rulings
+  (tied to specific transcript segments) block restart entirely. Label-scope
+  rulings (speaker assignments that may apply to different voices after
+  re-processing) warn with a required acknowledgment checkbox. The editor and
+  run-detail pages both render these states.
+- **Feature flag dependency nesting** (#406). Dependent feature flags are
+  visually nested under their prerequisites in Settings, disabled when
+  prerequisites are off, and preserved on save (no silent clearing).
+  Cross-section dependencies show inline disabled reasons.
+- **Operator feedback when invariant blocks a flag reset** (#404). Resetting
+  a feature flag that would violate an invariant now shows a plain-language
+  notice explaining which dependency prevents the reset, instead of a
+  silent redirect.
+
+### Fixed
+- **Watch-folder batch cap prevents model-service flooding** (#418). Each
+  watch-folder sweep now submits at most `WATCH_FOLDER_BATCH_SIZE` files
+  (default 8, matching model services' admission limit). Remaining files
+  stay undiscovered until the next sweep. Previously a large media library
+  could dispatch hundreds of pipeline runs at once.
+- **Saturation errors no longer exhaust the retry budget** (#418). When a
+  model service returns a 503 (at capacity), the failure is classified as
+  saturation and excluded from the run's `STAGE_MAX_ATTEMPTS` budget.
+  Previously, sustained backpressure during batch ingest could permanently
+  fail runs that had no actual defect.
+- **Settings compat routes now reconcile switch state** (#446). Five legacy
+  compat POST routes bypassed `_reconcile_switches`, causing two bugs:
+  disabled switches (unmet dependency) silently reverted stored overrides
+  because the browser omits them, and inherited flags got pinned to explicit
+  values on save.
+
 
 ## [0.33.0] - 2026-09-03
 
