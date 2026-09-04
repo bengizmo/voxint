@@ -33,7 +33,7 @@ from voxint.api.csrf import (
 )
 from voxint.api.media_query import MEDIA_LIBRARY_LIMIT
 from voxint.config import Settings
-from voxint.db.models import MediaFolder, MediaItem, PipelineRun, Project
+from voxint.db.models import MediaFolder, MediaItem, PipelineRun, Project, RunStatus
 from voxint.ingest import submit_media_item
 
 CREDS = ("reviewer", "s3cret")
@@ -489,3 +489,118 @@ def test_rerun_routes_404_when_flag_off(
         ).status_code
         == 404
     )
+
+
+# ---- publish batch cap and broker-failure short-circuit --------------------
+
+
+def test_confirm_publish_cap_limits_broker_traffic(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """The publish loop stops after rerun_publish_batch_size; all runs are
+    committed (commit-before-publish) but items beyond the cap stay deferred."""
+    import unittest.mock
+
+    from voxint.ingest.service import SubmissionResult
+
+    s = _settings(tmp_path)
+    s = s.model_copy(update={"rerun_publish_batch_size": 2})
+    s.media_root.mkdir(parents=True, exist_ok=True)
+    client = _make_client(session_factory, s)
+
+    media_ids: list[uuid.UUID] = []
+    with session_factory() as session:
+        for i in range(5):
+            m = _add_media(session, source_path=f"file_{i}.wav")
+            media_ids.append(m.id)
+        session.commit()
+
+    publish_calls: list[uuid.UUID] = []
+
+    def counting_publish(self: SubmissionResult) -> bool:
+        publish_calls.append(self.run_id)
+        return True
+
+    preview = client.post(
+        "/media/rerun",
+        data=_data(CSRF_MEDIA_RERUN, media_id=[str(mid) for mid in media_ids]),
+        follow_redirects=False,
+    )
+    assert preview.status_code == 200
+    pairs = _scrape_pairs(preview.text)
+    assert len(pairs) == 5
+
+    with unittest.mock.patch.object(SubmissionResult, "publish", counting_publish):
+        confirm = client.post(
+            "/media/rerun/confirm",
+            data=_data(CSRF_MEDIA_RERUN_CONFIRM, item=pairs),
+            follow_redirects=False,
+        )
+
+    assert confirm.status_code == 200
+    # All 5 runs committed (commit-before-publish contract).
+    for mid in media_ids:
+        assert _run_count(session_factory, mid) == 1
+    # Only 2 publish calls (the batch cap).
+    assert len(publish_calls) == 2
+    # Items beyond the cap show the deferred marker.
+    assert "will start when the worker is available" in confirm.text
+
+
+def test_confirm_broker_failure_short_circuits(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broker failure on the first publish stops all further publish attempts;
+    runs are still committed QUEUED."""
+    from voxint.ingest.service import SubmissionResult
+
+    s = _settings(tmp_path)
+    s.media_root.mkdir(parents=True, exist_ok=True)
+    client = _make_client(session_factory, s)
+
+    media_ids: list[uuid.UUID] = []
+    with session_factory() as session:
+        for i in range(3):
+            m = _add_media(session, source_path=f"broker_{i}.wav")
+            media_ids.append(m.id)
+        session.commit()
+
+    publish_calls: list[uuid.UUID] = []
+
+    def failing_publish(self: SubmissionResult) -> bool:
+        publish_calls.append(self.run_id)
+        return False
+
+    preview = client.post(
+        "/media/rerun",
+        data=_data(CSRF_MEDIA_RERUN, media_id=[str(mid) for mid in media_ids]),
+        follow_redirects=False,
+    )
+    assert preview.status_code == 200
+    pairs = _scrape_pairs(preview.text)
+    assert len(pairs) == 3
+
+    monkeypatch.setattr(SubmissionResult, "publish", failing_publish)
+
+    confirm = client.post(
+        "/media/rerun/confirm",
+        data=_data(CSRF_MEDIA_RERUN_CONFIRM, item=pairs),
+        follow_redirects=False,
+    )
+
+    assert confirm.status_code == 200
+    # Only 1 publish call — short-circuited after the first failure.
+    assert len(publish_calls) == 1
+    # All 3 runs committed as QUEUED (commit-before-publish).
+    for mid in media_ids:
+        assert _run_count(session_factory, mid) == 1
+    with session_factory() as session:
+        runs = session.execute(
+            select(PipelineRun).where(PipelineRun.media_item_id.in_(media_ids))
+        ).scalars().all()
+        assert all(r.status == RunStatus.QUEUED.value for r in runs)
+    # Deferred banner and per-item marker present.
+    assert "Some runs are queued but not yet handed to the worker" in confirm.text
+    assert "will start when the worker is available" in confirm.text

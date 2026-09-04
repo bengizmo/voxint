@@ -1679,9 +1679,20 @@ def setup_scan_confirm(
     # Commit the whole batch ONCE (commit-before-publish); if the commit fails,
     # nothing is published and no partial state escapes.
     session.commit()
-    # After the durable QUEUED rows exist, publish each. A broker outage leaves
-    # them QUEUED for the recovery sweep — never roll back a published batch.
-    published = sum(s.publish() for s in submissions)
+    # Publish each committed run. On the FIRST failure the broker is down, so
+    # stop retrying (each apply_async pays a connect timeout and stalls the
+    # request) and leave the rest deferred — the recovery sweep owns every
+    # durable QUEUED row regardless.
+    published = 0
+    batch_limit = settings.watch_folder_batch_size
+    broker_down = False
+    for i, sub in enumerate(submissions):
+        if broker_down or i >= batch_limit:
+            break
+        if sub.publish():
+            published += 1
+        else:
+            broker_down = True
     confirmed = ScanResult(
         candidates=[],
         inspected=result.inspected,

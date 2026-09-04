@@ -674,6 +674,67 @@ def test_scan_confirm_is_idempotent(
     assert len(published) == 1  # no duplicate publish on the replayed confirm
 
 
+def test_scan_confirm_publish_cap_limits_broker_traffic(
+    session_factory: sessionmaker[Session],
+    media_root: Path,
+    published: list[uuid.UUID],
+) -> None:
+    """The publish loop respects watch_folder_batch_size; all candidates still
+    get durable QUEUED rows."""
+    for i in range(12):
+        _write_media(media_root, f"batch/{i:02d}.wav")
+    client = make_client(session_factory, media_root, watch_folder_batch_size=3)
+    _register_folder(client, "batch")
+
+    resp = client.post("/setup/scan/confirm", data=_form(), headers=_HTMX)
+    assert resp.status_code == 200
+    assert "Queued 12 runs" in resp.text
+    # Template shows deferral message when published < queued.
+    assert "3 enqueued now" in resp.text
+
+    assert len(published) == 3
+    with session_factory() as session:
+        runs = session.execute(select(PipelineRun)).scalars().all()
+    assert len(runs) == 12
+    assert all(r.status == RunStatus.QUEUED.value for r in runs)
+
+
+def test_scan_confirm_broker_failure_short_circuits(
+    session_factory: sessionmaker[Session],
+    media_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broker failure on the first publish stops further attempts; all rows
+    remain durable QUEUED."""
+    from voxint.ingest.service import SubmissionResult
+
+    publish_calls: list[uuid.UUID] = []
+
+    def _failing_publish(self: SubmissionResult) -> bool:
+        publish_calls.append(self.run_id)
+        return False  # broker down
+
+    monkeypatch.setattr(SubmissionResult, "publish", _failing_publish)
+
+    for i in range(5):
+        _write_media(media_root, f"fail/{i}.wav")
+    client = make_client(session_factory, media_root)
+    _register_folder(client, "fail")
+
+    resp = client.post("/setup/scan/confirm", data=_form(), headers=_HTMX)
+    assert resp.status_code == 200
+    assert "Queued 5 runs" in resp.text
+    assert "0 enqueued now" in resp.text
+
+    # Only one publish was attempted (the first call returned False, so the
+    # loop short-circuited).
+    assert len(publish_calls) == 1
+    with session_factory() as session:
+        runs = session.execute(select(PipelineRun)).scalars().all()
+    assert len(runs) == 5
+    assert all(r.status == RunStatus.QUEUED.value for r in runs)
+
+
 def test_scan_without_csrf_is_403(client: TestClient) -> None:
     assert client.post("/setup/scan", data={}, headers=_HTMX).status_code == 403
     assert client.post("/setup/scan/confirm", data={}, headers=_HTMX).status_code == 403

@@ -476,3 +476,102 @@ def test_finish_pipeline_retries_its_own_transient_failure(
         assert run is not None
         assert run.status == RunStatus.QUEUED.value
         assert run.current_stage == Stage.ENHANCE_MATCH.value
+
+
+def test_recovery_sweep_caps_dispatches_per_sweep(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """At most recovery_publish_batch_size runs are dispatched per sweep;
+    the rest stay QUEUED for later sweeps."""
+    from voxint.config import Settings
+    from voxint.worker import tasks
+
+    run_ids = [submit_run(session_factory) for _ in range(5)]
+    stale_at = datetime.now(UTC) - timedelta(hours=2)
+    with session_factory() as session:
+        for rid in run_ids:
+            run = session.get(PipelineRun, rid)
+            assert run is not None
+            run.current_stage = Stage.TRANSCRIBE.value
+            run.updated_at = stale_at
+        session.commit()
+
+    monkeypatch.setattr(
+        tasks,
+        "get_settings",
+        lambda: Settings(
+            _env_file=None, queued_run_stale_seconds=60, recovery_publish_batch_size=2
+        ),
+    )
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+    published: list[str] = []
+    monkeypatch.setattr(
+        tasks.run_pipeline,
+        "apply_async",
+        lambda args, **kwargs: published.append(args[0]),
+    )
+    monkeypatch.setattr(
+        tasks.finish_pipeline,
+        "apply_async",
+        lambda args, **kwargs: published.append(args[0]),
+    )
+
+    tasks.recovery_sweep()
+
+    assert len(published) == 2
+    # The remaining 3 are still QUEUED for the next sweep.
+    with session_factory() as session:
+        still_queued = [
+            rid
+            for rid in run_ids
+            if str(rid) not in published
+        ]
+        assert len(still_queued) == 3
+        for rid in still_queued:
+            run = session.get(PipelineRun, rid)
+            assert run is not None
+            assert run.status == RunStatus.QUEUED.value
+
+
+def test_recovery_sweep_stale_query_drains_oldest_first(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A capped sweep selects the oldest stale runs first (by updated_at)."""
+    from voxint.config import Settings
+    from voxint.worker import tasks
+
+    run_ids = [submit_run(session_factory) for _ in range(4)]
+    base = datetime.now(UTC) - timedelta(hours=4)
+    with session_factory() as session:
+        for i, rid in enumerate(run_ids):
+            run = session.get(PipelineRun, rid)
+            assert run is not None
+            run.current_stage = Stage.TRANSCRIBE.value
+            run.updated_at = base + timedelta(minutes=i * 30)
+        session.commit()
+
+    monkeypatch.setattr(
+        tasks,
+        "get_settings",
+        lambda: Settings(
+            _env_file=None, queued_run_stale_seconds=60, recovery_publish_batch_size=2
+        ),
+    )
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+    published: list[str] = []
+    monkeypatch.setattr(
+        tasks.run_pipeline,
+        "apply_async",
+        lambda args, **kwargs: published.append(args[0]),
+    )
+    monkeypatch.setattr(
+        tasks.finish_pipeline,
+        "apply_async",
+        lambda args, **kwargs: published.append(args[0]),
+    )
+
+    tasks.recovery_sweep()
+
+    assert len(published) == 2
+    expected_oldest = {str(run_ids[0]), str(run_ids[1])}
+    assert set(published) == expected_oldest

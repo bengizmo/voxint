@@ -390,35 +390,46 @@ def recovery_sweep() -> dict[str, int]:
     with factory() as session:
         stale_queued = (
             session.execute(
-                select(PipelineRun.id).where(
+                select(PipelineRun.id)
+                .where(
                     PipelineRun.status == RunStatus.QUEUED.value,
                     PipelineRun.updated_at < cutoff,
                 )
+                .order_by(PipelineRun.updated_at, PipelineRun.id)
+                .limit(settings.recovery_publish_batch_size)
             )
             .scalars()
             .all()
         )
     publish_ids = {*recovered, *stale_queued}
+    dispatched = 0
     if publish_ids:
         # Re-read after recovery commits: routing from an earlier snapshot can
         # send QUEUED/ENHANCE_MATCH to the GPU lane, whose entry guard would
         # correctly no-op forever while every later sweep repeated the mistake.
         with factory() as session:
             resumable = session.execute(
-                select(PipelineRun.id, PipelineRun.current_stage).where(
+                select(PipelineRun.id, PipelineRun.current_stage)
+                .where(
                     PipelineRun.id.in_(publish_ids),
                     PipelineRun.status == RunStatus.QUEUED.value,
                 )
+                .order_by(PipelineRun.updated_at, PipelineRun.id)
+                .limit(settings.recovery_publish_batch_size)
             ).all()
         # One unavailable broker must not abort the sweep midway through this
         # durable set. Each row stays QUEUED and becomes eligible again after the
         # stale grace, while the remaining rows still get their publish attempt.
+        # Cap total dispatches per sweep so a mass stranding drains gradually.
         for rid, stage_value in resumable:
+            if dispatched >= settings.recovery_publish_batch_size:
+                break
             stage = Stage(stage_value) if stage_value else None
             try:
                 pipeline_task_for_stage(stage).apply_async(
                     (str(rid),), ignore_result=True
                 )
+                dispatched += 1
             except OperationalError:
                 logger.warning(
                     "recovery enqueue deferred (broker unavailable); run %s stays "
@@ -493,6 +504,7 @@ def recovery_sweep() -> dict[str, int]:
     result = {
         "recovered": len(recovered),
         "stale_queued": len(stale_queued),
+        "dispatched": dispatched,
         "cancelled_claims_closed": len(cancelled_claims),
         "stale_embedding_jobs": len(stale_embedding_jobs),
         "stale_asset_jobs": len(stale_asset_jobs),

@@ -1174,8 +1174,20 @@ def media_rerun_confirm(
         )
 
     # Commit-before-publish: the durable QUEUED runs exist, so a broker outage only
-    # defers the enqueue (the recovery sweep republishes). Annotate each queued row.
-    published_ids = {s.run_id: s.publish() for s in pending}
+    # defers the enqueue (the recovery sweep republishes). Publish each, capped and
+    # short-circuiting: on the FIRST failure the broker is down, so stop retrying
+    # (each apply_async pays a connect timeout and stalls the request).
+    published_ids: dict[uuid.UUID, bool] = {}
+    broker_down = False
+    batch_limit = settings.rerun_publish_batch_size
+    for i, sub in enumerate(pending):
+        if broker_down or i >= batch_limit:
+            published_ids[sub.run_id] = False
+            continue
+        ok = sub.publish()
+        published_ids[sub.run_id] = ok
+        if not ok:
+            broker_down = True
     for result in results:
         if result["status"] == "queued":
             result["published"] = published_ids.get(result["run_id"], False)
