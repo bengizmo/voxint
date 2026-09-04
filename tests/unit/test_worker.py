@@ -315,7 +315,9 @@ def test_saturation_skips_retry_budget(monkeypatch: pytest.MonkeyPatch) -> None:
             StageFailedError(Stage.TRANSCRIBE, cause, failed_snapshot=snapshot)
         ),
     )
-    monkeypatch.setattr(tasks_mod, "stage_attempts", lambda session, rid, stage: 100)
+    monkeypatch.setattr(
+        tasks_mod, "stage_attempts", lambda session, rid, stage, **kw: 100
+    )
     monkeypatch.setattr(tasks_mod, "requeue_failed_stage", lambda factory, snap: True)
 
     def fake_retry(*, exc: object, countdown: float) -> Retry:
@@ -343,11 +345,53 @@ def test_non_saturation_exhausts_retry_budget(monkeypatch: pytest.MonkeyPatch) -
             StageFailedError(Stage.TRANSCRIBE, cause, failed_snapshot=snapshot)
         ),
     )
-    monkeypatch.setattr(tasks_mod, "stage_attempts", lambda session, rid, stage: 5)
+    monkeypatch.setattr(
+        tasks_mod, "stage_attempts", lambda session, rid, stage, **kw: 5
+    )
 
     fake_task = SimpleNamespace(retry=lambda exc, countdown: None)
     monkeypatch.setattr(tasks_mod, "run_pipeline", fake_task)
     with pytest.raises(StageFailedError):
+        tasks_mod._drive_segment(fake_task, str(run_id), GPU_SEGMENT)
+
+
+def test_mixed_saturation_then_transport_still_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After many saturations, a transport error still gets a full budget (#418)."""
+    import voxint.worker.tasks as tasks_mod
+
+    _factory, _ctx, run_id = _stub_segment_driver(monkeypatch)
+    cause = ServiceError("transport_error", "timeout", retryable=True)
+    snapshot = SimpleNamespace(
+        status=RunStatus.FAILED, current_stage=Stage.TRANSCRIBE, revision=1
+    )
+
+    monkeypatch.setattr(
+        tasks_mod,
+        "execute_run",
+        lambda *a, **k: (_ for _ in ()).throw(
+            StageFailedError(Stage.TRANSCRIBE, cause, failed_snapshot=snapshot)
+        ),
+    )
+
+    def _stage_attempts(
+        session: object, rid: object, stage: object, *, exclude_saturated: bool = False
+    ) -> int:
+        if exclude_saturated:
+            return 2  # only 2 real transport failures
+        return 50  # 48 saturations + 2 transport = 50 total
+
+    monkeypatch.setattr(tasks_mod, "stage_attempts", _stage_attempts)
+    monkeypatch.setattr(tasks_mod, "requeue_failed_stage", lambda factory, snap: True)
+
+    from celery.exceptions import Retry
+
+    def fake_retry(*, exc: object, countdown: float) -> Retry:
+        return Retry("retrying", exc=exc)
+
+    fake_task = SimpleNamespace(retry=fake_retry)
+    with pytest.raises(Retry):
         tasks_mod._drive_segment(fake_task, str(run_id), GPU_SEGMENT)
 
 
@@ -357,3 +401,4 @@ def test_backoff_is_exponential_and_capped() -> None:
     assert backoff_seconds(5, 30.0, 1800.0) == 480.0
     assert backoff_seconds(50, 30.0, 1800.0) == 1800.0
     assert backoff_seconds(0, 30.0, 1800.0) == 30.0  # defensive floor
+    assert backoff_seconds(10_000, 30.0, 1800.0) == 1800.0  # no overflow

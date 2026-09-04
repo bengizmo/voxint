@@ -29,7 +29,7 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint import app_settings
@@ -115,19 +115,45 @@ def is_saturation(exc: StageFailedError) -> bool:
     return isinstance(exc.cause, ServiceError) and exc.cause.code == "saturated"
 
 
+SATURATED_PREFIX = "saturated:"
+
+
 def backoff_seconds(attempts: int, base: float, cap: float) -> float:
     """Exponential in completed attempts, capped; jitter is the caller's."""
-    return float(min(base * 2 ** max(attempts - 1, 0), cap))
+    exp = min(max(attempts - 1, 0), 30)
+    return float(min(base * 2 ** exp, cap))
 
 
-def stage_attempts(session: Session, run_id: uuid.UUID, stage: Stage) -> int:
+def stage_attempts(
+    session: Session,
+    run_id: uuid.UUID,
+    stage: Stage,
+    *,
+    exclude_saturated: bool = False,
+) -> int:
     """Transient-failure attempts recorded in the ledger — the restart-proof
     retry budget.
 
     Interruption attempts (lease expiry: worker death, OOM, redeploy) are
     excluded — infra churn must not eat the budget for *service* failures.
     Crash loops are bounded separately by the recovery sweep's own ceiling.
+
+    When *exclude_saturated* is set, saturation rejections (flow control) are
+    also excluded — they should not consume the budget for genuine failures.
     """
+    if exclude_saturated:
+        error_filter = or_(
+            StageRun.error.is_(None),
+            and_(
+                ~StageRun.error.like(f"{INTERRUPTED_PREFIX}%"),
+                ~StageRun.error.like(f"{SATURATED_PREFIX}%"),
+            ),
+        )
+    else:
+        error_filter = or_(
+            StageRun.error.is_(None),
+            ~StageRun.error.like(f"{INTERRUPTED_PREFIX}%"),
+        )
     return int(
         session.execute(
             select(func.count())
@@ -136,10 +162,7 @@ def stage_attempts(session: Session, run_id: uuid.UUID, stage: Stage) -> int:
                 StageRun.pipeline_run_id == run_id,
                 StageRun.stage == stage.value,
                 StageRun.status == StageStatus.FAILED.value,
-                or_(
-                    StageRun.error.is_(None),
-                    ~StageRun.error.like(f"{INTERRUPTED_PREFIX}%"),
-                ),
+                error_filter,
             )
         ).scalar_one()
     )
@@ -249,7 +272,10 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
             raise  # deterministic — the failure lane owns it now
         with factory() as session:
             attempts = stage_attempts(session, run_id, exc.stage)
-        if not is_saturation(exc) and attempts >= settings.stage_max_attempts:
+            budget = stage_attempts(
+                session, run_id, exc.stage, exclude_saturated=True
+            )
+        if not is_saturation(exc) and budget >= settings.stage_max_attempts:
             raise  # transient budget exhausted; stays FAILED, honestly
         if not requeue_failed_stage(factory, exc.failed_snapshot):
             return "lost-requeue-race"
