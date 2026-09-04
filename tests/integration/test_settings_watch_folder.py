@@ -46,8 +46,17 @@ def make_client(
     return client, settings
 
 
-def _form(**fields: str) -> dict[str, str]:
-    return {"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETTINGS), **fields}
+def _form(
+    rendered: list[str] | None = None, **fields: str
+) -> dict[str, str | list[str]]:
+    """Build form data supporting repeated ``_rendered`` keys."""
+    result: dict[str, str | list[str]] = {
+        "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETTINGS),
+    }
+    if rendered:
+        result["_rendered"] = rendered
+    result.update(fields)
+    return result
 
 
 def _flag(session_factory: sessionmaker[Session]) -> bool | None:
@@ -73,30 +82,39 @@ def test_toggle_on_off_inherit_write_the_tristate(
 ) -> None:
     client, _ = make_client(session_factory, media_root)
 
-    resp = client.post("/settings/watch-folder", data=_form(watch_folder_enabled="on"))
+    resp = client.post(
+        "/settings/watch-folder",
+        data=_form(rendered=["watch_folder_enabled"], watch_folder_enabled="on"),
+    )
     assert resp.status_code == 200
     assert _flag(session_factory) is True
 
-    client.post("/settings/watch-folder", data=_form(watch_folder_enabled="off"))
-    assert _flag(session_factory) is False
+    client.post(
+        "/settings/watch-folder",
+        data=_form(rendered=["watch_folder_enabled"]),
+    )
+    assert _flag(session_factory) is False  # unchecked → off
 
-    client.post("/settings/watch-folder", data=_form(watch_folder_enabled="inherit"))
-    assert _flag(session_factory) is None  # cleared → inherit the installation default
 
-
-def test_unrecognized_choice_is_rejected_and_writes_nothing(
+def test_malformed_choice_treated_as_off(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
+    # _reconcile_switches sanitises rendered values: anything != "on" is off.
     client, _ = make_client(session_factory, media_root)
-    client.post("/settings/watch-folder", data=_form(watch_folder_enabled="on"))
+    client.post(
+        "/settings/watch-folder",
+        data=_form(rendered=["watch_folder_enabled"], watch_folder_enabled="on"),
+    )
+    assert _flag(session_factory) is True
     resp = client.post(
         "/settings/watch-folder",
-        data=_form(watch_folder_enabled="sometimes"),
+        data=_form(
+            rendered=["watch_folder_enabled"], watch_folder_enabled="sometimes"
+        ),
         follow_redirects=False,
     )
-    assert resp.status_code == 200
-    assert "Unrecognized watch-folder setting" in resp.text
-    assert _flag(session_factory) is True  # the prior value is untouched
+    assert resp.status_code == 303
+    assert _flag(session_factory) is False
 
 
 def test_toggle_requires_csrf(

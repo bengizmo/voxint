@@ -55,8 +55,17 @@ def make_client(
     return client, settings
 
 
-def _form(**fields: str) -> dict[str, str]:
-    return {"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETTINGS), **fields}
+def _form(
+    rendered: list[str] | None = None, **fields: str
+) -> dict[str, str | list[str]]:
+    """Build form data supporting repeated ``_rendered`` keys."""
+    result: dict[str, str | list[str]] = {
+        "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETTINGS),
+    }
+    if rendered:
+        result["_rendered"] = rendered
+    result.update(fields)
+    return result
 
 
 def _row(session_factory: sessionmaker[Session]) -> AppSettings | None:
@@ -132,7 +141,10 @@ def test_enable_run_assets_applies_without_restart(
 
     resp = client.post(
         "/settings/features",
-        data=_form(enrichment_run_assets_enabled="on"),
+        data=_form(
+            rendered=["enrichment_run_assets_enabled"],
+            enrichment_run_assets_enabled="on",
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -145,7 +157,10 @@ def test_enable_run_assets_applies_without_restart(
     # Disabling closes it again, still no restart.
     resp = client.post(
         "/settings/features",
-        data=_form(enrichment_run_assets_enabled="off"),
+        data=_form(
+            rendered=["enrichment_run_assets_enabled"],
+            enrichment_run_assets_enabled="off",
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -164,7 +179,10 @@ def test_invariant_violation_writes_nothing_and_preserves_input(
     _seed_flags(session_factory, ytdlp_enabled=False, enrichment_names_enabled=False)
     resp = client.post(
         "/settings/features",
-        data=_form(enrichment_names_llm_enabled="on"),
+        data=_form(
+            rendered=["enrichment_names_llm_enabled"],
+            enrichment_names_llm_enabled="on",
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 200  # re-render, not a redirect
@@ -192,6 +210,7 @@ def test_names_llm_requires_names_enabled(
     resp = client.post(
         "/settings/features",
         data=_form(
+            rendered=["enrichment_names_enabled", "enrichment_names_llm_enabled"],
             enrichment_names_enabled="off",
             enrichment_names_llm_enabled="on",
         ),
@@ -212,7 +231,10 @@ def test_autogenerate_requires_run_assets(
     client, _ = make_client(session_factory, media_root, seed_llm_enabled=True)
     resp = client.post(
         "/settings/features",
-        data=_form(enrichment_run_assets_autogenerate="on"),
+        data=_form(
+            rendered=["enrichment_run_assets_autogenerate"],
+            enrichment_run_assets_autogenerate="on",
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 200
@@ -223,17 +245,23 @@ def test_autogenerate_requires_run_assets(
 def test_all_inherit_leaves_every_column_null(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
-    # Saving with every control on "use installation setting" must not pin any env
-    # default onto the row (all columns stay NULL).
+    # Saving with every switch at its env default must not pin any override.
+    # Checkbox encoding: checked (value="on") for env-default-True flags,
+    # absent for env-default-False flags. All are rendered.
     client, _ = make_client(session_factory, media_root)
     resp = client.post(
         "/settings/features",
         data=_form(
-            enrichment_names_enabled="inherit",
-            enrichment_names_llm_enabled="inherit",
-            enrichment_run_assets_enabled="inherit",
-            enrichment_run_assets_autogenerate="inherit",
-            ytdlp_enabled="inherit",
+            rendered=[
+                "enrichment_names_enabled",
+                "enrichment_names_llm_enabled",
+                "enrichment_run_assets_enabled",
+                "enrichment_run_assets_autogenerate",
+                "llm_bundled_enabled",
+                "ytdlp_enabled",
+            ],
+            enrichment_names_enabled="on",
+            ytdlp_enabled="on",
         ),
         follow_redirects=False,
     )
@@ -245,34 +273,42 @@ def test_all_inherit_leaves_every_column_null(
         "enrichment_names_llm_enabled",
         "enrichment_run_assets_enabled",
         "enrichment_run_assets_autogenerate",
+        "llm_bundled_enabled",
         "ytdlp_enabled",
     ):
         assert getattr(row, name) is None, name
 
 
-def test_malformed_choice_is_rejected_without_writing(
+def test_malformed_choice_treated_as_off(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
-    # A value outside {on,off,inherit} (stale client / hand-crafted POST) is
-    # rejected, not silently coerced to off/inherit.
+    # _reconcile_switches sanitises rendered values: anything != "on" is off.
+    # Seed a stored override first so the idempotency check does not preserve
+    # NULL (env default is also False, so an unchecked NULL stays NULL).
     client, _ = make_client(session_factory, media_root, seed_llm_enabled=True)
+    _seed_flags(session_factory, enrichment_run_assets_enabled=True)
     resp = client.post(
         "/settings/features",
-        data=_form(enrichment_run_assets_enabled="yes-please"),
+        data=_form(
+            rendered=["enrichment_run_assets_enabled"],
+            enrichment_run_assets_enabled="yes-please",
+        ),
         follow_redirects=False,
     )
-    assert resp.status_code == 200
-    assert "Unrecognized feature setting" in resp.text
-    assert _row(session_factory).enrichment_run_assets_enabled is None  # type: ignore[union-attr]
+    assert resp.status_code == 303
+    assert _row(session_factory).enrichment_run_assets_enabled is False  # type: ignore[union-attr]
 
 
 def test_valid_dependent_enable_succeeds(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
+    # enrichment_names_enabled defaults True → idempotency keeps it as inherit.
+    # enrichment_names_llm_enabled defaults False → turning on stores True.
     client, _ = make_client(session_factory, media_root, seed_llm_enabled=True)
     resp = client.post(
         "/settings/features",
         data=_form(
+            rendered=["enrichment_names_enabled", "enrichment_names_llm_enabled"],
             enrichment_names_enabled="on",
             enrichment_names_llm_enabled="on",
         ),
@@ -281,23 +317,30 @@ def test_valid_dependent_enable_succeeds(
     assert resp.status_code == 303
     row = _row(session_factory)
     assert row is not None
-    assert row.enrichment_names_enabled is True
+    assert row.enrichment_names_enabled is None  # inherit (matches env default)
     assert row.enrichment_names_llm_enabled is True
 
 
-def test_inherit_reverts_a_stored_override_to_null(
+def test_unchecking_a_stored_on_stores_false(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
+    # Checkbox encoding: unchecked = no value, just _rendered marker → "off".
     client, _ = make_client(session_factory, media_root, seed_llm_enabled=True)
-    client.post("/settings/features", data=_form(enrichment_run_assets_enabled="on"))
+    client.post(
+        "/settings/features",
+        data=_form(
+            rendered=["enrichment_run_assets_enabled"],
+            enrichment_run_assets_enabled="on",
+        ),
+    )
     assert _row(session_factory).enrichment_run_assets_enabled is True  # type: ignore[union-attr]
     resp = client.post(
         "/settings/features",
-        data=_form(enrichment_run_assets_enabled="inherit"),
+        data=_form(rendered=["enrichment_run_assets_enabled"]),
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert _row(session_factory).enrichment_run_assets_enabled is None  # type: ignore[union-attr]
+    assert _row(session_factory).enrichment_run_assets_enabled is False  # type: ignore[union-attr]
 
 
 def test_off_stores_false(session_factory: sessionmaker[Session], media_root: Path) -> None:
@@ -305,7 +348,9 @@ def test_off_stores_false(session_factory: sessionmaker[Session], media_root: Pa
     client, _ = make_client(session_factory, media_root)
     resp = client.post(
         "/settings/features",
-        data=_form(enrichment_names_enabled="off"),
+        data=_form(
+            rendered=["enrichment_names_enabled"], enrichment_names_enabled="off"
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -319,7 +364,7 @@ def test_ytdlp_toggles_independently_of_llm(
     client, _ = make_client(session_factory, media_root, seed_llm_enabled=False)
     resp = client.post(
         "/settings/features",
-        data=_form(ytdlp_enabled="off"),
+        data=_form(rendered=["ytdlp_enabled"], ytdlp_enabled="off"),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -330,18 +375,15 @@ def test_features_route_accepts_every_rendered_flag(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
     # Behavioral drift guard (#67 regression): every flag the Features section
-    # RENDERS (_FEATURE_FLAG_META → the template radios) MUST round-trip through
-    # POST /settings/features. A rendered radio whose name the route does not
-    # declare as a Form param is silently dropped by Starlette and reverts to
-    # inherit (NULL) — exactly how llm_bundled_enabled shipped broken. Submitting
-    # an explicit Off for every flag (which violates no cross-flag invariant) and
-    # asserting each column stored False catches any flag the route fails to accept.
+    # RENDERS (_FEATURE_FLAG_META) MUST round-trip through POST /settings/features.
+    # First turn them all on, then uncheck them all and assert each stored False.
     from voxint.api.routers.settings import _FEATURE_FLAG_NAMES
 
-    client, _ = make_client(session_factory, media_root)
+    client, _ = make_client(session_factory, media_root, seed_llm_enabled=True)
+    _seed_flags(session_factory, **{name: True for name in _FEATURE_FLAG_NAMES})
     resp = client.post(
         "/settings/features",
-        data=_form(**{name: "off" for name in _FEATURE_FLAG_NAMES}),
+        data=_form(rendered=list(_FEATURE_FLAG_NAMES)),
         follow_redirects=False,
     )
     assert resp.status_code == 303, resp.text
@@ -360,7 +402,9 @@ def test_enable_bundled_local_model_persists(
     client, _ = make_client(session_factory, media_root)
     resp = client.post(
         "/settings/features",
-        data=_form(llm_bundled_enabled="on"),
+        data=_form(
+            rendered=["llm_bundled_enabled"], llm_bundled_enabled="on"
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -369,7 +413,9 @@ def test_enable_bundled_local_model_persists(
     # And an explicit Off persists False (not NULL/inherit).
     resp = client.post(
         "/settings/features",
-        data=_form(llm_bundled_enabled="off"),
+        data=_form(
+            rendered=["llm_bundled_enabled"], llm_bundled_enabled="off"
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -416,7 +462,10 @@ def test_saving_features_preserves_llm_section(
     )
     resp = client.post(
         "/settings/features",
-        data=_form(enrichment_run_assets_enabled="on"),
+        data=_form(
+            rendered=["enrichment_run_assets_enabled"],
+            enrichment_run_assets_enabled="on",
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -543,3 +592,35 @@ def test_disabled_flag_preserved_on_save(
     row = _row(session_factory)
     assert row is not None
     assert row.enrichment_names_llm_enabled is True
+
+
+# ---- Reconciliation-specific tests for the compat route --------------------
+
+
+def test_compat_disabled_flag_preserved_on_save(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Disabled switches (unmet dependency) are NOT rendered by the template and
+    # must not silently revert stored overrides when saving unrelated flags.
+    # The preserved value still violates the LLM invariant (LLM is off), so
+    # the form re-renders with 200 rather than committing -- but the stored
+    # override survives (nothing written).
+    make_client(session_factory, media_root, seed_llm_enabled=True)
+    _seed_flags(
+        session_factory,
+        enrichment_names_enabled=True,
+        enrichment_names_llm_enabled=True,
+    )
+    client, _ = make_client(session_factory, media_root, seed_llm_enabled=False)
+    resp = client.post(
+        "/settings/features",
+        data=_form(rendered=["ytdlp_enabled"], ytdlp_enabled="on"),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200
+    row = _row(session_factory)
+    assert row is not None
+    assert row.enrichment_names_llm_enabled is True
+    assert row.enrichment_names_enabled is True
+
+
