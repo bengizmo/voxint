@@ -520,6 +520,18 @@
     ]
   ],
   [
+    "/review/{run_id}/undo/enroll",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/review/{run_id}/undo/merge",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/runs",
     [
       "GET"

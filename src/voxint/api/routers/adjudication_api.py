@@ -16,7 +16,7 @@ import uuid
 import zipfile
 from collections.abc import Iterator, Sequence
 from dataclasses import replace as dataclass_replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -88,6 +88,13 @@ from voxint.adjudication.transcript import (
     effective_text,
     parse_transcript_text,
 )
+from voxint.adjudication.undo import (
+    UndoDriftError,
+    UndoError,
+    UndoExpiredError,
+    undo_enrollment,
+    undo_merge,
+)
 from voxint.api.annotation_view import (
     annotation_shapes as _annotation_shapes,
 )
@@ -106,6 +113,7 @@ from voxint.api.clip_service import (
 )
 from voxint.api.csrf import (
     CSRF_ANNOTATION_TAGS,
+    CSRF_CLAIM,
     CSRF_CLIP_EXTRACT,
 )
 from voxint.api.languages import LANGUAGE_NAMES, language_label
@@ -342,18 +350,21 @@ def _labels_response(
     request: Request,
     session: Session,
     run: PipelineRun,
+    *,
+    undo: dict[str, str] | None = None,
 ) -> Response:
     """Return updated label states and segments for the editor island."""
     settings: Settings = request.app.state.settings
     states = label_states(session, run.id, gates=gates_from_settings(settings))
     verified_n, total = verified_progress(session, run.id)
-    return JSONResponse(
-        {
-            "labels": [_label_state_shape(s) for s in states],
-            "segments": _run_island_segments(session, run.id),
-            "progress": {"verified": verified_n, "total": total},
-        }
-    )
+    payload: dict[str, Any] = {
+        "labels": [_label_state_shape(s) for s in states],
+        "segments": _run_island_segments(session, run.id),
+        "progress": {"verified": verified_n, "total": total},
+    }
+    if undo is not None:
+        payload["undo"] = undo
+    return JSONResponse(payload)
 
 
 @router.post("/review/{run_id}/labels/{label}/decision")
@@ -577,7 +588,16 @@ def merge_apply(
             survivor_name=result.survivor_name,
             label_count=len(result.labels),
         )
-    return _labels_response(request, session, run)
+    undo = None
+    if not result.is_replay:
+        undo = {
+            "kind": "merge",
+            "mergeNonce": nonce,
+            "expiresAt": (
+                datetime.now(UTC) + timedelta(seconds=settings.UNDO_GRACE_SECONDS)
+            ).isoformat(),
+        }
+    return _labels_response(request, session, run, undo=undo)
 
 
 @router.post("/review/{run_id}/segments/{segment_id}/relabel")
@@ -942,7 +962,16 @@ def enroll(
                 decision_id=enrollment.decision_id,
                 speaker_name=enrolled.display_name,
             )
-    return _labels_response(request, session, run)
+    undo = None
+    if not is_replay:
+        undo = {
+            "kind": "enroll",
+            "decisionId": str(enrollment.decision_id),
+            "expiresAt": (
+                datetime.now(UTC) + timedelta(seconds=settings.UNDO_GRACE_SECONDS)
+            ).isoformat(),
+        }
+    return _labels_response(request, session, run, undo=undo)
 
 
 # Transcript downloads: one attributed read shaped by a pure formatter (see
@@ -2226,6 +2255,84 @@ def update_annotation_tag(
     except AnnotationError as exc:
         raise _annotation_http_error(exc) from exc
     return JSONResponse(_tag_shape(tag))
+
+
+@router.post("/review/{run_id}/undo/enroll")
+def undo_enroll(
+    run_id: uuid.UUID,
+    request: Request,
+    identity: CurrentUserDep,
+    operator: OperatorDep,
+    session: SessionDep,
+    token: Annotated[uuid.UUID, Form()],
+    csrf_token: Annotated[str, Form()],
+    decision_id: Annotated[uuid.UUID, Form()],
+    nonce: Annotated[str, Form(min_length=8, max_length=64)],
+) -> Response:
+    try:
+        run = verify_claim(session, run_id, token, for_update=True)
+    except ClaimMismatchError as exc:
+        raise HTTPException(
+            status_code=409, detail=str(exc), headers=_CLAIM_CONFLICT_HEADERS
+        ) from exc
+    _require_csrf(request, CSRF_CLAIM, csrf_token)
+    try:
+        undo_enrollment(
+            session,
+            run_id=run_id,
+            decision_id=decision_id,
+            operator=operator,
+            idempotency_key=nonce,
+            user_id=identity.user_id,
+        )
+    except UndoDriftError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConflictingReplayError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except UndoError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    return _labels_response(request, session, run)
+
+
+@router.post("/review/{run_id}/undo/merge")
+def undo_merge_action(
+    run_id: uuid.UUID,
+    request: Request,
+    identity: CurrentUserDep,
+    operator: OperatorDep,
+    session: SessionDep,
+    token: Annotated[uuid.UUID, Form()],
+    csrf_token: Annotated[str, Form()],
+    merge_nonce: Annotated[str, Form(min_length=8, max_length=64)],
+    nonce: Annotated[str, Form(min_length=8, max_length=64)],
+) -> Response:
+    try:
+        run = verify_claim(session, run_id, token, for_update=True)
+    except ClaimMismatchError as exc:
+        raise HTTPException(
+            status_code=409, detail=str(exc), headers=_CLAIM_CONFLICT_HEADERS
+        ) from exc
+    _require_csrf(request, CSRF_CLAIM, csrf_token)
+    settings: Settings = request.app.state.settings
+    try:
+        undo_merge(
+            session,
+            run_id=run_id,
+            merge_nonce=merge_nonce,
+            operator=operator,
+            idempotency_key=nonce,
+            grace_seconds=settings.UNDO_GRACE_SECONDS,
+            user_id=identity.user_id,
+        )
+    except (UndoDriftError, UndoExpiredError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConflictingReplayError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except UndoError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    return _labels_response(request, session, run)
 
 
 # --- Legacy review page redirects (issue #158) ---

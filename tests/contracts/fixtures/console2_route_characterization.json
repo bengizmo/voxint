@@ -694,6 +694,22 @@
     true
   ],
   [
+    "/review/{run_id}/undo/enroll",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/review/{run_id}/undo/merge",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/runs",
     [
       "GET"
