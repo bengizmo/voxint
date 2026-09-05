@@ -4,8 +4,8 @@
   <div class="notice" role="status">
     Queued {{ queued }} run{{ "" if queued == 1 else "s" }} for transcription.
     {% if queued and published < queued %}
-      <span class="muted">({{ published }} enqueued now; the rest are saved and will
-      start automatically once the task broker is reachable.)</span>
+      <span class="muted">({{ published }} enqueued now; the rest are saved and
+      {% if broker_down %}will start automatically once the task broker is reachable.{% else %}will be started by the next recovery sweep, within an hour.{% endif %})</span>
     {% endif %}
   </div>
 {% elif result.root_missing %}

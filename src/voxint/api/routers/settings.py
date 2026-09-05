@@ -1709,6 +1709,7 @@ def setup_scan_confirm(
                 "result": confirmed,
                 "queued": len(submissions),
                 "published": published,
+                "broker_down": broker_down,
                 "csrf_setup": mint_csrf_token(request.app.state.csrf_secret, CSRF_SETUP),
             },
         )
