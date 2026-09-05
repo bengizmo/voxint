@@ -13,7 +13,11 @@
 </p>
 
 {% if any_deferred %}
-<p class="muted">Some runs are queued but not yet handed to the worker (it was unavailable). The recovery sweep will start them.</p>
+<p class="muted">
+  {% if broker_down %}Some runs are queued but not yet handed to the worker (it was unavailable).
+  {% else %}Some runs are queued and will be started by the next recovery sweep (within an hour).
+  {% endif %}
+</p>
 {% endif %}
 
 <ul class="rerun-list" aria-label="Re-run results">
@@ -28,7 +32,7 @@
       {% endif %}
     </p>
     {% if r.status == "queued" %}
-    <p class="muted"><a href="/runs/{{ r.run_id }}">View run</a>{% if not r.published %} · will start when the worker is available{% endif %}</p>
+    <p class="muted"><a href="/runs/{{ r.run_id }}">View run</a>{% if not r.published %} · {% if broker_down %}will start when the worker is available{% else %}queued for recovery sweep{% endif %}{% endif %}</p>
     {% else %}
     <p class="muted">Skipped: {{ r.reason }}.</p>
     {% endif %}
