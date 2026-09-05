@@ -36,6 +36,7 @@ from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from voxint import __version__
+from voxint.api.routers.account import router as account_router
 from voxint.api.routers.activity import router as activity_router
 from voxint.api.routers.auth_pages import router as auth_router
 from voxint.api.routers.deps import (
@@ -534,6 +535,7 @@ def _register_routes(app: FastAPI) -> None:
     # (setup_router, registered on `app` so the onboarding gate exempts it).
     app.include_router(setup_router)
     app.include_router(auth_router)
+    app.include_router(account_router)
 
     # ---- Home (Console 2.0 P1, #152): the landing page at /. Registered
     # first among the console families so the root route sits early in the

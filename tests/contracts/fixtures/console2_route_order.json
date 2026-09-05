@@ -72,6 +72,18 @@
     ]
   ],
   [
+    "/account/password",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/account/password",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/static/htmx.min.js",
     [
       "GET"

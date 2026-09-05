@@ -8,6 +8,22 @@
     true
   ],
   [
+    "/account/password",
+    [
+      "GET"
+    ],
+    "exempt",
+    true
+  ],
+  [
+    "/account/password",
+    [
+      "POST"
+    ],
+    "exempt",
+    true
+  ],
+  [
     "/activity/events",
     [
       "GET"

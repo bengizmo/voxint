@@ -3471,7 +3471,7 @@ def settings_users_reset_password(
     if user.username == admin.username:
         raise HTTPException(
             status_code=403,
-            detail="use the CLI to change your own password",
+            detail="use /account/password to change your own password",
         )
     try:
         reset_password(session, user, new_password)

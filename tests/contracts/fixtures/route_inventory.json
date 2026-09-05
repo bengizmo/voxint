@@ -6,6 +6,18 @@
     ]
   ],
   [
+    "/account/password",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/account/password",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/activity/events",
     [
       "GET"
