@@ -679,6 +679,7 @@ def runs(
         if active_view is LifecycleView.FAILED
         else None
     )
+    _queue_paused = is_queue_paused(session)
     return templates.TemplateResponse(
         request,
         "legacy_runs/runs.html",
@@ -733,7 +734,7 @@ def runs(
             ),
             "pipeline_summary": _pipeline_summary(
                 run_status_counts(session),
-                queue_paused=is_queue_paused(session),
+                queue_paused=_queue_paused,
             ),
             "degraded": _detect_degraded(request),
             "aux_jobs": recent_aux_jobs(session),
@@ -755,7 +756,7 @@ def runs(
                 else None
             ),
             "csrf_requeue": mint_csrf_token(request.app.state.csrf_secret, CSRF_REQUEUE),
-            "queue_paused": is_queue_paused(session),
+            "queue_paused": _queue_paused,
             "csrf_queue_pause": mint_csrf_token(request.app.state.csrf_secret, CSRF_QUEUE_PAUSE),
             "csrf_queue_resume": mint_csrf_token(request.app.state.csrf_secret, CSRF_QUEUE_RESUME),
             # Gate the URL-fetch form: when off, it renders disabled (POST /fetch
@@ -1313,8 +1314,9 @@ def queue_pause_route(
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
     """Pause the global pipeline dispatch queue (#419)."""
+    settings: Settings = request.app.state.settings
     _require_csrf(request, CSRF_QUEUE_PAUSE, csrf_token)
-    set_queue_paused(session, True)
+    set_queue_paused(session, True, llm_enabled_default=settings.llm_enabled)
     session.commit()
     return RedirectResponse("/runs", status_code=303)
 
@@ -1327,26 +1329,31 @@ def queue_resume_route(
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
     """Resume the global pipeline dispatch queue and re-dispatch QUEUED runs (#419)."""
-    import contextlib
-
     from celery.exceptions import OperationalError
 
     from voxint.worker.tasks import pipeline_task_for_stage
 
+    settings: Settings = request.app.state.settings
     _require_csrf(request, CSRF_QUEUE_RESUME, csrf_token)
-    set_queue_paused(session, False)
+    set_queue_paused(session, False, llm_enabled_default=settings.llm_enabled)
     session.commit()
     queued = session.execute(
-        select(PipelineRun.id, PipelineRun.current_stage).where(
-            PipelineRun.status == RunStatus.QUEUED.value
-        )
+        select(PipelineRun.id, PipelineRun.current_stage)
+        .where(PipelineRun.status == RunStatus.QUEUED.value)
+        .order_by(PipelineRun.updated_at, PipelineRun.id)
+        .limit(settings.recovery_publish_batch_size)
     ).all()
     for run_id, stage_value in queued:
         stage = Stage(stage_value) if stage_value else None
-        with contextlib.suppress(OperationalError):
+        try:
             pipeline_task_for_stage(stage).apply_async(
                 (str(run_id),), ignore_result=True
             )
+        except OperationalError:
+            logger.warning(
+                "queue resume: broker unavailable; remaining runs deferred to sweep"
+            )
+            break
     return RedirectResponse("/runs", status_code=303)
 
 

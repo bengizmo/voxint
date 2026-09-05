@@ -433,6 +433,10 @@ def _cancel(args: argparse.Namespace) -> int:
                 .all()
             )
             for run_id in run_ids:
+                run = session.get(PipelineRun, run_id)
+                if run is None or run.status != RunStatus.QUEUED.value:
+                    skipped += 1
+                    continue
                 try:
                     cancel_run(session, run_id)
                 except (IngestError, StaleRevisionError, InvalidTransitionError):
@@ -445,7 +449,11 @@ def _cancel(args: argparse.Namespace) -> int:
     if args.run_id is None:
         print("error: provide a run_id or --all-queued")
         return 2
-    run_id = uuid.UUID(args.run_id)
+    try:
+        run_id = uuid.UUID(args.run_id)
+    except ValueError:
+        print(f"error: invalid run id {args.run_id!r}")
+        return 2
     try:
         with session_scope(factory) as session:
             cancel_run(session, run_id)
@@ -462,7 +470,7 @@ def _pause(args: argparse.Namespace) -> int:
     from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
 
     factory = build_session_factory(build_engine())
-    run_id = uuid.UUID(args.run_id)
+    run_id: uuid.UUID = args.run_id
     try:
         with session_scope(factory) as session:
             pause_run(session, run_id)
@@ -480,7 +488,7 @@ def _resume(args: argparse.Namespace) -> int:
     from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
 
     factory = build_session_factory(build_engine())
-    run_id = uuid.UUID(args.run_id)
+    run_id: uuid.UUID = args.run_id
     try:
         with session_scope(factory) as session:
             run = session.get(PipelineRun, run_id)
@@ -496,11 +504,13 @@ def _resume(args: argparse.Namespace) -> int:
 
 def _queue_pause(args: argparse.Namespace) -> int:
     from voxint.app_settings import set_queue_paused
+    from voxint.config import get_settings
     from voxint.db.session import build_engine, build_session_factory, session_scope
 
+    settings = get_settings()
     factory = build_session_factory(build_engine())
     with session_scope(factory) as session:
-        set_queue_paused(session, True)
+        set_queue_paused(session, True, llm_enabled_default=settings.llm_enabled)
     print("queue paused -- queued runs will not start until 'voxint queue resume'")
     return 0
 
@@ -509,24 +519,28 @@ def _queue_resume(args: argparse.Namespace) -> int:
     from sqlalchemy import select
 
     from voxint.app_settings import set_queue_paused
+    from voxint.config import get_settings
     from voxint.db.models import PipelineRun, RunStatus, Stage
     from voxint.db.session import build_engine, build_session_factory, session_scope
 
+    settings = get_settings()
     factory = build_session_factory(build_engine())
     with session_scope(factory) as session:
-        set_queue_paused(session, False)
+        set_queue_paused(session, False, llm_enabled_default=settings.llm_enabled)
     with factory() as session:
         queued = session.execute(
-            select(PipelineRun.id, PipelineRun.current_stage).where(
-                PipelineRun.status == RunStatus.QUEUED.value
-            )
+            select(PipelineRun.id, PipelineRun.current_stage)
+            .where(PipelineRun.status == RunStatus.QUEUED.value)
+            .order_by(PipelineRun.updated_at, PipelineRun.id)
+            .limit(settings.recovery_publish_batch_size)
         ).all()
     dispatched = 0
     for run_id, stage_value in queued:
         stage = Stage(stage_value) if stage_value else None
         if _publish_or_defer(run_id, stage=stage):
             dispatched += 1
-    print(f"queue resumed; {dispatched} queued runs dispatched")
+    remaining = "" if not queued else "; remaining queued runs drain via the recovery sweep"
+    print(f"queue resumed; {dispatched} queued runs dispatched{remaining}")
     return 0
 
 
@@ -2444,11 +2458,11 @@ def build_parser() -> argparse.ArgumentParser:
     cancel_p.set_defaults(fn=_cancel)
 
     pause_p = sub.add_parser("pause", help="pause a live run at its next stage boundary")
-    pause_p.add_argument("run_id", type=str, help="run UUID to pause")
+    pause_p.add_argument("run_id", type=uuid.UUID, help="run UUID to pause")
     pause_p.set_defaults(fn=_pause)
 
     resume_p = sub.add_parser("resume", help="resume a paused run")
-    resume_p.add_argument("run_id", type=str, help="run UUID to resume")
+    resume_p.add_argument("run_id", type=uuid.UUID, help="run UUID to resume")
     resume_p.set_defaults(fn=_resume)
 
     queue_p = sub.add_parser("queue", help="global queue controls")

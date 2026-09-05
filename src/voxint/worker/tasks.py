@@ -396,13 +396,13 @@ def recovery_sweep() -> dict[str, int]:
         cancelled_claims = close_cancelled_run_claims(session)
         close_paused_run_claims(session)
         session.commit()
+    cutoff = datetime.now(tz=UTC) - timedelta(seconds=settings.queued_run_stale_seconds)
     with factory() as session:
         queue_paused = app_settings.is_queue_paused(session)
     if queue_paused:
         logger.info("queue paused; skipping pipeline re-dispatch")
         stale_queued: Sequence[uuid.UUID] = []
     else:
-        cutoff = datetime.now(tz=UTC) - timedelta(seconds=settings.queued_run_stale_seconds)
         with factory() as session:
             stale_queued = (
                 session.execute(

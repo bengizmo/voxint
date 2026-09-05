@@ -647,9 +647,11 @@ def is_queue_paused(session: Session) -> bool:
     return bool(row and row.queue_paused)
 
 
-def set_queue_paused(session: Session, paused: bool) -> None:
+def set_queue_paused(
+    session: Session, paused: bool, *, llm_enabled_default: bool
+) -> None:
     """Toggle the global pipeline dispatch pause flag. Caller commits."""
-    row = get_or_create(session, llm_enabled_default=False)
+    row = get_or_create(session, llm_enabled_default=llm_enabled_default)
     row.queue_paused = paused
     session.flush()
 
