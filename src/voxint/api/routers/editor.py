@@ -48,7 +48,7 @@ from voxint.api.routers.deps import (
     require_onboarded,
     templates,
 )
-from voxint.api.routers.legacy_review import _annotation_limits, _annotations_payload
+from voxint.api.annotation_view import annotation_limits, annotations_payload
 from voxint.api.speaker_colors import run_label_universe, speaker_palette
 from voxint.api.transcript_view import _transcript_island_props
 from voxint.app_settings import get_app_settings, resolve_effective_translation_target_language
@@ -135,10 +135,10 @@ def media_detail_page(
                 for sp in active_speakers(session)
             ]
 
-            annotations_payload = _annotations_payload(session, run_id, [])
-            island_props["annotations"] = annotations_payload["annotations"]
-            island_props["annotationTags"] = annotations_payload["tags"]
-            island_props["annotationLimits"] = _annotation_limits()
+            ann_payload = annotations_payload(session, run_id, [])
+            island_props["annotations"] = ann_payload["annotations"]
+            island_props["annotationTags"] = ann_payload["tags"]
+            island_props["annotationLimits"] = annotation_limits()
             states = label_states(session, run_id, gates=gates_from_settings(settings))
             island_props["labelStates"] = [
                 {

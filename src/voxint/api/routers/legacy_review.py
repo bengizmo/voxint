@@ -354,76 +354,12 @@ def _annotation_http_error(exc: AnnotationError) -> HTTPException:
     return HTTPException(status_code=422, detail=str(exc))
 
 
-def _annotation_limits() -> dict[str, int]:
-    """The server-enforced annotation caps, echoed to the island so the client can
-    pre-validate (the server stays the source of truth). Names mirror the constants
-    in docs/annotations.md."""
-    return {
-        "paletteSize": HIGHLIGHT_PALETTE_SIZE,
-        "maxSpanSegments": MAX_ANNOTATION_SPAN_SEGMENTS,
-        "maxNoteChars": MAX_ANNOTATION_NOTE_CHARS,
-        "maxTagsPerAnnotation": MAX_TAGS_PER_ANNOTATION,
-        "maxQuoteChars": MAX_ANNOTATION_QUOTE_CHARS,
-        "maxTagNameChars": MAX_TAG_NAME_CHARS,
-    }
-
-
-def _tag_shape(tag: AnnotationTag) -> dict[str, Any]:
-    """One tag's island/JSON shape (camelCase, matching the frontend islands)."""
-    return {
-        "id": str(tag.id),
-        "name": tag.name,
-        "color": tag.color,
-        "archived": tag.archived_at is not None,
-    }
-
-
-def _annotation_shapes(
-    session: Session, run_id: uuid.UUID, rows: list[TranscriptAnnotation]
-) -> list[dict[str, Any]]:
-    """Resolve a set of stored annotations against the CURRENT render into the island
-    JSON shape (camelCase): highlight spans, staleness, honest timing precision and
-    seconds, live speakers, and the row metadata (colour/quote/note/tags). Shared by
-    the list GET and the single-row create/patch responses so one row can never
-    serialize two ways. Reads render the CORRECTED variant, exactly as the review
-    surface does."""
-    if not rows:
-        return []
-    lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
-    covered = load_covered_segments(session, run_id)
-    anchors = [stored_anchor_from_row(row) for row in rows]
-    resolved = {r.annotation_id: r for r in resolve_annotation_spans(lines, covered, anchors)}
-    tags_by_id = tags_for_annotations(session, [row.id for row in rows])
-    # Canonical transcript order is applied AFTER resolution — by rendered line index,
-    # not the captured start_segment_index annotations_for_run sorts by — so the panel
-    # and the bulk pull-quote export agree even when a split child reorders lines.
-    ordered_rows = sorted(rows, key=lambda row: resolved_order_key(resolved[row.id]))
-    shapes: list[dict[str, Any]] = []
-    for row in ordered_rows:
-        res = resolved[row.id]
-        shapes.append(
-            {
-                "id": str(row.id),
-                "anchorKind": row.anchor_kind,
-                "colorIndex": row.color_index,
-                "quote": row.quote_text,
-                "note": row.note,
-                "operator": row.operator,
-                "stale": res.stale,
-                "timingPrecision": res.timing_precision,
-                "startSeconds": res.start_seconds,
-                "endSeconds": res.end_seconds,
-                "speakers": list(res.speakers),
-                "spans": [
-                    {"lineIndex": s.line_index, "start": s.start, "end": s.end} for s in res.spans
-                ],
-                "locatorLineIndex": res.locator_line_index,
-                "startSegmentIndex": row.start_segment_index,
-                "endSegmentIndex": row.end_segment_index,
-                "tags": [_tag_shape(t) for t in tags_by_id.get(row.id, [])],
-            }
-        )
-    return shapes
+from voxint.api.annotation_view import (
+    annotation_limits as _annotation_limits,
+    annotation_shapes as _annotation_shapes,
+    annotations_payload as _annotations_payload,
+    tag_shape as _tag_shape,
+)
 
 
 def _require_filter_tags_exist(session: Session, tag_ids: list[uuid.UUID]) -> None:
@@ -438,18 +374,6 @@ def _require_filter_tags_exist(session: Session, tag_ids: list[uuid.UUID]) -> No
     missing = [t for t in tag_ids if t not in found]
     if missing:
         raise HTTPException(status_code=404, detail=f"unknown tag id {missing[0]}")
-
-
-def _annotations_payload(
-    session: Session, run_id: uuid.UUID, tag_ids: list[uuid.UUID]
-) -> dict[str, Any]:
-    """The GET /annotations body: the run's live annotations (optionally OR-filtered
-    by tag) as island shapes, plus the full tag universe for the panel/picker."""
-    rows = annotations_for_run(session, run_id, tag_ids=tag_ids or None)
-    return {
-        "annotations": _annotation_shapes(session, run_id, rows),
-        "tags": [_tag_shape(t) for t in list_tags(session)],
-    }
 
 
 def _pull_quote_markdown(
