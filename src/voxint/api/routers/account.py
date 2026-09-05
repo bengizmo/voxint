@@ -64,9 +64,9 @@ def password_submit(
     request: Request,
     session: SessionDep,
     identity: CurrentUserDep,
-    current_password: Annotated[str, Form()],
-    new_password: Annotated[str, Form()],
-    new_password_confirm: Annotated[str, Form()],
+    current_password: Annotated[str, Form()] = "",
+    new_password: Annotated[str, Form()] = "",
+    new_password_confirm: Annotated[str, Form()] = "",
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> Response:
     settings: Settings = request.app.state.settings
