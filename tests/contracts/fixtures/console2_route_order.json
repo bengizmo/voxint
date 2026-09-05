@@ -306,6 +306,12 @@
     ]
   ],
   [
+    "/runs/progress-strip",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/submit",
     [
       "POST"
@@ -337,6 +343,18 @@
   ],
   [
     "/runs/bulk-retry",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/queue/pause",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/queue/resume",
     [
       "POST"
     ]

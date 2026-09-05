@@ -382,6 +382,22 @@
     true
   ],
   [
+    "/queue/pause",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/queue/resume",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/quotes",
     [
       "POST"
@@ -713,6 +729,14 @@
     "/runs/bulk-retry",
     [
       "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/runs/progress-strip",
+    [
+      "GET"
     ],
     "onboarding",
     true

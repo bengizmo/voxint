@@ -45,6 +45,8 @@ from voxint.api.csrf import (
     CSRF_NOTES,
     CSRF_PAUSE,
     CSRF_PLUGIN,
+    CSRF_QUEUE_PAUSE,
+    CSRF_QUEUE_RESUME,
     CSRF_REQUEUE,
     CSRF_RESTART,
     CSRF_RESUME,
@@ -58,6 +60,7 @@ from voxint.api.csrf import (
 )
 from voxint.api.languages import LANGUAGE_NAMES, language_label
 from voxint.api.model_provenance import select_run_model_identity
+from voxint.api.pipeline_dashboard_query import pipeline_dashboard_state
 from voxint.api.playback import MediaResolutionError, playback_capability, resolve_servable_media
 from voxint.api.presentation import friendly_media_label, title_from_snapshot
 from voxint.api.resource_status import (
@@ -102,8 +105,10 @@ from voxint.api.transcript_view import _transcript_island_props, _wants_island_j
 from voxint.api.tutorial_view import _tutorial_banner
 from voxint.app_settings import (
     get_app_settings,
+    is_queue_paused,
     resolve_effective_translation_target_language,
     resolve_effective_ytdlp_enabled,
+    set_queue_paused,
 )
 from voxint.config import Settings
 from voxint.db.models import (
@@ -675,12 +680,20 @@ def runs(
         if active_view is LifecycleView.FAILED
         else None
     )
+    _queue_paused = is_queue_paused(session)
+    _now = datetime.now(UTC)
+    dashboard = (
+        pipeline_dashboard_state(session, _now, settings.compute_tier, _queue_paused)
+        if not show_archived
+        else None
+    )
     return templates.TemplateResponse(
         request,
         "legacy_runs/runs.html",
         {
             "request": request,
             "page": page,
+            "dashboard": dashboard,
             "grouped_items": grouped_items,
             "active_view": active_view,
             "view_tabs": tuple(
@@ -729,6 +742,7 @@ def runs(
             ),
             "pipeline_summary": _pipeline_summary(
                 run_status_counts(session),
+                queue_paused=_queue_paused,
             ),
             "degraded": _detect_degraded(request),
             "aux_jobs": recent_aux_jobs(session),
@@ -749,13 +763,17 @@ def runs(
                 if grouped_items is not None
                 else None
             ),
+            "csrf_requeue": mint_csrf_token(request.app.state.csrf_secret, CSRF_REQUEUE),
+            "queue_paused": _queue_paused,
+            "csrf_queue_pause": mint_csrf_token(request.app.state.csrf_secret, CSRF_QUEUE_PAUSE),
+            "csrf_queue_resume": mint_csrf_token(request.app.state.csrf_secret, CSRF_QUEUE_RESUME),
             # Gate the URL-fetch form: when off, it renders disabled (POST /fetch
             # also refuses with 403), matching the CLI's ytdlp_enabled refusal.
             "ytdlp_enabled": resolve_effective_ytdlp_enabled(
                 get_app_settings(session), settings
             ),
             # Injected clock for the relative-age render (format_age(now=…)).
-            "now": datetime.now(UTC),
+            "now": _now,
             "active_nav": "runs",
         },
     )
@@ -774,6 +792,29 @@ def search(
     if q:
         target = f"/explore?{urlencode({'q': q})}"
     return RedirectResponse(target, status_code=302)
+
+
+@core_router.get("/runs/progress-strip")
+def runs_progress_strip(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+) -> Response:
+    """htmx-polled pipeline progress strip fragment (#423)."""
+    settings: Settings = request.app.state.settings
+    now = datetime.now(UTC)
+    _queue_paused = is_queue_paused(session)
+    dashboard = pipeline_dashboard_state(
+        session, now, settings.compute_tier, _queue_paused
+    )
+    response = templates.TemplateResponse(
+        request,
+        "legacy_runs/_progress_strip.html",
+        {"request": request, "dashboard": dashboard},
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
 
 @core_router.post("/submit")
 def submit_media_upload(
@@ -1294,6 +1335,57 @@ def bulk_retry(
             ),
         },
     )
+
+
+@actions_router.post("/queue/pause")
+def queue_pause_route(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> RedirectResponse:
+    """Pause the global pipeline dispatch queue (#419)."""
+    settings: Settings = request.app.state.settings
+    _require_csrf(request, CSRF_QUEUE_PAUSE, csrf_token)
+    set_queue_paused(session, True, llm_enabled_default=settings.llm_enabled)
+    session.commit()
+    return RedirectResponse("/runs", status_code=303)
+
+
+@actions_router.post("/queue/resume")
+def queue_resume_route(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> RedirectResponse:
+    """Resume the global pipeline dispatch queue and re-dispatch QUEUED runs (#419)."""
+    from celery.exceptions import OperationalError
+
+    from voxint.worker.tasks import pipeline_task_for_stage
+
+    settings: Settings = request.app.state.settings
+    _require_csrf(request, CSRF_QUEUE_RESUME, csrf_token)
+    set_queue_paused(session, False, llm_enabled_default=settings.llm_enabled)
+    session.commit()
+    queued = session.execute(
+        select(PipelineRun.id, PipelineRun.current_stage)
+        .where(PipelineRun.status == RunStatus.QUEUED.value)
+        .order_by(PipelineRun.updated_at, PipelineRun.id)
+        .limit(settings.recovery_publish_batch_size)
+    ).all()
+    for run_id, stage_value in queued:
+        stage = Stage(stage_value) if stage_value else None
+        try:
+            pipeline_task_for_stage(stage).apply_async(
+                (str(run_id),), ignore_result=True
+            )
+        except OperationalError:
+            logger.warning(
+                "queue resume: broker unavailable; remaining runs deferred to sweep"
+            )
+            break
+    return RedirectResponse("/runs", status_code=303)
 
 
 @actions_router.post("/runs/{run_id}/requeue")

@@ -248,7 +248,7 @@ class TestRowActions:
         with session_factory() as s:
             _make_run(s, status=RunStatus.FAILED)
         resp = client.get("/runs")
-        assert "Retry →" in resp.text
+        assert ">Retry</button>" in resp.text
 
     def test_running_shows_view(
         self, client: TestClient, session_factory: sessionmaker[Session]
@@ -288,3 +288,41 @@ class TestColumnHeaders:
         assert media_pos != -1
         assert status_pos != -1
         assert media_pos < status_pos
+
+
+class TestProgressStrip:
+    """Pipeline progress strip (#423) renders on the runs page."""
+
+    def test_progress_strip_present(self, client: TestClient) -> None:
+        resp = client.get("/runs")
+        assert resp.status_code == 200
+        assert "data-progress-strip" in resp.text
+
+    def test_progress_strip_absent_on_archived(self, client: TestClient) -> None:
+        resp = client.get("/runs?archived=1")
+        assert resp.status_code == 200
+        assert "data-progress-strip" not in resp.text
+
+    def test_progress_strip_fragment_endpoint(self, client: TestClient) -> None:
+        resp = client.get("/runs/progress-strip")
+        assert resp.status_code == 200
+        assert "data-progress-strip" in resp.text
+        assert "<html" not in resp.text
+
+    def test_progress_strip_shows_idle_when_no_runs(
+        self, client: TestClient
+    ) -> None:
+        resp = client.get("/runs/progress-strip")
+        assert "Pipeline idle" in resp.text
+
+    def test_progress_strip_shows_stage_labels(
+        self, client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as s:
+            _make_run(s, status=RunStatus.QUEUED)
+        resp = client.get("/runs/progress-strip")
+        assert resp.status_code == 200
+        body = resp.text
+        assert "Acquire" in body
+        assert "Transcribe" in body
+        assert "Finalize" in body

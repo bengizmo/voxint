@@ -6,6 +6,19 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Run lifecycle controls** (#419). CLI commands: `voxint cancel` (with
+  `--all-queued`), `voxint pause`, `voxint resume`, `voxint queue pause`,
+  `voxint queue resume`. Queue-level pause gate prevents new runs from starting
+  while already-running runs finish. Console shows pause/resume banner and
+  inline retry button (POST form with revision CAS + CSRF) for failed runs.
+- **Pipeline progress dashboard** (#423). htmx-polled progress strip at the top
+  of the runs page showing per-stage counts (6-column grid), active-item elapsed
+  timers (ticking every second), per-item ETAs from successful-attempt history
+  with compute-tier-aware heuristic fallbacks, and a workload footer with
+  outstanding count, elapsed, and approximate drain ETA. Adaptive polling (15s
+  active, 60s idle). Collapses to "Pipeline idle" when nothing is outstanding.
+
 
 ## [0.34.0] - 2026-09-04
 

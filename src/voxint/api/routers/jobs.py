@@ -79,10 +79,14 @@ def _detect_degraded(request: Request) -> list[DegradedService]:
 def _pipeline_summary(
     status_counts: dict[str, int],
     resource_strip: ResourceStripView | None = None,
+    *,
+    queue_paused: bool = False,
 ) -> str:
     running = status_counts.get(RunStatus.RUNNING.value, 0)
     queued = status_counts.get(RunStatus.QUEUED.value, 0)
     parts: list[str] = []
+    if queue_paused:
+        parts.append("queue paused")
     if running:
         parts.append(f"{running} running")
     if queued:

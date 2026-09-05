@@ -286,6 +286,18 @@
     ]
   ],
   [
+    "/queue/pause",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/queue/resume",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/quotes",
     [
       "POST"
@@ -535,6 +547,12 @@
     "/runs/bulk-retry",
     [
       "POST"
+    ]
+  ],
+  [
+    "/runs/progress-strip",
+    [
+      "GET"
     ]
   ],
   [

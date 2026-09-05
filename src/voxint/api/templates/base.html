@@ -1071,6 +1071,58 @@
       .pipeline-board { grid-template-columns: 1fr 1fr; }
     }
 
+    /* --- Progress strip (#423) ---------------------------------- */
+    .progress-strip { border: 1px solid var(--line); border-radius: var(--r-md);
+                background: var(--surface); margin-bottom: var(--space-4);
+                overflow: hidden; box-shadow: var(--shadow-1); }
+    .ps-idle { padding: var(--space-2) var(--space-4); font-size: var(--t-sm);
+                color: var(--ink-3); text-align: center; }
+    .ps-stages { display: grid; grid-template-columns: repeat(6, 1fr); }
+    .ps-stage { padding: var(--space-2) var(--space-3);
+                border-right: 1px solid var(--line); text-align: center; }
+    .ps-stage:last-child { border-right: 0; }
+    .ps-stage.is-active { border-top: 2px solid var(--accent); }
+    .ps-stage-header { display: flex; align-items: center; justify-content: center;
+                gap: .3em; margin-bottom: 2px; }
+    .ps-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+    .ps-dot-ok { background: var(--ok); }
+    .ps-dot-warn { background: var(--warn); }
+    .ps-dot-idle { background: var(--ink-3); }
+    .ps-stage-name { font-size: var(--t-micro); text-transform: uppercase;
+                letter-spacing: .06em; color: var(--ink-3); font-weight: 500; }
+    .ps-stage.is-active .ps-stage-name { color: var(--accent); }
+    .ps-count-main { font-family: var(--font-mono); font-size: var(--t-lg);
+                line-height: 1.2; font-variant-numeric: tabular-nums; }
+    .ps-count-queued { font-family: var(--font-mono); font-size: var(--t-xs);
+                color: var(--ink-3); margin-left: .2em; }
+    .ps-timer { font-family: var(--font-mono); font-size: var(--t-xs);
+                color: var(--ink-2); }
+    .ps-eta { font-size: var(--t-xs); color: var(--ink-3); }
+    .ps-workload { padding: var(--space-2) var(--space-4);
+                border-top: 1px solid var(--line); font-size: var(--t-sm);
+                color: var(--ink-2); display: flex; align-items: center;
+                gap: var(--space-2); flex-wrap: wrap; }
+    .ps-wl-count { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+    .ps-wl-sep { color: var(--ink-3); }
+    .ps-wl-elapsed, .ps-wl-eta { font-family: var(--font-mono);
+                font-variant-numeric: tabular-nums; }
+    .ps-wl-overrun { color: var(--warn); font-weight: 500; }
+    .ps-wl-paused { color: var(--warn); font-weight: 500; }
+    @media (max-width: 48rem) {
+      .ps-stages { grid-template-columns: repeat(3, 1fr); }
+      .ps-stage:nth-child(3) { border-right: 0; }
+      .ps-stage:nth-child(n+4) { border-top: 1px solid var(--line); }
+      .ps-stage.is-active { border-top: 2px solid var(--accent); }
+    }
+    @media (max-width: 30rem) {
+      .ps-stages { grid-template-columns: repeat(2, 1fr); }
+      .ps-stage:nth-child(3) { border-right: 1px solid var(--line); }
+      .ps-stage:nth-child(odd) { border-right: 1px solid var(--line); }
+      .ps-stage:nth-child(even) { border-right: 0; }
+      .ps-stage:nth-child(n+3) { border-top: 1px solid var(--line); }
+      .ps-stage.is-active { border-top: 2px solid var(--accent); }
+    }
+
     /* --- Degraded banner (R2 Jobs) ------------------------------ */
     .degraded-banner { display: flex; align-items: center; gap: var(--space-3);
                 padding: var(--space-3) var(--space-4);

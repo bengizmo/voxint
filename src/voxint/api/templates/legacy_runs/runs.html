@@ -60,8 +60,29 @@
 </div>
 {% endfor %}
 
+{% if dashboard %}
+{% include "legacy_runs/_progress_strip.html" %}
+{% endif %}
+
 <section class="oc-section" aria-label="Runs">
   <h2 class="oc-section-title">RUNS</h2>
+
+  {% if queue_paused %}
+  <div class="degraded-banner" role="alert" style="margin-bottom:var(--space-3)">
+    <div class="db-text">
+      <strong>Queue paused.</strong> No new runs will start processing. Runs already in progress will finish.
+    </div>
+    <form method="post" action="/queue/resume" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_queue_resume }}">
+      <button type="submit" class="cb-btn cb-btn-primary">Resume queue</button>
+    </form>
+  </div>
+  {% elif not show_archived %}
+  <form method="post" action="/queue/pause" style="display:inline;float:right;margin-top:-2rem">
+    <input type="hidden" name="csrf_token" value="{{ csrf_queue_pause }}">
+    <button type="submit" class="cb-btn cb-btn-secondary" style="font-size:var(--t-sm)">Pause queue</button>
+  </form>
+  {% endif %}
 
   <nav class="filter-tabs" aria-label="Lifecycle view">
     {% for view_val, view_label, view_url in view_tabs %}
@@ -176,8 +197,14 @@
       <span class="gt-action">
         {% if it.status == "completed" and it.unresolved_count > 0 %}
         <a href="/review">Review →</a>
+        {% elif it.status == "failed" and not it.archived %}
+        <form method="post" action="/runs/{{ it.run_id }}/requeue" style="display:inline">
+          <input type="hidden" name="revision" value="{{ it.revision }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_requeue }}">
+          <button type="submit" class="cb-btn cb-btn-secondary" style="font-size:var(--t-sm)">Retry</button>
+        </form>
         {% elif it.status == "failed" %}
-        <a href="/runs/{{ it.run_id }}">Retry →</a>
+        <a href="/runs/{{ it.run_id }}">View →</a>
         {% else %}
         <a href="/runs/{{ it.run_id }}">View →</a>
         {% endif %}
@@ -278,5 +305,31 @@
     {% endfor %}
   </div>
 </details>
+{% endif %}
+
+{% if dashboard %}
+<script>
+(function () {
+  function fmt(s) {
+    s = Math.max(0, s);
+    var m = Math.floor(s / 60); s = Math.floor(s) % 60;
+    var h = Math.floor(m / 60); m = m % 60;
+    if (h) return h + "h" + (m < 10 ? "0" : "") + m + "m";
+    return m + "m" + (s < 10 ? "0" : "") + s + "s";
+  }
+  function tick() {
+    var strip = document.querySelector("[data-progress-strip]");
+    if (!strip) return;
+    var now = Date.now() / 1000;
+    var els = strip.querySelectorAll("[data-started-at]");
+    for (var i = 0; i < els.length; i++) {
+      var t = Date.parse(els[i].dataset.startedAt) / 1000;
+      if (isFinite(t)) els[i].textContent = fmt(now - t);
+    }
+    setTimeout(tick, 1000);
+  }
+  setTimeout(tick, 1000);
+})();
+</script>
 {% endif %}
 {% endblock %}
