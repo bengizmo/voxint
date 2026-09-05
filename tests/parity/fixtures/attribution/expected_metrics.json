@@ -1,0 +1,27 @@
+{
+  "alignment_attrition": {
+    "genuine": 8,
+    "impostor": 0,
+    "mixed": 0,
+    "no_gold_overlap": 1,
+    "unscoreable_coverage": 0,
+    "unscoreable_eligibility": 1,
+    "unscoreable_margin": 0,
+    "unscoreable_purity": 0
+  },
+  "coverage": 0.5,
+  "far": 0.3333333333333333,
+  "far_ci_upper": 0.792345044873512,
+  "frr": 0.4,
+  "frr_ci_upper": 0.769280067791163,
+  "kind": "attribution_metrics",
+  "n_abstain": 2,
+  "n_auto_correct": 3,
+  "n_auto_wrong": 1,
+  "n_genuine_trials": 5,
+  "n_impostor_trials": 3,
+  "n_review": 2,
+  "n_speaker_clusters": 7,
+  "n_unscoreable": 2,
+  "schema_version": 1
+}

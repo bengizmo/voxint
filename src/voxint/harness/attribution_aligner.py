@@ -176,7 +176,7 @@ def align_slots(
             continue
 
         dominant, top_overlap = positive[0]
-        purity = top_overlap / slot_duration if slot_duration > 0 else 0.0
+        purity = min(1.0, top_overlap / slot_duration) if slot_duration > 0 else 0.0
         second_purity = (
             positive[1][1] / slot_duration
             if len(positive) > 1 and slot_duration > 0
@@ -187,7 +187,7 @@ def align_slots(
         # pure single-speaker slot merely because no runner-up exists.
         margin = purity - second_purity if len(positive) > 1 else 0.0
         dominant_duration = gold_durations[dominant]
-        coverage = top_overlap / dominant_duration if dominant_duration > 0 else 0.0
+        coverage = min(1.0, top_overlap / dominant_duration) if dominant_duration > 0 else 0.0
 
         too_few_turns = (
             slot_turn_counts is not None
@@ -303,7 +303,7 @@ def build_trials(
             vote_agreement=evidence.get("vote_agreement"),
             eligible_turns=int(_evidence_value(evidence, "eligible_turns", 0)),
             eligible_seconds=float(
-                _evidence_value(evidence, "eligible_seconds", item.slot_duration)
+                _evidence_value(evidence, "eligible_seconds", 0.0)
             ),
             roster_size=evidence.get("roster_size"),
             top_speaker_id=top_speaker_id,

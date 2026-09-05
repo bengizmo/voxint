@@ -213,12 +213,6 @@ def check_kill_criterion(
     genuine = count_genuine_pairs(cross)
     impostor = count_impostor_pairs(cross)
 
-    all_sessions = set()
-    for agents in meetings.values():
-        for spk in agents.values():
-            if spk.global_name is not None:
-                # not ideal but we need the meeting_id to derive session
-                pass
     all_sessions = {
         base_session_id(mid) for mid in meetings
     }
