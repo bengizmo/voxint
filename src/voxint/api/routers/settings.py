@@ -505,9 +505,9 @@ def _persist_llm_settings(
       ``get_or_create`` — nothing is created or mutated, a prior valid config stays
       intact. The caller re-renders with the fixed message.
     * **Stranded-dependent disable** (issue #77 — turning LLM off while a feature that
-      needs it is effectively on) returns a plain message and writes NOTHING (no
-      ``get_or_create``), so LLM stays on rather than the form auto-disabling an
-      unrelated feature (#62). See :func:`_llm_disable_strand_error`.
+      needs it is effectively on) raises :class:`SetupValidationError` and writes
+      NOTHING (no ``get_or_create``), so LLM stays on rather than the form
+      auto-disabling an unrelated feature (#62). See :func:`_llm_disable_strand_error`.
     * **Validation failure** (enable requested but no effective key / budget doesn't
       fit) still persists the valid non-secret overrides and the valid candidate key
       (a good key the operator typed is not thrown away) but forces
@@ -551,7 +551,7 @@ def _persist_llm_settings(
     if not enabled:
         strand_error = _llm_disable_strand_error(get_app_settings(session), settings)
         if strand_error is not None:
-            return strand_error
+            raise SetupValidationError(strand_error)
     row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
     if remove_key:
         candidate_key: str | None = None
@@ -2900,11 +2900,13 @@ async def settings_ai_save(
 ) -> Response:
     """Save the AI tab: LLM + semantic + translation + glossary (#379).
 
-    Corrections stays a separate island form.  Sections are processed in
-    sequence; the first validation failure stops, rolls back any prior
-    mutations in the session, and re-renders with the error.  Earlier
-    sections' unsaved edits re-render from the DB (atomic rollback), not
-    from the submitted form data.
+    Corrections stays a separate island form.  Each section runs inside a
+    SAVEPOINT (#403/#405): a validation failure rolls back only that
+    section's mutations and does not discard valid sibling edits.  All
+    sections are processed, errors collected, and a single commit persists
+    whatever succeeded.  ``_persist_llm_settings`` has intentional
+    partial-save semantics (saves valid key/model on an enablement failure);
+    its SAVEPOINT is released, not rolled back, so those writes survive.
     """
     form = await request.form()
     _require_csrf(request, CSRF_SETTINGS, csrf_token)
@@ -2915,7 +2917,17 @@ async def settings_ai_save(
     if reset_flag and isinstance(reset_flag, str):
         return _handle_reset_flag(session, settings, request, reset_flag, tab="ai")
 
+    errors: dict[str, Any] = {}
+    section_labels = ["LLM", "Semantic search", "Translation", "Glossary"]
+    section_failed: list[str] = []
+    section_partial: list[str] = []
+
     # ---- LLM section ----
+    # ``row`` is read before any SAVEPOINT. A rollback expires its attributes;
+    # subsequent sections' reads lazy-reload from committed state, which is
+    # correct. Do not mutate ``row`` directly inside a SAVEPOINT -- persisters
+    # call ``get_or_create`` for their own instance.
+    nested = session.begin_nested()
     try:
         llm_error = _persist_llm_settings(
             session,
@@ -2928,30 +2940,37 @@ async def settings_ai_save(
         )
     except SetupValidationError as exc:
         llm_error = str(exc)
+        nested.rollback()
+        section_failed.append(section_labels[0])
+    except Exception:
+        nested.rollback()
+        raise
+    else:
+        nested.commit()
+        if llm_error is not None:
+            section_partial.append(section_labels[0])
     if llm_error is not None:
-        session.rollback()
-        return templates.TemplateResponse(
-            request, _settings_page_template(request),
-            _settings_context(request, session, llm_error=llm_error),
-        )
+        errors["llm_error"] = llm_error
 
     # ---- Semantic search section ----
     semantic_reconciled = _reconcile_switches(
         _SEMANTIC_FLAG_NAMES, form, settings, row
     )
-    semantic_errors = _persist_semantic_index(
-        session, settings, submitted=semantic_reconciled
-    )
-    if semantic_errors:
-        session.rollback()
-        return templates.TemplateResponse(
-            request, _settings_page_template(request),
-            _settings_context(
-                request, session,
-                semantic_index_errors=semantic_errors,
-                semantic_index_submitted=semantic_reconciled,
-            ),
+    nested = session.begin_nested()
+    try:
+        semantic_errors = _persist_semantic_index(
+            session, settings, submitted=semantic_reconciled
         )
+    except Exception:
+        nested.rollback()
+        raise
+    if semantic_errors:
+        nested.rollback()
+        errors["semantic_index_errors"] = semantic_errors
+        errors["semantic_index_submitted"] = semantic_reconciled
+        section_failed.append(section_labels[1])
+    else:
+        nested.commit()
 
     # ---- Translation section ----
     translation_auto = _reconcile_switches(
@@ -2965,45 +2984,65 @@ async def settings_ai_save(
             "translation_autogenerate", "inherit"
         ),
     }
-    translation_errors = _persist_translation(
-        session, settings, submitted=translation_reconciled
-    )
-    if translation_errors:
-        session.rollback()
-        return templates.TemplateResponse(
-            request, _settings_page_template(request),
-            _settings_context(
-                request, session,
-                translation_errors=translation_errors,
-                translation_submitted=translation_reconciled,
-            ),
+    nested = session.begin_nested()
+    try:
+        translation_errors = _persist_translation(
+            session, settings, submitted=translation_reconciled
         )
+    except Exception:
+        nested.rollback()
+        raise
+    if translation_errors:
+        nested.rollback()
+        errors["translation_errors"] = translation_errors
+        errors["translation_submitted"] = translation_reconciled
+        section_failed.append(section_labels[2])
+    else:
+        nested.commit()
 
     # ---- Glossary section ----
     vocabulary_text = str(form.get("vocabulary", ""))
+    glossary_error: str | None = None
     try:
         terms = normalize_vocabulary(vocabulary_text)
     except SetupValidationError as exc:
-        session.rollback()
+        glossary_error = str(exc)
+    if glossary_error is not None:
         submitted_terms = [
             line for line in vocabulary_text.splitlines() if line.strip()
         ]
-        return templates.TemplateResponse(
-            request, _settings_page_template(request),
-            _settings_context(
-                request, session,
-                glossary_error=str(exc),
-                vocabulary_text=vocabulary_text,
-                vocabulary=submitted_terms,
-            ),
-            status_code=422,
-        )
-    row_mut = get_or_create(session, llm_enabled_default=settings.llm_enabled)
-    row_mut.vocabulary = terms
+        errors["glossary_error"] = glossary_error
+        errors["vocabulary_text"] = vocabulary_text
+        errors["vocabulary"] = submitted_terms
+        section_failed.append(section_labels[3])
+    else:
+        row_mut = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+        row_mut.vocabulary = terms
 
     session.commit()
-    return RedirectResponse(
-        _settings_redirect(request, "llm", "ai"), status_code=303
+
+    if not errors:
+        return RedirectResponse(
+            _settings_redirect(request, "llm", "ai"), status_code=303
+        )
+
+    saved_count = len(section_labels) - len(section_failed) - len(section_partial)
+    parts: list[str] = []
+    if saved_count:
+        parts.append(
+            f"{saved_count} section{'s' if saved_count != 1 else ''} saved"
+        )
+    for name in section_partial:
+        parts.append(f"{name} partially saved")
+    if section_failed:
+        parts.append(f"{', '.join(section_failed)} not saved")
+    if not parts:
+        parts.append("No changes saved")
+    errors["ai_save_summary"] = "; ".join(parts) + "."
+    return templates.TemplateResponse(
+        request, _settings_page_template(request),
+        _settings_context(request, session, **errors),
+        status_code=422,
     )
 
 
