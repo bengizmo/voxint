@@ -363,7 +363,7 @@ class TestAiTabSave:
         in the LLM section; siblings persist (#403/#405)."""
         client, _ = make_client(
             session_factory, media_root, seed_llm_enabled=True,
-            enrichment_run_assets_enabled=True,
+            llm_enabled=True, enrichment_run_assets_enabled=True,
         )
         _seed_cols(
             session_factory,
