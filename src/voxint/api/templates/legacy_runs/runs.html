@@ -60,6 +60,10 @@
 </div>
 {% endfor %}
 
+{% if dashboard %}
+{% include "legacy_runs/_progress_strip.html" %}
+{% endif %}
+
 <section class="oc-section" aria-label="Runs">
   <h2 class="oc-section-title">RUNS</h2>
 
@@ -302,4 +306,28 @@
   </div>
 </details>
 {% endif %}
+
+<script>
+(function () {
+  function fmt(s) {
+    s = Math.max(0, s);
+    var m = Math.floor(s / 60); s = Math.floor(s) % 60;
+    var h = Math.floor(m / 60); m = m % 60;
+    if (h) return h + "h" + (m < 10 ? "0" : "") + m + "m";
+    return m + "m" + (s < 10 ? "0" : "") + s + "s";
+  }
+  function tick() {
+    var strip = document.querySelector("[data-progress-strip]");
+    if (!strip) return;
+    var now = Date.now() / 1000;
+    var els = strip.querySelectorAll("[data-started-at]");
+    for (var i = 0; i < els.length; i++) {
+      var t = Date.parse(els[i].dataset.startedAt) / 1000;
+      if (isFinite(t)) els[i].textContent = fmt(now - t);
+    }
+    setTimeout(tick, 1000);
+  }
+  setTimeout(tick, 1000);
+})();
+</script>
 {% endblock %}

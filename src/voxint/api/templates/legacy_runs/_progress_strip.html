@@ -1,0 +1,56 @@
+{#- Pipeline progress strip (#423), htmx-polled partial fragment.
+
+   The outermost div carries hx-get + hx-swap="outerHTML" so each poll replaces
+   the whole strip (including its own hx-trigger, which the server adapts between
+   15s active and 60s idle). The page-level timer script in runs.html ticks
+   [data-started-at] elements every second — no script lives inside this fragment.
+-#}
+<div class="progress-strip" data-progress-strip
+     hx-get="/runs/progress-strip"
+     hx-trigger="every {{ '60s' if dashboard.is_idle else '15s' }}"
+     hx-swap="outerHTML">
+  {% if dashboard.is_idle %}
+  <div class="ps-idle">Pipeline idle</div>
+  {% else %}
+  <div class="ps-stages">
+    {% for s in dashboard.stages %}
+    <div class="ps-stage{% if s.active > 0 %} is-active{% endif %}">
+      <div class="ps-stage-header">
+        <span class="ps-dot{% if s.active > 0 %} ps-dot-ok{% elif s.queued > 0 %} ps-dot-warn{% else %} ps-dot-idle{% endif %}"></span>
+        <span class="ps-stage-name">{{ humanize_stage(s.stage) }}</span>
+      </div>
+      <div class="ps-counts">
+        <span class="ps-count-main">{{ s.active }}</span>
+        {% if s.queued > 0 %}<span class="ps-count-queued">+{{ s.queued }}q</span>{% endif %}
+      </div>
+      {% if s.active > 0 and s.active_started_at %}
+      <div class="ps-timer" data-started-at="{{ s.active_started_at.isoformat() }}">
+        {{ format_compact_duration((dashboard.generated_at - s.active_started_at).total_seconds()|int) }}
+      </div>
+      {% endif %}
+      {% if s.active > 0 and s.eta_seconds is not none %}
+      <div class="ps-eta">~{{ format_compact_duration(s.eta_seconds|int) }} left</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <div class="ps-workload">
+    <span class="ps-wl-count">{{ dashboard.workload.outstanding }} outstanding</span>
+    {% if dashboard.workload.elapsed_seconds is not none %}
+    <span class="ps-wl-sep">&middot;</span>
+    <span class="ps-wl-elapsed">{{ format_compact_duration(dashboard.workload.elapsed_seconds|int) }} elapsed</span>
+    {% endif %}
+    {% if dashboard.workload.overrun %}
+    <span class="ps-wl-sep">&middot;</span>
+    <span class="ps-wl-overrun">taking longer than usual</span>
+    {% elif dashboard.workload.drain_eta_seconds is not none %}
+    <span class="ps-wl-sep">&middot;</span>
+    <span class="ps-wl-eta">~{{ format_compact_duration(dashboard.workload.drain_eta_seconds|int) }} remaining</span>
+    {% endif %}
+    {% if dashboard.workload.queue_paused %}
+    <span class="ps-wl-sep">&middot;</span>
+    <span class="ps-wl-paused">queue paused</span>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>

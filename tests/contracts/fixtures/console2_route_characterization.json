@@ -734,6 +734,14 @@
     true
   ],
   [
+    "/runs/progress-strip",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/runs/{run_id}",
     [
       "GET"

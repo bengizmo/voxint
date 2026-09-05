@@ -60,6 +60,7 @@ from voxint.api.csrf import (
 )
 from voxint.api.languages import LANGUAGE_NAMES, language_label
 from voxint.api.model_provenance import select_run_model_identity
+from voxint.api.pipeline_dashboard_query import pipeline_dashboard_state
 from voxint.api.playback import MediaResolutionError, playback_capability, resolve_servable_media
 from voxint.api.presentation import friendly_media_label, title_from_snapshot
 from voxint.api.resource_status import (
@@ -680,12 +681,19 @@ def runs(
         else None
     )
     _queue_paused = is_queue_paused(session)
+    _now = datetime.now(UTC)
+    dashboard = (
+        pipeline_dashboard_state(session, _now, settings.compute_tier, _queue_paused)
+        if not show_archived
+        else None
+    )
     return templates.TemplateResponse(
         request,
         "legacy_runs/runs.html",
         {
             "request": request,
             "page": page,
+            "dashboard": dashboard,
             "grouped_items": grouped_items,
             "active_view": active_view,
             "view_tabs": tuple(
@@ -765,7 +773,7 @@ def runs(
                 get_app_settings(session), settings
             ),
             # Injected clock for the relative-age render (format_age(now=…)).
-            "now": datetime.now(UTC),
+            "now": _now,
             "active_nav": "runs",
         },
     )
@@ -784,6 +792,27 @@ def search(
     if q:
         target = f"/explore?{urlencode({'q': q})}"
     return RedirectResponse(target, status_code=302)
+
+
+@core_router.get("/runs/progress-strip")
+def runs_progress_strip(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+) -> Response:
+    """htmx-polled pipeline progress strip fragment (#423)."""
+    settings: Settings = request.app.state.settings
+    now = datetime.now(UTC)
+    _queue_paused = is_queue_paused(session)
+    dashboard = pipeline_dashboard_state(
+        session, now, settings.compute_tier, _queue_paused
+    )
+    return templates.TemplateResponse(
+        request,
+        "legacy_runs/_progress_strip.html",
+        {"request": request, "dashboard": dashboard},
+    )
+
 
 @core_router.post("/submit")
 def submit_media_upload(

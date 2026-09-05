@@ -306,6 +306,12 @@
     ]
   ],
   [
+    "/runs/progress-strip",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/submit",
     [
       "POST"

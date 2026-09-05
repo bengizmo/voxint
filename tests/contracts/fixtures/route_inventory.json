@@ -550,6 +550,12 @@
     ]
   ],
   [
+    "/runs/progress-strip",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/runs/{run_id}",
     [
       "GET"
