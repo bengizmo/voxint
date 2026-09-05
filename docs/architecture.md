@@ -776,10 +776,8 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   `reviewer`, `viewer`). The `_resolve_identity` dependency in `deps.py` branches once;
   downstream code uses `CurrentUserDep` (the resolved `AuthContext`) and
   `OperatorDep` (the username string) regardless of mode. `AdminDep` gates
-  every route that mutates installation-wide state: the settings page and
-  plugin mutation routes (synthdetect settings toggle, manual scoring
-  trigger). Plugin routes that mutate installation-wide state must depend on
-  `AdminDep`; read-only plugin routes (reports, panels) do not.
+  every route that mutates installation-wide state, including the settings
+  page.
   The login redirect target (`?next=`) is validated by `_validate_next()`,
   which rejects protocol-relative paths, backslash normalization, control
   characters, and scheme-bearing URLs to prevent open-redirect attacks.
@@ -807,6 +805,35 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   and to carry a decodable audio stream per ffprobe (bounded subprocess,
   cached per path/size/mtime). Single-range HTTP semantics: 206/416,
   open-ended and suffix forms; multipart ranges are ignored per RFC.
+
+### Plugins (epic #136)
+
+Plugins are for greenfield features with standalone surfaces. Features whose
+state is rendered by a core page stay in core. Translation, LLM enrichment, and
+semantic search therefore remain native. Synthdetect is the reference plugin.
+
+The framework lives in `src/voxint/plugins/`. `base.py` defines the contract and
+contribution records. `registry.py` validates and orders plugins. `hooks.py`
+dispatches lifecycle events. `deps.py` provides bounded route dependencies.
+`media.py` exposes confined run audio. `boot.py` and `doctor.py` integrate
+startup checks and diagnostics.
+
+Concrete plugin classes register in the `BUILTIN` tuple in `discover.py`.
+Plugins may import core. Core imports concrete plugin classes only in
+`discover.py`. The pipeline never imports `voxint.plugins`.
+
+Framework seams cover settings sections, run-detail panels, routes, Celery task
+modules and routing, recoverable job lanes, post-completion hooks, and CLI
+commands. Plugin routes that mutate installation-wide state depend on
+`AdminDep`. Read-only routes do not require it.
+
+Feature gates use tri-state settings. Pydantic `Settings` supplies the
+environment default. Nullable `AppSettings` columns supply per-installation
+overrides. `resolve_effective_*` functions select the active value at runtime.
+The base gate fails closed.
+
+See the [plugin author guide](plugins.md) for package layout, hook selection,
+job safety, migrations, compose overlays, tests, and the shipping checklist.
 
 ## Frontend islands (issue #48)
 

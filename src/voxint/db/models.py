@@ -2604,6 +2604,10 @@ class SynthdetectJob(Base):
             "finished_at IS NULL OR started_at IS NOT NULL",
             name="synthdetect_jobs_finished_requires_started_check",
         ),
+        CheckConstraint(
+            "source_content_hash IS NULL OR source_content_hash ~ '^[0-9a-f]{64}$'",
+            name="synthdetect_jobs_source_hash_check",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -2623,6 +2627,7 @@ class SynthdetectJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_content_hash: Mapped[str | None] = mapped_column(Text)
 
 
 class SynthdetectScore(Base):

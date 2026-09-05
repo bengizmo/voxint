@@ -1340,6 +1340,14 @@
     true
   ],
   [
+    "/synthdetect/cancel/{job_id}",
+    [
+      "POST"
+    ],
+    "exempt",
+    true
+  ],
+  [
     "/synthdetect/report/{run_id}",
     [
       "GET"

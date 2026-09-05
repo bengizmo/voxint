@@ -6,6 +6,34 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Synthdetect backfill CLI** (#146). `voxint synthdetect backfill` scores
+  completed runs with missing or stale synthdetect results. Supports single-run,
+  stale-only (default), and `--force` (all runs) modes. Stranded-QUEUED recovery
+  adopts and runs jobs inline.
+- **Plugin author guide** (#142). `docs/plugins.md` covers the full plugin
+  authoring workflow: scope rule, VoxintPlugin hook surface, registration,
+  settings tri-state, routes, jobs, media access, compose overlays, and testing.
+  Updated `docs/architecture.md` and `CONTRIBUTING.md` with plugin sections.
+  Closes epic #136.
+
+### Changed
+- **Synthdetect staleness fingerprint** (#146). Jobs now carry a
+  `source_content_hash` (sha256 over source audio identity, diarization
+  intervals, speaker labels, and window-plan version). Staleness detection
+  compares content hash, inference space, and calibration policy against the
+  current defaults.
+- **Synthdetect cancel fencing** (#146). Guarded terminal CAS on success publish
+  prevents a cancelled job from committing scores. `request_cancel` atomically
+  resolves active jobs. Two cancel checkpoints in the executor, plus a
+  `POST /synthdetect/cancel/{job_id}` route.
+- **Synthdetect create_job race safety** (#146). Savepoint + IntegrityError
+  pattern replaces check-then-insert for the one-active-per-run constraint.
+- **GC reclaim exclusion** (#146). Runs with active (QUEUED/RUNNING) synthdetect
+  jobs are excluded from audio artifact reclamation.
+- **Run detail panel** (#146). Prefers the latest SUCCEEDED synthdetect job; a
+  fresh re-score no longer hides completed results.
+
 
 ## [0.35.0] - 2026-09-05
 

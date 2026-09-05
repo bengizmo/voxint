@@ -44,6 +44,8 @@ from voxint.db.models import (
     MediaItem,
     PipelineRun,
     RunStatus,
+    SynthdetectJob,
+    SynthdetectJobStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -207,6 +209,15 @@ def _select_eligible(
             MediaItem.source_path == AudioArtifact.path,
         )
     )
+    # Protect runs with active synthdetect jobs that consume the audio file.
+    # Generalize if a second audio-consuming plugin appears.
+    active_synthdetect = exists().where(
+        SynthdetectJob.pipeline_run_id == AudioArtifact.pipeline_run_id,
+        SynthdetectJob.status.in_((
+            SynthdetectJobStatus.QUEUED.value,
+            SynthdetectJobStatus.RUNNING.value,
+        )),
+    )
     age_eligible = or_(
         and_(
             AudioArtifact.kind == ArtifactKind.PREPROCESSED_AUDIO.value,
@@ -232,6 +243,7 @@ def _select_eligible(
             PipelineRun.status.in_(_TERMINAL_STATUSES),
             age_eligible,
             ~source_alias,
+            ~active_synthdetect,
         )
         .order_by(PipelineRun.updated_at.asc(), AudioArtifact.id.asc())
         .limit(batch_limit)
