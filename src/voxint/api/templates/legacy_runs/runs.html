@@ -307,6 +307,7 @@
 </details>
 {% endif %}
 
+{% if dashboard %}
 <script>
 (function () {
   function fmt(s) {
@@ -330,4 +331,5 @@
   setTimeout(tick, 1000);
 })();
 </script>
+{% endif %}
 {% endblock %}
