@@ -52,7 +52,10 @@ def password_page(request: Request, identity: CurrentUserDep) -> Response:
     return templates.TemplateResponse(
         request,
         "account/password.html",
-        _password_context(request, ok=request.query_params.get("ok", "")),
+        _password_context(
+            request,
+            ok="Password changed" if request.query_params.get("ok") else "",
+        ),
     )
 
 
@@ -64,7 +67,7 @@ def password_submit(
     current_password: Annotated[str, Form()],
     new_password: Annotated[str, Form()],
     new_password_confirm: Annotated[str, Form()],
-    csrf_token: Annotated[str, Form()],
+    csrf_token: Annotated[str | None, Form()] = None,
 ) -> Response:
     settings: Settings = request.app.state.settings
     if not settings.voxint_multi_user:
@@ -129,7 +132,7 @@ def password_submit(
     logger.info("user %s changed their password", identity.username)
 
     response = RedirectResponse(
-        "/account/password?ok=Password+changed",
+        "/account/password?ok=1",
         status_code=303,
     )
     secure = request.url.scheme == "https" or request.headers.get(

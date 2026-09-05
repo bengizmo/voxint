@@ -17,6 +17,7 @@ from voxint.api.auth import SESSION_COOKIE
 from voxint.api.csrf import (
     CSRF_ACCOUNT_PASSWORD,
     CSRF_LOGIN,
+    CSRF_USERS,
     mint_csrf_token,
 )
 from voxint.config import Settings
@@ -124,7 +125,7 @@ class TestHappyPath:
 
         resp = _post_password(client, _ADMIN_PW, "brand-new-pw")
         assert resp.status_code == 303
-        assert "ok=" in resp.headers["location"]
+        assert "ok=1" in resp.headers["location"]
 
         with session_factory() as db:
             user = db.get(User, admin_id)
@@ -140,10 +141,14 @@ class TestHappyPath:
         client = _make_client(session_factory)
         _login(client, "admin", _ADMIN_PW)
 
-        _post_password(client, _ADMIN_PW, "new-pw")
-        resp = client.get("/account/password", headers={"accept": "text/html"})
-        assert resp.status_code == 200
-        assert "Password" in resp.text
+        resp = _post_password(client, _ADMIN_PW, "new-pw")
+        assert resp.status_code == 303
+        follow = client.get(
+            resp.headers["location"], headers={"accept": "text/html"}
+        )
+        assert follow.status_code == 200
+        assert "Password changed" in follow.text
+        assert "notice--ok" in follow.text
 
 
 class TestSessionRotation:
@@ -249,6 +254,22 @@ class TestValidation:
         _login(client, "admin", _ADMIN_PW)
 
         resp = _post_password(client, _ADMIN_PW, "new-pw", csrf_token="bogus")
+        assert resp.status_code == 403
+
+    def test_csrf_wrong_action_rejected(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        seed_onboarded(session_factory)
+        _seed_users(session_factory)
+        client = _make_client(session_factory)
+        _login(client, "admin", _ADMIN_PW)
+
+        login_token = mint_csrf_token(_CSRF_SECRET, CSRF_LOGIN)
+        resp = _post_password(client, _ADMIN_PW, "new-pw", csrf_token=login_token)
+        assert resp.status_code == 403
+
+        users_token = mint_csrf_token(_CSRF_SECRET, CSRF_USERS)
+        resp = _post_password(client, _ADMIN_PW, "new-pw", csrf_token=users_token)
         assert resp.status_code == 403
 
 
