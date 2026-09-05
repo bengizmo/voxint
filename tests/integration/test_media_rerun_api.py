@@ -543,8 +543,8 @@ def test_confirm_publish_cap_limits_broker_traffic(
         assert _run_count(session_factory, mid) == 1
     # Only 2 publish calls (the batch cap).
     assert len(publish_calls) == 2
-    # Items beyond the cap show the deferred marker.
-    assert "will start when the worker is available" in confirm.text
+    # Items beyond the cap show the deferred marker (cap, not broker-down).
+    assert "queued for recovery sweep" in confirm.text
 
 
 def test_confirm_broker_failure_short_circuits(

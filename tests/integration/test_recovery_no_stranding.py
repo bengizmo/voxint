@@ -154,6 +154,15 @@ def test_recovery_batch_cap_drains_gradually(
     # The dispatched set is a subset of all stale ids
     assert set(recorder.dispatched).issubset(set(stale_ids))
 
+    # Simulate the worker claiming the dispatched runs (status -> RUNNING)
+    # so the second sweep only finds the remaining 2.
+    with session_factory() as s:
+        for rid in recorder.dispatched:
+            run = s.get(PipelineRun, rid)
+            assert run is not None
+            run.status = RunStatus.RUNNING.value
+        s.commit()
+
     # Second sweep picks up the remaining 2
     recorder2 = _DispatchRecorder()
     monkeypatch.setattr(
