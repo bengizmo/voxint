@@ -78,6 +78,18 @@ Prose stays emoji-free apart from a `⚠️`/`✅` callout glyph. The full guida
 including per-lane structure and a pre-publish checklist, lives in the
 `voxint-docs` skill; agents should load it before writing or editing docs.
 
+## Plugin authoring
+
+Greenfield features with standalone surfaces belong in
+`src/voxint/plugins/<id>/`. Register the `VoxintPlugin` subclass in the
+`BUILTIN` tuple in `src/voxint/plugins/discover.py`.
+
+Plugins import core. Core imports concrete plugin classes only in `discover.py`.
+The pipeline never imports `voxint.plugins`. Contract tests enforce this import
+direction along with manifest, settings, task-name, and gate invariants. See the
+[plugin author guide](docs/plugins.md) for the full workflow and shipping
+checklist.
+
 ## Reporting security issues
 
 Do not open a public issue for a vulnerability. Report it privately via GitHub
