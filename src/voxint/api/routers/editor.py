@@ -12,7 +12,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from voxint.adjudication.resolver import label_states
 from voxint.adjudication.review_state import verified_progress
@@ -25,6 +25,7 @@ from voxint.adjudication.slots import (
     verify_claim,
 )
 from voxint.adjudication.transcript import TranscriptText, attributed_transcript
+from voxint.api.annotation_view import annotation_limits, annotations_payload
 from voxint.api.csrf import (
     CSRF_ANNOTATION_TAGS,
     CSRF_CLAIM,
@@ -48,9 +49,9 @@ from voxint.api.routers.deps import (
     require_onboarded,
     templates,
 )
-from voxint.api.annotation_view import annotation_limits, annotations_payload
 from voxint.api.speaker_colors import run_label_universe, speaker_palette
 from voxint.api.transcript_view import _transcript_island_props
+from voxint.api.tutorial_view import _tutorial_banner
 from voxint.app_settings import get_app_settings, resolve_effective_translation_target_language
 from voxint.config import Settings
 from voxint.db.models import PipelineRun, RunStatus
@@ -64,6 +65,7 @@ from voxint.enrichment.translation_jobs import (
 from voxint.ingest import restart_impact
 from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import active_speakers
+from voxint.tutorial.steps import TutorialPage
 
 router = APIRouter(
     dependencies=[Depends(require_onboarded), Depends(require_media_enabled)]
@@ -222,6 +224,15 @@ def media_detail_page(
         else None
     )
 
+    run_id_for_tutorial = detail.selected_run.id if detail.selected_run else None
+    tutorial = _tutorial_banner(
+        request,
+        session,
+        page=TutorialPage.EDITOR,
+        run_id=run_id_for_tutorial,
+        token=token if claim_valid else None,
+    )
+
     return templates.TemplateResponse(
         request,
         "editor/detail.html",
@@ -236,6 +247,7 @@ def media_detail_page(
             "csrf_restart": csrf_restart,
             "restart_impact": ri,
             "active_nav": "media",
+            "tutorial": tutorial,
         },
     )
 
@@ -248,11 +260,17 @@ def editor_claim(
     session: SessionDep,
     run_id: Annotated[uuid.UUID, Form()],
     csrf_token: Annotated[str | None, Form()] = None,
-) -> JSONResponse:
+    tutorial: Annotated[str | None, Form()] = None,
+) -> Response:
     """Claim a run for editing from the editor island (ADR 0004).
 
     CSRF-gated (no prior token exists to guard the POST). Returns the
     claim token as JSON so the island can adopt it without a page reload.
+
+    When the ``tutorial`` form field carries a step name (from the guided-
+    tutorial banner's claim form), the response is a redirect to the editor
+    page with the token and next tutorial step in the query string, matching
+    the server-rendered flow the tutorial banner expects.
     """
     _require_csrf(request, CSRF_CLAIM, csrf_token)
     run = session.get(PipelineRun, run_id)
@@ -269,6 +287,14 @@ def editor_claim(
         )
     except ClaimUnavailableError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    if tutorial:
+        return RedirectResponse(
+            f"/media/{media_id}/editor?run={run_id}&token={token}"
+            f"&tutorial={tutorial}",
+            status_code=303,
+        )
+
     return JSONResponse({
         "token": str(token),
         "tagCsrf": mint_csrf_token(

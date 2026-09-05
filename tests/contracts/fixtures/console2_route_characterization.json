@@ -566,30 +566,6 @@
     true
   ],
   [
-    "/review/{run_id}/candidates/{candidate_id}/decision",
-    [
-      "POST"
-    ],
-    "onboarding",
-    true
-  ],
-  [
-    "/review/{run_id}/claim",
-    [
-      "POST"
-    ],
-    "onboarding",
-    true
-  ],
-  [
-    "/review/{run_id}/enrich/names",
-    [
-      "POST"
-    ],
-    "onboarding",
-    true
-  ],
-  [
     "/review/{run_id}/export.json",
     [
       "GET"
@@ -663,22 +639,6 @@
   ],
   [
     "/review/{run_id}/merge/preview",
-    [
-      "POST"
-    ],
-    "onboarding",
-    true
-  ],
-  [
-    "/review/{run_id}/refresh",
-    [
-      "POST"
-    ],
-    "onboarding",
-    true
-  ],
-  [
-    "/review/{run_id}/release",
     [
       "POST"
     ],

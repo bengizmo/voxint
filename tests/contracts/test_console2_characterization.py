@@ -271,9 +271,13 @@ class RedirectRule(NamedTuple):
 # retired ``/dashboard`` redirects there.
 # P6b (#161): the hardware view ``/resources`` folded into ``/settings/status``
 # (Settings activation), so ``/resources`` redirects there.
+# P3c (#158): legacy review pages retired; redirected to the media editor.
 REDIRECT_MAP: tuple[RedirectRule, ...] = (
     RedirectRule(source="/dashboard", target="/", status=303, auth=True),
     RedirectRule(source="/resources", target="/settings/status", status=303, auth=True),
+    RedirectRule(source="/review", target="/media", status=303, auth=True),
+    RedirectRule(source="/review/{run_id}", target="/media/{media_id}/editor", status=302, auth=True),
+    RedirectRule(source="/review/{run_id}/transcript", target="/media/{media_id}/editor", status=302, auth=True),
 )
 
 
@@ -281,7 +285,7 @@ def test_redirect_map_is_well_formed() -> None:
     sources = [rule.source for rule in REDIRECT_MAP]
     assert len(sources) == len(set(sources)), "duplicate redirect source(s)"
     for rule in REDIRECT_MAP:
-        assert rule.status in {303, 307, 308}, f"{rule.source}: odd redirect status"
+        assert rule.status in {302, 303, 307, 308}, f"{rule.source}: odd redirect status"
         assert rule.target and rule.target != rule.source, (
             f"{rule.source}: redirect target must be a different non-empty path"
         )

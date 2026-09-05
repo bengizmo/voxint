@@ -1,9 +1,9 @@
 """The guided-tutorial step model (pure domain, no DB/FastAPI).
 
 Covers the lenient parser (unknown/blank → no banner, never a 422), the
-step→page binding that keeps ADJUDICATE on the workbench and CHECK_WORDS + EXPORT
-on the transcript stepper while disqualifying the wrong page, and the 1-of-5
-walkthrough numbering that excludes the terminal DONE step.
+step→page binding (REVIEW/ADJUDICATE/CHECK_WORDS/EXPORT all map to EDITOR
+after #158), and the 1-of-5 walkthrough numbering that excludes the terminal
+DONE step.
 """
 
 import pytest
@@ -47,18 +47,15 @@ def test_step_page_binds_every_step() -> None:
     assert set(STEP_PAGE) == set(TutorialStep)
 
 
-def test_adjudicate_on_workbench_check_words_and_export_share_transcript() -> None:
-    # Step 1 ("who is speaking") is the workbench; Step 2 ("check the words") and
-    # export both bind the transcript stepper (issue #117 Phase B), the same
-    # /review/{id}/transcript page disambiguated by step identity.
-    assert STEP_PAGE[TutorialStep.ADJUDICATE] is TutorialPage.WORKBENCH
-    assert STEP_PAGE[TutorialStep.CHECK_WORDS] is TutorialPage.TRANSCRIPT
-    assert STEP_PAGE[TutorialStep.EXPORT] is TutorialPage.TRANSCRIPT
+def test_review_adjudicate_check_words_export_all_editor() -> None:
+    assert STEP_PAGE[TutorialStep.REVIEW] is TutorialPage.EDITOR
+    assert STEP_PAGE[TutorialStep.ADJUDICATE] is TutorialPage.EDITOR
+    assert STEP_PAGE[TutorialStep.CHECK_WORDS] is TutorialPage.EDITOR
+    assert STEP_PAGE[TutorialStep.EXPORT] is TutorialPage.EDITOR
 
 
-def test_run_review_done_pages() -> None:
+def test_run_and_done_pages() -> None:
     assert STEP_PAGE[TutorialStep.RUN] is TutorialPage.RUN_DETAIL
-    assert STEP_PAGE[TutorialStep.REVIEW] is TutorialPage.REVIEW_QUEUE
     assert STEP_PAGE[TutorialStep.DONE] is TutorialPage.SETTINGS
 
 
