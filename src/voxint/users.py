@@ -129,3 +129,16 @@ def set_disabled(session: Session, user: User, *, disabled: bool) -> None:
 def reset_password(session: Session, user: User, new_password: str) -> None:
     user.password_hash = hash_password(new_password)
     session.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
+
+
+def change_own_password(
+    session: Session,
+    user: User,
+    *,
+    current_password: str,
+    new_password: str,
+) -> bool:
+    if not verify_password(current_password, user.password_hash):
+        return False
+    reset_password(session, user, new_password)
+    return True

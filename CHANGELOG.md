@@ -7,6 +7,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Self-service password change** (#364). Any authenticated user can change
+  their own password at `/account/password`. Changing the password signs out
+  all other sessions and rotates the current session. Account link in the
+  sidebar for all multi-user roles. Returns 404 in single-operator mode.
 - **Synthdetect backfill CLI** (#146). `voxint synthdetect backfill` scores
   completed runs with missing or stale synthdetect results. Supports single-run,
   stale-only (default), and `--force` (all runs) modes. Stranded-QUEUED recovery

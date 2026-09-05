@@ -11,6 +11,7 @@ from voxint.db.models import AuthSession, Base, User
 from voxint.users import (
     UserRole,
     authenticate,
+    change_own_password,
     create_user,
     hash_password,
     list_users,
@@ -420,3 +421,88 @@ def test_viewer_authenticates(session: Session) -> None:
     user = authenticate(session, username="view", password="viewpw")
     assert user is not None
     assert user.role == UserRole.VIEWER.value
+
+
+# ---- change_own_password (#364) ----
+
+
+def test_change_own_password_succeeds(session: Session) -> None:
+    user = create_user(session, username="admin", password="old-password")
+    old_hash = user.password_hash
+
+    result = change_own_password(
+        session, user, current_password="old-password", new_password="new-password"
+    )
+
+    assert result is True
+    assert user.password_hash != old_hash
+    assert verify_password("new-password", user.password_hash)
+    assert not verify_password("old-password", user.password_hash)
+
+
+def test_change_own_password_wrong_current(session: Session) -> None:
+    user = create_user(session, username="admin", password="old-password")
+    old_hash = user.password_hash
+
+    session.add(
+        AuthSession(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            token_hash=b"keep-me",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+    )
+    session.flush()
+
+    result = change_own_password(
+        session, user, current_password="wrong", new_password="new-password"
+    )
+
+    assert result is False
+    assert user.password_hash == old_hash
+    count = session.scalar(
+        select(func.count())
+        .select_from(AuthSession)
+        .where(AuthSession.user_id == user.id)
+    )
+    assert count == 1
+
+
+def test_change_own_password_purges_all_sessions(session: Session) -> None:
+    user = create_user(session, username="admin", password="old-password")
+    for i in range(3):
+        session.add(
+            AuthSession(
+                id=uuid.uuid4(),
+                user_id=user.id,
+                token_hash=f"hash-{i}".encode(),
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+            )
+        )
+    session.flush()
+
+    result = change_own_password(
+        session, user, current_password="old-password", new_password="new-password"
+    )
+
+    assert result is True
+    count = session.scalar(
+        select(func.count())
+        .select_from(AuthSession)
+        .where(AuthSession.user_id == user.id)
+    )
+    assert count == 0
+
+
+def test_change_own_password_rejects_invalid_new(session: Session) -> None:
+    user = create_user(session, username="admin", password="old-password")
+
+    with pytest.raises(ValueError):
+        change_own_password(
+            session, user, current_password="old-password", new_password=""
+        )
+
+    with pytest.raises(ValueError):
+        change_own_password(
+            session, user, current_password="old-password", new_password="a" * 1025
+        )

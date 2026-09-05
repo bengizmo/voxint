@@ -198,6 +198,9 @@ CSRF_MEDIA_EMPTY_TRASH = "media-empty-trash"
 # sub-page under the same admin gate, so one shared action is acceptable
 # (mirrors CSRF_SETTINGS' single-flow rationale for the settings sections).
 CSRF_USERS = "users"
+# Self-service password change (issue #364). Distinct from the admin user-reset
+# surface (CSRF_USERS): available to every authenticated role, not admin-gated.
+CSRF_ACCOUNT_PASSWORD = "account-password"
 CSRF_QUEUE_PAUSE = "queue-pause"
 CSRF_QUEUE_RESUME = "queue-resume"
 
