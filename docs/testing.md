@@ -433,3 +433,35 @@ stream once, so the harness never re-parses the XML. Nothing here is normalized
 at rest; per the numerics doctrine, WER normalization is applied to raw reference
 and raw hypothesis together at scoring time, and the harness records which
 normalizer scored it.
+
+## Eval-attribution harness (offline, maintainer)
+
+`tools/eval_attribution.py` (issue #113) scores end-to-end speaker
+attribution accuracy against corpus gold labels (AMI global participant
+IDs). Where the eval-quality harness above measures structural diarization
+and transcript quality, this harness measures whether the right person's
+name reaches the operator: false accept rate (FAR), false reject rate
+(FRR), and auto-attribution coverage at the frozen production matching
+gates.
+
+The harness is built from three pure library modules
+(`ami_recurrence`, `attribution_protocol`, `attribution_aligner` under
+`src/voxint/harness/`) documented in `docs/harness.md`. The CLI driver
+has four subcommands: `protocol`, `align`, `score`, `report`. It needs
+no special dependency extras (no pyannote, no jiwer). Run it with:
+
+```bash
+uv run python tools/eval_attribution.py score \
+    --trials trials.json --out metrics.json
+
+uv run python tools/eval_attribution.py report \
+    --run metrics.json --date YYYY-MM-DD --out report.md
+```
+
+A frozen regression pack under `tests/parity/fixtures/attribution/`
+commits synthetic trials and the expected metrics output, so scorer
+determinism is verified by `test_frozen_regression_pack` in
+`tests/unit/test_eval_attribution.py` without a GPU. The fixtures test a
+different invariant from the model-output parity gates: scorer arithmetic
+determinism (same trials always produce the same FAR/FRR/coverage/CI),
+not model-output equivalence.

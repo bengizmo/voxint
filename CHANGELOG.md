@@ -7,6 +7,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Speaker-attribution baseline harness** (#113 A1-A4). Three pure, DB-free
+  library modules (`ami_recurrence`, `attribution_protocol`,
+  `attribution_aligner`) that parse AMI corpus recurrence, define protocol
+  manifests, and align gold speaker timing to predicted diarization slots for
+  FAR/FRR/coverage measurement. CLI evaluation driver
+  (`tools/eval_attribution.py`) with `protocol`, `align`, `score`, and
+  `report` subcommands. Frozen regression pack with synthetic trials and
+  expected metrics for GPU-free scorer determinism testing.
 - **Self-service password change** (#364). Any authenticated user can change
   their own password at `/account/password`. Changing the password signs out
   all other sessions and rotates the current session. Account link in the

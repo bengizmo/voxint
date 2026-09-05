@@ -211,8 +211,11 @@ verdicts, two-voter fusion, regression gate metrics. It is documented in
 The `match_candidates` evidence (issue #113) is what closes the loop: the
 maintainer driver `tools/export_match_evidence.py` renders live runs, including
 those near-miss decisions, into the harness input files, so the gates above can
-be measured and a first attribution baseline produced (epic #112). See the
-"Feeding the harness from live runs" section of [harness.md](harness.md).
+be measured and a first attribution baseline produced (epic #112). The
+attribution evaluation driver (`tools/eval_attribution.py`) carries the loop
+further: it aligns corpus gold timing to predicted diarization slots, builds
+FAR/FRR trials, and renders a dated baseline report. See the "Attribution
+evaluation" sections of [harness.md](harness.md).
 
 ## See also
 

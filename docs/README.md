@@ -24,11 +24,11 @@ Reference & internals:
 | `enrichment-triage.md` | Draft triage: the read-time, explainable review-priority score, its components, and the source-authority allowlist |
 | `interpreting-diarization.md` | Reading the output: segment labels vs the turn ledger, short-clip over-splitting, and giving the pipeline a speaker count when it over-segments |
 | `timeouts-and-leases.md` | COMPUTE_TIER timing profiles: stage timeouts and worker leases per tier |
-| `harness.md` | Offline scoring harness: `voxint score` file contracts, verdict vocabularies, the cross-space invariant, and feeding it from live runs (`voxint.harness_export` + the `export_match_evidence` driver) |
+| `harness.md` | Offline scoring harness: `voxint score` file contracts, verdict vocabularies, the cross-space invariant, feeding it from live runs (`voxint.harness_export` + the `export_match_evidence` driver), and the attribution evaluation layer (AMI recurrence, protocol manifests, gold-to-slot alignment, the `eval_attribution` CLI driver) |
 | [`benchmark.md`](benchmark.md) | Shipped benchmark corpus, CLI runner, WER scorer, and cross-run comparison |
 | `operations.md` | Deployment, migrations, pipeline operations, recovery, adjudication workflow, [multi-user authentication](operations.md#multi-user-authentication) |
 | `native-macos-preview.md` | Technical preview: run the whole stack on macOS/arm64 without Docker, under `launchd` (`scripts/native/voxint-native.sh`) |
-| `testing.md` | Test layers and how to run them; the manual browser-verification procedure for the review console; the offline eval-quality harness (DER/JER/WER/cpWER against AMI/VoxConverse) |
+| `testing.md` | Test layers and how to run them; the manual browser-verification procedure for the review console; the offline eval-quality harness (DER/JER/WER/cpWER against AMI/VoxConverse); the attribution eval harness (FAR/FRR/coverage, frozen regression pack) |
 | `release-process.md` | Maintainers: how a release is cut (tag → GHCR images → PyPI → GitHub Release) |
 | `security/` | Security audits calibrated to the single-operator threat model (predates multi-user mode): the whole-repo audit, its threat model, and the standing findings plus their remediation status |
 | `reports/` | Dated measurement reports (parity screens, bakeoff diagnostics, negative results): the evidence behind verdict blocks in `gpu-contracts.md` |

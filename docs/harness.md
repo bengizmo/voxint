@@ -210,6 +210,74 @@ pin it.
 These have no CLI yet; if one grows a public workflow, it gets a `score`
 subcommand and a contract section here.
 
+### Attribution evaluation (issue #113)
+
+Three modules that measure end-to-end speaker attribution accuracy against
+corpus gold labels (AMI). Pure, DB-free, composable in sequence.
+
+- `voxint.harness.ami_recurrence`: parses AMI `meetings.xml` for
+  cross-session speaker recurrence. `base_session_id` groups scenario
+  suffixes (a/b/c/d) into one day-session. `check_kill_criterion` applies
+  two explicit viability gates: baseline (>=8 cross-session speakers, >=50
+  genuine pairs) and calibration (>=50 independent clusters, expected to
+  fail on AMI alone). The recurrence report feeds the protocol manifest.
+
+- `voxint.harness.attribution_protocol`: protocol manifest dataclasses
+  (`AttributionProtocolRow`, `ProtocolManifest`) defining which meetings,
+  speakers, and channels form the evaluation corpus.
+  `validate_session_honesty` checks that enrollment and test data are
+  base-session-disjoint (fail-closed). JSON round-trip via
+  `serialize_manifest` / `parse_manifest`; the `speakers` detail on
+  `RecurrenceReport` is intentionally non-persistent.
+
+- `voxint.harness.attribution_aligner`: the spine. Builds a complete
+  gold-speaker x predicted-slot duration-overlap matrix (with configurable
+  collar, default 0.25s). Classifies each slot: genuine, impostor, mixed,
+  or unscoreable (purity/coverage/margin/eligibility). Purity and coverage
+  are clamped to [0, 1] to handle overlapping same-label intervals.
+  `build_trials` produces `calibration.Trial` objects with
+  `truth_source="corpus_gold"` and cluster_id = gold speaker.
+  `aggregate_trials` computes speaker-clustered FAR/FRR with Wilson CIs,
+  auto-attribution coverage, and alignment attrition counts.
+
+## Attribution evaluation driver (`tools/eval_attribution.py`)
+
+A maintainer tool for offline attribution scoring. Four subcommands:
+
+- **`protocol`**: inspect/validate a protocol manifest.
+- **`align`**: reads a self-contained input manifest pointing to gold RTTMs,
+  hypothesis RTTMs, per-label match evidence, and an enrollment map. Runs
+  `align_slots` + `build_trials`, writes a trials JSON with alignment
+  provenance per meeting. Turn eligibility is sourced from the evidence
+  (`eligible_turns`), not inferred from RTTM segment counts. Emits warnings
+  to stderr for meetings without evidence or orphan evidence labels.
+- **`score`**: trials JSON in, attribution metrics JSON out. Records the
+  effective `MatchingGates` in the output for reproducibility. Optionally
+  accepts a `--gates` override.
+- **`report`**: renders one or more metrics JSONs into a dated Markdown
+  report. Multiple runs compute a noise-floor spread. The report honestly
+  states limitations (close-talk only, baseline not certification, Wilson
+  CIs descriptive only).
+
+All outputs use `sort_keys`, `allow_nan=False`, and `schema_version: 1`.
+The driver wraps all I/O and deserialization errors as `EvalError` (exit
+code 2). A frozen regression pack (`tests/parity/fixtures/attribution/`)
+commits synthetic trials and expected metrics so scorer determinism is
+CI-gated without a GPU.
+
+```
+uv run python tools/eval_attribution.py protocol --manifest protocol.json
+
+uv run python tools/eval_attribution.py align \
+    --manifest align-input.json --out trials.json
+
+uv run python tools/eval_attribution.py score \
+    --trials trials.json --out metrics.json
+
+uv run python tools/eval_attribution.py report \
+    --run metrics.json --date 2026-09-05 --out report.md
+```
+
 ## Feeding the harness from live runs (`voxint.harness_export`)
 
 The harness scores files; it never reads a database. `voxint.harness_export` is
