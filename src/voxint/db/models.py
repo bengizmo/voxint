@@ -1955,6 +1955,7 @@ class AppSettings(Base):
     synthdetect_autogenerate: Mapped[bool | None] = mapped_column(Boolean)
     synthdetect_url: Mapped[str | None] = mapped_column(Text)
     synthdetect_http_timeout_seconds: Mapped[int | None] = mapped_column(Integer)
+    queue_paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

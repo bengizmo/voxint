@@ -45,6 +45,8 @@ from voxint.api.csrf import (
     CSRF_NOTES,
     CSRF_PAUSE,
     CSRF_PLUGIN,
+    CSRF_QUEUE_PAUSE,
+    CSRF_QUEUE_RESUME,
     CSRF_REQUEUE,
     CSRF_RESTART,
     CSRF_RESUME,
@@ -102,8 +104,10 @@ from voxint.api.transcript_view import _transcript_island_props, _wants_island_j
 from voxint.api.tutorial_view import _tutorial_banner
 from voxint.app_settings import (
     get_app_settings,
+    is_queue_paused,
     resolve_effective_translation_target_language,
     resolve_effective_ytdlp_enabled,
+    set_queue_paused,
 )
 from voxint.config import Settings
 from voxint.db.models import (
@@ -729,6 +733,7 @@ def runs(
             ),
             "pipeline_summary": _pipeline_summary(
                 run_status_counts(session),
+                queue_paused=is_queue_paused(session),
             ),
             "degraded": _detect_degraded(request),
             "aux_jobs": recent_aux_jobs(session),
@@ -749,6 +754,10 @@ def runs(
                 if grouped_items is not None
                 else None
             ),
+            "csrf_requeue": mint_csrf_token(request.app.state.csrf_secret, CSRF_REQUEUE),
+            "queue_paused": is_queue_paused(session),
+            "csrf_queue_pause": mint_csrf_token(request.app.state.csrf_secret, CSRF_QUEUE_PAUSE),
+            "csrf_queue_resume": mint_csrf_token(request.app.state.csrf_secret, CSRF_QUEUE_RESUME),
             # Gate the URL-fetch form: when off, it renders disabled (POST /fetch
             # also refuses with 403), matching the CLI's ytdlp_enabled refusal.
             "ytdlp_enabled": resolve_effective_ytdlp_enabled(
@@ -1294,6 +1303,51 @@ def bulk_retry(
             ),
         },
     )
+
+
+@actions_router.post("/queue/pause")
+def queue_pause_route(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> RedirectResponse:
+    """Pause the global pipeline dispatch queue (#419)."""
+    _require_csrf(request, CSRF_QUEUE_PAUSE, csrf_token)
+    set_queue_paused(session, True)
+    session.commit()
+    return RedirectResponse("/runs", status_code=303)
+
+
+@actions_router.post("/queue/resume")
+def queue_resume_route(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> RedirectResponse:
+    """Resume the global pipeline dispatch queue and re-dispatch QUEUED runs (#419)."""
+    import contextlib
+
+    from celery.exceptions import OperationalError
+
+    from voxint.worker.tasks import pipeline_task_for_stage
+
+    _require_csrf(request, CSRF_QUEUE_RESUME, csrf_token)
+    set_queue_paused(session, False)
+    session.commit()
+    queued = session.execute(
+        select(PipelineRun.id, PipelineRun.current_stage).where(
+            PipelineRun.status == RunStatus.QUEUED.value
+        )
+    ).all()
+    for run_id, stage_value in queued:
+        stage = Stage(stage_value) if stage_value else None
+        with contextlib.suppress(OperationalError):
+            pipeline_task_for_stage(stage).apply_async(
+                (str(run_id),), ignore_result=True
+            )
+    return RedirectResponse("/runs", status_code=303)
 
 
 @actions_router.post("/runs/{run_id}/requeue")

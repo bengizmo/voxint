@@ -382,6 +382,22 @@
     true
   ],
   [
+    "/queue/pause",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/queue/resume",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/quotes",
     [
       "POST"

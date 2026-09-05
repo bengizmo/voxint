@@ -412,6 +412,124 @@ def _requeue(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cancel(args: argparse.Namespace) -> int:
+    from sqlalchemy import select
+
+    from voxint.db.models import PipelineRun, RunStatus
+    from voxint.db.session import build_engine, build_session_factory, session_scope
+    from voxint.ingest import IngestError, cancel_run
+    from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
+
+    factory = build_session_factory(build_engine())
+    if args.all_queued:
+        cancelled = 0
+        skipped = 0
+        with session_scope(factory) as session:
+            run_ids = (
+                session.execute(
+                    select(PipelineRun.id).where(PipelineRun.status == RunStatus.QUEUED.value)
+                )
+                .scalars()
+                .all()
+            )
+            for run_id in run_ids:
+                try:
+                    cancel_run(session, run_id)
+                except (IngestError, StaleRevisionError, InvalidTransitionError):
+                    skipped += 1
+                else:
+                    cancelled += 1
+        print(f"cancelled {cancelled} runs ({skipped} skipped)")
+        return 0
+
+    if args.run_id is None:
+        print("error: provide a run_id or --all-queued")
+        return 2
+    run_id = uuid.UUID(args.run_id)
+    try:
+        with session_scope(factory) as session:
+            cancel_run(session, run_id)
+    except (IngestError, StaleRevisionError, InvalidTransitionError) as exc:
+        print(f"error: {exc}")
+        return 2
+    print(f"cancelled {run_id}")
+    return 0
+
+
+def _pause(args: argparse.Namespace) -> int:
+    from voxint.db.session import build_engine, build_session_factory, session_scope
+    from voxint.ingest import IngestError, pause_run
+    from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
+
+    factory = build_session_factory(build_engine())
+    run_id = uuid.UUID(args.run_id)
+    try:
+        with session_scope(factory) as session:
+            pause_run(session, run_id)
+    except (IngestError, StaleRevisionError, InvalidTransitionError) as exc:
+        print(f"error: {exc}")
+        return 2
+    print(f"paused {run_id}")
+    return 0
+
+
+def _resume(args: argparse.Namespace) -> int:
+    from voxint.db.models import PipelineRun, Stage
+    from voxint.db.session import build_engine, build_session_factory, session_scope
+    from voxint.ingest import IngestError, resume_run
+    from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
+
+    factory = build_session_factory(build_engine())
+    run_id = uuid.UUID(args.run_id)
+    try:
+        with session_scope(factory) as session:
+            run = session.get(PipelineRun, run_id)
+            paused_stage = Stage(run.current_stage) if run and run.current_stage else None
+            resume_run(session, run_id)
+    except (IngestError, StaleRevisionError, InvalidTransitionError) as exc:
+        print(f"error: {exc}")
+        return 2
+    _publish_or_defer(run_id, stage=paused_stage)
+    print(f"resumed {run_id}")
+    return 0
+
+
+def _queue_pause(args: argparse.Namespace) -> int:
+    from voxint.app_settings import set_queue_paused
+    from voxint.db.session import build_engine, build_session_factory, session_scope
+
+    factory = build_session_factory(build_engine())
+    with session_scope(factory) as session:
+        set_queue_paused(session, True)
+    print("queue paused -- queued runs will not start until 'voxint queue resume'")
+    return 0
+
+
+def _queue_resume(args: argparse.Namespace) -> int:
+    from sqlalchemy import select
+
+    from voxint.app_settings import set_queue_paused
+    from voxint.db.models import PipelineRun, RunStatus, Stage
+    from voxint.db.session import build_engine, build_session_factory, session_scope
+
+    factory = build_session_factory(build_engine())
+    with session_scope(factory) as session:
+        set_queue_paused(session, False)
+    with factory() as session:
+        queued = session.execute(
+            select(PipelineRun.id, PipelineRun.current_stage).where(
+                PipelineRun.status == RunStatus.QUEUED.value
+            )
+        ).all()
+    dispatched = 0
+    for run_id, stage_value in queued:
+        stage = Stage(stage_value) if stage_value else None
+        if _publish_or_defer(run_id, stage=stage):
+            dispatched += 1
+    print(f"queue resumed; {dispatched} queued runs dispatched")
+    return 0
+
+
 def _fetch(args: argparse.Namespace) -> int:
     """Register a URL for acquisition and enqueue its run (mirrors ``_submit``).
 
@@ -2317,6 +2435,28 @@ def build_parser() -> argparse.ArgumentParser:
     requeue_p = sub.add_parser("requeue", help="requeue a failed run at its failed stage")
     requeue_p.add_argument("run_id")
     requeue_p.set_defaults(fn=_requeue)
+
+    cancel_p = sub.add_parser(
+        "cancel", help="cancel a live run (or all queued runs with --all-queued)"
+    )
+    cancel_p.add_argument("run_id", nargs="?", type=str, help="run UUID to cancel")
+    cancel_p.add_argument("--all-queued", action="store_true", help="cancel every queued run")
+    cancel_p.set_defaults(fn=_cancel)
+
+    pause_p = sub.add_parser("pause", help="pause a live run at its next stage boundary")
+    pause_p.add_argument("run_id", type=str, help="run UUID to pause")
+    pause_p.set_defaults(fn=_pause)
+
+    resume_p = sub.add_parser("resume", help="resume a paused run")
+    resume_p.add_argument("run_id", type=str, help="run UUID to resume")
+    resume_p.set_defaults(fn=_resume)
+
+    queue_p = sub.add_parser("queue", help="global queue controls")
+    queue_sub = queue_p.add_subparsers(dest="queue_command", required=True)
+    qpause_p = queue_sub.add_parser("pause", help="pause the global processing queue")
+    qpause_p.set_defaults(fn=_queue_pause)
+    qresume_p = queue_sub.add_parser("resume", help="resume the global processing queue")
+    qresume_p.set_defaults(fn=_queue_resume)
 
     fetch_p = sub.add_parser("fetch", help="submit a URL for yt-dlp acquisition + transcription")
     fetch_p.add_argument(

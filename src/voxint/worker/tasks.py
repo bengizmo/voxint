@@ -24,6 +24,7 @@ Orchestration philosophy (two execution lanes over the P1 stage engine):
 import logging
 import random
 import uuid
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -196,7 +197,13 @@ def requeue_failed_stage(factory: sessionmaker[Session], failed: RunSnapshot) ->
 # Setting it on the task (not just per apply_async) makes self.retry(), the CLI's
 # .delay(), and the recovery sweep's re-publish all inherit the policy — a
 # per-call flag is not propagated by Celery's Task.retry().
-def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> str:
+def _drive_segment(
+    task: object,
+    run_id_str: str,
+    segment: frozenset[Stage],
+    *,
+    skip_queue_pause: bool = False,
+) -> str:
     """Drive exactly one execution lane with the shared retry/settings policy."""
     factory, base_ctx = _runtime()
     settings = get_settings()
@@ -207,6 +214,9 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
     # the next run_pipeline invocation re-reads the row.
     with factory() as session:
         row = app_settings.get_app_settings(session)
+        if not skip_queue_pause and row is not None and row.queue_paused:
+            logger.info("queue paused; run %s deferred (stays QUEUED)", run_id)
+            return "queue-paused"
         prefs = resolve_run_preferences(row, settings)
         # Resolve the effective key (a UI-stored row value wins over env) inside the
         # session, so it reaches the per-run HttpLLMClient the same no-restart way as
@@ -333,7 +343,7 @@ def run_pipeline(self: object, run_id_str: str) -> str:
 @app.task(bind=True, name="voxint.finish_pipeline", max_retries=None, ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
 def finish_pipeline(self: object, run_id_str: str) -> str:
     """Advance one run through enhancement/matching and finalization."""
-    return _drive_segment(self, run_id_str, POST_SEGMENT)
+    return _drive_segment(self, run_id_str, POST_SEGMENT, skip_queue_pause=True)
 
 
 def pipeline_task_for_stage(stage: Stage | None) -> Any:
@@ -386,22 +396,28 @@ def recovery_sweep() -> dict[str, int]:
         cancelled_claims = close_cancelled_run_claims(session)
         close_paused_run_claims(session)
         session.commit()
-    cutoff = datetime.now(tz=UTC) - timedelta(seconds=settings.queued_run_stale_seconds)
     with factory() as session:
-        stale_queued = (
-            session.execute(
-                select(PipelineRun.id)
-                .where(
-                    PipelineRun.status == RunStatus.QUEUED.value,
-                    PipelineRun.updated_at < cutoff,
+        queue_paused = app_settings.is_queue_paused(session)
+    if queue_paused:
+        logger.info("queue paused; skipping pipeline re-dispatch")
+        stale_queued: Sequence[uuid.UUID] = []
+    else:
+        cutoff = datetime.now(tz=UTC) - timedelta(seconds=settings.queued_run_stale_seconds)
+        with factory() as session:
+            stale_queued = (
+                session.execute(
+                    select(PipelineRun.id)
+                    .where(
+                        PipelineRun.status == RunStatus.QUEUED.value,
+                        PipelineRun.updated_at < cutoff,
+                    )
+                    .order_by(PipelineRun.updated_at, PipelineRun.id)
+                    .limit(settings.recovery_publish_batch_size)
                 )
-                .order_by(PipelineRun.updated_at, PipelineRun.id)
-                .limit(settings.recovery_publish_batch_size)
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
-    publish_ids = {*recovered, *stale_queued}
+    publish_ids = set() if queue_paused else {*recovered, *stale_queued}
     dispatched = 0
     if publish_ids:
         # Re-read after recovery commits: routing from an earlier snapshot can

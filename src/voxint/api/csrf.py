@@ -198,6 +198,8 @@ CSRF_MEDIA_EMPTY_TRASH = "media-empty-trash"
 # sub-page under the same admin gate, so one shared action is acceptable
 # (mirrors CSRF_SETTINGS' single-flow rationale for the settings sections).
 CSRF_USERS = "users"
+CSRF_QUEUE_PAUSE = "queue-pause"
+CSRF_QUEUE_RESUME = "queue-resume"
 
 
 _CSRF_SECRET_FILENAME = ".csrf_secret"

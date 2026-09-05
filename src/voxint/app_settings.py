@@ -635,6 +635,25 @@ def is_onboarded(session: Session) -> bool:
     return bool(row and row.onboarding_complete)
 
 
+def is_queue_paused(session: Session) -> bool:
+    """True when the operator has paused the pipeline dispatch queue.
+
+    A missing row (pre-onboarding) is unpaused. The worker's GPU lane checks this
+    before claiming a run; the recovery sweep checks it before re-dispatching
+    stale QUEUED runs. The post-lane (finish_pipeline) bypasses this gate so
+    in-progress runs can complete.
+    """
+    row = session.get(AppSettings, SINGLETON_ID)
+    return bool(row and row.queue_paused)
+
+
+def set_queue_paused(session: Session, paused: bool) -> None:
+    """Toggle the global pipeline dispatch pause flag. Caller commits."""
+    row = get_or_create(session, llm_enabled_default=False)
+    row.queue_paused = paused
+    session.flush()
+
+
 def get_or_create(session: Session, *, llm_enabled_default: bool) -> AppSettings:
     """Return the singleton row, inserting a defaulted one if absent.
 

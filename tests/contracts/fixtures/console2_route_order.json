@@ -342,6 +342,18 @@
     ]
   ],
   [
+    "/queue/pause",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/queue/resume",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/runs/{run_id}/requeue",
     [
       "POST"
