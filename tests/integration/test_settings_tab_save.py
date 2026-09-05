@@ -192,10 +192,11 @@ class TestAiTabSave:
         assert row.translation_autogenerate is True
         assert row.vocabulary == ["Alpha", "Beta"]
 
-    def test_semantic_failure_rolls_back_llm(
+    def test_semantic_failure_preserves_valid_llm(
         self, session_factory: sessionmaker[Session], media_root: Path
     ) -> None:
-        """Invalid semantic (autogenerate on, enabled off) rolls back LLM mutation."""
+        """Invalid semantic (autogenerate on, enabled off) rolls back only
+        semantic; valid LLM edits persist (#403/#405)."""
         client, _ = make_client(
             session_factory, media_root, seed_llm_enabled=True
         )
@@ -220,19 +221,24 @@ class TestAiTabSave:
             vocabulary="",
         )
         resp = client.post("/settings/ai", data=data, follow_redirects=False)
-        assert resp.status_code == 200
+        assert resp.status_code == 422
         assert "auto-index" in resp.text.lower() or "semantic search on" in resp.text.lower()
         after = _snapshot(session_factory)
-        assert after["llm_base_url"] == before["llm_base_url"]
-        assert after["llm_model"] == before["llm_model"]
-        assert after["llm_api_key"] == before["llm_api_key"]
+        # LLM edits persisted (valid section).
+        assert after["llm_base_url"] == "https://replacement.example.org/v1"
+        assert after["llm_model"] == "replacement-model"
+        assert after["llm_api_key"] == "sk-replacement-key"
+        # Semantic rolled back (failed section).
         assert after["semantic_index_enabled"] == before["semantic_index_enabled"]
         assert after["semantic_index_autogenerate"] == before["semantic_index_autogenerate"]
+        # Summary shown.
+        assert "not saved" in resp.text.lower()
 
-    def test_translation_failure_rolls_back_llm_and_semantic(
+    def test_translation_failure_preserves_valid_llm_and_semantic(
         self, session_factory: sessionmaker[Session], media_root: Path
     ) -> None:
-        """Auto-translate on without target rolls back LLM + semantic mutations."""
+        """Auto-translate on without target rolls back only translation;
+        LLM + semantic edits persist (#403/#405)."""
         client, _ = make_client(
             session_factory, media_root, seed_llm_enabled=True
         )
@@ -256,17 +262,24 @@ class TestAiTabSave:
             vocabulary="",
         )
         resp = client.post("/settings/ai", data=data, follow_redirects=False)
-        assert resp.status_code == 200
+        assert resp.status_code == 422
         assert "preferred language" in resp.text.lower()
         after = _snapshot(session_factory)
-        assert after["llm_base_url"] == before["llm_base_url"]
-        assert after["llm_api_key"] == before["llm_api_key"]
-        assert after["semantic_index_enabled"] == before["semantic_index_enabled"]
+        # LLM persisted.
+        assert after["llm_base_url"] == "https://replacement.example.org/v1"
+        assert after["llm_api_key"] == "sk-replacement-key"
+        # Semantic persisted (submitted "on").
+        assert after["semantic_index_enabled"] is True
+        # Translation rolled back.
+        assert after["translation_autogenerate"] == before["translation_autogenerate"]
+        # Summary shown.
+        assert "not saved" in resp.text.lower()
 
-    def test_glossary_failure_rolls_back_all_prior(
+    def test_glossary_failure_preserves_all_prior(
         self, session_factory: sessionmaker[Session], media_root: Path
     ) -> None:
-        """Overlong glossary term (422) rolls back LLM + semantic + translation."""
+        """Overlong glossary term (422) rolls back only glossary; LLM +
+        semantic + translation edits persist (#403/#405)."""
         client, _ = make_client(
             session_factory, media_root, seed_llm_enabled=True
         )
@@ -294,11 +307,94 @@ class TestAiTabSave:
         assert resp.status_code == 422
         assert "120 characters" in resp.text
         after = _snapshot(session_factory)
+        # LLM persisted.
+        assert after["llm_base_url"] == "https://replacement.example.org/v1"
+        assert after["llm_api_key"] == "sk-replacement-key"
+        # Semantic persisted.
+        assert after["semantic_index_enabled"] is True
+        # Translation persisted.
+        assert after["translation_target_language"] == "es"
+        # Glossary unchanged (the only failed section).
+        assert after["vocabulary"] == before["vocabulary"]
+        # Summary shown.
+        assert "not saved" in resp.text.lower()
+
+    def test_llm_enablement_failure_partial_save_with_siblings(
+        self, session_factory: sessionmaker[Session], media_root: Path
+    ) -> None:
+        """LLM enable with no effective key saves key/model but forces
+        llm_enabled off (partial save); siblings persist (#403/#405)."""
+        client, _ = make_client(
+            session_factory, media_root, seed_llm_enabled=False
+        )
+        _seed_cols(
+            session_factory,
+            llm_base_url="https://original.example.org/v1",
+            llm_api_key=None,
+            vocabulary=["old-term"],
+        )
+        data = _form(
+            rendered=["semantic_index_enabled", "semantic_index_autogenerate",
+                      "translation_autogenerate"],
+            enabled="true",
+            llm_base_url="https://replacement.example.org/v1",
+            llm_model="replacement-model",
+            llm_api_key="",
+            translation_target_language="inherit",
+            translation_autogenerate="inherit",
+            vocabulary="NewTerm",
+        )
+        resp = client.post("/settings/ai", data=data, follow_redirects=False)
+        assert resp.status_code == 422
+        after = _snapshot(session_factory)
+        # LLM partially saved: key/model written, enable forced off.
+        assert after["llm_base_url"] == "https://replacement.example.org/v1"
+        assert after["llm_model"] == "replacement-model"
+        assert after["llm_enabled"] is False
+        # Glossary sibling persisted.
+        assert after["vocabulary"] == ["NewTerm"]
+        # Summary reflects partial save.
+        assert "partially saved" in resp.text.lower()
+
+    def test_llm_strand_disable_not_saved_with_siblings(
+        self, session_factory: sessionmaker[Session], media_root: Path
+    ) -> None:
+        """Strand-disable (LLM off while a dependent is on) saves nothing
+        in the LLM section; siblings persist (#403/#405)."""
+        client, _ = make_client(
+            session_factory, media_root, seed_llm_enabled=True,
+            enrichment_run_assets_enabled=True,
+        )
+        _seed_cols(
+            session_factory,
+            llm_base_url="https://original.example.org/v1",
+            llm_api_key="sk-original-key",
+            llm_enabled=True,
+            vocabulary=["old-term"],
+        )
+        before = _snapshot(session_factory)
+        data = _form(
+            rendered=["semantic_index_enabled", "semantic_index_autogenerate",
+                      "translation_autogenerate"],
+            enabled="",
+            llm_base_url="https://replacement.example.org/v1",
+            llm_model="",
+            llm_api_key="",
+            translation_target_language="inherit",
+            translation_autogenerate="inherit",
+            vocabulary="NewTerm",
+        )
+        resp = client.post("/settings/ai", data=data, follow_redirects=False)
+        assert resp.status_code == 422
+        after = _snapshot(session_factory)
+        # LLM not saved (strand refused).
         assert after["llm_base_url"] == before["llm_base_url"]
         assert after["llm_api_key"] == before["llm_api_key"]
-        assert after["semantic_index_enabled"] == before["semantic_index_enabled"]
-        assert after["translation_target_language"] == before["translation_target_language"]
-        assert after["translation_autogenerate"] == before["translation_autogenerate"]
+        assert after["llm_enabled"] == before["llm_enabled"]
+        # Glossary sibling persisted.
+        assert after["vocabulary"] == ["NewTerm"]
+        # Summary names LLM as not saved.
+        assert "llm not saved" in resp.text.lower()
 
 
 # ---------------------------------------------------------------------------
