@@ -143,4 +143,5 @@ def test_single_alembic_head() -> None:
     # 0057 = widen users_role_check for viewer role, issue #363.
     # 0058 = auto_enroll_evidence table for threshold calibration, issue #434.
     # 0059 = queue_paused column on app_settings, issue #419.
-    assert list(heads) == ["0059"]
+    # 0060 = synthdetect source_content_hash column, issue #146.
+    assert list(heads) == ["0060"]

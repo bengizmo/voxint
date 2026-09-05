@@ -60,6 +60,7 @@ EXEMPT_PATHS = {
 # gate structurally. These paths are NOT exempt — they are gated, just
 # invisibly to the walker. Verified by unauthenticated-401 runtime tests.
 _PLUGIN_WRAPPER_GATED = {
+    "/synthdetect/cancel/{job_id}",
     "/synthdetect/report/{run_id}",
     "/synthdetect/score/{run_id}",
     "/synthdetect/settings",
