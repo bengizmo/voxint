@@ -6,6 +6,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+
+## [0.35.0] - 2026-09-05
+
 ### Added
 - **Run lifecycle controls** (#419). CLI commands: `voxint cancel` (with
   `--all-queued`), `voxint pause`, `voxint resume`, `voxint queue pause`,
