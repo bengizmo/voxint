@@ -42,6 +42,7 @@ def test_resolver_exhaustive_dispatch_unknown_decision() -> None:
         Decision.UNKNOWN.value,
         Decision.INHERIT.value,
         Decision.AUTO_ENROLL.value,
+        Decision.REVOKE.value,
     }
     assert {d.value for d in Decision} == known
 

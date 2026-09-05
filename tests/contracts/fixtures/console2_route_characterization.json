@@ -566,30 +566,6 @@
     true
   ],
   [
-    "/review/{run_id}/candidates/{candidate_id}/decision",
-    [
-      "POST"
-    ],
-    "onboarding",
-    true
-  ],
-  [
-    "/review/{run_id}/claim",
-    [
-      "POST"
-    ],
-    "onboarding",
-    true
-  ],
-  [
-    "/review/{run_id}/enrich/names",
-    [
-      "POST"
-    ],
-    "onboarding",
-    true
-  ],
-  [
     "/review/{run_id}/export.json",
     [
       "GET"
@@ -670,22 +646,6 @@
     true
   ],
   [
-    "/review/{run_id}/refresh",
-    [
-      "POST"
-    ],
-    "onboarding",
-    true
-  ],
-  [
-    "/review/{run_id}/release",
-    [
-      "POST"
-    ],
-    "onboarding",
-    true
-  ],
-  [
     "/review/{run_id}/segments/{segment_id}/relabel",
     [
       "POST"
@@ -729,6 +689,22 @@
     "/review/{run_id}/transcript",
     [
       "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/review/{run_id}/undo/enroll",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/review/{run_id}/undo/merge",
+    [
+      "POST"
     ],
     "onboarding",
     true

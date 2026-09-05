@@ -1,13 +1,9 @@
-"""Legacy review area: the queue, workbench, exports, and annotation layer.
+"""Run-scoped adjudication API: segment mutations, speaker decisions,
+merge, enrollment, transcript exports, and annotations.
 
-Moved verbatim from ``api/app.py`` in the P0b router decomposition (#151).
-Two routers, both behind the router-level onboarding gate: ``transcript_router``
-carries only ``/review/{run_id}/transcript`` (it registers earlier than the
-main block, between the run routes, and stays a separate router so the
-registration order the P0b contract pins is preserved); ``router`` carries the
-review queue, workbench, segment mutations, exports, and annotations. Console
-2.0 later phases retire these routes behind redirects (the editor replaces
-review), hence "legacy".
+Extracted from the legacy review router (issue #158). The mutation
+endpoints keep their ``/review/{run_id}/...`` URLs — "review" names the
+adjudication domain, not the retired page UI.
 """
 
 from __future__ import annotations
@@ -20,7 +16,7 @@ import uuid
 import zipfile
 from collections.abc import Iterator, Sequence
 from dataclasses import replace as dataclass_replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -62,7 +58,6 @@ from voxint.adjudication.annotations import (
     update_annotation,
     update_tag,
 )
-from voxint.adjudication.corrections_view import run_reconciliation
 from voxint.adjudication.enrollment import EnrollmentError, enroll_new_speaker
 from voxint.adjudication.ledger import (
     ConflictingReplayError,
@@ -72,20 +67,12 @@ from voxint.adjudication.ledger import (
 )
 from voxint.adjudication.merge import MergeConflictError, MergeError, apply_merge, preview_merge
 from voxint.adjudication.resolver import (
-    QUEUE_SORTS,
     LabelState,
-    Resolution,
-    adjudication_queue,
     label_states,
-    segment_states,
 )
 from voxint.adjudication.review_state import set_correction, set_verified, verified_progress
 from voxint.adjudication.slots import (
     ClaimMismatchError,
-    ClaimUnavailableError,
-    claim_run,
-    refresh_run_claim,
-    release_run,
     verify_claim,
 )
 from voxint.adjudication.splits import (
@@ -101,6 +88,22 @@ from voxint.adjudication.transcript import (
     effective_text,
     parse_transcript_text,
 )
+from voxint.adjudication.undo import (
+    UndoDriftError,
+    UndoError,
+    UndoExpiredError,
+    undo_enrollment,
+    undo_merge,
+)
+from voxint.api.annotation_view import (
+    annotation_shapes as _annotation_shapes,
+)
+from voxint.api.annotation_view import (
+    annotations_payload as _annotations_payload,
+)
+from voxint.api.annotation_view import (
+    tag_shape as _tag_shape,
+)
 from voxint.api.clip_service import (
     ClipServiceError,
     _confined_clip_path,
@@ -112,12 +115,9 @@ from voxint.api.csrf import (
     CSRF_ANNOTATION_TAGS,
     CSRF_CLAIM,
     CSRF_CLIP_EXTRACT,
-    CSRF_TRANSLATION_GENERATE,
-    mint_csrf_token,
 )
 from voxint.api.languages import LANGUAGE_NAMES, language_label
 from voxint.api.model_provenance import select_run_model_identity
-from voxint.api.playback import playback_capability, representative_turns
 from voxint.api.routers.deps import (
     _TRANSLATION_ACTIVE_STATUSES,
     CurrentUserDep,
@@ -131,43 +131,22 @@ from voxint.api.routers.deps import (
     templates,
 )
 from voxint.api.routers.deps import run_source_title as _run_source_title
-from voxint.api.speaker_colors import run_label_universe, speaker_palette
 from voxint.api.transcript_view import (
-    _load_run_rule_index,
     _run_island_segments,
     _run_reconcile_response,
     _segment_child_ranges,
     _segment_is_corrected,
     _segment_is_split,
-    _transcript_island_props,
-    _wants_island_json,
-)
-from voxint.api.triage_view import _name_suggestions
-from voxint.api.tutorial_view import _tutorial_banner
-from voxint.app_settings import (
-    get_app_settings,
-    ready_tutorial_run_id,
-    resolve_effective_enrichment_names_enabled,
-    resolve_effective_translation_target_language,
 )
 from voxint.config import Settings
 from voxint.db.models import (
-    HIGHLIGHT_PALETTE_SIZE,
-    MAX_ANNOTATION_NOTE_CHARS,
-    MAX_ANNOTATION_QUOTE_CHARS,
-    MAX_ANNOTATION_SPAN_SEGMENTS,
     MAX_CORRECTED_TEXT_CHARS,
-    MAX_TAG_NAME_CHARS,
-    MAX_TAGS_PER_ANNOTATION,
     AnnotationTag,
     ArtifactKind,
     AudioArtifact,
-    ClaimField,
     Decision,
     DiarizationTurn,
-    EnrichmentCandidate,
     PipelineRun,
-    ProfileDecision,
     SegmentReviewState,
     SegmentSplitBoundary,
     Speaker,
@@ -175,14 +154,8 @@ from voxint.db.models import (
     TranscriptAnnotation,
     TranscriptSegment,
 )
-from voxint.enrichment.drafts import EnrichmentScope
-from voxint.enrichment.producers.names import PRODUCER_NAME as NAMES_PRODUCER
-from voxint.enrichment.producers.names import NameProducerError, run_offline_name_producer
-from voxint.enrichment.queries import CandidateState, latest_producer_run
-from voxint.enrichment.review import ConflictingReplayError as EnrichmentReplayError
-from voxint.enrichment.review import StaleCandidateError, record_profile_decision
 from voxint.enrichment.translation_jobs import active_or_last_job as active_or_last_translation_job
-from voxint.enrichment.translation_jobs import normalized_language, translation_gates_open
+from voxint.enrichment.translation_jobs import normalized_language
 from voxint.enrichment.translations import (
     TranslationError,
     current_translation,
@@ -208,112 +181,12 @@ from voxint.export.manifest import (
     build_quote_manifest,
 )
 from voxint.speakers.matching import gates_from_settings
-from voxint.speakers.roster import active_speakers
 from voxint.speakers.roster import is_active as roster_is_active
-from voxint.tutorial.steps import TutorialPage
 
 logger = logging.getLogger(__name__)
 
 
-transcript_router = APIRouter(dependencies=[Depends(require_onboarded)])
 router = APIRouter(dependencies=[Depends(require_onboarded)])
-
-
-def _label_previews(
-    session: Session, run_id: uuid.UUID, states: list[LabelState], limit: int
-) -> dict[str, list[TranscriptSegment]]:
-    previews: dict[str, list[TranscriptSegment]] = {}
-    for state in states:
-        previews[state.label] = list(
-            session.execute(
-                select(TranscriptSegment)
-                .where(
-                    TranscriptSegment.pipeline_run_id == run_id,
-                    TranscriptSegment.diarization_label == state.label,
-                )
-                .order_by(TranscriptSegment.segment_index)
-                .limit(limit)
-            ).scalars()
-        )
-    return previews
-
-
-def _workbench_context(
-    request: Request,
-    session: Session,
-    run: PipelineRun,
-    token: uuid.UUID | None,
-) -> dict[str, Any]:
-    settings: Settings = request.app.state.settings
-    states = label_states(session, run.id, gates=gates_from_settings(settings))
-    # Assignable identities only — merged and archived speakers are curated out
-    # of the roster and must not attract new decisions.
-    speakers = active_speakers(session)
-    name_hints_run, name_hints_labels, name_triage = _name_suggestions(session, run.id)
-    # Per-turn playback (issue #49) + fail-closed seek gating (issue #55). The
-    # workbench-player island (mounted OUTSIDE #labels) reads `capability` to
-    # enable/disable the server-rendered, htmx-swapped seek buttons; the buttons
-    # themselves carry the representative-turn timings for "preview this speaker".
-    capability = playback_capability(session, run, settings, _get_media_gate(request))
-    return {
-        "name_hints_run": name_hints_run,
-        "name_hints_labels": name_hints_labels,
-        # Review-priority + component breakdown per representative (#42), keyed by
-        # candidate id so labels.html can render it without changing the hint shape.
-        "name_triage": name_triage,
-        "names_enabled": resolve_effective_enrichment_names_enabled(
-            get_app_settings(session), settings
-        ),
-        "names_last_run": latest_producer_run(session, NAMES_PRODUCER, EnrichmentScope.run(run.id)),
-        # An accepted per-label suggestion prefills the Enroll input (editable,
-        # never auto-submitted) — the one-click path from hint to enrollment.
-        "enroll_prefill": {
-            label: next(
-                (view.candidate.value for view in views if view.state is CandidateState.ACCEPTED),
-                "",
-            )
-            for label, views in name_hints_labels.items()
-        },
-        "request": request,
-        "run": run,
-        "states": states,
-        # Per-speaker identity color (issue #50): one canonical map keyed on the
-        # raw label, derived from the SAME run-label universe the transcript page
-        # uses (turns and segments), so a label's color never drifts between the
-        # two surfaces.
-        "palette": speaker_palette(run_label_universe(session, run.id)),
-        "previews": _label_previews(session, run.id, states, settings.review_preview_segments),
-        # Per-segment overrides (issue #54 Phase B): keyed by segment id, so a
-        # preview segment can show its this-segment attribution + a reset control.
-        "segment_overrides": segment_states(session, run.id),
-        # Island props for the workbench-player (mounted OUTSIDE #labels). It owns
-        # the <audio>, the speed control, the visible capability banner, and the
-        # document-delegated enabling of the server-rendered seek buttons.
-        "workbench_props": {
-            "runId": str(run.id),
-            "mediaUrl": f"/media/{run.id}",
-            "capability": capability.to_props(),
-        },
-        # Per-label representative turn (start, end) for the "preview this speaker"
-        # button — longest clean (non-overlap) DiarizationTurn, fallback longest.
-        "representative_turns": representative_turns(session, run.id),
-        "speakers": speakers,
-        "token": token,
-        "resolution": Resolution,
-        "nonce": lambda: uuid.uuid4().hex,
-        # CSRF token for the (re)claim form shown when the run is not claimed here.
-        "csrf_claim": mint_csrf_token(request.app.state.csrf_secret, CSRF_CLAIM),
-    }
-
-
-def _wants_html(request: Request) -> bool:
-    """True for a plain browser form navigation (Accept prefers text/html), False
-    for the island's fetch (which asks for application/json explicitly). Lets one
-    write route serve the JSON island contract AND a JS-off HTML redirect fallback
-    without a second route. The default httpx/TestClient Accept (``*/*``) is not
-    HTML, so it keeps the JSON path — existing route tests are unaffected."""
-    accept = request.headers.get("accept", "")
-    return "text/html" in accept and "application/json" not in accept
 
 
 # Response header marking a 409 as a lost/again-taken claim (issue #59), so the
@@ -354,78 +227,6 @@ def _annotation_http_error(exc: AnnotationError) -> HTTPException:
     return HTTPException(status_code=422, detail=str(exc))
 
 
-def _annotation_limits() -> dict[str, int]:
-    """The server-enforced annotation caps, echoed to the island so the client can
-    pre-validate (the server stays the source of truth). Names mirror the constants
-    in docs/annotations.md."""
-    return {
-        "paletteSize": HIGHLIGHT_PALETTE_SIZE,
-        "maxSpanSegments": MAX_ANNOTATION_SPAN_SEGMENTS,
-        "maxNoteChars": MAX_ANNOTATION_NOTE_CHARS,
-        "maxTagsPerAnnotation": MAX_TAGS_PER_ANNOTATION,
-        "maxQuoteChars": MAX_ANNOTATION_QUOTE_CHARS,
-        "maxTagNameChars": MAX_TAG_NAME_CHARS,
-    }
-
-
-def _tag_shape(tag: AnnotationTag) -> dict[str, Any]:
-    """One tag's island/JSON shape (camelCase, matching the frontend islands)."""
-    return {
-        "id": str(tag.id),
-        "name": tag.name,
-        "color": tag.color,
-        "archived": tag.archived_at is not None,
-    }
-
-
-def _annotation_shapes(
-    session: Session, run_id: uuid.UUID, rows: list[TranscriptAnnotation]
-) -> list[dict[str, Any]]:
-    """Resolve a set of stored annotations against the CURRENT render into the island
-    JSON shape (camelCase): highlight spans, staleness, honest timing precision and
-    seconds, live speakers, and the row metadata (colour/quote/note/tags). Shared by
-    the list GET and the single-row create/patch responses so one row can never
-    serialize two ways. Reads render the CORRECTED variant, exactly as the review
-    surface does."""
-    if not rows:
-        return []
-    lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
-    covered = load_covered_segments(session, run_id)
-    anchors = [stored_anchor_from_row(row) for row in rows]
-    resolved = {r.annotation_id: r for r in resolve_annotation_spans(lines, covered, anchors)}
-    tags_by_id = tags_for_annotations(session, [row.id for row in rows])
-    # Canonical transcript order is applied AFTER resolution — by rendered line index,
-    # not the captured start_segment_index annotations_for_run sorts by — so the panel
-    # and the bulk pull-quote export agree even when a split child reorders lines.
-    ordered_rows = sorted(rows, key=lambda row: resolved_order_key(resolved[row.id]))
-    shapes: list[dict[str, Any]] = []
-    for row in ordered_rows:
-        res = resolved[row.id]
-        shapes.append(
-            {
-                "id": str(row.id),
-                "anchorKind": row.anchor_kind,
-                "colorIndex": row.color_index,
-                "quote": row.quote_text,
-                "note": row.note,
-                "operator": row.operator,
-                "stale": res.stale,
-                "timingPrecision": res.timing_precision,
-                "startSeconds": res.start_seconds,
-                "endSeconds": res.end_seconds,
-                "speakers": list(res.speakers),
-                "spans": [
-                    {"lineIndex": s.line_index, "start": s.start, "end": s.end} for s in res.spans
-                ],
-                "locatorLineIndex": res.locator_line_index,
-                "startSegmentIndex": row.start_segment_index,
-                "endSegmentIndex": row.end_segment_index,
-                "tags": [_tag_shape(t) for t in tags_by_id.get(row.id, [])],
-            }
-        )
-    return shapes
-
-
 def _require_filter_tags_exist(session: Session, tag_ids: list[uuid.UUID]) -> None:
     """Fail closed (404) when a ``?tag=`` filter names a tag that does not exist — a
     mistyped or forged id (docs/annotations.md: an unknown tag is a 404, never
@@ -438,18 +239,6 @@ def _require_filter_tags_exist(session: Session, tag_ids: list[uuid.UUID]) -> No
     missing = [t for t in tag_ids if t not in found]
     if missing:
         raise HTTPException(status_code=404, detail=f"unknown tag id {missing[0]}")
-
-
-def _annotations_payload(
-    session: Session, run_id: uuid.UUID, tag_ids: list[uuid.UUID]
-) -> dict[str, Any]:
-    """The GET /annotations body: the run's live annotations (optionally OR-filtered
-    by tag) as island shapes, plus the full tag universe for the panel/picker."""
-    rows = annotations_for_run(session, run_id, tag_ids=tag_ids or None)
-    return {
-        "annotations": _annotation_shapes(session, run_id, rows),
-        "tags": [_tag_shape(t) for t in list_tags(session)],
-    }
 
 
 def _pull_quote_markdown(
@@ -561,307 +350,22 @@ def _labels_response(
     request: Request,
     session: Session,
     run: PipelineRun,
-    token: uuid.UUID,
+    *,
+    undo: dict[str, str] | None = None,
 ) -> Response:
-    """Post-mutation response: htmx gets the refreshed label list, a plain
-    form POST gets a redirect back to the workbench, JSON accept gets the
-    updated label states + refreshed segments for the editor island."""
-    if "application/json" in request.headers.get("accept", ""):
-        settings: Settings = request.app.state.settings
-        states = label_states(session, run.id, gates=gates_from_settings(settings))
-        verified_n, total = verified_progress(session, run.id)
-        return JSONResponse({
-            "labels": [_label_state_shape(s) for s in states],
-            "segments": _run_island_segments(session, run.id),
-            "progress": {"verified": verified_n, "total": total},
-        })
-    if request.headers.get("HX-Request"):
-        return templates.TemplateResponse(
-            request,
-            "legacy_review/labels.html",
-            _workbench_context(request, session, run, token),
-        )
-    return RedirectResponse(f"/review/{run.id}?token={token}", status_code=303)
-
-
-@transcript_router.get("/review/{run_id}/transcript", name="review_transcript")
-def review_transcript(
-    run_id: uuid.UUID,
-    request: Request,
-    operator: OperatorDep,
-    session: SessionDep,
-    token: uuid.UUID | None = None,
-) -> Response:
-    """Claim-gated verify-and-advance surface (issue #53) + inline text
-    correction (issue #58). Reuses the SAME linear player/props as the
-    read-only transcript; the difference is the claim token (carried in
-    ``?token=`` from the workbench, never re-acquired here — claims are
-    takeover, so a fresh claim would kill the workbench tab) which unlocks the
-    review-stepper island. A stale/absent token degrades to read-only with a
-    prompt to claim, exactly like the workbench GET."""
-    run = _run_or_404(session, run_id)
-    if token is not None:
-        try:
-            verify_claim(session, run_id, token)
-        except ClaimMismatchError:
-            token = None  # stale tab: render read-only with a claim prompt
-    # The review surface always shows operator-effective text (corrected →
-    # enhanced → raw); raw evidence stays reachable on the read-only page.
-    lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+    """Return updated label states and segments for the editor island."""
     settings: Settings = request.app.state.settings
-    capability = playback_capability(session, run, settings, _get_media_gate(request))
-    palette = speaker_palette(run_label_universe(session, run_id))
-    verified_n, total = verified_progress(session, run_id)
-    island_props = _transcript_island_props(
-        session, run_id, lines, palette, capability, settings
-    )
-    # Extras the review loop needs beyond the shared display props.
-    island_props["reviewToken"] = str(token) if token is not None else None
-    island_props["initialProgress"] = {"verified": verified_n, "total": total}
-    # The assignable roster for the per-child reassign picker (issue #59 slice
-    # 3): ACTIVE identities only — merged/archived speakers are curated out and
-    # must not attract new rulings, mirroring the /relabel route's own
-    # roster_is_active guard so the picker never offers a speaker the write
-    # would reject. The read-only transcript-player never gets this (it cannot
-    # relabel); only the claim-gated review-stepper needs a picker.
-    island_props["speakers"] = [
-        {"id": str(sp.id), "displayName": sp.display_name}
-        for sp in active_speakers(session)
-    ]
-    # Declared-rule reconciliation (#83): the run-level "declared but never
-    # fired" panel. Computed ONCE per page load by replaying the frozen pack
-    # over every segment's IMMUTABLE raw_text (one row per segment — never the
-    # split-expanded lines, which would double-count a rule's applied segments).
-    # [] when the snapshot is unavailable or declares no corrections, so the
-    # panel simply does not render. Skip the replay (and the raw-text query)
-    # entirely for an unclaimed/read-only view — the panel lives inside the
-    # writable block and never renders there — and when the pack declares no
-    # rules (run_reconciliation would short-circuit to [] anyway).
-    rule_index = _load_run_rule_index(session, run_id) if token is not None else None
-    if rule_index is not None and rule_index.rules:
-        raw_texts = (
-            session.execute(
-                select(TranscriptSegment.raw_text).where(
-                    TranscriptSegment.pipeline_run_id == run_id
-                )
-            )
-            .scalars()
-            .all()
-        )
-        island_props["reconciliation"] = run_reconciliation(rule_index, raw_texts)
-    else:
-        island_props["reconciliation"] = []
-    # Operator annotation layer (issue #86): the annotations to render + the tag
-    # universe + a tag-CRUD CSRF token + the server caps. Hydrated for the
-    # review-stepper only (annotation authoring is claim-gated); the read-only
-    # transcript-player never gets these. The list mirrors GET /annotations so a
-    # write's JSON reconciles against the same shape the page hydrated with.
-    annotations_payload = _annotations_payload(session, run_id, [])
-    island_props["annotations"] = annotations_payload["annotations"]
-    island_props["annotationTags"] = annotations_payload["tags"]
-    island_props["annotationLimits"] = _annotation_limits()
-    island_props["tagCsrf"] = mint_csrf_token(
-        request.app.state.csrf_secret, CSRF_ANNOTATION_TAGS
-    )
-    # Attributed audio-clip extraction (issue #88): the per-highlight "Extract
-    # clip" action POSTs to /review/{run}/annotations/{id}/clips. Minted only for
-    # the writable review-stepper (like tagCsrf) — the read-only transcript-player
-    # never offers clip extraction.
-    island_props["clipCsrf"] = mint_csrf_token(
-        request.app.state.csrf_secret, CSRF_CLIP_EXTRACT
-    )
-    # Terminal Translate action (issue #133): once every line is checked, the
-    # stepper offers translation beside "Open the transcript to export". Only
-    # gate state + the preferred-language default are needed here — freshness
-    # lives on the run page card and the transcript view, not in this launcher.
-    # None when the LLM gates are closed (no dead button, matching the card).
-    translate_row = get_app_settings(session)
-    if translation_gates_open(settings, translate_row):
-        detected = normalized_language(run.detected_language)
-        preferred = normalized_language(
-            resolve_effective_translation_target_language(translate_row, settings)
-        )
-        translate_job = active_or_last_translation_job(session, run_id)
-        default_target = (
-            preferred if preferred is not None and preferred != detected else None
-        )
-        island_props["translate"] = {
-            "csrf": mint_csrf_token(
-                request.app.state.csrf_secret, CSRF_TRANSLATION_GENERATE
-            ),
-            "defaultTarget": default_target,
-            "defaultTargetLabel": (
-                language_label(default_target) if default_target else None
-            ),
-            "active": translate_job is not None
-            and translate_job.status in _TRANSLATION_ACTIVE_STATUSES,
-            "runAnchor": f"/runs/{run_id}#run-translation-{run_id}",
-            "transcriptUrl": f"/runs/{run_id}/transcript",
-        }
-    else:
-        island_props["translate"] = None
-    return templates.TemplateResponse(
-        request,
-        "legacy_review/review_transcript.html",
-        {
-            "request": request,
-            "run": run,
-            "lines": lines,
-            "island_props": island_props,
-            "palette": palette,
-            "low_confidence_threshold": settings.review_low_confidence_threshold,
-            "token": token,
-            "progress": {"verified": verified_n, "total": total},
-            "csrf_claim": mint_csrf_token(request.app.state.csrf_secret, CSRF_CLAIM),
-            # Guided-tutorial banner (issue #117 Phase B): CHECK_WORDS and EXPORT
-            # both bind this transcript page. The banner lives above the body
-            # (base.html), outside the island, so a stepper re-render never
-            # clobbers it. The claim token flows through so the export step's
-            # onward link stays writable.
-            "tutorial": _tutorial_banner(
-                request,
-                session,
-                page=TutorialPage.TRANSCRIPT,
-                run_id=run_id,
-                token=token,
-            ),
-            "active_nav": "runs",
-        },
-    )
+    states = label_states(session, run.id, gates=gates_from_settings(settings))
+    verified_n, total = verified_progress(session, run.id)
+    payload: dict[str, Any] = {
+        "labels": [_label_state_shape(s) for s in states],
+        "segments": _run_island_segments(session, run.id),
+        "progress": {"verified": verified_n, "total": total},
+    }
+    if undo is not None:
+        payload["undo"] = undo
+    return JSONResponse(payload)
 
-
-@router.get("/review", name="review_queue")
-def review_queue(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
-    # Whitelist the sort so a bookmarked/garbage value degrades to the
-    # default FIFO order rather than erroring (issue #56).
-    sort = request.query_params.get("sort") or "oldest"
-    if sort not in QUEUE_SORTS:
-        sort = "oldest"
-    return templates.TemplateResponse(
-        request,
-        "legacy_review/queue.html",
-        {
-            "request": request,
-            "entries": adjudication_queue(session, sort=sort),
-            "sort": sort,
-            # Injected clock for the relative-age render (format_age(now=…)).
-            "now": datetime.now(UTC),
-            "operator": operator,
-            # CSRF token for the per-row claim forms.
-            "csrf_claim": mint_csrf_token(request.app.state.csrf_secret, CSRF_CLAIM),
-            "tutorial": _tutorial_banner(request, session, page=TutorialPage.REVIEW_QUEUE),
-            "active_nav": "review",
-        },
-    )
-
-@router.post("/review/{run_id}/claim")
-def claim(
-    run_id: uuid.UUID,
-    request: Request,
-    operator: OperatorDep,
-    session: SessionDep,
-    csrf_token: Annotated[str | None, Form()] = None,
-) -> RedirectResponse:
-    # Claim mints the run's claim token, so — unlike the other workbench
-    # mutations — it has no unguessable token of its own to gate a forged POST.
-    # A CSRF token closes that (a cross-site claim would otherwise pin a run to
-    # the victim for the claim TTL). Verified before claim_run touches the DB.
-    _require_csrf(request, CSRF_CLAIM, csrf_token)
-    settings: Settings = request.app.state.settings
-    # An archived run is hidden from the queue; refuse a stale/forged claim so
-    # it can't be pinned to a reviewer while hidden (issue #5).
-    _reject_if_archived(_run_or_404(session, run_id))
-    try:
-        token = claim_run(
-            session,
-            run_id,
-            reviewer=operator,
-            ttl_seconds=settings.review_claim_ttl_seconds,
-        )
-    except ClaimUnavailableError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    # Guided-tutorial continuity: claiming the tutorial run — while the
-    # walkthrough is still active (not yet completed) — lands on the workbench
-    # in `adjudicate` mode. Keyed on RUN IDENTITY, not a hidden form field, so
-    # EVERY claim control continues the tutorial identically: the banner's own
-    # button, the queue row's ordinary "Review" button, and the workbench claim
-    # button. A first-time user therefore cannot silently fall out of the
-    # walkthrough by clicking the "wrong" (but identical-looking) button. A
-    # non-tutorial run is never rewritten, and once completed the tutorial run
-    # claims normally (no banner) — replay clears completion and re-activates it.
-    suffix = ""
-    if ready_tutorial_run_id(session) == run_id:
-        row = get_app_settings(session)
-        if row is not None and row.tutorial_completed_at is None:
-            suffix = "&tutorial=adjudicate"
-    return RedirectResponse(f"/review/{run_id}?token={token}{suffix}", status_code=303)
-
-
-@router.post("/review/{run_id}/refresh")
-def refresh(
-    run_id: uuid.UUID,
-    request: Request,
-    operator: OperatorDep,
-    session: SessionDep,
-    token: Annotated[uuid.UUID, Form()],
-    csrf_token: Annotated[str | None, Form()] = None,
-) -> JSONResponse:
-    """Extend the active workbench claim's TTL."""
-    _require_csrf(request, CSRF_CLAIM, csrf_token)
-    settings: Settings = request.app.state.settings
-    try:
-        refresh_run_claim(
-            session,
-            run_id,
-            token,
-            ttl_seconds=settings.review_claim_ttl_seconds,
-        )
-    except ClaimMismatchError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=str(exc),
-            headers=_CLAIM_CONFLICT_HEADERS,
-        ) from exc
-    return JSONResponse({"ok": True})
-
-
-@router.get("/review/{run_id}", name="workbench")
-def workbench(
-    run_id: uuid.UUID,
-    request: Request,
-    operator: OperatorDep,
-    session: SessionDep,
-    token: uuid.UUID | None = None,
-) -> Response:
-    run = _run_or_404(session, run_id)
-    if token is not None:
-        try:
-            verify_claim(session, run_id, token)
-        except ClaimMismatchError:
-            token = None  # stale tab: render read-only with a claim button
-    context = _workbench_context(request, session, run, token)
-    # Full-page render only: the banner lives above the body (base.html),
-    # outside the #labels htmx target, so decision/enroll fragment swaps — which
-    # go through _labels_response and never carry `tutorial` — leave it in place.
-    context["tutorial"] = _tutorial_banner(
-        request, session, page=TutorialPage.WORKBENCH, run_id=run_id, token=token
-    )
-    return templates.TemplateResponse(request, "legacy_review/run.html", context)
-
-@router.post("/review/{run_id}/release")
-def release(
-    run_id: uuid.UUID,
-    operator: OperatorDep,
-    session: SessionDep,
-    token: Annotated[uuid.UUID, Form()],
-) -> Response:
-    try:
-        release_run(session, run_id, token)
-    except ClaimMismatchError:
-        return Response(status_code=204)
-    except ClaimUnavailableError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return RedirectResponse("/review", status_code=303)
 
 @router.post("/review/{run_id}/labels/{label}/decision")
 def decide(
@@ -943,12 +447,12 @@ def decide(
         record_speaker_identified(
             session, run_id=run_id, decision_id=row.id, speaker_name=speaker.display_name
         )
-    return _labels_response(request, session, run, token)
+    return _labels_response(request, session, run)
+
 
 @router.post("/review/{run_id}/merge/preview")
 def merge_preview(
     run_id: uuid.UUID,
-    request: Request,
     operator: OperatorDep,
     session: SessionDep,
     token: Annotated[uuid.UUID, Form()],
@@ -963,7 +467,7 @@ def merge_preview(
     optimistic-concurrency token (each label's current effective ruling id)
     echoed into the confirm form so :func:`merge_apply` can reject a stale
     confirm. Claim-gated like every workbench mutation; JS-off never reaches
-    here (the panel enhances progressively — see legacy_review/labels.html).
+    here.
 
     ``target`` is the single unambiguous survivor chooser from the panel: the
     sentinel ``"new"`` (enroll ``new_name``) or an existing speaker's UUID.
@@ -971,7 +475,7 @@ def merge_preview(
     display_name, so :func:`merge_apply` never has to disambiguate.
     """
     try:
-        run = verify_claim(session, run_id, token)
+        verify_claim(session, run_id, token)
     except ClaimMismatchError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     target_speaker: Speaker | None = None
@@ -1001,31 +505,16 @@ def merge_preview(
             for impact in preview.labels
         }
     )
-    if "application/json" in request.headers.get("accept", ""):
-        return JSONResponse({
+    return JSONResponse(
+        {
             "labels": [impact.label for impact in preview.labels],
             "speakerId": str(target_speaker.id) if target_speaker else None,
-            "speakerName": (
-                target_speaker.display_name if target_speaker else display_name
-            ),
+            "speakerName": target_speaker.display_name if target_speaker else display_name,
             "turnsMoved": preview.total_turns,
             "expected": json.loads(expected),
-        })
-    return templates.TemplateResponse(
-        request,
-        "legacy_review/merge_confirm.html",
-        {
-            "request": request,
-            "run": run,
-            "token": token,
-            "nonce": lambda: uuid.uuid4().hex,
-            "preview": preview,
-            "target_speaker": target_speaker,
-            "target_name": display_name,
-            "expected_json": expected,
-            "palette": speaker_palette(run_label_universe(session, run_id)),
-        },
+        }
     )
+
 
 @router.post("/review/{run_id}/merge")
 def merge_apply(
@@ -1099,7 +588,17 @@ def merge_apply(
             survivor_name=result.survivor_name,
             label_count=len(result.labels),
         )
-    return _labels_response(request, session, run, token)
+    undo = None
+    if not result.is_replay:
+        undo = {
+            "kind": "merge",
+            "mergeNonce": nonce,
+            "expiresAt": (
+                datetime.now(UTC) + timedelta(seconds=settings.UNDO_GRACE_SECONDS)
+            ).isoformat(),
+        }
+    return _labels_response(request, session, run, undo=undo)
+
 
 @router.post("/review/{run_id}/segments/{segment_id}/relabel")
 def relabel_segment(
@@ -1135,7 +634,7 @@ def relabel_segment(
     indices are set together or both omitted (whole-segment scope).
     """
     try:
-        run = verify_claim(session, run_id, token, for_update=True)
+        verify_claim(session, run_id, token, for_update=True)
     except ClaimMismatchError as exc:
         # Marked so the island can tell a lost claim from the segment-STATE 409
         # this route also raises (a non-child range): the picker treats a plain
@@ -1148,9 +647,7 @@ def relabel_segment(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"unknown action {action!r}") from exc
     if decision not in (Decision.ASSIGN, Decision.INHERIT):
-        raise HTTPException(
-            status_code=422, detail="segment scope allows only assign or inherit"
-        )
+        raise HTTPException(status_code=422, detail="segment scope allows only assign or inherit")
     if (decision is Decision.ASSIGN) != (speaker_id is not None):
         raise HTTPException(
             status_code=422,
@@ -1160,17 +657,14 @@ def relabel_segment(
         raise HTTPException(
             status_code=422,
             detail=(
-                "provide both word-range boundaries together,"
-                " or omit both for whole-segment scope"
+                "provide both word-range boundaries together, or omit both for whole-segment scope"
             ),
         )
     segment = session.get(TranscriptSegment, segment_id)
     if segment is None or segment.pipeline_run_id != run_id:
         raise HTTPException(status_code=404, detail="no such segment in this run")
     if segment.diarization_label is None:
-        raise HTTPException(
-            status_code=400, detail="segment has no diarization label to override"
-        )
+        raise HTTPException(status_code=400, detail="segment has no diarization label to override")
     if start_word_index is not None and end_word_index is not None:
         # A ranged ruling may only target a child that exists right now, so it
         # can never write a row the read path silently drops.
@@ -1230,13 +724,8 @@ def relabel_segment(
         record_speaker_identified(
             session, run_id=run_id, decision_id=row.id, speaker_name=speaker.display_name
         )
-    # The island (JSON Accept) reassigns a split child and reconciles against a
-    # whole-run render — a child's speaker string moved, which the per-segment
-    # review shape can't carry. The htmx labels workbench (and any non-island
-    # caller) keeps the byte-identical server-rendered fragment.
-    if _wants_island_json(request):
-        return _run_reconcile_response(session, run_id)
-    return _labels_response(request, session, run, token)
+    return _run_reconcile_response(session, run_id)
+
 
 def _segment_review_json(
     session: Session, run_id: uuid.UUID, segment: TranscriptSegment
@@ -1256,11 +745,11 @@ def _segment_review_json(
         }
     )
 
+
 @router.post("/review/{run_id}/segments/{segment_id}/verify")
 def verify_segment(
     run_id: uuid.UUID,
     segment_id: uuid.UUID,
-    request: Request,
     operator: OperatorDep,
     session: SessionDep,
     token: Annotated[uuid.UUID, Form()],
@@ -1268,9 +757,7 @@ def verify_segment(
 ) -> Response:
     """Mark (or unmark) a segment verified — the verify-and-advance step
     (issue #53). Claim-gated; a mutable UPSERT, so idempotent without a nonce.
-    The island (fetch) gets the updated state + N-of-M progress as JSON; a
-    JS-off browser form navigation is redirected back to the review page, so
-    the server-rendered fallback verifies for real (degrade-to-plain-HTML)."""
+    Returns the updated state and N-of-M progress as JSON."""
     try:
         verify_claim(session, run_id, token, for_update=True)
     except ClaimMismatchError as exc:
@@ -1279,11 +766,8 @@ def verify_segment(
     if segment is None or segment.pipeline_run_id != run_id:
         raise HTTPException(status_code=404, detail="no such segment in this run")
     set_verified(session, segment=segment, verified=verified)
-    if _wants_html(request):
-        return RedirectResponse(
-            f"/review/{run_id}/transcript?token={token}", status_code=303
-        )
     return _segment_review_json(session, run_id, segment)
+
 
 @router.post("/review/{run_id}/segments/{segment_id}/text")
 def correct_segment(
@@ -1317,6 +801,7 @@ def correct_segment(
         )
     set_correction(session, segment=segment, text=text)
     return _segment_review_json(session, run_id, segment)
+
 
 @router.post("/review/{run_id}/segments/{segment_id}/split")
 def split_segment(
@@ -1380,12 +865,11 @@ def split_segment(
             ),
         )
     try:
-        record_split(
-            session, parent=segment, word_index=word_index, operator=operator
-        )
+        record_split(session, parent=segment, word_index=word_index, operator=operator)
     except UnsplittableError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _run_reconcile_response(session, run_id)
+
 
 @router.get("/review/{run_id}/segments/{segment_id}/words")
 def segment_words(
@@ -1427,11 +911,10 @@ def segment_words(
             "segmentId": str(segment_id),
             "splittable": True,
             "reason": None,
-            "words": [
-                {"start": w.start, "end": w.end, "word": w.text} for w in words
-            ],
+            "words": [{"start": w.start, "end": w.end, "word": w.text} for w in words],
         }
     )
+
 
 @router.post("/review/{run_id}/labels/{label}/enroll")
 def enroll(
@@ -1479,89 +962,17 @@ def enroll(
                 decision_id=enrollment.decision_id,
                 speaker_name=enrolled.display_name,
             )
-    return _labels_response(request, session, run, token)
+    undo = None
+    if not is_replay:
+        undo = {
+            "kind": "enroll",
+            "decisionId": str(enrollment.decision_id),
+            "expiresAt": (
+                datetime.now(UTC) + timedelta(seconds=settings.UNDO_GRACE_SECONDS)
+            ).isoformat(),
+        }
+    return _labels_response(request, session, run, undo=undo)
 
-@router.post("/review/{run_id}/enrich/names")
-def enrich_names(
-    run_id: uuid.UUID,
-    request: Request,
-    operator: OperatorDep,
-    session: SessionDep,
-    token: Annotated[uuid.UUID, Form()],
-) -> Response:
-    """Operator-triggered offline name sweep (issue #38), synchronous.
-
-    Pure regex + DB over one run's stored rows — sub-second — so it runs
-    inline and the htmx response swaps the refreshed suggestion list in.
-    Claim-token-gated like every other workbench mutation.
-    """
-    settings: Settings = request.app.state.settings
-    if not resolve_effective_enrichment_names_enabled(get_app_settings(session), settings):
-        raise HTTPException(status_code=404, detail="name enrichment is disabled")
-    try:
-        run = verify_claim(session, run_id, token)
-    except ClaimMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    try:
-        run_offline_name_producer(session, run_id=run_id, settings=settings)
-    except NameProducerError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _labels_response(request, session, run, token)
-
-@router.post("/review/{run_id}/candidates/{candidate_id}/decision")
-def decide_name_candidate(
-    run_id: uuid.UUID,
-    candidate_id: uuid.UUID,
-    request: Request,
-    identity: CurrentUserDep,
-    operator: OperatorDep,
-    session: SessionDep,
-    token: Annotated[uuid.UUID, Form()],
-    nonce: Annotated[str, Form(min_length=8, max_length=64)],
-    verdict: Annotated[str, Form()],
-) -> Response:
-    """Accept/reject one name suggestion — a review record, never identity.
-
-    Writes the profile-review trail only: no speaker, assignment, or
-    adjudication ruling is created (drafts are suggestions about identity).
-    """
-    settings: Settings = request.app.state.settings
-    if not resolve_effective_enrichment_names_enabled(get_app_settings(session), settings):
-        raise HTTPException(status_code=404, detail="name enrichment is disabled")
-    try:
-        run = verify_claim(session, run_id, token)
-    except ClaimMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    try:
-        decision = ProfileDecision(verdict)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"unknown verdict {verdict!r}") from exc
-    candidate = session.get(EnrichmentCandidate, candidate_id)
-    # This route serves the NAME surface only — a candidate from another
-    # run, or another claim field never rendered here, is not decidable.
-    if (
-        candidate is None
-        or candidate.pipeline_run_id != run_id
-        or candidate.field != ClaimField.NAME.value
-    ):
-        raise HTTPException(status_code=404, detail="no such candidate in this run")
-    try:
-        record_profile_decision(
-            session,
-            candidate_id=candidate_id,
-            decision=decision,
-            operator=operator,
-            idempotency_key=nonce,
-            user_id=identity.user_id,
-        )
-    except StaleCandidateError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="superseded by a newer sweep — refresh and re-review",
-        ) from exc
-    except EnrichmentReplayError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _labels_response(request, session, run, token)
 
 # Transcript downloads: one attributed read shaped by a pure formatter (see
 # voxint/export). The sibling extensions (.txt/.srt/.vtt/.json) share the CLI's
@@ -1591,9 +1002,7 @@ def _export_translated_lines(
     """
     target = normalized_language(lang)
     if target is None or target not in LANGUAGE_NAMES:
-        raise HTTPException(
-            status_code=422, detail=f"unknown translation language code {lang!r}"
-        )
+        raise HTTPException(status_code=422, detail=f"unknown translation language code {lang!r}")
     if variant is not TranscriptText.CORRECTED:
         raise HTTPException(
             status_code=422,
@@ -1617,8 +1026,7 @@ def _export_translated_lines(
         raise HTTPException(
             status_code=409,
             detail=(
-                f"a {label} translation is still being generated — retry when"
-                " it finishes"
+                f"a {label} translation is still being generated — retry when it finishes"
                 if running
                 else f"no {label} translation exists for this run — generate"
                 " one from the run page first"
@@ -1639,9 +1047,9 @@ def _export_translated_lines(
             ),
         )
     return [
-        dataclass_replace(ln, text=translated)
-        for ln, translated in zip(lines, texts, strict=True)
+        dataclass_replace(ln, text=translated) for ln, translated in zip(lines, texts, strict=True)
     ]
+
 
 def _export_transcript(
     run_id: uuid.UUID,
@@ -1665,6 +1073,7 @@ def _export_transcript(
         media_type=MEDIA_TYPES[fmt.value],
     )
 
+
 @router.get("/review/{run_id}/export.txt")
 def export_transcript_txt(
     run_id: uuid.UUID,
@@ -1681,6 +1090,7 @@ def export_transcript_txt(
     return _export_transcript(
         run_id, session, TranscriptFormat.TXT, text, timestamps=timestamps, lang=lang
     )
+
 
 @router.get("/review/{run_id}/export.md")
 def export_transcript_md(
@@ -1702,6 +1112,7 @@ def export_transcript_md(
         lang=lang,
     )
 
+
 @router.get("/review/{run_id}/export.srt")
 def export_transcript_srt(
     run_id: uuid.UUID,
@@ -1711,6 +1122,7 @@ def export_transcript_srt(
     lang: str | None = None,
 ) -> Response:
     return _export_transcript(run_id, session, TranscriptFormat.SRT, text, lang=lang)
+
 
 @router.get("/review/{run_id}/export.vtt")
 def export_transcript_vtt(
@@ -1722,6 +1134,7 @@ def export_transcript_vtt(
 ) -> Response:
     return _export_transcript(run_id, session, TranscriptFormat.VTT, text, lang=lang)
 
+
 @router.get("/review/{run_id}/export.json")
 def export_transcript_json(
     run_id: uuid.UUID,
@@ -1731,6 +1144,7 @@ def export_transcript_json(
     lang: str | None = None,
 ) -> Response:
     return _export_transcript(run_id, session, TranscriptFormat.JSON, text, lang=lang)
+
 
 @router.get("/review/{run_id}/export.rttm")
 def export_transcript_rttm(
@@ -1748,12 +1162,14 @@ def export_transcript_rttm(
     )
     return Response(content=to_rttm(turns, str(run_id)), media_type=MEDIA_TYPES["rttm"])
 
+
 # ---- Operator annotation layer (issue #86) --------------------------------
 # Thin handlers over voxint.adjudication.annotations: the service owns all
 # coordinate math, classification, idempotency, and staleness; routes only
 # parse the wire shape, gate auth/claim/CSRF, and map AnnotationError to HTTP
 # (docs/annotations.md). Reads need onboarding only; run-scoped writes need the
 # live review claim; global tag writes are CSRF-gated like run notes.
+
 
 @router.get("/review/{run_id}/annotations")
 def list_annotations(
@@ -1771,6 +1187,7 @@ def list_annotations(
     tag_ids = tag or []
     _require_filter_tags_exist(session, tag_ids)
     return JSONResponse(_annotations_payload(session, run_id, tag_ids))
+
 
 @router.get("/review/{run_id}/annotations/export.md")
 def export_annotations_md(
@@ -1817,6 +1234,7 @@ def export_annotations_md(
         media_type=ANNOTATION_MEDIA_TYPES["md"],
     )
 
+
 @router.get("/review/{run_id}/annotations/{annotation_id}/export.md")
 def export_annotation_md(
     run_id: uuid.UUID,
@@ -1851,16 +1269,11 @@ def export_annotation_md(
 # JSON provenance manifest (issue #122)
 # ---------------------------------------------------------------------------
 
-def _stage_provenance_from_run(
-    session: Session, run_id: uuid.UUID
-) -> dict[str, StageProvenance]:
+
+def _stage_provenance_from_run(session: Session, run_id: uuid.UUID) -> dict[str, StageProvenance]:
     """Read per-stage model identity from the latest completed attempt."""
     stage_runs = (
-        session.execute(
-            select(StageRun).where(StageRun.pipeline_run_id == run_id)
-        )
-        .scalars()
-        .all()
+        session.execute(select(StageRun).where(StageRun.pipeline_run_id == run_id)).scalars().all()
     )
     stages: dict[str, StageProvenance] = {}
     for sm in select_run_model_identity(stage_runs):
@@ -1943,8 +1356,7 @@ def _clip_ref_for_annotation(
                 AudioArtifact.pipeline_run_id == run_id,
                 AudioArtifact.kind == ArtifactKind.AUDIO_CLIP.value,
                 AudioArtifact.reclaimed_at.is_(None),
-                AudioArtifact.meta["annotation_id"].as_string()
-                == str(annotation_id),
+                AudioArtifact.meta["annotation_id"].as_string() == str(annotation_id),
             )
             .order_by(AudioArtifact.created_at.desc(), AudioArtifact.id.desc())
             .limit(1)
@@ -2187,9 +1599,7 @@ def _manifest_member_name(run_id: uuid.UUID, annotation_id: uuid.UUID) -> str:
     return f"voxint-{run_id.hex[:8]}-manifest-{annotation_id.hex}.json"
 
 
-def _zip_writestr(
-    archive: zipfile.ZipFile, name: str, data: bytes | memoryview[int]
-) -> None:
+def _zip_writestr(archive: zipfile.ZipFile, name: str, data: bytes | memoryview[int]) -> None:
     """Deflated text member with the deterministic 1980 epoch ZipInfo stamp."""
     archive.writestr(zipfile.ZipInfo(name), bytes(data), compress_type=zipfile.ZIP_DEFLATED)
 
@@ -2226,9 +1636,7 @@ def _zip_add_clip(
         servable.handle.close()
 
 
-def _zip_response(
-    spool: tempfile.SpooledTemporaryFile[bytes], filename: str
-) -> StreamingResponse:
+def _zip_response(spool: tempfile.SpooledTemporaryFile[bytes], filename: str) -> StreamingResponse:
     size = spool.tell()
     spool.seek(0)
 
@@ -2400,9 +1808,7 @@ def export_annotations_zip(
         markdown = _pull_quote_markdown(
             resolved, lines, source_title=source_title, tags=row_tags, note=row.note
         )
-        md_members.append(
-            (_quote_md_member_name(run_id, row.id), markdown.encode("utf-8"))
-        )
+        md_members.append((_quote_md_member_name(run_id, row.id), markdown.encode("utf-8")))
 
     bundle = build_quote_bundle(
         exported_at=exported_at,
@@ -2501,18 +1907,13 @@ def evidence_pack(
                 "start_seconds": resolved.start_seconds,
                 "end_seconds": resolved.end_seconds,
                 "speakers": list(resolved.speakers),
-                "tags": [
-                    {"name": t.name, "color": t.color}
-                    for t in tags_by_id.get(row.id, [])
-                ],
+                "tags": [{"name": t.name, "color": t.color} for t in tags_by_id.get(row.id, [])],
                 "note": row.note,
                 "operator": row.operator,
                 "source_text_hash": row.source_text_hash,
                 "updated_at": row.updated_at,
                 "clip": (
-                    {"filename": clip.filename, "sha256": clip.sha256}
-                    if clip is not None
-                    else None
+                    {"filename": clip.filename, "sha256": clip.sha256} if clip is not None else None
                 ),
             }
         )
@@ -2527,9 +1928,7 @@ def evidence_pack(
         "quotes": quotes,
         "filtered": bool(tag_ids),
     }
-    return templates.TemplateResponse(
-        request, "legacy_review/evidence_pack.html", context
-    )
+    return templates.TemplateResponse(request, "adjudication/evidence_pack.html", context)
 
 
 @router.post("/review/{run_id}/annotations/{annotation_id}/clips")
@@ -2598,6 +1997,7 @@ def extract_annotation_clip(
         status_code=201,
     )
 
+
 @router.post("/review/{run_id}/annotations/export/live.md")
 def export_live_pull_quote(
     run_id: uuid.UUID,
@@ -2651,6 +2051,7 @@ def export_live_pull_quote(
     )
     return Response(content=markdown, media_type=ANNOTATION_MEDIA_TYPES["md"])
 
+
 @router.post("/review/{run_id}/annotations")
 def create_annotation(
     run_id: uuid.UUID,
@@ -2703,6 +2104,7 @@ def create_annotation(
     except AnnotationError as exc:
         raise _annotation_http_error(exc) from exc
     return JSONResponse(_annotation_shapes(session, run_id, [row])[0], status_code=201)
+
 
 @router.patch("/review/{run_id}/annotations/{annotation_id}")
 def patch_annotation(
@@ -2785,6 +2187,7 @@ def patch_annotation(
         raise _annotation_http_error(exc) from exc
     return JSONResponse(_annotation_shapes(session, run_id, [row])[0])
 
+
 @router.delete("/review/{run_id}/annotations/{annotation_id}")
 def delete_annotation(
     run_id: uuid.UUID,
@@ -2804,11 +2207,13 @@ def delete_annotation(
         raise _annotation_http_error(exc) from exc
     return Response(status_code=204)
 
+
 @router.get("/annotations/tags")
 def list_annotation_tags(operator: OperatorDep, session: SessionDep) -> JSONResponse:
     """The global tag universe (all tags, archived included), in display order.
     Onboarding-auth only; tags are not run-scoped."""
     return JSONResponse({"tags": [_tag_shape(t) for t in list_tags(session)]})
+
 
 @router.post("/annotations/tags")
 def create_annotation_tag(
@@ -2828,6 +2233,7 @@ def create_annotation_tag(
     except AnnotationError as exc:
         raise _annotation_http_error(exc) from exc
     return JSONResponse(_tag_shape(tag), status_code=201)
+
 
 @router.patch("/annotations/tags/{tag_id}")
 def update_annotation_tag(
@@ -2849,3 +2255,142 @@ def update_annotation_tag(
     except AnnotationError as exc:
         raise _annotation_http_error(exc) from exc
     return JSONResponse(_tag_shape(tag))
+
+
+@router.post("/review/{run_id}/undo/enroll")
+def undo_enroll(
+    run_id: uuid.UUID,
+    request: Request,
+    identity: CurrentUserDep,
+    operator: OperatorDep,
+    session: SessionDep,
+    token: Annotated[uuid.UUID, Form()],
+    csrf_token: Annotated[str, Form()],
+    decision_id: Annotated[uuid.UUID, Form()],
+    nonce: Annotated[str, Form(min_length=8, max_length=64)],
+) -> Response:
+    try:
+        run = verify_claim(session, run_id, token, for_update=True)
+    except ClaimMismatchError as exc:
+        raise HTTPException(
+            status_code=409, detail=str(exc), headers=_CLAIM_CONFLICT_HEADERS
+        ) from exc
+    _require_csrf(request, CSRF_CLAIM, csrf_token)
+    try:
+        undo_enrollment(
+            session,
+            run_id=run_id,
+            decision_id=decision_id,
+            operator=operator,
+            idempotency_key=nonce,
+            user_id=identity.user_id,
+        )
+    except UndoDriftError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConflictingReplayError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except UndoError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    return _labels_response(request, session, run)
+
+
+@router.post("/review/{run_id}/undo/merge")
+def undo_merge_action(
+    run_id: uuid.UUID,
+    request: Request,
+    identity: CurrentUserDep,
+    operator: OperatorDep,
+    session: SessionDep,
+    token: Annotated[uuid.UUID, Form()],
+    csrf_token: Annotated[str, Form()],
+    merge_nonce: Annotated[str, Form(min_length=8, max_length=64)],
+    nonce: Annotated[str, Form(min_length=8, max_length=64)],
+) -> Response:
+    try:
+        run = verify_claim(session, run_id, token, for_update=True)
+    except ClaimMismatchError as exc:
+        raise HTTPException(
+            status_code=409, detail=str(exc), headers=_CLAIM_CONFLICT_HEADERS
+        ) from exc
+    _require_csrf(request, CSRF_CLAIM, csrf_token)
+    settings: Settings = request.app.state.settings
+    try:
+        undo_merge(
+            session,
+            run_id=run_id,
+            merge_nonce=merge_nonce,
+            operator=operator,
+            idempotency_key=nonce,
+            grace_seconds=settings.UNDO_GRACE_SECONDS,
+            user_id=identity.user_id,
+        )
+    except (UndoDriftError, UndoExpiredError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConflictingReplayError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except UndoError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    return _labels_response(request, session, run)
+
+
+# --- Legacy review page redirects (issue #158) ---
+#
+# The review queue, workbench, and transcript pages are retired. Bookmarks
+# and muscle memory redirect to the media editor. Run-keyed routes do a
+# DB lookup to resolve the media_item_id.
+
+
+def _preserve_query(request: Request, base: str) -> str:
+    """Append preserved query params (?t=, ?token=, ?tutorial=) to a redirect."""
+    params = {
+        k: v
+        for k, v in request.query_params.items()
+        if k in ("t", "token", "tutorial")
+    }
+    if not params:
+        return base
+    from urllib.parse import urlencode
+
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}{urlencode(params)}"
+
+
+@router.get("/review", name="review_queue_redirect")
+def review_queue_redirect(
+    request: Request, operator: OperatorDep
+) -> RedirectResponse:
+    """Retired review queue → media library."""
+    return RedirectResponse(_preserve_query(request, "/media"), status_code=303)
+
+
+@router.get("/review/{run_id}", name="workbench_redirect")
+def workbench_redirect(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+) -> RedirectResponse:
+    """Retired workbench → media editor."""
+    run = _run_or_404(session, run_id)
+    target = f"/media/{run.media_item_id}/editor?run={run_id}"
+    return RedirectResponse(_preserve_query(request, target), status_code=302)
+
+
+redirect_transcript_router = APIRouter(dependencies=[Depends(require_onboarded)])
+
+
+@redirect_transcript_router.get(
+    "/review/{run_id}/transcript", name="review_transcript_redirect"
+)
+def review_transcript_redirect(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+) -> RedirectResponse:
+    """Retired transcript stepper → media editor."""
+    run = _run_or_404(session, run_id)
+    target = f"/media/{run.media_item_id}/editor?run={run_id}"
+    return RedirectResponse(_preserve_query(request, target), status_code=302)

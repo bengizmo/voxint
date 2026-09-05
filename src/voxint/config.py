@@ -102,6 +102,9 @@ class Settings(BaseSettings):
     # enough for one careful listen-through; short enough that a closed tab
     # doesn't dam the queue.
     review_claim_ttl_seconds: int = Field(default=1800, ge=60)
+    # Short window in which the media editor offers compensating undo for an
+    # enrollment or run-local merge.
+    UNDO_GRACE_SECONDS: int = Field(default=300, gt=0)
     # Hard bound on the ffprobe gate in the media-serving request path.
     media_probe_timeout_seconds: PositiveSeconds = 30.0
     # Longest attributed audio clip an operator can extract from an annotation

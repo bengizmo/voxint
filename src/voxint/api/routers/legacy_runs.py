@@ -1082,6 +1082,20 @@ def run_transcript(
     translation: str | None = None,
 ) -> Response:
     run = _run_or_404(session, run_id)
+    if not read:
+        # Issue #158: the interactive transcript stepper is retired; redirect
+        # to the media editor. The read-mode shareable view is preserved.
+        from urllib.parse import urlencode
+
+        params: dict[str, str] = {}
+        for k in ("t", "token", "tutorial"):
+            v = request.query_params.get(k)
+            if v:
+                params[k] = v
+        target = f"/media/{run.media_item_id}/editor?run={run_id}"
+        if params:
+            target = f"{target}&{urlencode(params)}"
+        return RedirectResponse(target, status_code=302)
     try:
         variant = parse_transcript_text(text)
     except ValueError as exc:

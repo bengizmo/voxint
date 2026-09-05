@@ -7,8 +7,6 @@ const registry: Record<
   () => Promise<{ mount: (el: HTMLElement) => void }>
 > = {
   "transcript-player": () => import("./entries/transcript-player"),
-  "workbench-player": () => import("./entries/workbench-player"),
-  "review-stepper": () => import("./entries/review-stepper"),
   "corrections-editor": () => import("./entries/corrections-editor"),
   "media-editor": () => import("./entries/media-editor"),
   "explore": () => import("./entries/explore"),

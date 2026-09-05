@@ -43,6 +43,7 @@ def _payload_matches(
     transcript_segment_id: uuid.UUID | None,
     start_word_index: int | None,
     end_word_index: int | None,
+    voids_decision_id: uuid.UUID | None,
 ) -> bool:
     return (
         row.pipeline_run_id == pipeline_run_id
@@ -53,6 +54,7 @@ def _payload_matches(
         and row.transcript_segment_id == transcript_segment_id
         and row.start_word_index == start_word_index
         and row.end_word_index == end_word_index
+        and row.voids_decision_id == voids_decision_id
     )
 
 
@@ -87,6 +89,7 @@ def record_decision(
     transcript_segment_id: uuid.UUID | None = None,
     start_word_index: int | None = None,
     end_word_index: int | None = None,
+    voids_decision_id: uuid.UUID | None = None,
     user_id: uuid.UUID | None = None,
 ) -> AdjudicationDecision:
     """Append a ruling; replaying an identical request returns the existing row.
@@ -98,6 +101,10 @@ def record_decision(
     3 — reassigning a derived split child). Scope is part of the replay identity,
     so the same key replayed with a different scope (segment OR range) is a
     conflict, not a silent adopt.
+
+    ``voids_decision_id`` is set only for a label-scope ``REVOKE``. It is part
+    of the replay payload so one undo key cannot silently adopt a revocation of
+    a different ruling; database CHECKs enforce the REVOKE-specific shape.
 
     A word-range is validated here — the sole ledger writer is the invariant home
     (extend, never bypass): both indices set together, scoping a segment whose
@@ -131,6 +138,7 @@ def record_decision(
             transcript_segment_id,
             start_word_index,
             end_word_index,
+            voids_decision_id,
         ):
             return existing
         raise ConflictingReplayError(idempotency_key)
@@ -147,6 +155,7 @@ def record_decision(
             transcript_segment_id=transcript_segment_id,
             start_word_index=start_word_index,
             end_word_index=end_word_index,
+            voids_decision_id=voids_decision_id,
         )
         session.add(row)
         return row
