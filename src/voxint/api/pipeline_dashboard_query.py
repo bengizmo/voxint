@@ -15,7 +15,7 @@ migration; these counts are advisory.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -32,6 +32,8 @@ from voxint.db.models import (
 )
 
 _MIN_HISTORY_SAMPLES = 3
+
+_DURATION_HISTORY_DAYS = 90
 
 _HEURISTIC_GPU_SECONDS: dict[str, float] = {
     Stage.ACQUIRE.value: 45,
@@ -76,9 +78,6 @@ class WorkloadSummary:
     """Aggregate workload counters for the footer."""
 
     outstanding: int
-    completed: int
-    failed: int
-    total: int
     elapsed_seconds: float | None
     drain_eta_seconds: float | None
     queue_paused: bool
@@ -95,13 +94,17 @@ class PipelineDashboardState:
     is_idle: bool
 
 
-def _successful_avg_durations(session: Session) -> dict[str, tuple[int, float]]:
+def _successful_avg_durations(
+    session: Session, now: datetime
+) -> dict[str, tuple[int, float]]:
     """Average duration of *successful* stage attempts, keyed by stage value.
 
     Returns ``{stage: (sample_count, avg_seconds)}``. Only completed attempts
-    with non-negative duration count, so failed/skipped/interrupted attempts
+    with non-negative duration within the last ``_DURATION_HISTORY_DAYS`` count,
+    so failed/skipped/interrupted attempts and stale pre-hardware-change history
     do not distort the ETA.
     """
+    cutoff = now - timedelta(days=_DURATION_HISTORY_DAYS)
     seconds_expr = func.extract("epoch", StageRun.finished_at - StageRun.started_at)
     rows = session.execute(
         select(
@@ -113,6 +116,7 @@ def _successful_avg_durations(session: Session) -> dict[str, tuple[int, float]]:
             StageRun.status == StageStatus.COMPLETED.value,
             StageRun.finished_at.isnot(None),
             StageRun.finished_at >= StageRun.started_at,
+            StageRun.finished_at >= cutoff,
         )
         .group_by(StageRun.stage)
     ).all()
@@ -168,10 +172,7 @@ def compute_stage_eta(
     if avg_seconds is None:
         return None
     if is_active and elapsed_seconds is not None:
-        remaining = avg_seconds - elapsed_seconds
-        return max(remaining, 0.0)
-    if is_active:
-        return avg_seconds
+        return max(avg_seconds - elapsed_seconds, 0.0)
     return avg_seconds
 
 
@@ -183,7 +184,7 @@ def pipeline_dashboard_state(
 ) -> PipelineDashboardState:
     """Composite read model for the progress strip."""
     activity: list[StageActivity] = stage_activity(session)
-    durations = _successful_avg_durations(session)
+    durations = _successful_avg_durations(session, now)
     started_at_by_stage = _active_started_at(session)
     status_counts = run_status_counts(session)
     oldest_created = _oldest_outstanding_created(session)
@@ -227,9 +228,6 @@ def pipeline_dashboard_state(
     outstanding = status_counts.get(RunStatus.QUEUED.value, 0) + status_counts.get(
         RunStatus.RUNNING.value, 0
     )
-    completed = status_counts.get(RunStatus.COMPLETED.value, 0)
-    failed = status_counts.get(RunStatus.FAILED.value, 0)
-    total = sum(status_counts.values())
 
     elapsed_seconds: float | None = None
     if oldest_created is not None:
@@ -250,9 +248,6 @@ def pipeline_dashboard_state(
         stages=tuple(stages),
         workload=WorkloadSummary(
             outstanding=outstanding,
-            completed=completed,
-            failed=failed,
-            total=total,
             elapsed_seconds=elapsed_seconds,
             drain_eta_seconds=drain_eta,
             queue_paused=queue_paused,
@@ -266,13 +261,34 @@ def pipeline_dashboard_state(
 def _estimate_drain(
     stages: list[StageProgress], outstanding: int
 ) -> float | None:
-    """Approximate seconds to drain all outstanding work (conservative serial)."""
+    """Approximate seconds to drain all outstanding work.
+
+    Queued runs are charged the suffix sum of average durations from their
+    current stage onward (not just the current stage). Active runs contribute
+    their remaining ETA at the current stage plus downstream stages. This is a
+    conservative serial estimate (no concurrency discount).
+    """
     if outstanding == 0:
         return None
+
+    # suffix_sum[i] = sum of avg_seconds from stage i to the last stage
+    suffix_sums: list[float] = [0.0] * len(stages)
+    running = 0.0
+    for i in range(len(stages) - 1, -1, -1):
+        running += stages[i].avg_seconds or 0.0
+        suffix_sums[i] = running
+
     total: float = 0.0
-    for sp in stages:
+    estimated = False
+    for i, sp in enumerate(stages):
         if sp.active > 0 and sp.eta_seconds is not None:
-            total += sp.eta_seconds
-        if sp.queued > 0 and sp.avg_seconds is not None:
-            total += sp.queued * sp.avg_seconds
-    return total if total > 0 else None
+            # active item: remaining time at current stage + all downstream
+            downstream = suffix_sums[i + 1] if i + 1 < len(stages) else 0.0
+            total += sp.eta_seconds + downstream
+            estimated = True
+        if sp.queued > 0:
+            # queued items: full pipeline from this stage onward, per item
+            total += sp.queued * suffix_sums[i]
+            estimated = True
+
+    return total if estimated else None

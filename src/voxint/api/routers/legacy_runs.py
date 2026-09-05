@@ -807,11 +807,13 @@ def runs_progress_strip(
     dashboard = pipeline_dashboard_state(
         session, now, settings.compute_tier, _queue_paused
     )
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request,
         "legacy_runs/_progress_strip.html",
         {"request": request, "dashboard": dashboard},
     )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @core_router.post("/submit")

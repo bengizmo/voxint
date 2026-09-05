@@ -4,9 +4,29 @@ from voxint.api.pipeline_dashboard_query import (
     _CPU_TIER_FACTOR,
     _HEURISTIC_GPU_SECONDS,
     _MIN_HISTORY_SAMPLES,
+    StageProgress,
+    _estimate_drain,
     _heuristic_seconds,
     compute_stage_eta,
 )
+
+
+def _stage(
+    stage: str = "transcribe",
+    queued: int = 0,
+    active: int = 0,
+    avg_seconds: float | None = 100.0,
+    eta_seconds: float | None = None,
+) -> StageProgress:
+    return StageProgress(
+        stage=stage,
+        queued=queued,
+        active=active,
+        active_started_at=None,
+        avg_seconds=avg_seconds,
+        eta_seconds=eta_seconds,
+        using_heuristic=False,
+    )
 
 
 class TestComputeStageEta:
@@ -47,6 +67,40 @@ class TestHeuristicSeconds:
 
     def test_unknown_stage_returns_default(self) -> None:
         assert _heuristic_seconds("unknown_stage", "gpu") == 120.0
+
+
+class TestEstimateDrain:
+    def test_zero_outstanding_returns_none(self) -> None:
+        assert _estimate_drain([_stage(active=1, eta_seconds=50.0)], 0) is None
+
+    def test_active_only_returns_eta_plus_downstream(self) -> None:
+        stages = [
+            _stage(stage="a", active=1, eta_seconds=50.0, avg_seconds=100.0),
+            _stage(stage="b", avg_seconds=200.0),
+        ]
+        # active at stage a: 50s remaining + 200s downstream
+        assert _estimate_drain(stages, 1) == 250.0
+
+    def test_queued_charged_suffix_sum(self) -> None:
+        stages = [
+            _stage(stage="a", queued=1, avg_seconds=100.0),
+            _stage(stage="b", avg_seconds=200.0),
+        ]
+        # queued at stage a: 1 * (100 + 200) = 300
+        assert _estimate_drain(stages, 1) == 300.0
+
+    def test_all_etas_zero_returns_zero_not_none(self) -> None:
+        """Overrun state: all active stages exceeded their average."""
+        stages = [
+            _stage(stage="a", active=1, eta_seconds=0.0, avg_seconds=100.0),
+        ]
+        result = _estimate_drain(stages, 1)
+        assert result is not None
+        assert result == 0.0
+
+    def test_no_estimates_available(self) -> None:
+        stages = [_stage(avg_seconds=None, eta_seconds=None)]
+        assert _estimate_drain(stages, 1) is None
 
 
 class TestConstants:

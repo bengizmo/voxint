@@ -1112,6 +1112,7 @@
       .ps-stages { grid-template-columns: repeat(3, 1fr); }
       .ps-stage:nth-child(3) { border-right: 0; }
       .ps-stage:nth-child(n+4) { border-top: 1px solid var(--line); }
+      .ps-stage.is-active { border-top: 2px solid var(--accent); }
     }
     @media (max-width: 30rem) {
       .ps-stages { grid-template-columns: repeat(2, 1fr); }
@@ -1119,6 +1120,7 @@
       .ps-stage:nth-child(odd) { border-right: 1px solid var(--line); }
       .ps-stage:nth-child(even) { border-right: 0; }
       .ps-stage:nth-child(n+3) { border-top: 1px solid var(--line); }
+      .ps-stage.is-active { border-top: 2px solid var(--accent); }
     }
 
     /* --- Degraded banner (R2 Jobs) ------------------------------ */

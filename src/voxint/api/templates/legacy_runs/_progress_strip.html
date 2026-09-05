@@ -10,7 +10,7 @@
      hx-trigger="every {{ '60s' if dashboard.is_idle else '15s' }}"
      hx-swap="outerHTML">
   {% if dashboard.is_idle %}
-  <div class="ps-idle">Pipeline idle</div>
+  <div class="ps-idle">Pipeline idle{% if dashboard.workload.queue_paused %} &middot; <span class="ps-wl-paused">queue paused</span>{% endif %}</div>
   {% else %}
   <div class="ps-stages">
     {% for s in dashboard.stages %}
