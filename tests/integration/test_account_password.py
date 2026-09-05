@@ -44,11 +44,13 @@ def _seed_users(
     session_factory: sessionmaker[Session],
 ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     with session_factory() as db:
-        admin = create_user(db, username="admin", password=_ADMIN_PW)
-        reviewer = create_user(
+        admin = create_user(  # pragma: allowlist secret
+            db, username="admin", password=_ADMIN_PW
+        )
+        reviewer = create_user(  # pragma: allowlist secret
             db, username="reviewer", password=_REVIEWER_PW, role=UserRole.REVIEWER
         )
-        viewer = create_user(
+        viewer = create_user(  # pragma: allowlist secret
             db, username="viewer", password=_VIEWER_PW, role=UserRole.VIEWER
         )
         db.commit()
