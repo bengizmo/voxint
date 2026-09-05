@@ -163,6 +163,25 @@ def build_synthdetect_router(deps: PluginRouteDeps) -> APIRouter:
 
         return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
+    @router.post("/synthdetect/cancel/{job_id}")
+    def cancel_synthdetect_job(
+        request: Request,
+        job_id: uuid.UUID,
+        admin: AdminDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+        session: Session = Depends(deps.get_session),  # noqa: B008
+    ) -> Response:
+        if not verify_csrf_token(
+            request.app.state.csrf_secret, CSRF_PLUGIN, csrf_token
+        ):
+            raise HTTPException(status_code=403, detail="Invalid CSRF token")
+        from voxint.plugins.synthdetect.jobs import request_cancel
+
+        request_cancel(session, job_id)
+        session.commit()
+        referer = request.headers.get("referer", "/runs")
+        return RedirectResponse(url=referer, status_code=303)
+
     @router.post("/synthdetect/settings")
     def synthdetect_settings(
         request: Request,

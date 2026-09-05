@@ -1004,6 +1004,12 @@
     ]
   ],
   [
+    "/synthdetect/cancel/{job_id}",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/synthdetect/report/{run_id}",
     [
       "GET"

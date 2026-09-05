@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import logging
 import uuid
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -38,6 +39,11 @@ class SynthdetectPlugin(VoxintPlugin):
         settings_prefixes=("synthdetect_",),
         task_names=(TASK_NAME,),
     )
+
+    def add_cli_commands(self, subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+        from voxint.plugins.synthdetect.cli import register_commands
+
+        register_commands(subparsers)
 
     def enabled(self, row: AppSettings | None, settings: Settings) -> bool:
         from voxint.app_settings import resolve_effective_synthdetect_enabled
@@ -83,18 +89,39 @@ class SynthdetectPlugin(VoxintPlugin):
         session: Session,
         settings: Settings,
     ) -> dict[str, Any]:
-        from sqlalchemy import select
+        from sqlalchemy import case, select
 
         from voxint.app_settings import get_app_settings
-        from voxint.db.models import SynthdetectJob
+        from voxint.db.models import SynthdetectJob, SynthdetectJobStatus
 
         row = get_app_settings(session)
+        # Prefer the latest SUCCEEDED job so a fresh re-score does not hide
+        # completed results.
         job = session.execute(
             select(SynthdetectJob)
-            .where(SynthdetectJob.pipeline_run_id == run_id)
+            .where(
+                SynthdetectJob.pipeline_run_id == run_id,
+                SynthdetectJob.status == SynthdetectJobStatus.SUCCEEDED.value,
+            )
             .order_by(SynthdetectJob.created_at.desc())
             .limit(1)
         ).scalar_one_or_none()
+        if job is None:
+            # Fall back to the latest non-succeeded job (active first, then
+            # terminal) so FAILED error info is still visible.
+            job = session.execute(
+                select(SynthdetectJob)
+                .where(SynthdetectJob.pipeline_run_id == run_id)
+                .order_by(
+                    case(
+                        (SynthdetectJob.status == SynthdetectJobStatus.RUNNING.value, 0),
+                        (SynthdetectJob.status == SynthdetectJobStatus.QUEUED.value, 1),
+                        else_=2,
+                    ),
+                    SynthdetectJob.created_at.desc(),
+                )
+                .limit(1)
+            ).scalar_one_or_none()
         return {
             "synthdetect_job": job,
             "synthdetect_plugin_enabled": self.enabled(row, settings),

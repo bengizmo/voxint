@@ -1016,6 +1016,12 @@
     ]
   ],
   [
+    "/synthdetect/cancel/{job_id}",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/synthdetect/settings",
     [
       "POST"
