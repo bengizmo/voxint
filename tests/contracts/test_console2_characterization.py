@@ -276,8 +276,18 @@ REDIRECT_MAP: tuple[RedirectRule, ...] = (
     RedirectRule(source="/dashboard", target="/", status=303, auth=True),
     RedirectRule(source="/resources", target="/settings/status", status=303, auth=True),
     RedirectRule(source="/review", target="/media", status=303, auth=True),
-    RedirectRule(source="/review/{run_id}", target="/media/{media_id}/editor", status=302, auth=True),
-    RedirectRule(source="/review/{run_id}/transcript", target="/media/{media_id}/editor", status=302, auth=True),
+    RedirectRule(
+        source="/review/{run_id}",
+        target="/media/{media_id}/editor",
+        status=302,
+        auth=True,
+    ),
+    RedirectRule(
+        source="/review/{run_id}/transcript",
+        target="/media/{media_id}/editor",
+        status=302,
+        auth=True,
+    ),
 )
 
 
