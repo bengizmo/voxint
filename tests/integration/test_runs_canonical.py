@@ -248,7 +248,7 @@ class TestRowActions:
         with session_factory() as s:
             _make_run(s, status=RunStatus.FAILED)
         resp = client.get("/runs")
-        assert "Retry →" in resp.text
+        assert ">Retry</button>" in resp.text
 
     def test_running_shows_view(
         self, client: TestClient, session_factory: sessionmaker[Session]
