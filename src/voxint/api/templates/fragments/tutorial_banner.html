@@ -1,11 +1,11 @@
-{# Server-rendered guided-tutorial banner (issue #3, slice 6).
+{# Server-rendered guided-tutorial banner (issue #3, slice 6; remapped #158).
 
-   Rendered in base.html ABOVE {% block body %} — i.e. OUTSIDE the workbench's
-   <div id="labels"> htmx target — so decision/enroll fragment swaps never clobber
-   it. It appears only when the API layer put a `tutorial` dict in the context,
-   which it does exclusively for the real tutorial run on the step's bound page.
-   The banner is data-driven: the resolver sets whichever action fields this step
-   needs (a next-link, a claim form, or the export + finish controls). #}
+   Rendered in base.html ABOVE {% block body %} — i.e. OUTSIDE every page's
+   content area — so island renders never clobber it. It appears only when the
+   API layer put a `tutorial` dict in the context, which it does exclusively for
+   the real tutorial run on the step's bound page. The banner is data-driven: the
+   resolver sets whichever action fields this step needs (a next-link, a claim
+   form, or the export + finish controls). #}
 <section class="tutorial-banner" role="note" aria-label="Guided tutorial">
   <p class="tutorial-step">
     {% if tutorial.n %}Guided tutorial · step {{ tutorial.n }} of {{ tutorial.total }}
@@ -15,19 +15,19 @@
   <p>{{ tutorial.body }}</p>
   <div class="tutorial-actions">
     {% if tutorial.claim_run_id %}
-    {# REVIEW step (and ADJUDICATE with no live claim): claim THIS exact run and
-       continue into the workbench — works whether or not the run is still in the
-       queue, so a replayed (already-resolved) run is still reachable. Continuation
-       into `adjudicate` mode is keyed on run identity in the claim route, so this
-       button and the ordinary queue/workbench claim buttons behave identically. #}
-    <form method="post" action="/review/{{ tutorial.claim_run_id }}/claim" class="inline">
+    {# REVIEW step (and later steps with no live claim): claim the tutorial run
+       via the editor endpoint. The editor claim returns JSON, so the form must
+       target the editor claim path (not the retired legacy claim). #}
+    <form method="post" action="/media/{{ tutorial.claim_media_id }}/editor/claim" class="inline">
+      <input type="hidden" name="run_id" value="{{ tutorial.claim_run_id }}">
       <input type="hidden" name="csrf_token" value="{{ tutorial.csrf_claim }}">
+      <input type="hidden" name="tutorial" value="adjudicate">
       <button type="submit">{{ tutorial.claim_label }}</button>
     </form>
     {% endif %}
     {% if tutorial.export_href %}
     {# EXPORT step: open the plaintext transcript in a new tab (the claim token is
-       never placed in this URL), then finish the tutorial via an explicit POST. #}
+       never placed in its URL), then finish the tutorial via an explicit POST. #}
     <a href="{{ tutorial.export_href }}" target="_blank" rel="noopener">Export transcript ↗</a>
     <form method="post" action="/settings/tutorial/complete" class="inline">
       <input type="hidden" name="csrf_token" value="{{ tutorial.csrf_settings }}">

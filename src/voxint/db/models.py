@@ -223,6 +223,11 @@ class Decision(enum.StrEnum):
     # System-initiated: post-completion auto-enrollment of unmatched voices
     # into the roster (#275). Label-scope only.
     AUTO_ENROLL = "auto_enroll"
+    # Label-scope only (#158): voids a specific prior ruling, restoring the
+    # previous effective resolution. voids_decision_id is required; speaker_id
+    # is NULL. The resolver excludes both the REVOKE row and the voided row
+    # from effective_decisions, so the pre-void state is restored automatically.
+    REVOKE = "revoke"
 
 
 class EnrichmentTargetKind(enum.StrEnum):
@@ -1175,8 +1180,26 @@ class AdjudicationDecision(Base):
             f"decision IN ({_enum_values(Decision)})", name="adjudication_decisions_check"
         ),
         CheckConstraint(
-            "(decision IN ('assign', 'auto_enroll')) = (speaker_id IS NOT NULL)",
+            "(decision IN ('assign', 'auto_enroll')) = (speaker_id IS NOT NULL)"
+            " OR decision = 'revoke'",
             name="adjudication_decisions_assign_speaker_check",
+        ),
+        CheckConstraint(
+            "decision != 'revoke' OR ("
+            "speaker_id IS NULL AND voids_decision_id IS NOT NULL"
+            " AND transcript_segment_id IS NULL)",
+            name="adjudication_decisions_revoke_check",
+        ),
+        CheckConstraint(
+            "decision = 'revoke' OR voids_decision_id IS NULL",
+            name="adjudication_decisions_voids_only_revoke_check",
+        ),
+        Index(
+            "ix_adjudication_decisions_voids",
+            "voids_decision_id",
+            unique=True,
+            postgresql_where=text("voids_decision_id IS NOT NULL"),
+            sqlite_where=text("voids_decision_id IS NOT NULL"),
         ),
         # INHERIT is a segment-scope reset only; it is meaningless at label scope
         # (issue #54 Phase B). A NULL transcript_segment_id is label scope.
@@ -1261,6 +1284,9 @@ class AdjudicationDecision(Base):
         ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
     idempotency_key: Mapped[str] = mapped_column(Text)
+    voids_decision_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("adjudication_decisions.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

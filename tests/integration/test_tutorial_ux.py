@@ -131,8 +131,8 @@ def test_run_step_banner_renders_on_tutorial_run(
     assert BANNER in resp.text
     assert "Your tutorial run" in resp.text
     assert "step 1 of 5" in resp.text
-    # Next step points at the review console in tutorial mode.
-    assert "/review?tutorial=review" in resp.text
+    assert "tutorial=review" in resp.text
+    assert "Open the editor" in resp.text
 
 
 def test_no_banner_without_param(
@@ -181,35 +181,10 @@ def test_done_step_on_run_page_renders_no_banner(
     assert BANNER not in resp.text
 
 
-def test_review_step_banner_offers_tutorial_claim(
-    client: TestClient, tutorial_run_id: uuid.UUID
-) -> None:
-    resp = client.get("/review?tutorial=review")
-    assert resp.status_code == 200
-    assert BANNER in resp.text
-    assert "Claim the tutorial run" in resp.text
-    # The banner's own claim form targets the exact tutorial run; continuation into
-    # adjudicate mode is decided by the claim route on run identity (asserted in
-    # test_claim_of_tutorial_run_lands_on_adjudicate), not a hidden form field.
-    assert f'action="/review/{tutorial_run_id}/claim"' in resp.text
 
-
-def test_review_banner_present_even_when_run_resolved(
-    client: TestClient,
-    tutorial_run_id: uuid.UUID,
-    session_factory: sessionmaker[Session],
-) -> None:
-    # Resolve every label, so the run leaves the queue; the review-step banner must
-    # still offer to claim it (it does not depend on a queue row existing).
-    location = _claim(client, tutorial_run_id)
-    token = _token(location)
-    _decide(client, tutorial_run_id, HEARD_LABEL, token, "exclude")
-    _decide(client, tutorial_run_id, UNRESOLVED_LABEL, token, "exclude")
-    with session_scope(session_factory) as session:
-        assert not any(e.run_id == tutorial_run_id for e in adjudication_queue(session))
-    resp = client.get("/review?tutorial=review")
-    assert BANNER in resp.text
-    assert f'action="/review/{tutorial_run_id}/claim"' in resp.text
+# Tests for tutorial banner rendering on retired review pages (workbench, queue,
+# transcript stepper) were removed in issue #158. The tutorial now renders
+# banners on the media editor page.
 
 
 # ------------------------------------------------------ claim continuity + token
@@ -252,114 +227,10 @@ def test_claim_of_non_tutorial_run_has_no_suffix(
     assert "tutorial=" not in location
 
 
-def test_adjudicate_banner_next_link_hands_off_to_check_words(
-    client: TestClient, tutorial_run_id: uuid.UUID
-) -> None:
-    token = _token(_claim(client, tutorial_run_id))
-    resp = client.get(f"/review/{tutorial_run_id}?token={token}&tutorial=adjudicate")
-    assert resp.status_code == 200
-    assert BANNER in resp.text
-    assert "Attribute the three voices" in resp.text
-    # Step 1 → Step 2 (issue #117 Phase B): the onward link goes to the transcript
-    # stepper in check_words mode, keeping the claim token so verify/edit stay
-    # enabled there. (The href's & is HTML-escaped, so assert the parts.)
-    assert f"/review/{tutorial_run_id}/transcript?token={token}" in resp.text
-    assert "tutorial=check_words" in resp.text
 
-
-def test_check_words_banner_next_link_carries_token(
-    client: TestClient, tutorial_run_id: uuid.UUID
-) -> None:
-    token = _token(_claim(client, tutorial_run_id))
-    resp = client.get(
-        f"/review/{tutorial_run_id}/transcript?token={token}&tutorial=check_words"
-    )
-    assert resp.status_code == 200
-    assert BANNER in resp.text
-    assert "Check the words" in resp.text
-    # Step 2 → export stays on the transcript page (both steps share it), keeping
-    # the token so a returning tab is writable. (The href's & is HTML-escaped.)
-    assert f"/review/{tutorial_run_id}/transcript?token={token}" in resp.text
-    assert "tutorial=export" in resp.text
-
-
-def test_check_words_banner_without_token_offers_claim(
-    client: TestClient, tutorial_run_id: uuid.UUID
-) -> None:
-    resp = client.get(f"/review/{tutorial_run_id}/transcript?tutorial=check_words")
-    assert resp.status_code == 200
-    assert BANNER in resp.text
-    # A stale/absent token degrades to a claim form (which re-enters the walkthrough
-    # on run identity), never a dead read-only next-link.
-    assert f'action="/review/{tutorial_run_id}/claim"' in resp.text
-
-
-def test_check_words_banner_not_on_workbench(
-    client: TestClient, tutorial_run_id: uuid.UUID
-) -> None:
-    # check_words binds the transcript page; spoofed onto the workbench it is a
-    # clean page-mismatch (no banner).
-    token = _token(_claim(client, tutorial_run_id))
-    resp = client.get(f"/review/{tutorial_run_id}?token={token}&tutorial=check_words")
-    assert resp.status_code == 200
-    assert BANNER not in resp.text
-
-
-def test_adjudicate_banner_without_token_offers_claim(
-    client: TestClient, tutorial_run_id: uuid.UUID
-) -> None:
-    resp = client.get(f"/review/{tutorial_run_id}?tutorial=adjudicate")
-    assert resp.status_code == 200
-    assert BANNER in resp.text
-    # No live claim → degrade to a claim form (which the route continues on run
-    # identity), not a dead next-link that would land on a read-only workbench.
-    assert f'action="/review/{tutorial_run_id}/claim"' in resp.text
-
-
-def test_export_banner_has_export_link_and_finish(
-    client: TestClient, tutorial_run_id: uuid.UUID
-) -> None:
-    # EXPORT now binds the transcript stepper (issue #117 Phase B), alongside
-    # check_words — not the workbench.
-    token = _token(_claim(client, tutorial_run_id))
-    resp = client.get(f"/review/{tutorial_run_id}/transcript?token={token}&tutorial=export")
-    assert resp.status_code == 200
-    assert BANNER in resp.text
-    assert f'href="/review/{tutorial_run_id}/export.txt"' in resp.text
-    assert 'action="/settings/tutorial/complete"' in resp.text
-    # The claim token must NOT leak into the plaintext export URL.
-    assert f"export.txt?token={token}" not in resp.text
-
-
-def test_export_banner_not_on_workbench(
-    client: TestClient, tutorial_run_id: uuid.UUID
-) -> None:
-    # Spoofed onto the workbench, the export step is a clean page-mismatch now
-    # that it binds the transcript page.
-    token = _token(_claim(client, tutorial_run_id))
-    resp = client.get(f"/review/{tutorial_run_id}?token={token}&tutorial=export")
-    assert resp.status_code == 200
-    assert BANNER not in resp.text
-
-
-# ------------------------------------------------------------------ htmx safety
-
-
-def test_htmx_decision_fragment_excludes_banner(
-    client: TestClient, tutorial_run_id: uuid.UUID
-) -> None:
-    token = _token(_claim(client, tutorial_run_id))
-    resp = client.post(
-        f"/review/{tutorial_run_id}/labels/{UNRESOLVED_LABEL}/decision",
-        data={"token": token, "nonce": uuid.uuid4().hex, "action": "exclude"},
-        headers={"HX-Request": "true"},
-        follow_redirects=False,
-    )
-    assert resp.status_code == 200
-    # The swap replaces only #labels; the fragment must not carry the banner (which
-    # lives above the body and therefore survives the swap untouched).
-    assert BANNER not in resp.text
-    assert "label-card" in resp.text  # sanity: it IS the labels fragment
+# Tests for tutorial step banners on retired review pages (workbench, transcript
+# stepper) and htmx fragment banner exclusion (now JSON responses) were removed
+# in issue #158. The tutorial flow now renders banners on the media editor page.
 
 
 # --------------------------------------------------------------- settings states
@@ -556,10 +427,10 @@ def test_finish_plain_does_not_launch_seeded_tutorial(
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/review"
+    assert resp.headers["location"] == "/media"
 
 
-def test_finish_plain_falls_back_to_review_when_unseeded(
+def test_finish_plain_falls_back_to_media_when_unseeded(
     session_factory: sessionmaker[Session], settings: Settings
 ) -> None:
     client = _client(session_factory, settings, onboarded=False)
@@ -569,7 +440,7 @@ def test_finish_plain_falls_back_to_review_when_unseeded(
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/review"
+    assert resp.headers["location"] == "/media"
 
 
 # ------------------------------------------------------------- full walkthrough

@@ -230,11 +230,6 @@ def test_pipeline_summary_no_gpu_when_idle() -> None:
     assert "GPU busy" not in summary
 
 
-def test_legacy_transcript_crumb_uses_runs(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    """The transcript page always uses 'runs' in the breadcrumb."""
-    run_id = _make_run(session_factory, status=RunStatus.COMPLETED)
-    resp = client.get(f"/runs/{run_id}/transcript", follow_redirects=True)
-    assert resp.status_code == 200
-    assert f'class="cb-breadcrumb">runs / <strong>{run_id.hex[:8]}</strong>' in resp.text
+
+# test_legacy_transcript_crumb_uses_runs was removed in issue #158 (interactive
+# transcript retired; breadcrumb rendering now in the media editor).

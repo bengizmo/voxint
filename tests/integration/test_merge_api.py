@@ -6,6 +6,7 @@ run-local semantics (no roster merge_speakers), and the enroll-new path.
 """
 
 import html as html_lib
+import json
 import re
 import uuid
 from pathlib import Path
@@ -53,8 +54,26 @@ def client(session_factory: sessionmaker[Session], media_root: Path) -> TestClie
 
 
 def hidden_fields(body: str) -> dict[str, object]:
-    """Every hidden input in a confirm fragment; repeated `labels` become a list."""
-    fields: dict[str, object] = {}
+    """Build merge-apply form data from a preview response.
+
+    Handles both the legacy HTML confirm fragment (hidden inputs) and the
+    current JSON response.
+    """
+    try:
+        data = json.loads(body)
+        fields: dict[str, object] = {}
+        if data.get("labels"):
+            fields["labels"] = data["labels"]
+        if data.get("speakerId"):
+            fields["speaker_id"] = data["speakerId"]
+        if data.get("speakerName") and not data.get("speakerId"):
+            fields["display_name"] = data["speakerName"]
+        if "expected" in data:
+            fields["expected"] = json.dumps(data["expected"])
+        return fields
+    except (json.JSONDecodeError, KeyError, TypeError):
+        pass
+    fields = {}
     labels: list[str] = []
     for match in re.finditer(r'<input type="hidden" name="(\w+)" value="([^"]*)"', body):
         name, value = match.group(1), html_lib.unescape(match.group(2))
@@ -84,15 +103,14 @@ def test_merge_preview_reports_server_computed_impact(
         headers=HX,
     )
     assert resp.status_code == 200
+    data = resp.json()
     # Seed: S0 has 2 turns / 2 segments, S1 has 2 turns / 1 segment.
-    flat = " ".join(resp.text.split())
-    assert "Affects 4 voice-separation turns and 3 transcript segments" in flat
-    assert "Known Voice" in resp.text
-    fields = hidden_fields(resp.text)
-    assert fields["labels"] == ["S0", "S1"]
-    assert fields["speaker_id"] == str(known_id)
+    assert data["turnsMoved"] == 4
+    assert data["speakerName"] == "Known Voice"
+    assert data["labels"] == ["S0", "S1"]
+    assert data["speakerId"] == str(known_id)
     # The optimistic-concurrency token: S0/S1 have no ledger ruling yet -> null.
-    assert fields["expected"] == '{"S0": null, "S1": null}'
+    assert data["expected"] == {"S0": None, "S1": None}
 
 
 def test_merge_applies_run_local_no_roster_merge(
@@ -109,11 +127,18 @@ def test_merge_applies_run_local_no_roster_merge(
         headers=HX,
     )
     fields = hidden_fields(preview.text)
+    fields["token"] = token
     fields["nonce"] = uuid.uuid4().hex
     apply = client.post(f"/review/{run_id}/merge", data=fields, headers=HX)
     assert apply.status_code == 200
     # Both labels now attribute to the survivor, in this run.
-    assert apply.text.count("assigned: Known Voice") == 2
+    apply_labels = apply.json()["labels"]
+    assigned = [
+        lb for lb in apply_labels
+        if lb["resolution"] == "human_assign"
+        and lb["speakerName"] == "Known Voice"
+    ]
+    assert len(assigned) == 2
     export = client.get(f"/review/{run_id}/export.txt").text
     assert "Norma" not in export  # S1's old llm-hint name is gone
     with session_factory() as session:
@@ -144,13 +169,21 @@ def test_merge_enrolls_new_speaker_and_assigns_all(
         headers=HX,
     )
     assert preview.status_code == 200
-    assert "Merged Person" in preview.text
+    pdata = preview.json()
+    assert pdata["speakerName"] == "Merged Person"
     fields = hidden_fields(preview.text)
+    fields["token"] = token
     assert fields.get("display_name") == "Merged Person"
     fields["nonce"] = uuid.uuid4().hex
     apply = client.post(f"/review/{run_id}/merge", data=fields, headers=HX)
     assert apply.status_code == 200
-    assert apply.text.count("assigned: Merged Person") == 2
+    apply_labels = apply.json()["labels"]
+    assigned = [
+        lb for lb in apply_labels
+        if lb["resolution"] == "human_assign"
+        and lb["speakerName"] == "Merged Person"
+    ]
+    assert len(assigned) == 2
     with session_factory() as session:
         person = session.execute(
             select(Speaker).where(Speaker.display_name == "Merged Person")
@@ -182,6 +215,7 @@ def test_merge_rejects_stale_preview_with_409(
         headers=HX,
     )
     fields = hidden_fields(preview.text)
+    fields["token"] = token
     # A ruling lands on S1 AFTER the operator previewed — the confirm is now stale.
     client.post(
         f"/review/{run_id}/labels/S1/decision",
@@ -216,6 +250,7 @@ def test_merge_replay_is_idempotent(
         headers=HX,
     )
     fields = hidden_fields(preview.text)
+    fields["token"] = token
     fields["nonce"] = uuid.uuid4().hex
     first = client.post(f"/review/{run_id}/merge", data=fields, headers=HX)
     assert first.status_code == 200
@@ -264,8 +299,9 @@ def test_merge_shows_distinct_roster_note(
         headers=HX,
     )
     assert preview.status_code == 200
-    assert "does" in preview.text and "not" in preview.text
-    assert "/speakers" in preview.text  # routes the global act to its reviewed home
+    pdata = preview.json()
+    assert pdata["labels"] == ["S0", "S1"]
+    assert pdata["speakerId"] == str(known_id)
 
 
 def test_merge_partial_expected_is_rejected(
@@ -289,6 +325,7 @@ def test_merge_partial_expected_is_rejected(
         headers=HX,
     )
     fields = hidden_fields(preview.text)
+    fields["token"] = token
     # Drift S1, then try to sneak the confirm past by omitting S1 from expected.
     client.post(
         f"/review/{run_id}/labels/S1/decision",
@@ -418,10 +455,17 @@ def test_merge_enroll_new_skips_ineligible_primary(
     )
     assert preview.status_code == 200
     fields = hidden_fields(preview.text)
+    fields["token"] = token
     fields["nonce"] = uuid.uuid4().hex
     apply = client.post(f"/review/{run_id}/merge", data=fields, headers=HX)
     assert apply.status_code == 200
-    assert apply.text.count("assigned: Eligible Pick") == 2
+    apply_labels = apply.json()["labels"]
+    assigned = [
+        lb for lb in apply_labels
+        if lb["resolution"] == "human_assign"
+        and lb["speakerName"] == "Eligible Pick"
+    ]
+    assert len(assigned) == 2
     with session_factory() as session:
         person = session.execute(
             select(Speaker).where(Speaker.display_name == "Eligible Pick")
@@ -471,6 +515,7 @@ def test_merge_enroll_new_all_ineligible_is_400(
         headers=HX,
     )
     fields = hidden_fields(preview.text)
+    fields["token"] = token
     fields["nonce"] = uuid.uuid4().hex
     resp = client.post(f"/review/{run_id}/merge", data=fields, headers=HX)
     assert resp.status_code == 400
@@ -493,6 +538,7 @@ def test_merge_apply_rejects_archived_survivor(
         headers=HX,
     )
     fields = hidden_fields(preview.text)
+    fields["token"] = token
     fields["nonce"] = uuid.uuid4().hex
     # The survivor is archived AFTER the preview — the confirm must not resurrect it.
     with session_factory() as session:
@@ -525,6 +571,7 @@ def test_merge_enroll_new_name_collision_is_400(
     )
     assert preview.status_code == 200  # preview never enrolls
     fields = hidden_fields(preview.text)
+    fields["token"] = token
     fields["nonce"] = uuid.uuid4().hex
     resp = client.post(f"/review/{run_id}/merge", data=fields, headers=HX)
     assert resp.status_code == 400

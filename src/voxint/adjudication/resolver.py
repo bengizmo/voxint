@@ -282,18 +282,32 @@ class LabelState:
 def effective_decisions(
     session: Session, run_id: uuid.UUID
 ) -> dict[str, AdjudicationDecision]:
-    """Newest LABEL-scope ledger row per label (created_at DESC, id DESC).
+    """Newest active LABEL-scope ledger row per label.
+
+    REVOKE rows are compensating metadata rather than resolutions. A REVOKE and
+    the decision it names are both omitted before newest-wins reduction.
 
     Segment-scope rows (issue #54 Phase B) are excluded here — GROUND ZERO: this
     feeds ``label_states``, and a newer segment override would otherwise poison a
     whole label's resolution. Segment overrides resolve separately, in
     :func:`segment_states`.
     """
+    revoked_ids = (
+        select(AdjudicationDecision.voids_decision_id)
+        .where(
+            AdjudicationDecision.pipeline_run_id == run_id,
+            AdjudicationDecision.decision == Decision.REVOKE.value,
+            AdjudicationDecision.voids_decision_id.is_not(None),
+        )
+        .scalar_subquery()
+    )
     rows = session.execute(
         select(AdjudicationDecision)
         .where(
             AdjudicationDecision.pipeline_run_id == run_id,
             AdjudicationDecision.transcript_segment_id.is_(None),
+            AdjudicationDecision.decision != Decision.REVOKE.value,
+            AdjudicationDecision.id.not_in(revoked_ids),
         )
         .order_by(
             AdjudicationDecision.diarization_label,
@@ -544,6 +558,9 @@ def label_states(
         cosine = cosine_by_label.get(label)
         hint = hint_by_label.get(label)
         decision = decisions.get(label)
+
+        if decision is not None and decision.decision == Decision.REVOKE.value:
+            decision = None  # Defensive only; effective_decisions filters these.
 
         speaker_id: uuid.UUID | None = None
         if decision is not None:

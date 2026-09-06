@@ -255,6 +255,7 @@ def test_merge_emits_one_event(
         headers=HX,
     )
     fields = hidden_fields(preview.text)
+    fields["token"] = token
     fields["nonce"] = uuid.uuid4().hex
     apply = client.post(f"/review/{run_id}/merge", data=fields, headers=HX)
     assert apply.status_code == 200
@@ -277,6 +278,7 @@ def test_merge_replay_stays_one_event(
         headers=HX,
     )
     fields = hidden_fields(preview.text)
+    fields["token"] = token
     fields["nonce"] = uuid.uuid4().hex
     client.post(f"/review/{run_id}/merge", data=fields, headers=HX)
     client.post(f"/review/{run_id}/merge", data=fields, headers=HX)  # exact replay

@@ -33,8 +33,6 @@ _PYPROJECT = REPO_ROOT / "pyproject.toml"
 _VITE_CONFIG = REPO_ROOT / "frontend" / "vite.config.ts"
 _MAIN_TS = REPO_ROOT / "frontend" / "src" / "main.ts"
 _ENTRIES_DIR = REPO_ROOT / "frontend" / "src" / "entries"
-_RUN_HTML = REPO_ROOT / "src" / "voxint" / "api" / "templates" / "legacy_review/run.html"
-_LABELS_HTML = REPO_ROOT / "src" / "voxint" / "api" / "templates" / "legacy_review" / "labels.html"
 
 
 # --------------------------------------------------------------------------- #
@@ -332,23 +330,20 @@ def test_asset_url_reads_the_loaded_map(monkeypatch: pytest.MonkeyPatch) -> None
 # 7. Island wiring: every island is registered in main.ts, has an entry file,
 #    and is a Vite rollup input. Adding an island touches exactly these three
 #    places (issue #48 contract) — this pins that for every island so a new one
-#    can't half-land (issues #49/#55 add `workbench-player`; #84 adds
-#    `corrections-editor`).
+#    can't half-land (#84 adds `corrections-editor`).
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize(
-    "island",
-    [
-        "transcript-player",
-        "workbench-player",
-        "review-stepper",
-        "corrections-editor",
-        "media-editor",
-        "explore",
-        "quote-board",
-        "temporal-trends",
-        "speaker-timeline",
-    ],
-)
+_LIVE_ISLANDS = [
+    "transcript-player",
+    "corrections-editor",
+    "media-editor",
+    "explore",
+    "quote-board",
+    "temporal-trends",
+    "speaker-timeline",
+]
+
+
+@pytest.mark.parametrize("island", _LIVE_ISLANDS)
 def test_island_registered_in_main_ts(island: str) -> None:
     text = _MAIN_TS.read_text()
     assert re.search(
@@ -357,43 +352,16 @@ def test_island_registered_in_main_ts(island: str) -> None:
     ), f"main.ts registry is missing the {island!r} island"
 
 
-@pytest.mark.parametrize(
-    "island",
-    [
-        "transcript-player",
-        "workbench-player",
-        "review-stepper",
-        "corrections-editor",
-        "media-editor",
-        "explore",
-        "quote-board",
-        "temporal-trends",
-        "speaker-timeline",
-    ],
-)
+@pytest.mark.parametrize("island", _LIVE_ISLANDS)
 def test_island_entry_file_exists(island: str) -> None:
     entry = _ENTRIES_DIR / f"{island}.tsx"
     assert entry.is_file(), f"missing island entry file {entry}"
-    # The entry must export a `mount` the shared loader can call.
     assert "export function mount(" in entry.read_text(), (
         f"{entry} must export a mount(el) the shared loader invokes"
     )
 
 
-@pytest.mark.parametrize(
-    "island",
-    [
-        "transcript-player",
-        "workbench-player",
-        "review-stepper",
-        "corrections-editor",
-        "media-editor",
-        "explore",
-        "quote-board",
-        "temporal-trends",
-        "speaker-timeline",
-    ],
-)
+@pytest.mark.parametrize("island", _LIVE_ISLANDS)
 def test_island_is_a_vite_input(island: str) -> None:
     text = _VITE_CONFIG.read_text()
     assert re.search(
@@ -402,41 +370,3 @@ def test_island_is_a_vite_input(island: str) -> None:
     ), f"vite.config.ts rollupOptions.input is missing the {island!r} entry"
 
 
-# --------------------------------------------------------------------------- #
-# 8. The workbench-player mount node lives OUTSIDE #labels, so it survives the
-#    htmx innerHTML swap the decision cards do (issue #49 review). If it were
-#    inside, every ruling would blow away the audio element mid-review.
-# --------------------------------------------------------------------------- #
-def test_workbench_mount_is_outside_labels() -> None:
-    html = _RUN_HTML.read_text()
-    island = html.find('data-island="workbench-player"')
-    labels = html.find('<div id="labels">')
-    assert island != -1, "run.html lost the workbench-player island mount"
-    assert labels != -1, "run.html lost the #labels container"
-    assert island < labels, (
-        "the workbench-player island must be rendered BEFORE (outside) #labels so "
-        "an htmx innerHTML swap of the decision cards never removes the <audio>"
-    )
-    # And the mount ships a bare <audio> fallback so JS-off still plays.
-    mount_region = html[island:labels]
-    assert "<audio" in mount_region, "the island mount must wrap the <audio> fallback"
-
-
-# --------------------------------------------------------------------------- #
-# 9. Every server-rendered seek button is disabled + type="button": disabled so
-#    JS-off shows no false affordance (the island enables it only when seeking is
-#    safe, issue #55); type="button" so it never submits an adjudication form.
-# --------------------------------------------------------------------------- #
-def test_seek_buttons_are_disabled_and_typed_button() -> None:
-    html = _LABELS_HTML.read_text()
-    buttons = re.findall(r"<button\b[^>]*\bdata-voxint-seek\b[^>]*>", html, re.DOTALL)
-    assert len(buttons) >= 2, (
-        "expected at least the per-segment and per-speaker seek buttons in labels.html"
-    )
-    for button in buttons:
-        assert 'type="button"' in button, (
-            f"seek button must be type=button so it never submits a form: {button!r}"
-        )
-        assert re.search(r"\bdisabled\b", button), (
-            f"seek button must render disabled by default (honest JS-off): {button!r}"
-        )

@@ -58,47 +58,40 @@ class TutorialPage(StrEnum):
     """
 
     RUN_DETAIL = "run_detail"
-    REVIEW_QUEUE = "review_queue"
-    WORKBENCH = "workbench"
-    TRANSCRIPT = "transcript"
+    EDITOR = "editor"
     SETTINGS = "settings"
 
 
-# Which page each step is allowed to render on. ADJUDICATE binds to the workbench
-# ("who is speaking"); CHECK_WORDS and EXPORT both bind to the transcript stepper
-# (the same ``/review/{id}/transcript`` page, two banners) — "check the words" then
-# export from the finished result. The API layer keys the run identity check off
-# ``tutorial_run_id`` so none render on another run.
+# Which page each step is allowed to render on. The media editor (#158) absorbs
+# review, adjudication, word-checking, and export — four steps on one page,
+# disambiguated by the ``?tutorial=`` query param. The banner resolver renders the
+# step matching the param; the other three are invisible.
 #
 # DONE binds to SETTINGS, but the Settings page renders its terminal completion
 # celebration INLINE (it needs a "submit your own media" link the walkthrough
 # banner has no place for), NOT through ``_tutorial_banner``. DONE's entry here is
-# still load-bearing: it makes ``?tutorial=done`` on a run/review/workbench page a
+# still load-bearing: it makes ``?tutorial=done`` on a run/editor page a
 # clean page-mismatch (no banner) instead of a ``KeyError`` on this dict.
 STEP_PAGE: dict[TutorialStep, TutorialPage] = {
     TutorialStep.RUN: TutorialPage.RUN_DETAIL,
-    TutorialStep.REVIEW: TutorialPage.REVIEW_QUEUE,
-    TutorialStep.ADJUDICATE: TutorialPage.WORKBENCH,
-    TutorialStep.CHECK_WORDS: TutorialPage.TRANSCRIPT,
-    TutorialStep.EXPORT: TutorialPage.TRANSCRIPT,
+    TutorialStep.REVIEW: TutorialPage.EDITOR,
+    TutorialStep.ADJUDICATE: TutorialPage.EDITOR,
+    TutorialStep.CHECK_WORDS: TutorialPage.EDITOR,
+    TutorialStep.EXPORT: TutorialPage.EDITOR,
     TutorialStep.DONE: TutorialPage.SETTINGS,
 }
 
 
 # Which FastAPI route renders each tutorial page (Console 2.0 P1, issue #152).
 # The banner's "continue" links resolve their paths through this map (via
-# ``app.url_path_for``) instead of hardcoding URLs, so when a later epic phase
-# moves a page — the review queue folding into the editor, say — remapping the
-# tutorial is a one-line change here, not a link hunt through the API layer.
-# Each name is pinned explicitly (``name=...``) on its GET route; the contract
-# test ``tests/contracts/test_tutorial_route_map.py`` asserts every mapped name
-# resolves to exactly one GET route on the built app, so a route rename or
-# removal that would strand the tutorial fails loudly.
+# ``app.url_path_for``) instead of hardcoding URLs, so remapping the tutorial is
+# a one-line change here, not a link hunt through the API layer. Each name is
+# pinned explicitly (``name=...``) on its GET route; the contract test
+# ``tests/contracts/test_tutorial_route_map.py`` asserts every mapped name
+# resolves to exactly one GET route on the built app.
 PAGE_ROUTE_NAME: dict[TutorialPage, str] = {
     TutorialPage.RUN_DETAIL: "run_detail",
-    TutorialPage.REVIEW_QUEUE: "review_queue",
-    TutorialPage.WORKBENCH: "workbench",
-    TutorialPage.TRANSCRIPT: "review_transcript",
+    TutorialPage.EDITOR: "media_detail",
     TutorialPage.SETTINGS: "settings_page",
 }
 
@@ -122,27 +115,27 @@ STEP_COPY: dict[TutorialStep, StepCopy] = {
         body=(
             "This three-speaker sample has already been transcribed and split by "
             "voice, so you can see the whole result at once. Look over the stage "
-            "ledger and open the transcript below, then continue to the review "
-            "console to attribute each voice to a speaker."
+            "ledger, then continue to the editor to attribute each voice to a "
+            "speaker."
         ),
     ),
     TutorialStep.REVIEW: StepCopy(
         title="Claim the tutorial run",
         body=(
-            "Reviewing a run “claims” it, so only you can rule on its "
-            "voices while you work. Claim the sample below to start attributing "
-            "its three speakers."
+            "Editing a run “claims” it, so only you can rule on its "
+            "voices while you work. Use the Claim button in the editor to start "
+            "attributing its three speakers, then continue."
         ),
     ),
     TutorialStep.ADJUDICATE: StepCopy(
         title="Attribute the three voices",
         body=(
-            "Each voice below shows its evidence. One has a grounded machine match "
-            "you can accept; one shows a heard name that is only a guess, and you "
-            "decide whether to trust it; one has no name at all. Assign an existing "
-            "speaker, enroll a new one, or mark a voice excluded or unknown. Your "
-            "rulings update the list below as you go, then continue to checking the "
-            "words."
+            "Each voice in the speaker rail shows its evidence. One has a grounded "
+            "machine match you can accept; one shows a heard name that is only a "
+            "guess, and you decide whether to trust it; one has no name at all. "
+            "Assign an existing speaker, enroll a new one, or mark a voice excluded "
+            "or unknown. Your rulings update the rail as you go, then continue to "
+            "checking the words."
         ),
     ),
     TutorialStep.CHECK_WORDS: StepCopy(
@@ -157,10 +150,10 @@ STEP_COPY: dict[TutorialStep, StepCopy] = {
     TutorialStep.EXPORT: StepCopy(
         title="Export the transcript",
         body=(
-            "This is the last step of the tour. Open the transcript to see the "
-            "result, then save it in whichever format you need. That is the whole "
-            "loop: submit, review, attribute, check the words, export. Finish the "
-            "tutorial when you are ready."
+            "This is the last step of the tour. Use the export menu to save the "
+            "transcript in whichever format you need. That is the whole loop: "
+            "submit, attribute, check the words, export. Finish the tutorial when "
+            "you are ready."
         ),
     ),
     TutorialStep.DONE: StepCopy(

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, apiFetch } from "../lib/api-client";
 import { makeNonce } from "../lib/nonce";
@@ -15,7 +15,12 @@ export interface LabelsResult {
   labels: LabelStateShape[];
   segments: Segment[];
   progress: { verified: number; total: number };
+  undo?: UndoPayload;
 }
+
+export type UndoPayload =
+  | { kind: "enroll"; decisionId: string; expiresAt: string }
+  | { kind: "merge"; mergeNonce: string; expiresAt: string };
 
 export interface LabelStateShape {
   label: string;
@@ -617,6 +622,10 @@ export function SpeakerRail({
       })),
     [],
   );
+
+  useEffect(() => {
+    setLabelStates(applyPalette(initialStates));
+  }, [applyPalette, initialStates]);
 
   const adoptResult = useCallback(
     (data: LabelsResult) => {
