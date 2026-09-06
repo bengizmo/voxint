@@ -571,9 +571,10 @@ def render_report(date: str, runs: list[dict[str, Any]]) -> str:
     lines += [
         "## Limitations",
         "",
-        "Close-talk IHM microphones only (AMI). "
+        "AMI Mix-Headset recordings (multi-speaker far-field). "
         "Baseline-only status, not calibration certification. "
-        "Effective sample counts may be small. "
+        "Effective sample counts may be small; a zero impostor count "
+        "makes FAR undefined (the CI upper bound is not meaningful). "
         "Wilson CIs assume independent labels; with clustered speakers "
         "the true interval may be wider.",
         "",
