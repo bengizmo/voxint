@@ -553,6 +553,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
             "API_PORT": str(args.port),
             "VOXINT_USER": args.user,
             "VOXINT_PASSWORD": args.password,
+            "CONSOLE_MEDIA_ENABLED": "true",
         }
     )
     Path(args.media_root).mkdir(parents=True, exist_ok=True)
