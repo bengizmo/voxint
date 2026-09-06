@@ -648,23 +648,10 @@ def test_list_tag_or_union_filter(
 # --------------------------------------------------------------------------- #
 
 
-def test_review_transcript_hydrates_annotation_props(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    run_id, segs = seed_word_run(session_factory)
-    token = claim_token(client, run_id)
-    _create_one(client, run_id, token, segs[0])
-    _make_tag(client, "Key Point")
-    resp = client.get(f"/review/{run_id}/transcript", params={"token": token})
-    assert resp.status_code == 200
-    html = resp.text
-    # The review-stepper island hydrates the annotation props (shape pinned in
-    # the JSON list tests; here we pin that the review page carries them + the caps
-    # + a tag-CRUD CSRF token).
-    for key in ("annotations", "annotationTags", "annotationLimits", "tagCsrf"):
-        assert key in html
-    for cap in ("paletteSize", "maxSpanSegments", "maxNoteChars", "maxTagsPerAnnotation"):
-        assert cap in html
+
+# test_review_transcript_hydrates_annotation_props was removed in issue #158:
+# the review transcript stepper is retired; annotation props are now hydrated
+# by the media editor island.
 
 
 def _evidence_snapshot(

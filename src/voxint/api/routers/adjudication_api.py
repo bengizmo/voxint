@@ -73,6 +73,10 @@ from voxint.adjudication.resolver import (
 from voxint.adjudication.review_state import set_correction, set_verified, verified_progress
 from voxint.adjudication.slots import (
     ClaimMismatchError,
+    ClaimUnavailableError,
+    claim_run,
+    refresh_run_claim,
+    release_run,
     verify_claim,
 )
 from voxint.adjudication.splits import (
@@ -138,21 +142,35 @@ from voxint.api.transcript_view import (
     _segment_is_corrected,
     _segment_is_split,
 )
+from voxint.app_settings import (
+    get_app_settings,
+    ready_tutorial_run_id,
+    resolve_effective_enrichment_names_enabled,
+)
 from voxint.config import Settings
 from voxint.db.models import (
     MAX_CORRECTED_TEXT_CHARS,
     AnnotationTag,
     ArtifactKind,
     AudioArtifact,
+    ClaimField,
     Decision,
     DiarizationTurn,
+    EnrichmentCandidate,
     PipelineRun,
+    ProfileDecision,
     SegmentReviewState,
     SegmentSplitBoundary,
     Speaker,
     StageRun,
     TranscriptAnnotation,
     TranscriptSegment,
+)
+from voxint.enrichment.producers.names import NameProducerError, run_offline_name_producer
+from voxint.enrichment.review import ConflictingReplayError as EnrichmentReplayError
+from voxint.enrichment.review import (
+    StaleCandidateError,
+    record_profile_decision,
 )
 from voxint.enrichment.translation_jobs import active_or_last_job as active_or_last_translation_job
 from voxint.enrichment.translation_jobs import normalized_language
@@ -365,6 +383,160 @@ def _labels_response(
     if undo is not None:
         payload["undo"] = undo
     return JSONResponse(payload)
+
+
+# --- Run claim / refresh / release (restored from legacy review) ---
+
+
+@router.post("/review/{run_id}/claim")
+def claim(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> RedirectResponse:
+    _require_csrf(request, CSRF_CLAIM, csrf_token)
+    settings: Settings = request.app.state.settings
+    _reject_if_archived(_run_or_404(session, run_id))
+    try:
+        token = claim_run(
+            session,
+            run_id,
+            reviewer=operator,
+            ttl_seconds=settings.review_claim_ttl_seconds,
+        )
+    except ClaimUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    run = _run_or_404(session, run_id)
+    suffix = ""
+    if ready_tutorial_run_id(session) == run_id:
+        row = get_app_settings(session)
+        if row is not None and row.tutorial_completed_at is None:
+            suffix = "&tutorial=adjudicate"
+    target = f"/media/{run.media_item_id}/editor?run={run_id}&token={token}{suffix}"
+    return RedirectResponse(target, status_code=303)
+
+
+@router.post("/review/{run_id}/refresh")
+def refresh(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    token: Annotated[uuid.UUID, Form()],
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> JSONResponse:
+    """Extend the active claim's TTL."""
+    _require_csrf(request, CSRF_CLAIM, csrf_token)
+    settings: Settings = request.app.state.settings
+    try:
+        refresh_run_claim(
+            session,
+            run_id,
+            token,
+            ttl_seconds=settings.review_claim_ttl_seconds,
+        )
+    except ClaimMismatchError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+            headers=_CLAIM_CONFLICT_HEADERS,
+        ) from exc
+    return JSONResponse({"ok": True})
+
+
+@router.post("/review/{run_id}/release")
+def release(
+    run_id: uuid.UUID,
+    operator: OperatorDep,
+    session: SessionDep,
+    token: Annotated[uuid.UUID, Form()],
+) -> Response:
+    try:
+        release_run(session, run_id, token)
+    except ClaimMismatchError:
+        return Response(status_code=204)
+    except ClaimUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return RedirectResponse("/media", status_code=303)
+
+
+# --- Name enrichment routes (restored from legacy review) ---
+
+
+@router.post("/review/{run_id}/enrich/names")
+def enrich_names(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    token: Annotated[uuid.UUID, Form()],
+) -> Response:
+    settings: Settings = request.app.state.settings
+    if not resolve_effective_enrichment_names_enabled(get_app_settings(session), settings):
+        raise HTTPException(status_code=404, detail="name enrichment is disabled")
+    try:
+        run = verify_claim(session, run_id, token)
+    except ClaimMismatchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    try:
+        run_offline_name_producer(session, run_id=run_id, settings=settings)
+    except NameProducerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _labels_response(request, session, run)
+
+
+@router.post("/review/{run_id}/candidates/{candidate_id}/decision")
+def decide_name_candidate(
+    run_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    request: Request,
+    identity: CurrentUserDep,
+    operator: OperatorDep,
+    session: SessionDep,
+    token: Annotated[uuid.UUID, Form()],
+    nonce: Annotated[str, Form(min_length=8, max_length=64)],
+    verdict: Annotated[str, Form()],
+) -> Response:
+    settings: Settings = request.app.state.settings
+    if not resolve_effective_enrichment_names_enabled(get_app_settings(session), settings):
+        raise HTTPException(status_code=404, detail="name enrichment is disabled")
+    try:
+        run = verify_claim(session, run_id, token)
+    except ClaimMismatchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    try:
+        decision = ProfileDecision(verdict)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"unknown verdict {verdict!r}") from exc
+    candidate = session.get(EnrichmentCandidate, candidate_id)
+    if (
+        candidate is None
+        or candidate.pipeline_run_id != run_id
+        or candidate.field != ClaimField.NAME.value
+    ):
+        raise HTTPException(status_code=404, detail="no such candidate in this run")
+    try:
+        record_profile_decision(
+            session,
+            candidate_id=candidate_id,
+            decision=decision,
+            operator=operator,
+            idempotency_key=nonce,
+            user_id=identity.user_id,
+        )
+    except StaleCandidateError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="superseded by a newer sweep — refresh and re-review",
+        ) from exc
+    except EnrichmentReplayError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _labels_response(request, session, run)
+
+
+# --- Label decisions ---
 
 
 @router.post("/review/{run_id}/labels/{label}/decision")

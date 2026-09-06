@@ -79,100 +79,10 @@ def _stale_edit(session_factory: sessionmaker[Session], run_id: uuid.UUID) -> No
         session.commit()
 
 
-class TestTranscriptView:
-    def test_fresh_translation_interleaves(
-        self, session_factory: sessionmaker[Session]
-    ) -> None:
-        with session_factory() as session:
-            run_id = seed_run(session)
-        _translate(session_factory, run_id)
-        client = _build_client(session_factory)
-        # The toggle offers the fresh generation on the plain page.
-        plain = client.get(f"/runs/{run_id}/transcript").text
-        assert "translation=es" in plain
-        # Selecting it interleaves the translated lines in the fallback AND
-        # hands them to the island props, with honest provenance copy.
-        body = client.get(f"/runs/{run_id}/transcript?translation=es").text
-        assert 'class="tp-translation"' in body
-        assert "ES:Hello there." in body
-        assert "ES:Goodbye now." in body
-        assert "Machine-translated to Spanish" in body
-        assert '"translation"' in body or "&#34;translation&#34;" in body
 
-    def test_raw_variant_shows_note_not_lines(
-        self, session_factory: sessionmaker[Session]
-    ) -> None:
-        with session_factory() as session:
-            run_id = seed_run(session)
-        _translate(session_factory, run_id)
-        client = _build_client(session_factory)
-        body = client.get(f"/runs/{run_id}/transcript?text=raw&translation=es").text
-        assert "pair with the reviewed text" in body
-        assert "ES:Hello there." not in body
-
-    def test_toggle_absent_on_raw_and_enhanced_variants(
-        self, session_factory: sessionmaker[Session]
-    ) -> None:
-        # Translations pair with the reviewed text: raw/enhanced views must not
-        # advertise a switcher whose links silently change the rendition.
-        with session_factory() as session:
-            run_id = seed_run(session)
-        _translate(session_factory, run_id)
-        client = _build_client(session_factory)
-        assert (
-            'aria-label="Translation"'
-            in client.get(f"/runs/{run_id}/transcript").text
-        )
-        for text in ("raw", "enhanced"):
-            body = client.get(f"/runs/{run_id}/transcript?text={text}").text
-            assert 'aria-label="Translation"' not in body, text
-
-    def test_stale_translation_never_interleaves(
-        self, session_factory: sessionmaker[Session]
-    ) -> None:
-        with session_factory() as session:
-            run_id = seed_run(session)
-        _translate(session_factory, run_id)
-        _stale_edit(session_factory, run_id)
-        client = _build_client(session_factory)
-        plain = client.get(f"/runs/{run_id}/transcript").text
-        assert "out of date" in plain
-        body = client.get(f"/runs/{run_id}/transcript?translation=es").text
-        assert "out of date" in body
-        assert "ES:Hello there." not in body
-        assert 'class="tp-translation"' not in body
-
-    def test_no_translations_renders_no_toggle(
-        self, session_factory: sessionmaker[Session]
-    ) -> None:
-        with session_factory() as session:
-            run_id = seed_run(session)
-        client = _build_client(session_factory)
-        body = client.get(f"/runs/{run_id}/transcript").text
-        assert 'aria-label="Translation"' not in body
-        assert 'class="tp-translation"' not in body
-
-    def test_unknown_translation_shows_note(
-        self, session_factory: sessionmaker[Session]
-    ) -> None:
-        with session_factory() as session:
-            run_id = seed_run(session)
-        client = _build_client(session_factory)
-        body = client.get(f"/runs/{run_id}/transcript?translation=fr").text
-        assert "No such translation" in body
-
-    def test_export_menu_lists_fresh_only(
-        self, session_factory: sessionmaker[Session]
-    ) -> None:
-        with session_factory() as session:
-            run_id = seed_run(session)
-        _translate(session_factory, run_id)
-        client = _build_client(session_factory)
-        fresh = client.get(f"/runs/{run_id}/transcript").text
-        assert "export.srt?lang=es" in fresh
-        _stale_edit(session_factory, run_id)
-        stale = client.get(f"/runs/{run_id}/transcript").text
-        assert "export.srt?lang=es" not in stale
+# TestTranscriptView was removed in issue #158: the interactive transcript
+# stepper page is retired (now redirects to the media editor). Translation
+# interleaving and toggle rendering are now handled by the editor island.
 
 
 class TestExports:
@@ -320,37 +230,10 @@ class TestExports:
 
 
 class TestStepperTranslate:
-    def test_props_present_with_preferred_language(
-        self, session_factory: sessionmaker[Session]
-    ) -> None:
-        with session_factory() as session:
-            run_id = seed_run(session)
-        client = _build_client(
-            session_factory, translation_target_language="fr"
-        )
-        body = client.get(f"/review/{run_id}/transcript").text
-        assert "defaultTarget" in body
-        assert "French" in body
-
-    def test_props_null_when_gates_closed(
-        self, session_factory: sessionmaker[Session]
-    ) -> None:
-        with session_factory() as session:
-            run_id = seed_run(session)
-        client = _build_client(session_factory, gates_open=False)
-        body = client.get(f"/review/{run_id}/transcript").text
-        assert '"translate": null' in body
-
-    def test_preferred_matching_detected_gives_no_default(
-        self, session_factory: sessionmaker[Session]
-    ) -> None:
-        with session_factory() as session:
-            run_id = seed_run(session, detected_language="es")
-        client = _build_client(
-            session_factory, translation_target_language="es"
-        )
-        body = client.get(f"/review/{run_id}/transcript").text
-        assert '"defaultTarget": null' in body
+    # Stepper-island prop tests (preferred language, gates-closed, preferred-
+    # matching-detected) were removed in issue #158: the interactive transcript
+    # stepper is retired; translation props are now delivered by the media
+    # editor island.
 
     def test_generate_json_contract(
         self,

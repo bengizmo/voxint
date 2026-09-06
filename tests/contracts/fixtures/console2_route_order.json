@@ -432,6 +432,36 @@
     ]
   ],
   [
+    "/review/{run_id}/claim",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/review/{run_id}/refresh",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/review/{run_id}/release",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/review/{run_id}/enrich/names",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/review/{run_id}/candidates/{candidate_id}/decision",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/review/{run_id}/labels/{label}/decision",
     [
       "POST"

@@ -9,9 +9,6 @@ route rejects a range that is not a current split child and a half-set range; an
 a ranged ruling replays idempotently.
 """
 
-import datetime as _dt
-import json
-import re
 import uuid
 from pathlib import Path
 
@@ -98,7 +95,7 @@ def _claim(client: TestClient, run_id: uuid.UUID) -> str:
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    return resp.headers["location"].split("token=")[1]
+    return resp.headers["location"].split("token=")[1].split("&")[0]
 
 
 def _split(
@@ -278,12 +275,9 @@ def test_island_reassign_returns_whole_run_reconcile(
     assert body["progress"] == {"verified": 0, "total": 1}
 
 
-def test_htmx_reassign_still_returns_labels_fragment(
+def test_htmx_reassign_returns_json_labels(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
-    """The labels workbench (htmx / non-JSON Accept) keeps its server-rendered
-    HTML fragment byte-for-byte — the island branch is a positive JSON opt-in,
-    never a silent change for the existing caller."""
     run_id, seg_id, other = _seed(session_factory)
     token = _claim(client, run_id)
     _split(client, run_id, seg_id, token, at=2)
@@ -291,41 +285,12 @@ def test_htmx_reassign_still_returns_labels_fragment(
         client, run_id, seg_id, token, action="assign", speaker_id=other, start=2, end=4
     )
     assert resp.status_code == 200, resp.text
-    # An HTML fragment, not the JSON reconcile shape.
-    assert "application/json" not in resp.headers.get("content-type", "")
-    assert resp.text.lstrip().startswith("<")
+    data = resp.json()
+    assert "segments" in data
 
 
-def _island_props(client: TestClient, run_id: uuid.UUID, token: str) -> dict:
-    """The review-stepper island's hydrated props, parsed out of the page."""
-    html = client.get(f"/review/{run_id}/transcript?token={token}").text
-    m = re.search(r"data-island=\"review-stepper\" data-props='([^']*)'", html)
-    assert m is not None, "review-stepper island props not found on the page"
-    return json.loads(m.group(1))
-
-
-def test_review_page_hydrates_active_roster_for_picker(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    """The review-stepper island is hydrated with the ACTIVE roster (id +
-    displayName) for the per-child picker — archived/merged speakers are curated
-    out, mirroring the /relabel write guard so the picker never offers a speaker
-    the write would reject."""
-    run_id, _seg_id, _other = _seed(session_factory)  # seeds "Other Person" (active)
-    with session_factory() as session:
-        archived = Speaker(
-            display_name="Archived One",
-            deleted_at=_dt.datetime.now(tz=_dt.UTC),
-        )
-        session.add(archived)
-        session.commit()
-    token = _claim(client, run_id)
-    props = _island_props(client, run_id, token)
-    names = {sp["displayName"] for sp in props["speakers"]}
-    assert "Other Person" in names
-    assert "Archived One" not in names
-    # Each entry carries exactly the id + displayName the picker binds on.
-    assert all(set(sp) == {"id", "displayName"} for sp in props["speakers"])
+# test_review_page_hydrates_active_roster_for_picker was removed in issue #158:
+# the review-stepper island is retired; the editor island hydrates the roster.
 
 
 def test_second_distinct_cut_is_rejected_and_preserves_reassignment(

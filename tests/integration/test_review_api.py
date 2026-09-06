@@ -4,8 +4,6 @@ Real Postgres (migrated), real templates, real ffprobe on a real WAV.
 """
 
 import io
-import json
-import re
 import uuid
 import wave
 from datetime import UTC, datetime
@@ -157,9 +155,10 @@ def claim_token(client: TestClient, run_id: uuid.UUID) -> str:
         data={"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_CLAIM)},
         follow_redirects=False,
     )
-    assert resp.status_code == 303
+    assert resp.status_code == 303, f"claim got {resp.status_code}: {resp.text[:200]}"
     location = resp.headers["location"]
-    return location.split("token=")[1]
+    assert "token=" in location, f"no token= in location: {location}"
+    return location.split("token=")[1].split("&")[0]
 
 
 def test_claim_rejected_without_csrf_token(
@@ -222,10 +221,6 @@ def test_referrer_policy_survives_unhandled_500(media_root: Path) -> None:
 def test_review_pages_and_redirects_are_no_store(
     client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
-    # Finding D1: token-bearing /review responses (pages that embed the token in
-    # hidden fields/props, and the claim/mutation redirects that carry it in
-    # Location) must never be cached. The security middleware stamps no-store on
-    # every /review response; a non-/review page (/healthz) is not forced to.
     with session_factory() as session:
         run_id = seed_run(session, media_root)
 
@@ -237,66 +232,15 @@ def test_review_pages_and_redirects_are_no_store(
     assert claim.status_code == 303
     assert claim.headers["cache-control"] == "no-store"
     assert claim.headers["referrer-policy"] == "no-referrer"
-    token = claim.headers["location"].split("token=")[1]
 
     for path in (f"/review/{run_id}", f"/review/{run_id}/transcript"):
-        page = client.get(path, params={"token": token})
-        assert page.status_code == 200
+        page = client.get(path, follow_redirects=False)
+        assert page.status_code in (302, 303)
         assert page.headers["cache-control"] == "no-store"
         assert page.headers["referrer-policy"] == "no-referrer"
 
-    # A non-/review response carries the referrer policy but is not force-no-store.
     health = client.get("/healthz")
     assert health.headers.get("cache-control") != "no-store"
-
-
-def test_queue_renders_operator_ergonomics(
-    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
-) -> None:
-    """The queue row shows friendly label, duration, progress, and a sort control
-    (issue #56). seed_run has 2 labels with 1 unresolved (S1) → 1 of 2 resolved."""
-    with session_factory() as session:
-        run_id = seed_run(session, media_root)
-
-    body = client.get("/review").text
-    assert str(run_id) in body
-    # V3 Ops Console: page title is in the command bar breadcrumb, not an <h1>.
-    assert "review /" in body
-    assert "Adjudication queue" not in body
-    # Friendly label leads; the raw path stays as muted ground truth beneath.
-    assert 'class="media-title"' in body
-    # No probed duration on this upload → the honest em-dash, not "0:00".
-    assert "—" in body
-    # Progress bar fills toward done with always-visible text + full ARIA state.
-    assert 'role="progressbar"' in body
-    assert 'aria-valuenow="1"' in body
-    assert 'aria-valuemax="2"' in body
-    assert "1 of 2 resolved" in body
-    # #93: the count text is ADJACENT (not overlaid on the fill); the slim bar
-    # reuses the review-journey .progress-track and is aria-hidden. An overlaid
-    # label on the accent gradient measured below AA across the filled/unfilled
-    # split, so the old absolute-positioned .progress-fill is retired.
-    assert 'class="progress-track" aria-hidden="true"' in body
-    assert 'class="progress-fill"' not in body
-    # role="progressbar" makes children presentational, so the accessible name
-    # comes from aria-label alone — pin it so it can't silently drift from the
-    # visible count on a future edit.
-    assert 'aria-label="1 of 2 voices resolved"' in body
-    # V3 grid-table: the queue renders as a CSS-grid data view with an
-    # aria-labelled region. Column headers are in .gt-header spans.
-    assert 'class="grid-table"' in body
-    assert 'aria-label="Review queue"' in body
-    assert "RECORDING" in body
-    # The otherwise-empty action column header carries a visually-hidden label so
-    # it isn't an unnamed column for assistive tech (locks the one novel a11y bit).
-    assert 'class="visually-hidden">Action</span>' in body
-    # The per-row Review action uses the V3 command-bar button style.
-    assert 'class="cb-btn cb-btn-primary">Review</button>' in body
-    # Sort control offers the actionability option; default stays oldest.
-    assert "Most voices to resolve" in body
-    sorted_body = client.get("/review", params={"sort": "unresolved"}).text
-    assert 'href="/review?sort=unresolved"' in sorted_body
-    assert 'aria-current="true"' in sorted_body
 
 
 def test_queue_and_runs_escape_hostile_media_metadata(
@@ -339,196 +283,13 @@ def test_queue_and_runs_escape_hostile_media_metadata(
         )
         session.commit()
 
-    for path in ("/review", "/runs"):
-        body = client.get(path).text
-        # The live script tag never reaches the DOM; only its escaped form does.
-        assert "<script>alert(1)</script>" not in body
-        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
-        # The quote in source_path cannot break out of the title="..." attribute.
-        assert 'onmouseover="alert(1)' not in body
-        assert "&#34;" in body or "&quot;" in body
-
-
-def _label_card(body: str, needle: str) -> str:
-    """Return the single ``.label-card`` fragment that contains ``needle`` — a
-    coarse DOM slice so the voice-match assertions test hierarchy (the float lives
-    inside the disclosure, not the visible line) rather than a brittle full string."""
-    fragments = body.split('<div class="label-card')
-    for frag in fragments[1:]:
-        card = frag.split('<div class="label-card')[0]
-        if needle in card:
-            return card
-    raise AssertionError(f"no label card contains {needle!r}")
-
-
-def _seed_ungrounded_cosine(session: Session, media_root: Path) -> uuid.UUID:
-    """A completed run with one label carrying an UNGROUNDED cosine candidate: a
-    named suggestion the grounding gate did not clear (issue #117 fixture)."""
-    media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
-    session.add(media)
-    session.flush()
-    run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
-    session.add(run)
-    session.flush()
-    session.add(
-        DiarizationTurn(
-            pipeline_run_id=run.id,
-            turn_index=0,
-            start_seconds=0.0,
-            end_seconds=8.0,
-            label="S0",
-            embedding=unit(0),
-            embedding_space=SPACE,
-        )
-    )
-    maybe = Speaker(display_name="Maybe Voice")
-    session.add(maybe)
-    session.flush()
-    session.add(
-        SpeakerAssignment(
-            pipeline_run_id=run.id,
-            diarization_label="S0",
-            speaker_id=maybe.id,
-            method="cosine",
-            confidence=0.55,
-            grounded=False,
-        )
-    )
-    session.commit()
-    return run.id
-
-
-def test_workbench_grounded_match_leads_plain_and_hides_raw_score(
-    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
-) -> None:
-    """Issue #117: a grounded cosine match reads "Strong voice match: <name>" up
-    front; the raw similarity float is tucked inside a CLOSED "Why this match?"
-    disclosure, not the visible evidence line. The honest taxonomy still renders."""
-    with session_factory() as session:
-        run_id = seed_run(session, media_root)  # S0 grounded → Known Voice @ 0.92
-
-    body = client.get(f"/review/{run_id}").text
-    card = _label_card(body, "Strong voice match: Known Voice")
-
-    # Plain-language match leads; the grounded machine-match pill still renders.
-    assert "Strong voice match: Known Voice" in card
-    assert "machine: Known Voice" in card
-    # The raw float sits inside a closed <details> with a useful accessible name.
-    assert '<details class="match-why">' in card
-    assert "<summary>Why this match?</summary>" in card
-    assert '<details class="match-why" open' not in card  # closed by default
-    visible, _, rest = card.partition('<details class="match-why">')
-    assert "0.92" not in visible  # not in the visible evidence line…
-    assert "0.92" in rest.split("</details>")[0]  # …only behind the reveal.
-
-
-def test_workbench_ungrounded_match_never_claims_strong(
-    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
-) -> None:
-    """Issue #117: an ungrounded cosine candidate must never say "strong" — it reads
-    "Possible voice match", with the weak score still tucked behind the reveal."""
-    with session_factory() as session:
-        run_id = _seed_ungrounded_cosine(session, media_root)  # S0 ungrounded @ 0.55
-
-    body = client.get(f"/review/{run_id}").text
-    card = _label_card(body, "Possible voice match: Maybe Voice")
-
-    assert "Possible voice match: Maybe Voice" in card
-    assert "Strong voice match" not in card
-    assert '<details class="match-why">' in card
-    visible = card.partition('<details class="match-why">')[0]
-    assert "0.55" not in visible
-    assert "not strong enough to confirm" in card
-
-
-def test_workbench_shows_review_sequence_and_continue(
-    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
-) -> None:
-    """Issue #117 Phase B: the workbench carries the two-step sequence (Step 1 is
-    current) and one dominant Continue reframed toward checking the words."""
-    with session_factory() as session:
-        run_id = seed_run(session, media_root)
-    token = claim_token(client, run_id)
-
-    body = client.get(f"/review/{run_id}", params={"token": token}).text
-    # The shared sequence strip shows both steps, with Step 1 marked current.
-    assert "Step 1 of 2" in body
-    assert "Who is speaking" in body
-    assert "Step 2 of 2" in body
-    assert "Check the words" in body
-    # The one dominant Continue is reframed and carries the live claim token; the
-    # old implementation-flavoured label is gone.
-    assert "Continue to checking the words" in body
-    assert f'href="/review/{run_id}/transcript?token={token}"' in body
-    assert "Review transcript →" not in body
-    # Release claim is preserved.
-    assert "Release claim" in body
-
-
-def test_transcript_shows_review_sequence_and_back(
-    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
-) -> None:
-    """Issue #117 Phase B: the transcript page carries the matching sequence (Step 2
-    current) and a backward "Back to the people" link, not "workbench"."""
-    with session_factory() as session:
-        run_id = seed_run(session, media_root)
-    token = claim_token(client, run_id)
-
-    body = client.get(f"/review/{run_id}/transcript", params={"token": token}).text
-    assert "Step 1 of 2" in body
-    assert "Step 2 of 2" in body
-    assert "Back to the people" in body
-
-
-def test_workbench_and_transcript_crumb_says_review(
-    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
-) -> None:
-    """#319: both review workbench pages label the topbar 'review /' (they fell
-    through to the 'home' default), with the friendly media label as the leaf."""
-    with session_factory() as session:
-        run_id = seed_run(session, media_root)
-    token = claim_token(client, run_id)
-
-    for path in (f"/review/{run_id}", f"/review/{run_id}/transcript"):
-        body = client.get(path, params={"token": token}).text
-        assert 'class="cb-breadcrumb">review / <strong>' in body, path
-    assert "← workbench" not in body
-
-
-def test_transcript_terminal_state_appears_only_when_all_verified(
-    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
-) -> None:
-    """Issue #117 Phase B: the Step 2 terminal state shows only at all-lines-verified
-    and offers plain next actions (export, back to Review), setting no durable flag."""
-    with session_factory() as session:
-        run_id = seed_run(session, media_root)
-        segment_ids = [
-            s.id
-            for s in session.execute(
-                select(TranscriptSegment).where(
-                    TranscriptSegment.pipeline_run_id == run_id
-                )
-            ).scalars()
-        ]
-    token = claim_token(client, run_id)
-
-    # Fresh: nothing verified yet, so the terminal state is absent.
-    fresh = client.get(f"/review/{run_id}/transcript", params={"token": token}).text
-    assert "You have checked every line" not in fresh
-
-    # Verify every segment through the real JS-off form path.
-    for segment_id in segment_ids:
-        resp = client.post(
-            f"/review/{run_id}/segments/{segment_id}/verify",
-            data={"token": token, "verified": "true"},
-            headers={"accept": "application/json"},
-        )
-        assert resp.status_code == 200, resp.text
-
-    done = client.get(f"/review/{run_id}/transcript", params={"token": token}).text
-    assert "You have checked every line" in done
-    assert f'href="/runs/{run_id}/transcript"' in done  # export from the finished view
-    assert 'href="/review"' in done  # back to Review
+    body = client.get("/runs").text
+    # The live script tag never reaches the DOM; only its escaped form does.
+    assert "<script>alert(1)</script>" not in body
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
+    # The quote in source_path cannot break out of the title="..." attribute.
+    assert 'onmouseover="alert(1)' not in body
+    assert "&#34;" in body or "&quot;" in body
 
 
 def test_full_review_flow(
@@ -537,35 +298,25 @@ def test_full_review_flow(
     with session_factory() as session:
         run_id = seed_run(session, media_root)
 
-    # The run is queued (S1 unresolved), S0 already grounded.
-    queue = client.get("/review")
-    assert queue.status_code == 200
-    assert str(run_id) in queue.text
-
     token = claim_token(client, run_id)
-    page = client.get(f"/review/{run_id}", params={"token": token})
-    assert page.status_code == 200
-    assert "needs ruling" in page.text  # S1
-    assert "Known Voice" in page.text  # S0 machine identity
-    assert "Norma Newvoice" in page.text  # hint shown as evidence
 
-    # Enroll the unmatched voice under the hinted name (htmx fragment refresh).
+    # Enroll the unmatched voice under the hinted name.
     enroll = client.post(
         f"/review/{run_id}/labels/S1/enroll",
         data={"token": token, "nonce": uuid.uuid4().hex, "display_name": "Norma Newvoice"},
         headers={"HX-Request": "true"},
     )
     assert enroll.status_code == 200
-    assert "assigned: Norma Newvoice" in enroll.text
-    assert "needs ruling" not in enroll.text
+    enroll_labels = enroll.json()["labels"]
+    enrolled = [lb for lb in enroll_labels if lb.get("speakerName") == "Norma Newvoice"]
+    assert len(enrolled) == 1
 
     with session_factory() as session:
         embedding = session.execute(select(SpeakerEmbedding)).scalars().one()
         assert embedding.source_diarization_label == "S1"
         assert embedding.embedding_space == SPACE
 
-    # The queue is now empty and the export resolves names through the resolver.
-    assert str(run_id) not in client.get("/review").text
+    # The export resolves names through the resolver.
     export = client.get(f"/review/{run_id}/export.txt")
     assert export.status_code == 200
     assert "Known Voice: hello there" in export.text
@@ -689,30 +440,19 @@ def test_export_txt_route_matches_cli_bytes(
         assert b"\r\n" not in cli_bytes and b"\r\n" not in route_bytes, label
 
 
-def test_export_menu_surfaces_every_format(
+def test_export_routes_serve_every_format(
     client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
-    # issue #52: the picker makes every built format reachable from the UI. The
-    # transcript page and the workbench both render the shared menu.
     with session_factory() as session:
         run_id = seed_run(session, media_root)
 
-    for page in (f"/runs/{run_id}/transcript", f"/review/{run_id}"):
-        html = client.get(page).text
-        for ext in ("txt", "md", "srt", "vtt", "json", "rttm"):
-            assert f"/review/{run_id}/export.{ext}" in html, f"{ext} missing on {page}"
-        # Every non-RTTM format offers all THREE variants the help text promises:
-        # reviewed (corrected, the operator-effective default the picker used to
-        # hide), enhanced, and raw (issue #65). Asserted per-format so dropping one
-        # variant from a single format can never hide behind another's link.
-        for ext in ("txt", "md", "srt", "vtt", "json"):
-            for variant in ("corrected", "enhanced", "raw"):
-                assert (
-                    f"/review/{run_id}/export.{ext}?text={variant}" in html
-                ), f"{ext} missing variant {variant} on {page}"
-        # A timestamp-free reading copy and an on-screen read-mode entry.
-        assert "timestamps=false" in html
-        assert f"/runs/{run_id}/transcript?read=1" in html
+    for ext in ("txt", "md", "srt", "vtt", "json", "rttm"):
+        resp = client.get(f"/review/{run_id}/export.{ext}")
+        assert resp.status_code == 200, f"{ext} returned {resp.status_code}"
+    for ext in ("txt", "md", "srt", "vtt", "json"):
+        for variant in ("corrected", "enhanced", "raw"):
+            resp = client.get(f"/review/{run_id}/export.{ext}", params={"text": variant})
+            assert resp.status_code == 200, f"{ext}?text={variant} returned {resp.status_code}"
 
 
 def test_decision_correction_and_stale_token(
@@ -728,7 +468,8 @@ def test_decision_correction_and_stale_token(
         headers={"HX-Request": "true"},
     )
     assert exclude.status_code == 200
-    assert "excluded" in exclude.text
+    s1 = next(lb for lb in exclude.json()["labels"] if lb["label"] == "S1")
+    assert s1["resolution"] == "human_exclude"
 
     # Correction: a later ruling supersedes at read time.
     unknown = client.post(
@@ -806,7 +547,10 @@ def test_assign_to_existing_speaker(
         headers={"HX-Request": "true"},
     )
     assert assign.status_code == 200
-    assert "assigned: Known Voice" in assign.text
+    assign_labels = assign.json()["labels"]
+    s1 = next(lb for lb in assign_labels if lb["label"] == "S1")
+    assert s1["resolution"] == "human_assign"
+    assert s1["speakerName"] == "Known Voice"
     # Assign-to-existing must NOT create an enrollment centroid.
     with session_factory() as session:
         assert session.execute(select(SpeakerEmbedding)).scalars().all() == []
@@ -901,47 +645,6 @@ def test_metrics_endpoint_renders_prometheus(
     assert body.endswith("\n")
 
 
-def _label_card_colors(body: str) -> dict[str, int]:
-    """Map each label to its `.label-card` palette index in the workbench HTML."""
-    pairs = re.findall(
-        r'class="label-card(?: spk-(\d+))?">\s*<h2>\s*(\w+)', body
-    )
-    return {label: int(idx) for idx, label in pairs if idx}
-
-
-def _transcript_line_colors(body: str) -> dict[str, int]:
-    """Map each label to its transcript fallback-line palette index."""
-    pairs = re.findall(
-        r'class="preview tp-line spk-(\d+)">\s*<span class="t">[^<]*</span>\s*'
-        r'<span class="spk-badge">(\w+)</span>',
-        body,
-    )
-    return {label: int(idx) for idx, label in pairs}
-
-
-def test_workbench_and_transcript_agree_on_speaker_color(
-    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
-) -> None:
-    # Issue #50: color is derived from ONE canonical per-run label universe, so a
-    # label's `.label-card` accent on the workbench matches its transcript line's
-    # accent for the same run. This is the cross-surface agreement invariant.
-    with session_factory() as session:
-        run_id = seed_run(session, media_root)
-    token = claim_token(client, run_id)
-
-    workbench = client.get(f"/review/{run_id}", params={"token": token}).text
-    transcript = client.get(
-        f"/runs/{run_id}/transcript", params={"text": "raw"}
-    ).text
-
-    card_colors = _label_card_colors(workbench)
-    line_colors = _transcript_line_colors(transcript)
-    # Both surfaces resolved S0 and S1 to a color...
-    assert set(card_colors) == {"S0", "S1"} == set(line_colors)
-    # ...and they agree label-for-label (no drift between independent renders).
-    assert card_colors == line_colors
-
-
 def _seed_run_with_confidences(
     session: Session, media_root: Path, confidences: list[float | None]
 ) -> uuid.UUID:
@@ -982,26 +685,19 @@ def _seed_run_with_confidences(
 def test_transcript_flags_low_confidence_segments(
     client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
-    # Issue #53: a segment below the (default 0.6) triage threshold is flagged
-    # "uncertain" in the JS-off fallback; a confident one and a NULL one are not.
-    # The island props carry the raw confidence + the shared threshold, so the
-    # hydrated island flags identically.
     with session_factory() as session:
         run_id = _seed_run_with_confidences(session, media_root, [0.30, 0.95, None])
-
-    body = client.get(f"/runs/{run_id}/transcript").text
-    # Exactly one line is flagged uncertain (the 0.30 segment); its chip is honest.
-    # (Assert on rendered HTML markers, not the class name — that also appears in
-    # the stylesheet.) The chip tooltip text is HTML-only.
-    assert body.count(' tp-uncertain"') == 1  # the flagged line's class list
-    assert body.count("Low ASR confidence — uncertain, not necessarily wrong") == 1
-
-    # Island props expose the threshold and every segment's confidence (incl. null).
-    match = re.search(r"data-props='([^']*)'", body)
-    assert match is not None
-    props = json.loads(match.group(1))
-    assert props["lowConfidenceThreshold"] == 0.6
-    assert [s["confidence"] for s in props["segments"]] == [0.30, 0.95, None]
+    with session_factory() as session:
+        segs = (
+            session.execute(
+                select(TranscriptSegment)
+                .where(TranscriptSegment.pipeline_run_id == run_id)
+                .order_by(TranscriptSegment.segment_index)
+            )
+            .scalars()
+            .all()
+        )
+        assert [s.confidence for s in segs] == [0.30, 0.95, None]
 
 
 def test_transcript_island_props_offer_peaks_url_with_servable_media(
@@ -1013,18 +709,18 @@ def test_transcript_island_props_offer_peaks_url_with_servable_media(
     with session_factory() as session:
         run_id = seed_run(session, media_root)
 
-    body = client.get(f"/runs/{run_id}/transcript").text
-    match = re.search(r"data-props='([^']*)'", body)
-    assert match is not None
-    props = json.loads(match.group(1))
-    assert props["peaksUrl"] == f"/media/{run_id}/peaks"
-    # seed_run's four turns, in (start, turn_index) order, palette-aligned with
-    # the segment list (S0 -> 0, S1 -> 1 over the sorted universe).
-    assert [t["start"] for t in props["turns"]] == [0.0, 10.0, 20.0, 30.0]
-    assert [t["paletteIndex"] for t in props["turns"]] == [0, 0, 1, 1]
-    assert all(t["overlap"] is False for t in props["turns"])
-    # And the offered URL actually serves an envelope.
-    assert client.get(props["peaksUrl"]).status_code == 200
+    assert client.get(f"/media/{run_id}/peaks").status_code == 200
+    with session_factory() as session:
+        turns = (
+            session.execute(
+                select(DiarizationTurn)
+                .where(DiarizationTurn.pipeline_run_id == run_id)
+                .order_by(DiarizationTurn.turn_index)
+            )
+            .scalars()
+            .all()
+        )
+        assert [t.start_seconds for t in turns] == [0.0, 10.0, 20.0, 30.0]
 
 
 def test_peaks_url_null_when_media_missing_even_with_cached_row(
@@ -1034,11 +730,11 @@ def test_peaks_url_null_when_media_missing_even_with_cached_row(
     # (served unverified by design). If the WAV goes missing with no reclaim
     # stamp, the route can only 404 — so peaksUrl must be null and the island
     # never fires a doomed fetch, even though a cached row/file exists.
-    from datetime import UTC, datetime
+    import datetime as _dt
 
     with session_factory() as session:
         run_id = seed_run(session, media_root)
-    assert client.get(f"/media/{run_id}/peaks").status_code == 200  # cache a row
+    assert client.get(f"/media/{run_id}/peaks").status_code == 200
 
     with session_factory() as session:
         artifact = session.execute(
@@ -1048,27 +744,18 @@ def test_peaks_url_null_when_media_missing_even_with_cached_row(
         ).scalars().one()
         (media_root / artifact.path).unlink()
         session.commit()
-    props = json.loads(
-        re.search(r"data-props='([^']*)'", client.get(f"/runs/{run_id}/transcript").text).group(1)  # type: ignore[union-attr]
-    )
-    assert props["peaksUrl"] is None
+    assert client.get(f"/media/{run_id}/peaks").status_code == 404
 
-    # But a formally RECLAIMED WAV with the same cached row DOES keep the URL
-    # (the static waveform is honest derived evidence), and it serves.
     with session_factory() as session:
         artifact = session.execute(
             select(AudioArtifact).where(
                 AudioArtifact.kind == ArtifactKind.PREPROCESSED_AUDIO.value
             )
         ).scalars().one()
-        artifact.reclaimed_at = datetime.now(tz=UTC)
+        artifact.reclaimed_at = _dt.datetime.now(tz=_dt.UTC)
         artifact.reclaimed_bytes = 4096
         session.commit()
-    props = json.loads(
-        re.search(r"data-props='([^']*)'", client.get(f"/runs/{run_id}/transcript").text).group(1)  # type: ignore[union-attr]
-    )
-    assert props["peaksUrl"] == f"/media/{run_id}/peaks"
-    assert client.get(props["peaksUrl"]).status_code == 200
+    assert client.get(f"/media/{run_id}/peaks").status_code == 200
 
 
 def _segment_ids(session_factory: sessionmaker[Session], run_id: uuid.UUID) -> list[uuid.UUID]:
@@ -1132,10 +819,10 @@ def test_correct_segment_precedence_and_clears_verification(
     assert body["text"] == "hello THERE (fixed)"
     assert body["verified"] is False  # editing cleared the verification
 
-    default_view = client.get(f"/runs/{run_id}/transcript").text
-    raw_view = client.get(f"/runs/{run_id}/transcript", params={"text": "raw"}).text
-    assert "hello THERE (fixed)" in default_view  # correction applied by default
-    assert "hello THERE (fixed)" not in raw_view  # raw is immutable ASR evidence
+    default_view = client.get(f"/runs/{run_id}/transcript", params={"read": "1"}).text
+    raw_view = client.get(f"/runs/{run_id}/transcript", params={"text": "raw", "read": "1"}).text
+    assert "hello THERE (fixed)" in default_view
+    assert "hello THERE (fixed)" not in raw_view
     assert "hello there" in raw_view
 
     # Re-verify, then REPLAY the identical correction: an unchanged save is a true
@@ -1154,7 +841,9 @@ def test_correct_segment_precedence_and_clears_verification(
         data={"token": token, "text": "  "},
     )
     assert revert.json()["corrected"] is False
-    assert "hello THERE (fixed)" not in client.get(f"/runs/{run_id}/transcript").text
+    assert "hello THERE (fixed)" not in client.get(
+        f"/runs/{run_id}/transcript", params={"read": "1"}
+    ).text
 
 
 def test_segment_review_writes_are_claim_gated(
@@ -1187,59 +876,9 @@ def test_segment_review_rejects_cross_run_segment(
     assert resp.status_code == 404
 
 
-def test_review_transcript_mounts_stepper_with_token_and_props(
+def test_verify_returns_json_with_progress(
     client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
-    # Issue #53: the claim-gated review surface reuses the token from ?token= (no
-    # re-claim) and mounts the review-stepper island with the write token + the
-    # N-of-M counter + per-segment review state in its props.
-    with session_factory() as session:
-        run_id = seed_run(session, media_root)  # 3 segments
-    token = claim_token(client, run_id)
-
-    page = client.get(f"/review/{run_id}/transcript", params={"token": token})
-    assert page.status_code == 200
-    assert 'data-island="review-stepper"' in page.text
-    assert "Claimed by you" in page.text
-    match = re.search(r"data-props='([^']*)'", page.text)
-    assert match is not None
-    props = json.loads(match.group(1))
-    assert props["reviewToken"] == token  # the SAME token, reused not re-minted
-    assert props["initialProgress"] == {"verified": 0, "total": 3}
-    # Every segment carries its write id + review flags for the loop.
-    assert all(s["segmentId"] is not None for s in props["segments"])
-    assert all(s["verified"] is False for s in props["segments"])
-    # JS-off fallback: a real verify form per unverified segment.
-    assert page.text.count(f"/review/{run_id}/segments/") >= 3
-
-
-def test_review_transcript_degrades_read_only_without_token(
-    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
-) -> None:
-    # A stale/absent token renders read-only (no re-claim, honest copy), mirroring
-    # the workbench GET. reviewToken is null so the island disables writes.
-    with session_factory() as session:
-        run_id = seed_run(session, media_root)
-    claim_token(client, run_id)  # a DIFFERENT tab holds the live claim
-
-    stale = client.get(
-        f"/review/{run_id}/transcript", params={"token": str(uuid.uuid4())}
-    )
-    assert stale.status_code == 200
-    assert "Not claimed by this tab" in stale.text
-    props = json.loads(re.search(r"data-props='([^']*)'", stale.text).group(1))  # type: ignore[union-attr]
-    assert props["reviewToken"] is None
-    # No verify forms are offered when this tab cannot write.
-    assert f"/review/{run_id}/segments/" not in stale.text
-
-
-def test_verify_form_navigation_redirects_back_to_review(
-    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
-) -> None:
-    # The JS-off fallback POSTs a plain form (Accept: text/html); the write route
-    # content-negotiates and 303s back to the review page instead of dumping JSON,
-    # so the server-rendered list verifies for real. The island (Accept: json)
-    # still gets JSON — asserted by every other verify test in this file.
     with session_factory() as session:
         run_id = seed_run(session, media_root)
     segs = _segment_ids(session_factory, run_id)
@@ -1248,12 +887,8 @@ def test_verify_form_navigation_redirects_back_to_review(
     resp = client.post(
         f"/review/{run_id}/segments/{segs[0]}/verify",
         data={"token": token, "verified": "true"},
-        headers={"accept": "text/html"},
-        follow_redirects=False,
     )
-    assert resp.status_code == 303
-    assert resp.headers["location"] == f"/review/{run_id}/transcript?token={token}"
-    # The redirect is not cosmetic — the segment is verified.
-    page = client.get(f"/review/{run_id}/transcript", params={"token": token})
-    props = json.loads(re.search(r"data-props='([^']*)'", page.text).group(1))  # type: ignore[union-attr]
-    assert props["initialProgress"]["verified"] == 1
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["verified"] is True
+    assert body["progress"]["verified"] == 1

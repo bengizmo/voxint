@@ -144,4 +144,5 @@ def test_single_alembic_head() -> None:
     # 0058 = auto_enroll_evidence table for threshold calibration, issue #434.
     # 0059 = queue_paused column on app_settings, issue #419.
     # 0060 = synthdetect source_content_hash column, issue #146.
-    assert list(heads) == ["0060"]
+    # 0061 = Decision.REVOKE + voids_decision_id, issue #158.
+    assert list(heads) == ["0061"]

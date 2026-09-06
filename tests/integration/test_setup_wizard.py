@@ -467,11 +467,10 @@ def test_post_finish_flips_onboarding_and_opens_console(
 ) -> None:
     resp = client.post("/setup/finish", data=_form(), follow_redirects=False)
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/review"
+    assert resp.headers["location"] == "/media"
     row = _row(session_factory)
     assert row is not None and row.onboarding_complete is True
-    # The gate now lets a protected route through.
-    assert client.get("/review", follow_redirects=False).status_code == 200
+    assert client.get("/runs", follow_redirects=False).status_code == 200
 
 
 def test_post_finish_without_csrf_is_403_and_not_onboarded(
