@@ -17,13 +17,11 @@ from tests.contracts.test_console2_characterization import _iter_api_routes
 from voxint.api.app import create_app
 from voxint.tutorial.steps import PAGE_ROUTE_NAME, STEP_PAGE, TutorialPage
 
-# The path parameters each tutorial page's route needs to build a URL. The pages
-# without an entry take none; the banner passes ``run_id`` for the run-scoped
-# ones (tutorial_view._step_path).
+# The path parameters each tutorial page's route needs to build a URL. The
+# editor page takes media_id; the run_detail page takes run_id.
 _EXPECTED_PATH_PARAMS: dict[TutorialPage, set[str]] = {
     TutorialPage.RUN_DETAIL: {"run_id"},
-    TutorialPage.WORKBENCH: {"run_id"},
-    TutorialPage.TRANSCRIPT: {"run_id"},
+    TutorialPage.EDITOR: {"media_id"},
 }
 
 

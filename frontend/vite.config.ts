@@ -24,8 +24,6 @@ export default defineConfig({
         main: "src/main.ts",
         tailwind: "src/styles/tailwind.css",
         "transcript-player": "src/entries/transcript-player.tsx",
-        "workbench-player": "src/entries/workbench-player.tsx",
-        "review-stepper": "src/entries/review-stepper.tsx",
         "corrections-editor": "src/entries/corrections-editor.tsx",
         "media-editor": "src/entries/media-editor.tsx",
         "explore": "src/entries/explore.tsx",

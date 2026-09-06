@@ -9,6 +9,7 @@ end-to-end assertion for free by adding a row to the table.
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from tests.contracts.test_console2_characterization import REDIRECT_MAP, Redirec
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
 from voxint.config import Settings
+from voxint.db.models import MediaItem, PipelineRun, RunStatus
 
 CREDS = ("operator", "pw")
 
@@ -31,6 +33,17 @@ def settings(tmp_path: Path) -> Settings:
         media_root=tmp_path,
         csrf_secret="test-csrf-secret-value-0123456789",
     )
+
+
+def _seed_run(session_factory: sessionmaker[Session]) -> tuple[uuid.UUID, uuid.UUID]:
+    with session_factory() as session:
+        media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
+        session.add(media)
+        session.flush()
+        run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
+        session.add(run)
+        session.commit()
+        return run.id, media.id
 
 
 def _client(
@@ -48,16 +61,20 @@ def _client(
 def test_redirect_map_is_live(
     session_factory: sessionmaker[Session], settings: Settings, rule: RedirectRule
 ) -> None:
-    # Honor rule.auth: an auth-gated source is driven with credentials, so the
-    # redirect (not the 401 challenge) is what we assert; a future unauthenticated
-    # rule is driven without them.
     client = _client(session_factory, settings, auth=rule.auth)
-    response = client.get(rule.source, follow_redirects=False)
+    run_id: uuid.UUID | None = None
+    media_id: uuid.UUID | None = None
+    source = rule.source
+    target = rule.target
+    if "{run_id}" in source:
+        run_id, media_id = _seed_run(session_factory)
+        source = source.replace("{run_id}", str(run_id))
+        target = target.replace("{media_id}", str(media_id))
+    response = client.get(source, follow_redirects=False)
     assert response.status_code == rule.status, (
-        f"{rule.source} should {rule.status}-redirect, got {response.status_code}"
+        f"{source} should {rule.status}-redirect, got {response.status_code}"
     )
     location = response.headers["location"]
-    # A redirect may carry a query string (e.g. a claim token); match the path.
-    assert location.split("?")[0] == rule.target, (
-        f"{rule.source} should redirect to {rule.target}, got {location}"
+    assert location.split("?")[0] == target, (
+        f"{source} should redirect to {target}, got {location}"
     )

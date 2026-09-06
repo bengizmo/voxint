@@ -153,7 +153,7 @@ def test_onboarded_request_reaches_the_handler(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
     seed_onboarded(session_factory)
-    resp = client.get("/review", follow_redirects=False)
+    resp = client.get("/runs", follow_redirects=False)
     assert resp.status_code == 200
 
 
@@ -173,9 +173,9 @@ def test_gate_reads_onboarding_fresh_each_request(
 ) -> None:
     # No app.state cache: completing onboarding out of band (as the Celery worker
     # would, in its own process) is visible to the very next request.
-    assert client.get("/review", follow_redirects=False).status_code == 303
+    assert client.get("/runs", follow_redirects=False).status_code == 303
     seed_onboarded(session_factory)
-    assert client.get("/review", follow_redirects=False).status_code == 200
+    assert client.get("/runs", follow_redirects=False).status_code == 200
 
 
 # ------------------------------------------------------------ inventory guard

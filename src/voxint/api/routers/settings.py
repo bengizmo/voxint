@@ -1950,7 +1950,7 @@ def setup_finish(
         return RedirectResponse(
             f"/runs/{seeded_run_id}?tutorial=run", status_code=303
         )
-    return RedirectResponse("/review", status_code=303)
+    return RedirectResponse("/media", status_code=303)
 
 
 # ---- Settings + guided-tutorial lifecycle (issue #3, slice 6) --------------

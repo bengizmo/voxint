@@ -93,7 +93,7 @@ def _claim(client: TestClient, run_id: uuid.UUID) -> str:
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    return resp.headers["location"].split("token=")[1]
+    return resp.headers["location"].split("token=")[1].split("&")[0]
 
 
 def test_split_expands_parent_into_children(

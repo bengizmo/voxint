@@ -31,6 +31,7 @@ import {
   SAVE_EDIT_LABEL,
 } from "./keymap";
 import { type LabelStateShape, type LabelsResult, SpeakerRail } from "./SpeakerRail";
+import { UndoToast } from "./UndoToast";
 import {
   type Segment,
   type SplitWord,
@@ -262,6 +263,8 @@ export function MediaEditor({
   );
 
   const writable = reviewToken !== null && !claimLost;
+  const [undoInfo, setUndoInfo] = useState<LabelsResult["undo"] | null>(null);
+  const [labelStates, setLabelStates] = useState(initialLabelStates);
 
   const { cursor, setCursor, goTo, jumpNext, remaining } = useWalkCursor(
     segments,
@@ -281,6 +284,8 @@ export function MediaEditor({
     (result: LabelsResult) => {
       setSegments(result.segments);
       setProgress(result.progress);
+      setLabelStates(result.labels);
+      setUndoInfo(result.undo ?? null);
       void reloadAnnotationsRef.current?.();
     },
     [setSegments, setProgress],
@@ -1104,7 +1109,7 @@ export function MediaEditor({
             runId={runId}
             reviewToken={reviewToken}
             writable={writable}
-            labelStates={initialLabelStates}
+            labelStates={labelStates}
             speakers={speakers}
             onClaimLost={onAnnotationClaimLost}
             onLabelsChanged={onLabelsChanged}
@@ -1130,6 +1135,20 @@ export function MediaEditor({
           ]}
         />
       </div>
+      {undoInfo && reviewToken && (
+        <UndoToast
+          undo={undoInfo}
+          runId={runId}
+          reviewToken={reviewToken}
+          claimCsrf={claimCsrf}
+          onClaimLost={onAnnotationClaimLost}
+          onUndone={(data) => {
+            setUndoInfo(null);
+            onLabelsChanged(data);
+          }}
+          onDismiss={() => setUndoInfo(null)}
+        />
+      )}
     </>
   );
 }

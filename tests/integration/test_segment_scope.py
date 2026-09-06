@@ -220,21 +220,9 @@ def test_segment_override_canonicalizes_through_merge(
     assert "Source Speaker" not in export
 
 
-def test_html_transcript_and_export_agree(
-    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
-) -> None:
-    with session_factory() as session:
-        run_id = seed_run(session, media_root)
-    other = add_speaker(session_factory, "Other Person")
-    segs = segment_ids(session_factory, run_id)
-    token = claim_token(client, run_id)
-    relabel(client, run_id, segs[0], token, action="assign", speaker_id=other)
 
-    export = client.get(f"/review/{run_id}/export.txt").text
-    html = client.get(f"/runs/{run_id}/transcript").text
-    # Both surfaces resolve the overridden segment to the same speaker.
-    assert "Other Person: hello there" in export
-    assert "Other Person" in html
+# test_html_transcript_and_export_agree was removed in issue #158 (interactive
+# transcript retired; export agreement tested by read-mode tests).
 
 
 def test_speaker_search_stays_label_scoped(
@@ -384,34 +372,9 @@ def test_segment_scope_exclude_is_db_rejected(
         session.flush()
 
 
-def test_workbench_renders_two_scope_controls(
-    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
-) -> None:
-    with session_factory() as session:
-        run_id = seed_run(session, media_root)
-    other = add_speaker(session_factory, "Other Person")
-    segs = segment_ids(session_factory, run_id)
-    token = claim_token(client, run_id)
 
-    # Before any override: the per-segment "reassign" control is offered.
-    page = client.get(f"/review/{run_id}?token={token}").text
-    assert "reassign segment" in page
-    assert f"/review/{run_id}/segments/" in page
-
-    # After an override: the workbench shows the this-segment attribution + reset.
-    relabel(client, run_id, segs[0], token, action="assign", speaker_id=other)
-    fragment = client.post(
-        f"/review/{run_id}/segments/{segs[0]}/relabel",
-        data={
-            "token": token,
-            "nonce": uuid.uuid4().hex,
-            "action": "assign",
-            "speaker_id": str(other),
-        },
-        headers=HX,
-    ).text
-    assert "Other Person (this segment)" in fragment
-    assert "reset to label" in fragment
+# test_workbench_renders_two_scope_controls was removed in issue #158 (workbench
+# retired; scope controls now in the editor island).
 
 
 def test_segment_relabel_validation_and_idempotency(

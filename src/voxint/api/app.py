@@ -38,6 +38,10 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from voxint import __version__
 from voxint.api.routers.account import router as account_router
 from voxint.api.routers.activity import router as activity_router
+from voxint.api.routers.adjudication_api import (
+    redirect_transcript_router as adjudication_transcript_redirect_router,
+)
+from voxint.api.routers.adjudication_api import router as adjudication_router
 from voxint.api.routers.auth_pages import router as auth_router
 from voxint.api.routers.deps import (
     _APP_ASSET_MEDIA_TYPES,
@@ -56,8 +60,6 @@ from voxint.api.routers.editor import router as editor_router
 from voxint.api.routers.explore import router as explore_router
 from voxint.api.routers.home import router as home_router
 from voxint.api.routers.jobs import router as jobs_router
-from voxint.api.routers.legacy_review import router as review_router
-from voxint.api.routers.legacy_review import transcript_router as review_transcript_router
 from voxint.api.routers.legacy_runs import (
     actions_router as runs_actions_router,
 )
@@ -621,15 +623,18 @@ def _register_routes(app: FastAPI) -> None:
             headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return FileResponse(candidate, media_type=media_type, headers=headers)
 
-    console.include_router(review_transcript_router)
+    # ---- Legacy review transcript redirect (issue #158): the old
+    # /review/{run_id}/transcript page redirects to the editor. Registered
+    # at the same position the retired transcript_router occupied.
+    console.include_router(adjudication_transcript_redirect_router)
 
     # ---- Run actions (requeue/cancel/archive/notes/export): moved to
     # routers/legacy_runs.py; included here to keep registration order.
     console.include_router(runs_actions_router)
 
     # ---- Review queue, workbench, annotations (issues #16/#86): moved to
-    # routers/legacy_review.py; included here to keep registration order.
-    console.include_router(review_router)
+    # routers/adjudication_api.py; included here to keep registration order.
+    console.include_router(adjudication_router)
 
     # ---- Metrics, dashboard, resources: moved to routers/legacy_runs.py;
     # included here to keep registration order.

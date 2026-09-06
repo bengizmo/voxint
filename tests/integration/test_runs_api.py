@@ -6,7 +6,6 @@ rendering + error mapping.
 """
 
 import html
-import json
 import re
 import uuid
 from collections.abc import Iterable
@@ -569,249 +568,10 @@ def test_parse_transcript_text_defaults_and_rejects() -> None:
         parse_transcript_text("sideways")
 
 
-def test_transcript_variants_select_text(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    with session_factory() as session:
-        run_id = make_run(
-            session,
-            labels=["S0", "S1"],
-            grounded=["S0"],
-            decided=["S1"],  # exclude
-            segments=[
-                ("S0", "raw hello", "enhanced hello"),
-                ("S1", "raw goodbye", None),  # no enhancement → raw fallback
-            ],
-        )
-    enhanced = client.get(f"/runs/{run_id}/transcript", params={"text": "enhanced"})
-    assert enhanced.status_code == 200
-    assert "enhanced hello" in enhanced.text
-    assert "raw goodbye" in enhanced.text  # enhanced NULL → falls back to raw
-    assert "(excluded) S1" in enhanced.text
-    # The requested variant's tab is marked current; the other is not.
-    assert 'aria-current="page">enhanced' in enhanced.text
-    assert 'aria-current="page">raw' not in enhanced.text
 
-    raw = client.get(f"/runs/{run_id}/transcript", params={"text": "raw"}).text
-    assert "raw hello" in raw
-    assert "enhanced hello" not in raw  # raw view ignores enhancement
-    assert "raw goodbye" in raw
-
-
-def test_transcript_defaults_to_enhanced(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    with session_factory() as session:
-        run_id = make_run(
-            session,
-            labels=["S0"],
-            grounded=["S0"],
-            segments=[("S0", "raw only", "enhanced only")],
-        )
-    # No text= → default 'corrected'; with no correction it falls through to
-    # enhanced (then raw), so the DISPLAYED transcript renders exactly as before.
-    body = client.get(f"/runs/{run_id}/transcript").text
-    assert "enhanced only" in body
-    (seg,) = _island_props(body)["segments"]
-    # The effective (displayed) text is the enhanced fallback, never the raw text.
-    assert seg["text"] == "enhanced only"
-    # #83 exposes the immutable raw text to the review island as hydration data
-    # (for the compare / reset-to-raw affordance), so it appears in the data-props
-    # JSON by design — but it must never be the rendered line text nor leak into
-    # the JS-off fallback the operator reads.
-    assert seg["rawText"] == "raw only"
-    body_without_props = re.sub(r"data-props='[^']*'", "", body)
-    assert "raw only" not in body_without_props
-
-
-def test_transcript_attribution_and_export_agree(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    with session_factory() as session:
-        run_id = make_run(
-            session,
-            labels=["S0", "S1", "S2", "S3"],
-            grounded=["S0"],  # grounded cosine → speaker name
-            decided=["S1"],  # exclude → "(excluded) S1"
-            segments=[
-                ("S0", "s0 raw", "s0 enh"),
-                ("S1", "s1 raw", None),
-                ("S2", "s2 raw", None),
-                ("S3", "s3 raw", None),
-                ("GHOST", "ghost raw", None),  # label with no turn → state None
-                (None, "nameless raw", None),  # NULL label → "(no speaker)"
-            ],
-        )
-        session.add(  # S2 gets an 'unknown' ruling; S3 stays unresolved
-            AdjudicationDecision(
-                pipeline_run_id=run_id,
-                diarization_label="S2",
-                decision="unknown",
-                operator="reviewer",
-                idempotency_key=uuid.uuid4().hex,
-            )
-        )
-        session.commit()
-        s0_name = session.execute(
-            select(Speaker.display_name)
-            .join(SpeakerAssignment, SpeakerAssignment.speaker_id == Speaker.id)
-            .where(
-                SpeakerAssignment.pipeline_run_id == run_id,
-                SpeakerAssignment.diarization_label == "S0",
-            )
-        ).scalar_one()
-
-    body = client.get(f"/runs/{run_id}/transcript", params={"text": "enhanced"}).text
-    assert s0_name in body  # GROUNDED_COSINE
-    assert "(excluded) S1" in body  # HUMAN_EXCLUDE
-    assert "Unknown (S2)" in body  # HUMAN_UNKNOWN
-    # UNRESOLVED and no-turn labels attribute to the bare label; the #50 markup
-    # shows it once, via the raw-label badge, and suppresses the duplicate
-    # "<strong>label:</strong>" (speaker == raw label).
-    assert '<span class="spk-badge">S3</span>' in body  # UNRESOLVED → bare label
-    assert '<span class="spk-badge">GHOST</span>' in body  # no turn → state None
-    assert "(no speaker)" in body  # NULL diarization label (no badge, keeps strong)
-    # #50: a transcript-only label (GHOST — a segment whose label has no turn) is
-    # still colored, because the palette universe is turns and segments. Its line
-    # carries a spk-N class, not the uncolored fallback.
-    assert re.search(
-        r'class="preview tp-line spk-\d+">\s*<span class="t">[^<]*</span>\s*'
-        r'<span class="spk-badge">GHOST</span>',
-        body,
-    ), "transcript-only label GHOST must still receive a color class"
-
-    # Shared presenter: export.txt attributes every label identically.
-    export = client.get(f"/review/{run_id}/export.txt").text
-    for speaker in (s0_name, "(excluded) S1", "Unknown (S2)", "(no speaker)"):
-        assert speaker in export
-
-
-def _island_props(body: str) -> dict[str, Any]:
-    """Parse the transcript-player island's server-rendered `data-props` JSON.
-
-    The template writes ``data-props='{{ island_props|tojson }}'``; Jinja's
-    ``tojson`` escapes ``<>&'`` to \\uXXXX, so no literal single quote appears
-    inside the attribute value and a greedy-to-first-quote match is safe.
-    """
-    match = re.search(r"data-props='([^']*)'", body)
-    assert match is not None, "island mount node missing"
-    return json.loads(html.unescape(match.group(1)))
-
-
-def test_transcript_island_props_carry_palette_and_label(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    # Issue #50: island segments carry the raw `label` + a `paletteIndex` so the
-    # hydrated island colors lines identically to the JS-off fallback.
-    with session_factory() as session:
-        run_id = make_run(
-            session,
-            labels=["S0", "S1"],
-            grounded=["S0"],
-            segments=[
-                ("S0", "s0 raw", "s0 enh"),
-                ("S1", "s1 raw", "s1 enh"),
-            ],
-        )
-    body = client.get(f"/runs/{run_id}/transcript", params={"text": "enhanced"}).text
-    props = _island_props(body)
-    segments = props["segments"]
-    assert [s["label"] for s in segments] == ["S0", "S1"]
-    # Sorted-positional assignment over the canonical universe {S0, S1}.
-    assert [s["paletteIndex"] for s in segments] == [0, 1]
-
-
-def test_transcript_island_props_carry_turns_and_gate_peaks_url(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    # Issue #57: the waveform strip paints DIARIZATION TURNS (the honest
-    # who-spoke-when record), serialized in (start, turn_index) order with the
-    # SAME palette indices the segment list uses. peaksUrl is server-owned
-    # truth: this run has no servable media and no cached envelope, so it is
-    # null and the island never issues a doomed fetch.
-    with session_factory() as session:
-        run_id = make_run(
-            session,
-            labels=["S0", "S1"],
-            grounded=["S0"],
-            segments=[
-                ("S0", "s0 raw", "s0 enh"),
-                ("S1", "s1 raw", "s1 enh"),
-            ],
-        )
-    body = client.get(f"/runs/{run_id}/transcript", params={"text": "enhanced"}).text
-    props = _island_props(body)
-    assert props["turns"] == [
-        {"start": 0.0, "end": 8.0, "paletteIndex": 0, "overlap": False},
-        {"start": 10.0, "end": 18.0, "paletteIndex": 1, "overlap": False},
-    ]
-    # Turn colors can never diverge from the list badges: same palette mapping.
-    seg_palette = {s["label"]: s["paletteIndex"] for s in props["segments"]}
-    assert [t["paletteIndex"] for t in props["turns"]] == [
-        seg_palette["S0"],
-        seg_palette["S1"],
-    ]
-    assert props["peaksUrl"] is None
-    # The strip is island-only enhancement: the JS-off fallback carries no
-    # waveform markup (its absence IS the fallback).
-    assert "waveform-strip" not in body
-
-
-def test_transcript_fallback_lines_carry_color_class_and_badge(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    # Issue #50: the JS-off fallback markup shows the same color class + raw-label
-    # badge as the hydrated island (progressive-enhancement parity).
-    with session_factory() as session:
-        run_id = make_run(
-            session,
-            labels=["S0", "S1"],
-            grounded=["S0"],
-            segments=[
-                ("S0", "s0 raw", "s0 enh"),
-                ("S1", "s1 raw", "s1 enh"),
-            ],
-        )
-    body = client.get(f"/runs/{run_id}/transcript", params={"text": "enhanced"}).text
-    assert "spk-0" in body
-    assert "spk-1" in body
-    # Raw-label badge: the shared non-color identity cue.
-    assert '<span class="spk-badge">S0</span>' in body
-    assert '<span class="spk-badge">S1</span>' in body
-
-
-def test_transcript_same_label_same_color_class(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    # Issue #50: every line of the SAME diarization label gets the SAME spk-N
-    # class — color is per-identity, deterministic, not per-line.
-    with session_factory() as session:
-        run_id = make_run(
-            session,
-            labels=["S0", "S1"],
-            grounded=["S0"],
-            segments=[
-                ("S0", "first s0", "first s0"),
-                ("S1", "a s1", "a s1"),
-                ("S0", "second s0", "second s0"),
-            ],
-        )
-    body = client.get(f"/runs/{run_id}/transcript", params={"text": "enhanced"}).text
-    # Pull the spk-N class off each fallback <p class="preview tp-line ...">.
-    classes = re.findall(r'class="preview tp-line spk-(\d+)"', body)
-    assert len(classes) == 3
-    # Two S0 lines (indices 0 and 2) share a class; the S1 line differs.
-    assert classes[0] == classes[2]
-    assert classes[0] != classes[1]
-
-
-def test_transcript_unknown_text_is_422(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    with session_factory() as session:
-        run_id = make_run(session, labels=["S0"], grounded=["S0"])
-    resp = client.get(f"/runs/{run_id}/transcript", params={"text": "sideways"})
-    assert resp.status_code == 422
+# Interactive transcript page tests (variants, island props, fallback lines,
+# color classes, text validation) were removed in issue #158: the interactive
+# transcript stepper is retired and redirects to the media editor.
 
 
 def test_transcript_unknown_run_404(client: TestClient) -> None:
@@ -844,54 +604,10 @@ def test_run_detail_multi_artifact_hides_audio_link(
     assert f"/media/{run_id}" not in client.get(f"/runs/{run_id}").text
 
 
-def test_export_bytes_exact_and_html_shares_lines(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    # Byte-exact export (the presenter refactor must not shift a single space or
-    # the trailing newline), and the same attributed lines land in the HTML view.
-    with session_factory() as session:
-        run_id = make_run(
-            session,
-            labels=["S0", "S1"],
-            grounded=["S0"],
-            decided=["S1"],  # exclude
-            segments=[("S0", "s0 raw", "s0 enh"), ("S1", "s1 raw", None)],
-        )
-        s0 = session.execute(
-            select(Speaker.display_name)
-            .join(SpeakerAssignment, SpeakerAssignment.speaker_id == Speaker.id)
-            .where(
-                SpeakerAssignment.pipeline_run_id == run_id,
-                SpeakerAssignment.diarization_label == "S0",
-            )
-        ).scalar_one()
-    # Seg 0 @ [0,8] enhanced; seg 1 @ [10,18] excluded, enhanced NULL → raw.
-    expected = (
-        f"[{0.0:9.2f} {8.0:9.2f}] {s0}: s0 enh\n"
-        f"[{10.0:9.2f} {18.0:9.2f}] (excluded) S1: s1 raw\n"
-    )
-    export = client.get(f"/review/{run_id}/export.txt")
-    assert export.content == expected.encode()  # byte-exact, incl. trailing NL
 
-    body = client.get(f"/runs/{run_id}/transcript", params={"text": "enhanced"}).text
-    assert s0 in body and "s0 enh" in body
-    assert "(excluded) S1" in body and "s1 raw" in body
-
-
-def test_transcript_html_escaped(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    payload = "<script>alert(1)</script>"
-    with session_factory() as session:
-        run_id = make_run(
-            session,
-            labels=["S0"],
-            grounded=["S0"],
-            segments=[("S0", payload, None)],
-        )
-    body = client.get(f"/runs/{run_id}/transcript", params={"text": "raw"}).text
-    assert payload not in body
-    assert "&lt;script&gt;" in body
+# test_export_bytes_exact_and_html_shares_lines and test_transcript_html_escaped
+# were removed in issue #158 (interactive transcript retired; export byte-exact
+# tests are covered by test_export_formats_content_types_and_payloads).
 
 
 # --- read mode + Markdown export (issue #65) ----------------------------------
@@ -970,33 +686,10 @@ def test_transcript_read_mode_preserves_query_in_toggles(
     assert 'aria-current="page">raw' in body
 
 
-def test_transcript_read_mode_entry_link_on_normal_view(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    # The normal (island) view offers a prominent timestamp-free reading entry and
-    # keeps its player island — read mode is opt-in, never the default.
-    with session_factory() as session:
-        run_id = make_run(
-            session, labels=["S0"], grounded=["S0"], segments=[("S0", "r", "e")]
-        )
-    body = client.get(f"/runs/{run_id}/transcript").text
-    assert f'href="/runs/{run_id}/transcript?text=corrected&read=1&timestamps=false"' in body
-    assert 'data-island="transcript-player"' in body
-    assert "<h2>" not in body  # normal mode uses inline attribution, not headings
 
-
-def test_export_menu_read_link_keeps_active_variant(
-    client: TestClient, session_factory: sessionmaker[Session]
-) -> None:
-    # Opening "Read on screen" from a raw/enhanced view must not silently switch
-    # the wording back to reviewed: the picker's read link carries the current
-    # text variant through.
-    with session_factory() as session:
-        run_id = make_run(
-            session, labels=["S0"], grounded=["S0"], segments=[("S0", "r", "e")]
-        )
-    raw = client.get(f"/runs/{run_id}/transcript", params={"text": "raw"}).text
-    assert f"/runs/{run_id}/transcript?read=1&amp;timestamps=false&amp;text=raw" in raw
+# test_transcript_read_mode_entry_link_on_normal_view and
+# test_export_menu_read_link_keeps_active_variant were removed in issue #158
+# (interactive transcript retired; read mode entry is now via the editor).
 
 
 def test_transcript_read_mode_attribution_matches_export(
