@@ -1,5 +1,7 @@
 # Voxint pyannote service — pyannote/speaker-diarization-3.1 on pyannote.audio 3.1.1.
 # Contract: docs/gpu-contracts.md (POST /v1/diarize, GET /healthz).
+# CUDA 12.8.1 base + torch 2.8.0/cu128 — serves sm_70 through sm_120 (Blackwell).
+# The cu128 torch wheels vendor their own cuDNN, so the plain runtime base suffices.
 # The image bakes the vendored diarization weights (~33 MB): before building,
 # place the two checkpoints at services/pyannote/models/*.bin — download them
 # from the pyannote-models-v1 asset release (CI path) or from the upstream HF
@@ -7,7 +9,7 @@
 # The build FAILS unless their sha256s match the ARGs below. HF_TOKEN is no
 # longer needed for the default pipeline; DIARIZER_MODEL_NAME + HF_TOKEN at
 # runtime restore the online Hugging Face path.
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -21,12 +23,14 @@ RUN apt-get update && apt-get install -y \
 # which setuptools 81 removed (same pin + boot canary as Dockerfile.cpu).
 RUN pip3 install --no-cache-dir --upgrade pip wheel "setuptools>=70,<81"
 
-# numpy first, then torch from the cu118 index, then everything else — the
+# numpy first, then torch from the cu128 index, then everything else — the
 # order prevents the resolver from dragging in incompatible torch builds.
+# torch < 2.9 is hard-pinned: torchaudio 2.9 removed set_audio_backend(),
+# which pyannote 3.1.1 calls at import.
 RUN pip3 install --no-cache-dir "numpy==1.24.3"
 RUN pip3 install --no-cache-dir \
-    torch==2.5.0+cu118 torchaudio==2.5.0+cu118 \
-    --index-url https://download.pytorch.org/whl/cu118
+    torch==2.8.0+cu128 torchaudio==2.8.0+cu128 \
+    --index-url https://download.pytorch.org/whl/cu128
 
 COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
@@ -65,6 +69,10 @@ COPY --chown=voxint:voxint app/ /app/app/
 ENV TORCH_HOME=/app/models
 ENV HF_HOME=/app/models
 ENV HUGGINGFACE_HUB_CACHE=/app/models
+# torch >=2.6 defaults torch.load(weights_only=True); the pyannote 3.1.x
+# checkpoints pickle torch.torch_version.TorchVersion, which that mode
+# rejects. The checkpoints are vendored and sha-verified above.
+ENV TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 ENV CUDA_DEVICE_ORDER=PCI_BUS_ID
 # Explicit (the CUDA base image also sets it): "utility" mounts libnvidia-ml so
 # the /healthz telemetry sampler can read NVML. Losing it degrades telemetry to
