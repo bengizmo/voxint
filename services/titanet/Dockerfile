@@ -15,15 +15,26 @@ FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
+# Python 3.11 from deadsnakes (matching Dockerfile.cpu's python:3.11-slim).
+# onnxruntime-gpu >= 1.24 requires Python >= 3.11; Ubuntu 22.04 ships 3.10.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 python3-pip libgomp1 libsndfile1 ffmpeg curl \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv libgomp1 libsndfile1 ffmpeg curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -r voxint && useradd -r -g voxint -s /bin/bash voxint
 
-RUN pip3 install --no-cache-dir --upgrade pip wheel
+RUN curl -sSL https://bootstrap.pypa.io/get-pip.py | python3.11
+RUN python3.11 -m pip install --no-cache-dir --upgrade pip wheel
 
 COPY requirements.txt /tmp/requirements.txt
-RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+RUN python3.11 -m pip install --no-cache-dir -r /tmp/requirements.txt
+# onnxruntime-gpu 1.28+ is not on PyPI; the CUDA 12 build lives on
+# Microsoft's feed. Installed separately so the extra index does not
+# affect the other packages.
+RUN python3.11 -m pip install --no-cache-dir onnxruntime-gpu==1.28.0 \
+    --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
 
 # Overriding this ARG produces a NON-PROVENANCE build (dev-only escape hatch);
 # release CI never overrides it.
@@ -57,4 +68,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 EXPOSE 8021
 
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "python3.11 -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

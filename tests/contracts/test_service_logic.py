@@ -2572,6 +2572,26 @@ class TestCudaTitanetImageProvenance:
             "the image would silently run on CPUExecutionProvider"
         )
 
+    def test_cuda_onnxruntime_gpu_version_matches_cpu(self) -> None:
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        cpu_reqs = (REPO_ROOT / "services" / "titanet" / "requirements.cpu.txt").read_text()
+        cpu_match = re.search(r"^onnxruntime==([0-9.]+)$", cpu_reqs, re.MULTILINE)
+        assert cpu_match is not None
+        cpu_pin = cpu_match.group(1)
+
+        dockerfile = self._dockerfile()
+        gpu_match = re.search(r"onnxruntime-gpu==([0-9.]+)", dockerfile)
+        assert gpu_match is not None, (
+            "services/titanet/Dockerfile lost its onnxruntime-gpu version pin"
+        )
+        assert gpu_match.group(1) == cpu_pin, (
+            f"CUDA Dockerfile pins onnxruntime-gpu=={gpu_match.group(1)} but "
+            f"requirements.cpu.txt pins onnxruntime=={cpu_pin} — bump together"
+        )
+
 
 class TestWhisperOfflineStartup:
     """Weights are baked/pre-downloaded, so no whisper deployment may phone

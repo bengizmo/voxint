@@ -16,10 +16,9 @@ numba==0.58.1
 pyloudnorm==0.1.0
 noisereduce==2.0.1
 
-# Inference engine — CUDA EP via onnxruntime-gpu. The ONNX graph is the
-# same sha-pinned export used by the CPU image; onnxruntime-gpu provides
-# the CUDAExecutionProvider for GPU acceleration on NVIDIA hardware.
-onnxruntime-gpu==1.28.0
+# Inference engine: onnxruntime-gpu 1.28.0 is installed in the Dockerfile
+# from Microsoft's CUDA 12 feed (not on PyPI). The ONNX graph is the same
+# sha-pinned export used by the CPU image.
 
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
