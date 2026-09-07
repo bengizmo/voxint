@@ -1217,6 +1217,33 @@ model services (whisper, pyannote, titanet) and the synthdetect container are
 Gates A/R/M carried on byte-identical services; Gate E skipped (editor template
 and schema additions only, no functional pipeline or island change).
 
+#### Verdict: Blackwell image rebuilds, Gate A PASS all three services (2026-09-06)
+
+PRs #461 (titanet), #462 (whisper), #463 (pyannote) rebuild all three CUDA
+model-service images for Blackwell (sm_120). One set of images now serves
+sm_70 through sm_120. Gate A run on maintainer NVIDIA hardware (RTX 5090 32 GB,
+driver 610.43.02 open, CUDA 12.8.1) against the committed CUDA references.
+
+- **titanet** (#427, PR #461): NeMo/torch stack replaced with ONNX Runtime GPU
+  (`onnxruntime-gpu==1.28.0`, CUDAExecutionProvider, CUDA 12.8.1-cudnn-runtime,
+  Python 3.11 via deadsnakes). Same sha-pinned ONNX graph as the CPU image.
+  3-level parity gate: vector cosine min 0.9999964 / p50 0.9999991 (gate
+  >= 0.9995), 0 skip mismatches, SNR drift 0.00 dB, 465 pairs evaluated with
+  max drift 0.000528 (gate <= 0.002), 0 gate crossings at 0.60/0.70. **PASS.**
+- **whisper** (#429, PR #462): CUDA 12.8.1 base (was 12.4.1), torch 2.8.0+cu128
+  (was 2.1.1+cu121), CT2 4.8.2. cuDNN symlink shim removed. `CUDA_CACHE_PATH`
+  added for PTX JIT persistence. Transcript: **byte-identical** to the committed
+  CUDA reference (431 chars, 2 segments, language en). Confidence 0.8445
+  (ref 0.8457, within engine variance). **PASS.**
+- **pyannote** (#428, PR #463): CUDA 12.8.1-runtime base (was 11.8-cudnn8-runtime),
+  torch 2.8.0+cu128 (was 2.5.0+cu118), `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`.
+  Diarization response: **byte-identical** to the committed CUDA reference
+  (3 speakers, 7 turns). Checkpoint fingerprint `aa94a2d9...` matches the
+  validated value. Diarization config hash `9a31a4a4...` matches. **PASS.**
+
+Gate R (ROCm) and Gate M (Metal) are unaffected (no `-rocm`, `-cpu`, or metal
+path changes in these PRs; those flavors carry their standing verdicts).
+
 #### Verdict: v0.33.0, Gate A PASS, Gate R/M carry, Gate E deferred (2026-09-03)
 
 v0.33.0 ships the TitaNet v2 window-cap and embedding-space bump (#424), the

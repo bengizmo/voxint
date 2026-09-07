@@ -6,6 +6,26 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **Blackwell (sm_120) support for all GPU model-service images** (#426).
+  All three CUDA images rebuilt on CUDA 12.8.1. One set of images now serves
+  sm_70 through sm_120 (Ampere, Ada Lovelace, Blackwell). Gate A passed on
+  RTX 5090 with results byte-identical (whisper, pyannote) or within tight
+  ratcheted bounds (titanet cosine >= 0.9999) to the committed CUDA references.
+  - **titanet** (#427): NeMo/torch stack replaced with ONNX Runtime GPU
+    (onnxruntime-gpu 1.28.0 CUDAExecutionProvider). Python 3.11 via deadsnakes.
+    Same sha-pinned ONNX graph as the CPU image, no weights change. Much smaller
+    image (no NeMo, no torch, no CUDA devel layer).
+  - **whisper** (#429): CUDA 12.8.1 base (was 12.4.1), torch 2.8.0+cu128
+    (was 2.1.1), CTranslate2 4.8.2. cuDNN 9-to-8 symlink shim removed
+    (CT2 4.8.2 links no cuDNN). PTX JIT cache (`CUDA_CACHE_PATH`) added for
+    sm_120 first-run warmup.
+  - **pyannote** (#428): CUDA 12.8.1 runtime base (was 11.8 cudnn8-runtime),
+    torch 2.8.0+cu128 (was 2.5.0+cu118). `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`
+    added (torch >= 2.6 defaults `weights_only=True`, which rejects pyannote
+    3.1.x checkpoints). Plain runtime base suffices because the cu128 torch
+    wheels vendor their own cuDNN.
+
 ### Added
 - **Speaker-attribution GPU baseline** (#113 A5). First measured baseline for
   speaker attribution quality: 44 enrollment + 10 test AMI Mix-Headset
