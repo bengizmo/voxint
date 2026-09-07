@@ -33,7 +33,7 @@ RUN pip3 install --no-cache-dir --upgrade pip wheel "setuptools>=70,<81"
 # else — the order prevents the resolver from dragging in incompatible builds.
 RUN pip3 install --no-cache-dir "numpy==1.24.3"
 RUN pip3 install --no-cache-dir \
-    torch==2.5.0 torchaudio==2.5.0 \
+    torch==2.8.0 torchaudio==2.8.0 \
     --index-url https://download.pytorch.org/whl/cpu
 
 COPY requirements.txt /tmp/requirements.txt

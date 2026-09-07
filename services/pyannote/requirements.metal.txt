@@ -4,9 +4,9 @@
 # source — flavor drift is impossible); this file adds only what the
 # Dockerfiles install outside that file:
 #
-# - torch/torchaudio 2.5.0: the exact versions Dockerfile.cpu pins, and the
-#   versions the Phase 0 MPS spike measured (DER identical to CPU on the
-#   spike corpus, 3x repeat runs bit-stable). On macOS arm64 the default
+# - torch/torchaudio 2.8.0: the exact versions Dockerfile.cpu pins. torch < 2.9
+#   is hard-pinned: torchaudio 2.9 removed set_audio_backend(), which
+#   pyannote 3.1.1 calls at import. On macOS arm64 the default
 #   PyPI wheels ARE the Metal-capable build — no special wheel index needed.
 # - setuptools >=70,<81: pyannote.database imports pkg_resources, which
 #   setuptools 81 removed. The pip-based images inherit setuptools from
@@ -14,6 +14,6 @@
 #   ship no setuptools at all, so the pin must be explicit here
 #   (84.x confirmed broken, 80.10.2 verified working).
 -r requirements.txt
-torch==2.5.0
-torchaudio==2.5.0
+torch==2.8.0
+torchaudio==2.8.0
 setuptools>=70,<81
