@@ -1,5 +1,5 @@
-# Pinned, known-good stack for pyannote.audio 3.1.1 on CUDA 11.8.
-# torch is installed separately from the cu118 index in the Dockerfile.
+# Pinned, known-good stack for pyannote.audio 3.1.1 on CUDA 12.8.1.
+# torch is installed separately from the cu128 index in the Dockerfile.
 numpy==1.24.3
 
 librosa==0.10.1
