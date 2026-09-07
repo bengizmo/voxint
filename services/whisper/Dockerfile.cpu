@@ -19,10 +19,10 @@ COPY requirements.txt .
 # torch first, pinned to the CPU wheel index on BOTH arches: on amd64 the
 # PyPI default torch drags the full CUDA runtime into a CPU image, and the
 # explicit index keeps the two arches on the same build. requirements.txt's
-# torch pin is then already satisfied (2.1.1+cpu / 2.1.1 aarch64 == 2.1.1),
-# mirroring how the CUDA Dockerfile layers cu121 wheels under the same file.
+# torch pin is then already satisfied (2.8.0+cpu / 2.8.0 aarch64 == 2.8.0),
+# mirroring how the CUDA Dockerfile layers cu128 wheels under the same file.
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir torch==2.1.1 torchaudio==2.1.1 \
+    pip install --no-cache-dir torch==2.8.0 torchaudio==2.8.0 \
         --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
 
