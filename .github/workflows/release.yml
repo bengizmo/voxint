@@ -47,8 +47,8 @@ env:
   SYNTHDETECT_WEIGHTS_RELEASE: synthdetect-weights-v1
 
 jobs:
-  # CUDA images — byte-identical build steps to previous releases; amd64-only.
-  # (The voxint app image moved to the multi-arch pipeline below.)
+  # CUDA images — amd64-only. titanet and pyannote fetch vendored weights
+  # before building. (The voxint app image moved to the multi-arch pipeline.)
   publish-images:
     if: github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
@@ -75,6 +75,18 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
+      - name: Fetch the exported ONNX graph (titanet only)
+        if: matrix.image == 'voxint-titanet'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p services/titanet/models
+          gh release download "$TITANET_ONNX_RELEASE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern titanet-large.onnx \
+            --output services/titanet/models/titanet-large.onnx
+          expected=$(python3 -c "import json; print(json.load(open('tests/parity/fixtures/onnx/provenance.json'))['onnx_sha256'])")
+          echo "${expected}  services/titanet/models/titanet-large.onnx" | sha256sum -c -
       - name: Fetch the vendored diarization weights (pyannote only)
         if: matrix.image == 'voxint-pyannote'
         env:
