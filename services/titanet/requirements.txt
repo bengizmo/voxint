@@ -1,33 +1,33 @@
-# Pinned, known-good stack for NeMo 1.22.0 on CUDA 11.8 / Python 3.10.
-# Install order matters (numpy → Cython → torch cu118 → the rest); the
-# Dockerfile drives it. This file lists the non-torch pins for reference/CI.
+# Pinned stack for the ONNX GPU image (Dockerfile) — no NeMo, no torch.
+# Uses onnxruntime-gpu (CUDA Execution Provider) for GPU inference with
+# the same self-exported graph as the CPU image. The preprocessing pins
+# MUST stay identical to requirements.cpu.txt and to pyproject.toml's
+# `parity` extra: the parity verdict that keeps titanet-large-v2 on the
+# ONNX engine was measured against exactly this chain, so version skew
+# here is embedding-space drift.
 numpy==1.24.3
-Cython==0.29.36
 
 librosa==0.10.1
 soundfile==0.12.1
 scipy==1.11.4
 numba==0.58.1
 
-hydra-core==1.3.2
-omegaconf==2.3.0
-pytorch-lightning==2.0.7
-transformers==4.36.0
-webdataset==0.2.48
-pyarrow==14.0.1
-scikit-learn==1.3.2
-huggingface-hub==0.23.5
+# Embedding-space preprocessing (part of the titanet-large-v2 definition)
+pyloudnorm==0.1.0
+noisereduce==2.0.1
+
+# Inference engine: onnxruntime-gpu 1.28.0 is installed in the Dockerfile
+# from Microsoft's CUDA 12 feed (not on PyPI). The ONNX graph is the same
+# sha-pinned export used by the CPU image.
 
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 
-# Pure-ctypes NVML bindings for the /healthz hardware-telemetry sampler
-# (temperature + throttle reasons, which torch alone cannot report). Fail-soft:
-# absent/older bindings degrade telemetry to "unsupported", never affect
-# readiness. NVIDIA CUDA images only; the cpu/rocm/metal flavors omit it.
+# Pure-ctypes NVML bindings for the /healthz hardware-telemetry sampler.
+# Fail-soft: absent/older bindings degrade telemetry to "unsupported",
+# never affect readiness. NVIDIA CUDA images only.
 nvidia-ml-py==12.560.30
 
-# Embedding-space preprocessing (part of the titanet-large-v2 definition)
-pyloudnorm==0.1.0
-noisereduce==2.0.1
+# librosa 0.10.1 imports pkg_resources, removed in setuptools 81.
+setuptools>=70,<81
