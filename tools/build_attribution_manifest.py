@@ -27,6 +27,8 @@ from voxint.db.models import DiarizationTurn, MatchCandidate, PipelineRun, RunSt
 from voxint.db.session import build_engine, build_session_factory, session_scope
 from voxint.export import to_rttm
 from voxint.harness.attribution_protocol import (
+    MeetingRole,
+    MeetingSplit,
     ProtocolManifest,
 )
 from voxint.harness.attribution_protocol import (
@@ -34,6 +36,7 @@ from voxint.harness.attribution_protocol import (
 )
 
 SCHEMA_VERSION = 1
+PROTOCOL_SCHEMA_VERSION = 2
 KIND = "attribution_align_input"
 ALIGN_INPUT_NAME = "align-input.json"
 HYPOTHESIS_DIR_NAME = "hypothesis_rttm"
@@ -129,9 +132,9 @@ def _load_protocol(path: Path) -> ProtocolManifest:
         protocol = parse_protocol_manifest(payload)
     except (KeyError, TypeError, ValueError) as exc:
         raise ManifestError(f"protocol {path}: invalid attribution protocol: {exc}") from exc
-    if protocol.schema_version != SCHEMA_VERSION:
+    if protocol.schema_version != PROTOCOL_SCHEMA_VERSION:
         raise ManifestError(
-            f"protocol {path}: schema_version must be {SCHEMA_VERSION}, "
+            f"protocol {path}: schema_version must be {PROTOCOL_SCHEMA_VERSION}, "
             f"got {protocol.schema_version!r}"
         )
     return protocol
@@ -222,6 +225,7 @@ def assemble_manifest(
     enrolled_speaker_map: Mapping[str, str],
     out_dir: Path,
     git_sha: str | None,
+    meeting_metadata: Mapping[str, tuple[MeetingRole, MeetingSplit]],
 ) -> dict[str, Any]:
     """Assemble the JSON-friendly align input with paths relative to its file."""
     manifest_dir = out_dir.resolve()
@@ -230,10 +234,20 @@ def assemble_manifest(
     for meeting_id in sorted(run_manifest.runs):
         if meeting_id not in gold_paths:
             raise ManifestError(f"meeting {meeting_id}: no resolved gold RTTM")
+        try:
+            role, split = meeting_metadata[meeting_id]
+        except KeyError as exc:
+            raise ManifestError(f"meeting {meeting_id}: no protocol role/split") from exc
+        if role == "enrollment":
+            raise ManifestError(
+                f"meeting {meeting_id}: enrollment-role meetings cannot be scored"
+            )
         meetings[meeting_id] = {
             "gold_rttm": _relative_path(gold_paths[meeting_id], manifest_dir),
             "hypothesis_rttm": f"{HYPOTHESIS_DIR_NAME}/{meeting_id}.rttm",
             "run_id": str(run_manifest.runs[meeting_id]),
+            "role": role,
+            "split": split,
         }
         evidence[meeting_id] = match_evidence.get(meeting_id, {})
     return {
@@ -317,16 +331,39 @@ def _validate_inputs(
     run_manifest_path: Path,
     gold_rttm_dir: Path,
     enrolled_map_path: Path,
-) -> tuple[RunManifest, dict[str, Path], dict[str, str]]:
+) -> tuple[
+    RunManifest,
+    dict[str, Path],
+    dict[str, str],
+    dict[str, tuple[MeetingRole, MeetingSplit]],
+]:
     protocol = _load_protocol(protocol_path)
     run_manifest = parse_run_manifest(_load_json(run_manifest_path, "run manifest"))
-    protocol_meetings = {row.meeting_id for row in protocol.rows}
+    metadata: dict[str, tuple[MeetingRole, MeetingSplit]] = {}
+    for row in protocol.rows:
+        value = (row.role, row.split)
+        previous = metadata.setdefault(row.meeting_id, value)
+        if previous != value:
+            raise ManifestError(
+                f"protocol meeting {row.meeting_id}: inconsistent role/split rows"
+            )
+    protocol_meetings = set(metadata)
     unknown = sorted(set(run_manifest.runs) - protocol_meetings)
     if unknown:
         raise ManifestError(f"run manifest meetings absent from protocol: {unknown}")
+    enrollment = sorted(
+        meeting_id
+        for meeting_id in run_manifest.runs
+        if metadata[meeting_id][0] == "enrollment"
+    )
+    if enrollment:
+        raise ManifestError(
+            f"run manifest contains enrollment-role meetings, which cannot be scored: "
+            f"{enrollment}"
+        )
     gold_paths = resolve_gold_rttm_paths(gold_rttm_dir, run_manifest.runs)
     enrolled = parse_enrolled_speaker_map(_load_json(enrolled_map_path, "enrolled speaker map"))
-    return run_manifest, gold_paths, enrolled
+    return run_manifest, gold_paths, enrolled, metadata
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -342,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        run_manifest, gold_paths, enrolled = _validate_inputs(
+        run_manifest, gold_paths, enrolled, meeting_metadata = _validate_inputs(
             args.protocol,
             args.run_manifest,
             args.gold_rttm_dir,
@@ -372,6 +409,7 @@ def main(argv: list[str] | None = None) -> int:
         enrolled_speaker_map=enrolled,
         out_dir=args.out_dir,
         git_sha=_git_sha(_REPO_ROOT),
+        meeting_metadata=meeting_metadata,
     )
     manifest_text = _dumps(manifest) + "\n"
     for meeting_id, rttm_text in sorted(rttm_by_meeting.items()):
