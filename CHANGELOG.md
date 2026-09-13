@@ -6,6 +6,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+
+## [0.36.0] - 2026-09-13
+
 ### Added
 - **Speaker-attribution calibration tooling** (#114). The harness now scores
   open-set false accepts: a slot whose gold speaker is not enrolled but that the
@@ -60,6 +63,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   Closes epic #136.
 
 ### Changed
+- **Blackwell-ready model images** (#427, #428, #429). All three CUDA model
+  service images rebuilt on CUDA 12.8.1 for native Blackwell (sm_120) support.
+  Titanet: replaced the NeMo/torch CUDA stack with ONNX Runtime GPU
+  (`CUDAExecutionProvider`), using the same sha-pinned ONNX graph as the CPU
+  image. Whisper: CUDA 12.8.1 + torch 2.8.0 base. Pyannote: CUDA 12.8.1 +
+  torch 2.8.0 base.
+- **Legacy review retirement** (#158). Retired the legacy review pages
+  (review queue, workbench, transcript viewer) and extracted the live
+  adjudication mutation endpoints into `adjudication_api.py`. Retired page
+  URLs redirect to the editor. Deleted 7 legacy templates, the review-stepper
+  and workbench-player islands, and dead handlers. Net reduction: ~3,000
+  lines. Tutorial walkthrough remapped to the editor flow.
 - **Synthdetect staleness fingerprint** (#146). Jobs now carry a
   `source_content_hash` (sha256 over source audio identity, diarization
   intervals, speaker labels, and window-plan version). Staleness detection
@@ -4165,7 +4180,9 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.36.0...HEAD
+[0.36.0]: https://github.com/bengizmo/voxint/compare/v0.35.0...v0.36.0
+[0.35.0]: https://github.com/bengizmo/voxint/compare/v0.27.0...v0.35.0
 [0.27.0]: https://github.com/bengizmo/voxint/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/bengizmo/voxint/compare/v0.24.0...v0.26.0
 [0.24.0]: https://github.com/bengizmo/voxint/compare/v0.23.1...v0.24.0
