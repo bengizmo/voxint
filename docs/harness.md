@@ -278,6 +278,125 @@ uv run python tools/eval_attribution.py report \
     --run metrics.json --date 2026-09-05 --out report.md
 ```
 
+## Calibrating the auto-display band (issue #114)
+
+The three-band policy (`voxint.speakers.policy`) auto-displays a proposal only
+when it clears the grounded gate. Issue #114 calibrates that gate against corpus
+gold with a rule fixed before any score is seen. The rule text lives verbatim in
+the `voxint.harness.calibration` module docstring; the tooling below applies it.
+
+### Trials and clusters
+
+`build_trials` tags every scoreable slot with a `detail`:
+
+| detail | gold speaker enrolled | machine top candidate | counts toward |
+|---|---|---|---|
+| `genuine` | yes | equals the gold speaker | FRR, coverage |
+| `impostor_closed` | yes | a different roster speaker | FAR |
+| `impostor_open` | no | any roster speaker | FAR |
+| `unscoreable` | any | none, or alignment failed | attrition only |
+
+A slot with a gold speaker who is not on the roster used to be unscoreable; that
+hid open-set false accepts, the harm the auto-display band exists to bound.
+
+Independence is a cluster count where a cluster is one gold speaker. The floor
+(`MIN_INDEPENDENT_CLUSTERS = 50`) applies to impostor clusters, because the
+certified claim is about false accepts. Genuine clusters are reported alongside
+with descriptive intervals and carry no floor: the AMI corpus has at most 35
+recurring speakers, so a symmetric floor could never be met there. Both counts
+appear in `check_independence`, sweep points, and the attribution summary, and
+the FAR bound is the one-sided 95% Wilson upper bound at cluster level
+(`wilson_upper_one_sided`).
+
+### Protocol roles and the dev/confirm split (schema 2)
+
+`tools/generate_attribution_protocol.py --open-set N --gold-rttm-dir DIR`
+writes a schema-2 manifest where every meeting carries a `role`
+(`enrollment`, `test_genuine`, `test_open`) and a `split` (`enrollment`,
+`dev`, `confirm`):
+
+- Open-set meetings are AMI meetings with no cross-session speaker and a gold
+  RTTM, picked by ascending SHA-256 of `split_seed:meeting_id`. Every
+  participant is un-enrolled, so their slots become `impostor_open` trials.
+- Dev and confirm are assigned per base session from metadata only. Test
+  sessions that share a cross-session speaker form one component, so a genuine
+  speaker never straddles the halves; components and open-set sessions are
+  ordered by seeded hash and alternated so both halves are balanced.
+- `validate_split_honesty` fails the generation on any leak (a speaker in both
+  halves, an enrollment meeting in a scored split, an enrolled speaker inside
+  an open-set meeting).
+
+Schema-1 manifests are refused with a regenerate message. Align inputs and
+trials carry `meeting_role` and `meeting_split`; enrollment meetings are never
+scored.
+
+### One GPU pass, offline roster and matching
+
+The corpus is run through the pipeline once with an empty roster and
+`AUTO_ENROLL=false`, so every run stores its per-turn embeddings and records
+`no_roster` evidence. Everything after that is CPU work through production code:
+
+```bash
+uv run python tools/build_attribution_roster.py \
+    --protocol protocol.json --runs runs.json \
+    --gold-rttm-dir gold_rttm --out-dir roster/
+
+uv run python tools/rematch_runs.py --protocol protocol.json --runs runs.json
+```
+
+`build_attribution_roster.py` gold-aligns each enrollment run, keeps slots that
+pass the aligner's purity, coverage, margin, and eligibility floors, and enrolls
+the single best slot per cross-session speaker through the operator enrollment
+path (`enroll_new_speaker`, replay-safe idempotency keys). It writes
+`enrolled_speaker_map.json` and `roster_fingerprint.json`, and refuses to run on
+a roster that already holds foreign speakers unless `--allow-existing`.
+`rematch_runs.py` calls `refresh_run_matches` for the test-role runs only;
+enrollment-role runs are excluded by design. Because the matcher core
+is `evaluate_run`, the rematched evidence is exactly what the worker would have
+written with that roster.
+
+### Select on dev, certify on confirm
+
+```bash
+uv run python -m tools.calibrate_policy select \
+    --trials attribution-trials.json --out selection.json
+
+uv run python -m tools.calibrate_policy certify \
+    --trials attribution-trials.json --candidate selection.json \
+    --out certification.json
+```
+
+`select` scores the 32 pre-registered candidates (grounded cosine x grounded
+margin, everything else held at the base gates) on the dev trials. A candidate
+is feasible with zero `auto_wrong` and a cluster-level one-sided FAR upper bound
+at or below 5%; among feasible candidates the rule maximises genuine-cluster
+coverage, then minimises review load, then takes the stricter gate. No feasible
+candidate is a `NO_DECISION`.
+
+`certify` scores the locked candidate once on the confirm trials. `CERTIFIED`
+requires at least 50 impostor clusters, zero `auto_wrong`, and the FAR bound;
+anything else is `NO_DECISION` with every failing reason
+(`insufficient_impostor_clusters`, `auto_wrong_observed`,
+`far_bound_exceeded`). The output also carries the PRE (base gates) and POST
+(candidate) tallies on the identical trials, the full band-change listing,
+FRR, coverage, and descriptive Wilson intervals, so the report is a gold
+PRE/POST diff rather than an opinion. `select` and `certify` filter on
+`meeting_split`; `sweep` and `compare` read the same file unfiltered for
+exploratory use.
+
+### AMI corpus calibration result
+
+The first calibration run on 170 AMI Mix-Headset meetings returned
+`NO_DECISION`: the confirm split had 49 impostor clusters (floor: 50) and a
+one-sided 95% Wilson FAR upper bound of 5.23% (ceiling: 5.00%). Zero
+`auto_wrong` across all 311 scoreable trials. The 50-cluster floor was
+imported from the recurrence viability check and is internally inconsistent
+with the Wilson method: zero errors need at least 52 clusters to clear 5%.
+Grounded-gate defaults remain at their pre-calibration values
+(`grounded_min_cosine=0.70`, `grounded_min_margin=0.08`). Full analysis:
+[`docs/reports/attribution-calibration-2026-09-13.md`](reports/attribution-calibration-2026-09-13.md).
+Evidence pack: `tests/parity/fixtures/attribution/calibration/`.
+
 ## Feeding the harness from live runs (`voxint.harness_export`)
 
 The harness scores files; it never reads a database. `voxint.harness_export` is

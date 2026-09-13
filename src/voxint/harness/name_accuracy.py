@@ -23,6 +23,7 @@ import re
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from statistics import NormalDist
 
 import numpy as np
 
@@ -346,7 +347,9 @@ def wilson_ci(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
     ``[0, 1]``. Used only for single-rate reporting — paired comparisons use
     :func:`mcnemar` / :func:`clustered_bootstrap_delta`.
     """
-    if n <= 0:
+    if n < 0:
+        raise ValueError(f"n must be non-negative, got {n}")
+    if n == 0:
         return (0.0, 1.0)
     if not math.isfinite(z) or z <= 0:
         raise ValueError(f"z must be a positive finite number, got {z}")
@@ -358,6 +361,19 @@ def wilson_ci(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
     center = (p_hat + z2 / (2 * n)) / denom
     half = (z / denom) * math.sqrt(p_hat * (1 - p_hat) / n + z2 / (4 * n * n))
     return (max(0.0, center - half), min(1.0, center + half))
+
+
+def wilson_upper_one_sided(
+    successes: int, n: int, confidence: float = 0.95
+) -> float:
+    """Return the one-sided Wilson upper bound for a binomial rate.
+
+    At 95% confidence the standard-normal quantile is approximately 1.6449.
+    Validation of ``successes`` and ``n`` is delegated to :func:`wilson_ci`.
+    """
+    if not math.isfinite(confidence) or not 0.5 < confidence < 1.0:
+        raise ValueError(f"confidence must be within (0.5, 1), got {confidence}")
+    return wilson_ci(successes, n, z=NormalDist().inv_cdf(confidence))[1]
 
 
 def mcnemar(

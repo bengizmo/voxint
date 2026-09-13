@@ -13,15 +13,38 @@ Trial taxonomy:
 Truth anchoring tags whether the human decision was made before or after seeing
 the machine proposal. Production confirms are anchoring-biased and cannot serve
 as primary calibration truth (4-model consult, issue #114).
+
+Pre-registered selection and certification rule:
+
+- Candidate family: grounded cosine in
+  {0.66,0.68,0.70,0.72,0.74,0.76,0.78,0.80} x grounded margin in
+  {0.05,0.08,0.10,0.12}; all other gates held at the base gates (defaults or
+  --gates file). Accept tier and eligibility floors fixed.
+- Feasible on DEV: auto_wrong == 0 AND one-sided 95% Wilson upper bound of
+  cluster-level FAR (impostor clusters with >= 1 auto_wrong over impostor
+  clusters) <= 0.05.
+- Selection among feasible: maximise genuine cluster coverage (fraction of
+  genuine clusters with >= 1 auto_correct), then minimise review count, then
+  stricter (higher cosine, then higher margin). If no feasible point: outcome
+  NO_DECISION reason "no_feasible_candidate".
+- Certification on CONFIRM with the locked candidate (single scoring, no
+  reselection): CERTIFIED iff impostor clusters >= MIN_INDEPENDENT_CLUSTERS
+  (50) AND auto_wrong == 0 AND one-sided upper FAR <= 0.05; else NO_DECISION
+  with the failing reasons listed (insufficient_impostor_clusters /
+  auto_wrong_observed / far_bound_exceeded). Also report the PRE (base gates)
+  vs POST (candidate) tallies on the same confirm trials, the full band-change
+  listing (reuse `compare`), genuine-cluster coverage and trial-level FRR for
+  both, descriptive two-sided Wilson CIs, and the confirm genuine cluster count
+  (descriptive; no floor, per the asymmetric bar).
 """
 
 import enum
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any
 
-from voxint.harness.name_accuracy import wilson_ci
+from voxint.harness.name_accuracy import wilson_ci, wilson_upper_one_sided
 from voxint.speakers.matching import MatchingGates
 from voxint.speakers.tiers import passes_accept, passes_grounded
 
@@ -32,6 +55,21 @@ class TrialKind(enum.StrEnum):
     GENUINE = "genuine"
     IMPOSTOR = "impostor"
     UNSCOREABLE = "unscoreable"
+
+
+class TrialDetail(enum.StrEnum):
+    GENUINE = "genuine"
+    IMPOSTOR_CLOSED = "impostor_closed"
+    IMPOSTOR_OPEN = "impostor_open"
+    UNSCOREABLE = "unscoreable"
+
+
+_DETAIL_BY_KIND = {
+    TrialKind.GENUINE: TrialDetail.GENUINE,
+    TrialKind.IMPOSTOR: TrialDetail.IMPOSTOR_CLOSED,
+    TrialKind.UNSCOREABLE: TrialDetail.UNSCOREABLE,
+}
+_DETAIL_UNSET: Any = object()
 
 
 @dataclass(frozen=True)
@@ -50,6 +88,12 @@ class Trial:
     kind: TrialKind
     truth_anchoring: str
     cluster_id: str
+    detail: TrialDetail = field(default=_DETAIL_UNSET)
+    split: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.detail is _DETAIL_UNSET:
+            object.__setattr__(self, "detail", _DETAIL_BY_KIND[self.kind])
 
 
 @dataclass(frozen=True)
@@ -71,6 +115,10 @@ class SweepPoint:
     n_scoreable: int
     far: float
     far_ci_upper: float
+    n_impostor_clusters: int
+    n_genuine_clusters: int
+    far_upper_one_sided: float
+    genuine_cluster_coverage: float
 
 
 @dataclass(frozen=True)
@@ -104,12 +152,90 @@ class CompareResult:
 
 @dataclass(frozen=True)
 class IndependenceReport:
-    """Cluster independence check for a trial set."""
+    """Per-kind cluster independence check for a trial set."""
 
     n_clusters: int
     n_trials: int
     sufficient: bool
     cluster_sizes: dict[str, int]
+    n_genuine_clusters: int
+    n_impostor_clusters: int
+    genuine_cluster_sizes: dict[str, int]
+    impostor_cluster_sizes: dict[str, int]
+
+
+@dataclass(frozen=True)
+class SelectionRule:
+    """The fixed candidate family and safety thresholds for issue #114."""
+
+    cosine_grid: tuple[float, ...] = (
+        0.66,
+        0.68,
+        0.70,
+        0.72,
+        0.74,
+        0.76,
+        0.78,
+        0.80,
+    )
+    margin_grid: tuple[float, ...] = (0.05, 0.08, 0.10, 0.12)
+    max_far_upper_one_sided: float = 0.05
+    confidence: float = 0.95
+    min_impostor_clusters: int = MIN_INDEPENDENT_CLUSTERS
+
+
+@dataclass(frozen=True)
+class SelectionPoint:
+    """One pre-registered DEV candidate plus its feasibility decision."""
+
+    metrics: SweepPoint
+    feasible: bool
+
+
+@dataclass(frozen=True)
+class SelectionResult:
+    """DEV selection outcome and the complete candidate search record."""
+
+    outcome: str
+    reason: str | None
+    chosen_gates: MatchingGates | None
+    points: tuple[SelectionPoint, ...]
+    n_genuine_clusters: int
+    n_impostor_clusters: int
+
+
+@dataclass(frozen=True)
+class PolicyEvaluation:
+    """Safety and utility metrics for one policy on one fixed trial set."""
+
+    auto_correct: int
+    auto_wrong: int
+    review: int
+    abstain: int
+    n_scoreable: int
+    n_genuine_trials: int
+    n_impostor_trials: int
+    n_genuine_clusters: int
+    n_impostor_clusters: int
+    far: float
+    far_ci: tuple[float, float]
+    far_upper_one_sided: float
+    frr: float
+    frr_ci: tuple[float, float]
+    genuine_cluster_coverage: float
+    coverage: float
+
+
+@dataclass(frozen=True)
+class CertificationResult:
+    """Locked-candidate CONFIRM result with paired PRE/POST evidence."""
+
+    outcome: str
+    reasons: tuple[str, ...]
+    pre: PolicyEvaluation
+    post: PolicyEvaluation
+    changes: tuple[BandChange, ...]
+    candidate_gates: MatchingGates
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +293,7 @@ def classify_trial(
         kind=kind,
         truth_anchoring=truth_anchoring,
         cluster_id=cluster_id,
+        detail=_DETAIL_BY_KIND[kind],
     )
 
 
@@ -268,13 +395,27 @@ def sweep(
             t for t in scoreable if t.roster_size is not None and t.roster_size >= 2
         ]
 
-    n_impostor = sum(1 for t in scoreable if t.kind == TrialKind.IMPOSTOR)
+    impostors = [t for t in scoreable if t.kind == TrialKind.IMPOSTOR]
+    genuines = [t for t in scoreable if t.kind == TrialKind.GENUINE]
+    n_impostor = len(impostors)
+    impostor_clusters = {t.cluster_id for t in impostors}
+    genuine_clusters = {t.cluster_id for t in genuines}
 
     points: list[SweepPoint] = []
     for cosine in cosine_grid:
         for margin_val in margin_grid:
             gates = _grounded_gates(base_gates, cosine=cosine, margin=margin_val)
             ac, aw, rv, ab = _tally(scoreable, gates)
+            wrong_clusters = {
+                t.cluster_id
+                for t in impostors
+                if _band_label(t, gates) == "auto_attribute"
+            }
+            covered_genuine_clusters = {
+                t.cluster_id
+                for t in genuines
+                if _band_label(t, gates) == "auto_attribute"
+            }
             if n_impostor > 0:
                 far = aw / n_impostor
                 _, far_upper = wilson_ci(aw, n_impostor)
@@ -292,6 +433,16 @@ def sweep(
                     n_scoreable=ac + aw + rv + ab,
                     far=far,
                     far_ci_upper=far_upper,
+                    n_impostor_clusters=len(impostor_clusters),
+                    n_genuine_clusters=len(genuine_clusters),
+                    far_upper_one_sided=wilson_upper_one_sided(
+                        len(wrong_clusters), len(impostor_clusters)
+                    ),
+                    genuine_cluster_coverage=(
+                        len(covered_genuine_clusters) / len(genuine_clusters)
+                        if genuine_clusters
+                        else 0.0
+                    ),
                 )
             )
     return points
@@ -350,20 +501,223 @@ def compare(
 # Independence check
 # ---------------------------------------------------------------------------
 def check_independence(trials: Sequence[Trial]) -> IndependenceReport:
-    """Verify the trial set has enough independent clusters (>= 50).
+    """Verify the trial set has enough independent impostor clusters (>= 50).
 
     Independence = speaker clusters. Trials sharing a human-assigned speaker
     are correlated (same voice); resampling must be at the cluster level.
-    Fewer than 50 clusters means the calibration cannot produce a reliable
-    decision (NO_DECISION is a valid first-class outcome).
+    Fewer than 50 impostor clusters means the calibration cannot produce a
+    reliable FAR decision (NO_DECISION is a valid first-class outcome).
     """
     scoreable = _scoreable(trials)
     counts = Counter(t.cluster_id for t in scoreable)
+    genuine_counts = Counter(
+        t.cluster_id for t in scoreable if t.kind == TrialKind.GENUINE
+    )
+    impostor_counts = Counter(
+        t.cluster_id for t in scoreable if t.kind == TrialKind.IMPOSTOR
+    )
     return IndependenceReport(
         n_clusters=len(counts),
         n_trials=len(scoreable),
-        sufficient=len(counts) >= MIN_INDEPENDENT_CLUSTERS,
+        sufficient=len(impostor_counts) >= MIN_INDEPENDENT_CLUSTERS,
         cluster_sizes=dict(counts),
+        n_genuine_clusters=len(genuine_counts),
+        n_impostor_clusters=len(impostor_counts),
+        genuine_cluster_sizes=dict(genuine_counts),
+        impostor_cluster_sizes=dict(impostor_counts),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pre-registered DEV selection and locked CONFIRM certification
+# ---------------------------------------------------------------------------
+def load_attribution_trials(data: dict[str, Any]) -> list[Trial]:
+    """Load split-aware trials from an ``eval_attribution align`` document."""
+    if data.get("kind") != "attribution_trials":
+        raise ValueError(
+            f"expected kind 'attribution_trials', got {data.get('kind')!r}"
+        )
+    raw_trials = data.get("trials")
+    if not isinstance(raw_trials, list):
+        raise ValueError("attribution trials document requires a 'trials' list")
+    trials: list[Trial] = []
+    for index, raw in enumerate(raw_trials):
+        if not isinstance(raw, dict):
+            raise ValueError(f"trial {index}: expected an object")
+        split = raw.get("meeting_split")
+        if split is None:
+            raise ValueError(f"trial {index}: missing required meeting_split")
+        if split not in ("dev", "confirm"):
+            raise ValueError(f"trial {index}: invalid meeting_split {split!r}")
+        payload = dict(raw)
+        payload["split"] = split
+        try:
+            trials.append(trial_from_dict(payload))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"trial {index}: {exc}") from exc
+    return trials
+
+
+def filter_split(trials: Sequence[Trial], split: str) -> list[Trial]:
+    """Return trials belonging to one pre-registered meeting split."""
+    if split not in ("dev", "confirm"):
+        raise ValueError(f"split must be 'dev' or 'confirm', got {split!r}")
+    return [trial for trial in trials if trial.split == split]
+
+
+def rule_to_dict(rule: SelectionRule) -> dict[str, Any]:
+    """Serialize the complete pre-registered rule."""
+    return {
+        "cosine_grid": list(rule.cosine_grid),
+        "margin_grid": list(rule.margin_grid),
+        "max_far_upper_one_sided": rule.max_far_upper_one_sided,
+        "confidence": rule.confidence,
+        "min_impostor_clusters": rule.min_impostor_clusters,
+    }
+
+
+def select_candidate(
+    dev_trials: Sequence[Trial],
+    base_gates: MatchingGates,
+    rule: SelectionRule,
+) -> SelectionResult:
+    """Apply the pre-registered candidate ordering once on DEV trials."""
+    points_list: list[SelectionPoint] = []
+    for point in sweep(
+        dev_trials,
+        cosine_grid=rule.cosine_grid,
+        margin_grid=rule.margin_grid,
+        base_gates=base_gates,
+    ):
+        gates = _grounded_gates(
+            base_gates, cosine=point.cosine, margin=point.margin
+        )
+        evaluation = _evaluate_policy(dev_trials, gates, rule.confidence)
+        metrics = replace(
+            point, far_upper_one_sided=evaluation.far_upper_one_sided
+        )
+        points_list.append(
+            SelectionPoint(
+                metrics=metrics,
+                feasible=(
+                    metrics.auto_wrong_person == 0
+                    and metrics.far_upper_one_sided
+                    <= rule.max_far_upper_one_sided
+                ),
+            )
+        )
+    points = tuple(points_list)
+    feasible = [point for point in points if point.feasible]
+    independence = check_independence(dev_trials)
+    if not feasible:
+        return SelectionResult(
+            outcome="NO_DECISION",
+            reason="no_feasible_candidate",
+            chosen_gates=None,
+            points=points,
+            n_genuine_clusters=independence.n_genuine_clusters,
+            n_impostor_clusters=independence.n_impostor_clusters,
+        )
+    chosen = max(
+        feasible,
+        key=lambda point: (
+            point.metrics.genuine_cluster_coverage,
+            -point.metrics.review_count,
+            point.metrics.cosine,
+            point.metrics.margin,
+        ),
+    )
+    return SelectionResult(
+        outcome="SELECTED",
+        reason=None,
+        chosen_gates=_grounded_gates(
+            base_gates,
+            cosine=chosen.metrics.cosine,
+            margin=chosen.metrics.margin,
+        ),
+        points=points,
+        n_genuine_clusters=independence.n_genuine_clusters,
+        n_impostor_clusters=independence.n_impostor_clusters,
+    )
+
+
+def _evaluate_policy(
+    trials: Sequence[Trial], gates: MatchingGates, confidence: float
+) -> PolicyEvaluation:
+    scoreable = _scoreable(trials)
+    genuines = [trial for trial in scoreable if trial.kind == TrialKind.GENUINE]
+    impostors = [trial for trial in scoreable if trial.kind == TrialKind.IMPOSTOR]
+    auto_correct, auto_wrong, review, abstain = _tally(scoreable, gates)
+    genuine_clusters = {trial.cluster_id for trial in genuines}
+    impostor_clusters = {trial.cluster_id for trial in impostors}
+    covered_genuine_clusters = {
+        trial.cluster_id
+        for trial in genuines
+        if _band_label(trial, gates) == "auto_attribute"
+    }
+    wrong_impostor_clusters = {
+        trial.cluster_id
+        for trial in impostors
+        if _band_label(trial, gates) == "auto_attribute"
+    }
+    false_rejects = len(genuines) - auto_correct
+    auto_total = auto_correct + auto_wrong
+    return PolicyEvaluation(
+        auto_correct=auto_correct,
+        auto_wrong=auto_wrong,
+        review=review,
+        abstain=abstain,
+        n_scoreable=len(scoreable),
+        n_genuine_trials=len(genuines),
+        n_impostor_trials=len(impostors),
+        n_genuine_clusters=len(genuine_clusters),
+        n_impostor_clusters=len(impostor_clusters),
+        far=auto_wrong / len(impostors) if impostors else 0.0,
+        far_ci=wilson_ci(auto_wrong, len(impostors)),
+        far_upper_one_sided=wilson_upper_one_sided(
+            len(wrong_impostor_clusters),
+            len(impostor_clusters),
+            confidence=confidence,
+        ),
+        frr=false_rejects / len(genuines) if genuines else 0.0,
+        frr_ci=wilson_ci(false_rejects, len(genuines)),
+        genuine_cluster_coverage=(
+            len(covered_genuine_clusters) / len(genuine_clusters)
+            if genuine_clusters
+            else 0.0
+        ),
+        coverage=auto_total / len(scoreable) if scoreable else 0.0,
+    )
+
+
+def certify(
+    confirm_trials: Sequence[Trial],
+    base_gates: MatchingGates,
+    candidate_gates: MatchingGates,
+    rule: SelectionRule,
+) -> CertificationResult:
+    """Score one locked candidate on CONFIRM without reselection."""
+    pre = _evaluate_policy(confirm_trials, base_gates, rule.confidence)
+    post = _evaluate_policy(confirm_trials, candidate_gates, rule.confidence)
+    reasons: list[str] = []
+    if post.n_impostor_clusters < rule.min_impostor_clusters:
+        reasons.append("insufficient_impostor_clusters")
+    if post.auto_wrong != 0:
+        reasons.append("auto_wrong_observed")
+    if post.far_upper_one_sided > rule.max_far_upper_one_sided:
+        reasons.append("far_bound_exceeded")
+    paired = compare(
+        confirm_trials,
+        baseline_gates=base_gates,
+        candidate_gates=candidate_gates,
+    )
+    return CertificationResult(
+        outcome="CERTIFIED" if not reasons else "NO_DECISION",
+        reasons=tuple(reasons),
+        pre=pre,
+        post=post,
+        changes=paired.changes,
+        candidate_gates=candidate_gates,
     )
 
 
@@ -383,8 +737,10 @@ def trial_to_dict(trial: Trial) -> dict[str, Any]:
         "roster_size": trial.roster_size,
         "top_speaker_id": trial.top_speaker_id,
         "kind": trial.kind.value,
+        "detail": trial.detail.value,
         "truth_anchoring": trial.truth_anchoring,
         "cluster_id": trial.cluster_id,
+        "split": trial.split,
     }
 
 
@@ -403,7 +759,87 @@ def trial_from_dict(d: dict[str, Any]) -> Trial:
         kind=TrialKind(d["kind"]),
         truth_anchoring=d["truth_anchoring"],
         cluster_id=d["cluster_id"],
+        detail=(
+            TrialDetail(d["detail"])
+            if "detail" in d
+            else _DETAIL_BY_KIND[TrialKind(d["kind"])]
+        ),
+        split=d.get("split"),
     )
+
+
+def selection_result_to_dict(result: SelectionResult, rule: SelectionRule) -> dict[str, Any]:
+    """Serialize a DEV selection result without non-finite JSON values."""
+    return {
+        "kind": "calibration_selection",
+        "outcome": result.outcome,
+        "reason": result.reason,
+        "rule": rule_to_dict(rule),
+        "chosen_gates": (
+            gates_to_dict(result.chosen_gates)
+            if result.chosen_gates is not None
+            else None
+        ),
+        "n_genuine_clusters": result.n_genuine_clusters,
+        "n_impostor_clusters": result.n_impostor_clusters,
+        "points": [
+            {
+                **sweep_point_to_dict(point.metrics),
+                "auto_wrong": point.metrics.auto_wrong_person,
+                "feasible": point.feasible,
+            }
+            for point in result.points
+        ],
+    }
+
+
+def policy_evaluation_to_dict(evaluation: PolicyEvaluation) -> dict[str, Any]:
+    """Serialize one PRE or POST policy evaluation."""
+    return {
+        "auto_correct": evaluation.auto_correct,
+        "auto_wrong": evaluation.auto_wrong,
+        "review": evaluation.review,
+        "abstain": evaluation.abstain,
+        "n_scoreable": evaluation.n_scoreable,
+        "n_genuine_trials": evaluation.n_genuine_trials,
+        "n_impostor_trials": evaluation.n_impostor_trials,
+        "n_genuine_clusters": evaluation.n_genuine_clusters,
+        "n_impostor_clusters": evaluation.n_impostor_clusters,
+        "far": evaluation.far,
+        "far_ci": list(evaluation.far_ci),
+        "far_upper_one_sided": evaluation.far_upper_one_sided,
+        "frr": evaluation.frr,
+        "frr_ci": list(evaluation.frr_ci),
+        "genuine_cluster_coverage": evaluation.genuine_cluster_coverage,
+        "coverage": evaluation.coverage,
+    }
+
+
+def certification_result_to_dict(
+    result: CertificationResult, rule: SelectionRule
+) -> dict[str, Any]:
+    """Serialize the locked CONFIRM decision and complete paired evidence."""
+    return {
+        "kind": "calibration_certification",
+        "outcome": result.outcome,
+        "reasons": list(result.reasons),
+        "rule": rule_to_dict(rule),
+        "candidate_gates": gates_to_dict(result.candidate_gates),
+        "pre": policy_evaluation_to_dict(result.pre),
+        "post": policy_evaluation_to_dict(result.post),
+        "changes": [
+            {
+                "run_id": change.run_id,
+                "label": change.label,
+                "old_band": change.old_band,
+                "new_band": change.new_band,
+                "top_speaker_id": change.top_speaker_id,
+                "similarity": change.similarity,
+                "kind": change.kind.value,
+            }
+            for change in result.changes
+        ],
+    }
 
 
 def sweep_point_to_dict(point: SweepPoint) -> dict[str, Any]:
@@ -418,6 +854,10 @@ def sweep_point_to_dict(point: SweepPoint) -> dict[str, Any]:
         "n_scoreable": point.n_scoreable,
         "far": round(point.far, 6),
         "far_ci_upper": round(point.far_ci_upper, 6),
+        "n_impostor_clusters": point.n_impostor_clusters,
+        "n_genuine_clusters": point.n_genuine_clusters,
+        "far_upper_one_sided": round(point.far_upper_one_sided, 6),
+        "genuine_cluster_coverage": round(point.genuine_cluster_coverage, 6),
     }
 
 

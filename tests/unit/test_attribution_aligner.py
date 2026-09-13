@@ -13,8 +13,8 @@ from voxint.harness.attribution_aligner import (
     overlap_duration,
     total_duration,
 )
-from voxint.harness.calibration import Trial, TrialKind
-from voxint.harness.name_accuracy import wilson_ci
+from voxint.harness.calibration import Trial, TrialDetail, TrialKind
+from voxint.harness.name_accuracy import wilson_ci, wilson_upper_one_sided
 from voxint.speakers.matching import MatchingGates
 
 
@@ -332,6 +332,7 @@ def test_build_trials_creates_genuine_trial_for_matching_identity() -> None:
         {"Alice": "speaker-a"},
     )
     assert trials[0].trial.kind == TrialKind.GENUINE
+    assert trials[0].trial.detail == TrialDetail.GENUINE
     assert trials[0].trial.truth_anchoring == "corpus_gold"
 
 
@@ -342,6 +343,7 @@ def test_build_trials_creates_impostor_trial_for_different_identity() -> None:
         {"Alice": "speaker-a"},
     )
     assert trials[0].trial.kind == TrialKind.IMPOSTOR
+    assert trials[0].trial.detail == TrialDetail.IMPOSTOR_CLOSED
 
 
 def test_build_trials_is_unscoreable_without_match_evidence() -> None:
@@ -360,11 +362,21 @@ def test_build_trials_is_unscoreable_for_mixed_alignment() -> None:
     assert trials[0].trial.kind == TrialKind.UNSCOREABLE
 
 
-def test_build_trials_is_unscoreable_when_gold_is_not_enrolled() -> None:
+def test_build_trials_creates_open_set_impostor_when_gold_is_not_enrolled() -> None:
     trials = build_trials(
         _report(_alignment()), {"slot-1": _evidence()}, {}
     )
+    assert trials[0].trial.kind == TrialKind.IMPOSTOR
+    assert trials[0].trial.detail == TrialDetail.IMPOSTOR_OPEN
+    assert trials[0].trial.cluster_id == "Alice"
+
+
+def test_build_trials_unenrolled_gold_without_top_speaker_is_unscoreable() -> None:
+    evidence = _evidence()
+    evidence["top_speaker_id"] = None
+    trials = build_trials(_report(_alignment()), {"slot-1": evidence}, {})
     assert trials[0].trial.kind == TrialKind.UNSCOREABLE
+    assert trials[0].trial.detail == TrialDetail.UNSCOREABLE
 
 
 def test_build_trials_uses_dominant_gold_as_cluster_id() -> None:
@@ -402,6 +414,8 @@ def test_aggregate_trials_computes_far_frr_and_coverage() -> None:
 
     assert summary.n_genuine_trials == 2
     assert summary.n_impostor_trials == 2
+    assert summary.n_impostor_open_trials == 0
+    assert summary.n_impostor_closed_trials == 2
     assert summary.n_auto_correct == 1
     assert summary.n_auto_wrong == 1
     assert summary.n_review == 1
@@ -412,6 +426,11 @@ def test_aggregate_trials_computes_far_frr_and_coverage() -> None:
     assert summary.far_ci_upper == pytest.approx(wilson_ci(1, 2)[1])
     assert summary.frr_ci_upper == pytest.approx(wilson_ci(1, 2)[1])
     assert summary.n_speaker_clusters == 4
+    assert summary.n_genuine_clusters == 2
+    assert summary.n_impostor_clusters == 2
+    assert summary.far_upper_one_sided == pytest.approx(
+        wilson_upper_one_sided(1, 2)
+    )
 
 
 def test_aggregate_trials_zero_false_accepts() -> None:

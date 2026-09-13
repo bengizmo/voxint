@@ -61,7 +61,7 @@ from voxint.harness.attribution_aligner import (  # noqa: E402
 from voxint.harness.attribution_protocol import (  # noqa: E402
     parse_manifest as parse_protocol_manifest,
 )
-from voxint.harness.calibration import Trial, TrialKind  # noqa: E402
+from voxint.harness.calibration import Trial, TrialDetail, TrialKind  # noqa: E402
 from voxint.speakers.matching import MatchingGates  # noqa: E402
 
 SCHEMA_VERSION = 1
@@ -163,7 +163,10 @@ def cmd_protocol(args: argparse.Namespace) -> int:
         data = json.loads(_read(Path(args.manifest)))
     except (OSError, json.JSONDecodeError) as exc:
         raise EvalError(f"{args.manifest}: {exc}") from exc
-    manifest = parse_protocol_manifest(data)
+    try:
+        manifest = parse_protocol_manifest(data)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise EvalError(f"{args.manifest}: {exc}") from exc
     report = manifest.recurrence_report
     lines = [
         f"Protocol: {manifest.corpus}, truth={manifest.truth_source}",
@@ -226,10 +229,17 @@ def _serialize_alignment(alignment_report: Any) -> dict[str, Any]:
     }
 
 
-def _serialize_trial(at: AttributionTrial, meeting_id: str) -> dict[str, Any]:
+def _serialize_trial(
+    at: AttributionTrial,
+    meeting_id: str,
+    meeting_role: str,
+    meeting_split: str,
+) -> dict[str, Any]:
     t = at.trial
     return {
         "meeting_id": meeting_id,
+        "meeting_role": meeting_role,
+        "meeting_split": meeting_split,
         "run_id": t.run_id,
         "label": t.label,
         "similarity": t.similarity,
@@ -240,6 +250,7 @@ def _serialize_trial(at: AttributionTrial, meeting_id: str) -> dict[str, Any]:
         "roster_size": t.roster_size,
         "top_speaker_id": t.top_speaker_id,
         "kind": t.kind.value,
+        "detail": t.detail.value,
         "truth_anchoring": t.truth_anchoring,
         "cluster_id": t.cluster_id,
         "slot_label": at.slot_label,
@@ -265,7 +276,19 @@ def cmd_align(args: argparse.Namespace) -> int:
         protocol_data = json.loads(_read(_resolve(base, data["protocol_path"])))
     except (OSError, json.JSONDecodeError) as exc:
         raise EvalError(f"protocol: {exc}") from exc
-    protocol = parse_protocol_manifest(protocol_data)
+    try:
+        protocol = parse_protocol_manifest(protocol_data)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise EvalError(f"protocol: {exc}") from exc
+
+    protocol_metadata: dict[str, tuple[str, str]] = {}
+    for row in protocol.rows:
+        value = (row.role, row.split)
+        previous = protocol_metadata.setdefault(row.meeting_id, value)
+        if previous != value:
+            raise EvalError(
+                f"protocol meeting {row.meeting_id}: inconsistent role/split rows"
+            )
 
     meetings = data["meetings"]
     evidence_by_meeting: dict[str, dict[str, dict[str, Any]]] = data["match_evidence"]
@@ -277,6 +300,22 @@ def cmd_align(args: argparse.Namespace) -> int:
 
     for meeting_id in sorted(meetings):
         meeting_info = meetings[meeting_id]
+        try:
+            protocol_role, protocol_split = protocol_metadata[meeting_id]
+        except KeyError as exc:
+            raise EvalError(f"meeting {meeting_id}: absent from protocol") from exc
+        meeting_role = meeting_info.get("role")
+        meeting_split = meeting_info.get("split")
+        if (meeting_role, meeting_split) != (protocol_role, protocol_split):
+            raise EvalError(
+                f"meeting {meeting_id}: align input role/split "
+                f"{(meeting_role, meeting_split)!r} does not match protocol "
+                f"{(protocol_role, protocol_split)!r}"
+            )
+        if meeting_role == "enrollment":
+            raise EvalError(
+                f"meeting {meeting_id}: enrollment-role meetings cannot be scored"
+            )
         try:
             gold_path = _resolve(base, meeting_info["gold_rttm"])
             hyp_path = _resolve(base, meeting_info["hypothesis_rttm"])
@@ -316,7 +355,9 @@ def cmd_align(args: argparse.Namespace) -> int:
 
         alignments_out[meeting_id] = _serialize_alignment(alignment)
         for at in trials:
-            all_trials.append(_serialize_trial(at, meeting_id))
+            all_trials.append(
+                _serialize_trial(at, meeting_id, meeting_role, meeting_split)
+            )
 
     if warnings:
         for w in warnings:
@@ -360,6 +401,16 @@ def deserialize_trial(d: dict[str, Any]) -> AttributionTrial:
     if missing:
         raise EvalError(f"trial missing required fields: {sorted(missing)}")
     try:
+        kind = TrialKind(d["kind"])
+        detail = (
+            TrialDetail(d["detail"])
+            if "detail" in d
+            else {
+                TrialKind.GENUINE: TrialDetail.GENUINE,
+                TrialKind.IMPOSTOR: TrialDetail.IMPOSTOR_CLOSED,
+                TrialKind.UNSCOREABLE: TrialDetail.UNSCOREABLE,
+            }[kind]
+        )
         trial = Trial(
             run_id=str(d.get("run_id") or ""),
             label=d["label"],
@@ -370,9 +421,10 @@ def deserialize_trial(d: dict[str, Any]) -> AttributionTrial:
             eligible_seconds=d.get("eligible_seconds", 0.0),
             roster_size=d.get("roster_size"),
             top_speaker_id=d.get("top_speaker_id"),
-            kind=TrialKind(d["kind"]),
+            kind=kind,
             truth_anchoring=d.get("truth_anchoring", ""),
             cluster_id=d.get("cluster_id", ""),
+            detail=detail,
         )
         alignment = SlotAlignment(
             slot_label=d["slot_label"],
@@ -428,6 +480,8 @@ def cmd_score(args: argparse.Namespace) -> int:
         "kind": "attribution_metrics",
         "n_genuine_trials": summary.n_genuine_trials,
         "n_impostor_trials": summary.n_impostor_trials,
+        "n_impostor_open_trials": summary.n_impostor_open_trials,
+        "n_impostor_closed_trials": summary.n_impostor_closed_trials,
         "n_unscoreable": summary.n_unscoreable,
         "n_auto_correct": summary.n_auto_correct,
         "n_auto_wrong": summary.n_auto_wrong,
@@ -435,10 +489,13 @@ def cmd_score(args: argparse.Namespace) -> int:
         "n_abstain": summary.n_abstain,
         "far": summary.far,
         "far_ci_upper": summary.far_ci_upper,
+        "far_upper_one_sided": summary.far_upper_one_sided,
         "frr": summary.frr,
         "frr_ci_upper": summary.frr_ci_upper,
         "coverage": summary.coverage,
         "n_speaker_clusters": summary.n_speaker_clusters,
+        "n_genuine_clusters": summary.n_genuine_clusters,
+        "n_impostor_clusters": summary.n_impostor_clusters,
         "alignment_attrition": summary.alignment_attrition,
         "gates": asdict(effective_gates),
         "environment": {
@@ -497,6 +554,10 @@ def render_report(date: str, runs: list[dict[str, Any]]) -> str:
     far_values = [r["far"] for r in runs]
     frr_values = [r["frr"] for r in runs]
     coverage_values = [r["coverage"] for r in runs]
+    open_impostor_trials = [r.get("n_impostor_open_trials", 0) for r in runs]
+    closed_impostor_trials = [
+        r.get("n_impostor_closed_trials", r["n_impostor_trials"]) for r in runs
+    ]
 
     lines = [
         f"# Speaker-attribution baseline ({date})",
@@ -521,7 +582,8 @@ def render_report(date: str, runs: list[dict[str, Any]]) -> str:
         "| metric | value | 95% CI upper |",
         "| --- | --- | --- |",
         f"| FAR | {_pct(_mean(far_values))} "
-        f"| {_pct(_mean([r['far_ci_upper'] for r in runs]))} |",
+        f"| {_pct(_mean([r.get('far_upper_one_sided', r['far_ci_upper']) for r in runs]))} "
+        "(one-sided, cluster-level) |",
         f"| FRR | {_pct(_mean(frr_values))} "
         f"| {_pct(_mean([r['frr_ci_upper'] for r in runs]))} |",
         f"| Auto-attribution coverage | {_pct(_mean(coverage_values))} | |",
@@ -532,12 +594,16 @@ def render_report(date: str, runs: list[dict[str, Any]]) -> str:
         "| --- | --- |",
         f"| Genuine trials | {round(_mean([r['n_genuine_trials'] for r in runs]))} |",
         f"| Impostor trials | {round(_mean([r['n_impostor_trials'] for r in runs]))} |",
+        f"| Impostor trials (open) | {round(_mean(open_impostor_trials))} |",
+        f"| Impostor trials (closed) | {round(_mean(closed_impostor_trials))} |",
         f"| Unscoreable | {round(_mean([r['n_unscoreable'] for r in runs]))} |",
         f"| Auto correct | {round(_mean([r['n_auto_correct'] for r in runs]))} |",
         f"| Auto wrong | {round(_mean([r['n_auto_wrong'] for r in runs]))} |",
         f"| Review | {round(_mean([r['n_review'] for r in runs]))} |",
         f"| Abstain | {round(_mean([r['n_abstain'] for r in runs]))} |",
         f"| Speaker clusters | {round(_mean([r['n_speaker_clusters'] for r in runs]))} |",
+        f"| Genuine clusters | {round(_mean([r.get('n_genuine_clusters', 0) for r in runs]))} |",
+        f"| Impostor clusters | {round(_mean([r.get('n_impostor_clusters', 0) for r in runs]))} |",
         "",
     ]
 
@@ -575,8 +641,9 @@ def render_report(date: str, runs: list[dict[str, Any]]) -> str:
         "Baseline-only status, not calibration certification. "
         "Effective sample counts may be small; a zero impostor count "
         "makes FAR undefined (the CI upper bound is not meaningful). "
-        "Wilson CIs assume independent labels; with clustered speakers "
-        "the true interval may be wider.",
+        "The FAR upper bound is a one-sided 95% Wilson bound over independent "
+        "impostor speaker clusters; the legacy trial-level Wilson interval is "
+        "retained in metrics for compatibility.",
         "",
     ]
 

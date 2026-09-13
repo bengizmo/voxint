@@ -75,10 +75,12 @@ class TestParseRttmIntervals:
 # --------------------------------------------------------------------------- #
 def _minimal_protocol() -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "corpus": "ami_ihm",
         "truth_source": "corpus_gold",
         "selection_seed": "test-seed",
+        "split_seed": "split-v1",
+        "open_set_selection": {"requested": 0, "selected": [], "candidates": 0},
         "rows": [
             {
                 "meeting_id": "ES2002a",
@@ -86,6 +88,8 @@ def _minimal_protocol() -> dict[str, Any]:
                 "channel": 0,
                 "host_global_name": "MEE068",
                 "base_session_id": "ES2002",
+                "role": "test_genuine",
+                "split": "dev",
             }
         ],
         "recurrence_report": {
@@ -122,6 +126,8 @@ def _make_align_bundle(tmp_path: Path) -> Path:
             "channel": 0,
             "host_global_name": "speaker-alpha",
             "base_session_id": "M001",
+            "role": "test_genuine",
+            "split": "dev",
         },
         {
             "meeting_id": "M001",
@@ -129,6 +135,8 @@ def _make_align_bundle(tmp_path: Path) -> Path:
             "channel": 1,
             "host_global_name": "speaker-beta",
             "base_session_id": "M001",
+            "role": "test_genuine",
+            "split": "dev",
         },
     ]
     protocol_path = tmp_path / "protocol.json"
@@ -159,6 +167,8 @@ def _make_align_bundle(tmp_path: Path) -> Path:
             "M001": {
                 "gold_rttm": "gold/M001.rttm",
                 "hypothesis_rttm": "hyp/M001.rttm",
+                "role": "test_genuine",
+                "split": "dev",
             }
         },
         "match_evidence": {
@@ -208,6 +218,8 @@ def test_cmd_align(tmp_path: Path) -> None:
     assert len(data["trials"]) > 0
     for trial in data["trials"]:
         assert trial["meeting_id"] == "M001"
+        assert trial["meeting_role"] == "test_genuine"
+        assert trial["meeting_split"] == "dev"
         assert "kind" in trial
         assert "slot_label" in trial
 
@@ -243,6 +255,22 @@ def test_align_missing_meetings(tmp_path: Path) -> None:
     )
     rc = main(["align", "--manifest", str(bad)])
     assert rc == 2
+
+
+def test_align_refuses_enrollment_role(tmp_path: Path) -> None:
+    manifest_path = _make_align_bundle(tmp_path)
+    align_input = json.loads(manifest_path.read_text(encoding="utf-8"))
+    align_input["meetings"]["M001"].update(
+        {"role": "enrollment", "split": "enrollment"}
+    )
+    manifest_path.write_text(json.dumps(align_input), encoding="utf-8")
+    protocol_path = tmp_path / "protocol.json"
+    protocol = json.loads(protocol_path.read_text(encoding="utf-8"))
+    for row in protocol["rows"]:
+        row.update({"role": "enrollment", "split": "enrollment"})
+    protocol_path.write_text(json.dumps(protocol), encoding="utf-8")
+
+    assert main(["align", "--manifest", str(manifest_path)]) == 2
 
 
 # --------------------------------------------------------------------------- #

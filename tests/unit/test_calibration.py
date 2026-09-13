@@ -7,9 +7,12 @@ independence check, and JSONL round-trip serialization.
 
 import json
 
+import pytest
+
 from voxint.harness.calibration import (
     SweepPoint,
     Trial,
+    TrialDetail,
     TrialKind,
     check_independence,
     classify_trial,
@@ -21,6 +24,7 @@ from voxint.harness.calibration import (
     trial_from_dict,
     trial_to_dict,
 )
+from voxint.harness.name_accuracy import wilson_upper_one_sided
 from voxint.speakers.matching import MatchingGates
 
 
@@ -581,19 +585,44 @@ class TestCompare:
 # independence check
 # ---------------------------------------------------------------------------
 class TestIndependence:
-    def test_sufficient_clusters(self) -> None:
+    def test_genuine_clusters_do_not_satisfy_far_floor(self) -> None:
         trials = [
             _trial(
                 run_id=f"r{i}",
                 label=f"L{i}",
                 kind=TrialKind.GENUINE,
-                cluster=f"cluster-{i}",
+                cluster=f"genuine-{i}",
             )
             for i in range(60)
         ]
+        trials.extend(
+            _trial(
+                run_id=f"ri{i}",
+                label=f"LI{i}",
+                kind=TrialKind.IMPOSTOR,
+                cluster=f"impostor-{i}",
+            )
+            for i in range(49)
+        )
+        report = check_independence(trials)
+        assert report.sufficient is False
+        assert report.n_genuine_clusters == 60
+        assert report.n_impostor_clusters == 49
+
+    def test_impostor_clusters_satisfy_far_floor_without_genuines(self) -> None:
+        trials = [
+            _trial(
+                run_id=f"r{i}",
+                label=f"L{i}",
+                kind=TrialKind.IMPOSTOR,
+                cluster=f"impostor-{i}",
+            )
+            for i in range(50)
+        ]
         report = check_independence(trials)
         assert report.sufficient is True
-        assert report.n_clusters == 60
+        assert report.n_genuine_clusters == 0
+        assert report.n_impostor_clusters == 50
 
     def test_insufficient_clusters(self) -> None:
         trials = [
@@ -628,6 +657,18 @@ class TestIndependence:
         ]
         report = check_independence(trials)
         assert report.cluster_sizes == {"A": 2, "B": 1}
+        assert report.genuine_cluster_sizes == {"A": 2, "B": 1}
+        assert report.impostor_cluster_sizes == {}
+
+    def test_cluster_with_both_kinds_counts_in_each(self) -> None:
+        trials = [
+            _trial(kind=TrialKind.GENUINE, cluster="shared"),
+            _trial(kind=TrialKind.IMPOSTOR, cluster="shared"),
+        ]
+        report = check_independence(trials)
+        assert report.n_clusters == 1
+        assert report.n_genuine_clusters == 1
+        assert report.n_impostor_clusters == 1
 
 
 # ---------------------------------------------------------------------------
@@ -639,6 +680,24 @@ class TestSerialization:
         d = trial_to_dict(original)
         restored = trial_from_dict(d)
         assert restored == original
+        assert restored.detail == TrialDetail.GENUINE
+
+    def test_trial_round_trip_explicit_detail(self) -> None:
+        original = _trial(kind=TrialKind.IMPOSTOR)
+        original = Trial(
+            **{
+                **original.__dict__,
+                "detail": TrialDetail.IMPOSTOR_OPEN,
+            }
+        )
+        restored = trial_from_dict(trial_to_dict(original))
+        assert restored == original
+
+    def test_trial_from_legacy_dict_derives_detail(self) -> None:
+        payload = trial_to_dict(_trial(kind=TrialKind.IMPOSTOR))
+        del payload["detail"]
+        restored = trial_from_dict(payload)
+        assert restored.detail == TrialDetail.IMPOSTOR_CLOSED
 
     def test_trial_round_trip_null_margin(self) -> None:
         original = _trial(margin=None, roster=1)
@@ -665,11 +724,17 @@ class TestSerialization:
             n_scoreable=20,
             far=2 / 12,
             far_ci_upper=0.35,
+            n_impostor_clusters=10,
+            n_genuine_clusters=8,
+            far_upper_one_sided=0.30,
+            genuine_cluster_coverage=0.75,
         )
         d = sweep_point_to_dict(point)
         assert d["cosine"] == 0.70
         assert d["auto_correct"] == 10
         assert isinstance(d["far"], float)
+        assert d["n_impostor_clusters"] == 10
+        assert d["genuine_cluster_coverage"] == 0.75
 
     def test_gates_round_trip(self) -> None:
         gates = MatchingGates(
@@ -694,6 +759,11 @@ class TestSerialization:
 # Wilson CI integration (via sweep)
 # ---------------------------------------------------------------------------
 class TestWilsonCIIntegration:
+    def test_one_sided_wilson_expected_values(self) -> None:
+        assert wilson_upper_one_sided(0, 50) == pytest.approx(0.0513, abs=0.0001)
+        assert wilson_upper_one_sided(0, 60) == pytest.approx(0.0431, abs=0.0001)
+        assert wilson_upper_one_sided(0, 0) == 1.0
+
     def test_wilson_ci_bounds_far(self) -> None:
         """The Wilson CI upper bound should be >= the point FAR.
         At tight gates, FAR=0/5 -> CI upper is informative but < 1.0."""
@@ -711,6 +781,12 @@ class TestWilsonCIIntegration:
         assert p.far == 0.0
         assert p.far_ci_upper >= p.far
         assert p.far_ci_upper < 1.0  # 0/5 -> informative upper bound
+        assert p.n_impostor_clusters == 5
+        assert p.n_genuine_clusters == 10
+        assert p.far_upper_one_sided == pytest.approx(
+            wilson_upper_one_sided(0, 5)
+        )
+        assert p.genuine_cluster_coverage == 0.5
 
     def test_wilson_ci_all_correct_no_impostors(self) -> None:
         """No impostor trials at all: FAR=0, CI=1.0 (no denominator)."""

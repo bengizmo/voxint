@@ -104,6 +104,7 @@ def test_assemble_manifest_uses_paths_relative_to_output(tmp_path: Path) -> None
         enrolled_speaker_map={"MEO069": str(enrolled_id)},
         out_dir=out_dir,
         git_sha="abc123",
+        meeting_metadata={"ES2002a": ("test_genuine", "dev")},
     )
 
     assert manifest["schema_version"] == 1
@@ -113,11 +114,31 @@ def test_assemble_manifest_uses_paths_relative_to_output(tmp_path: Path) -> None
         "gold_rttm": "../../inputs/gold/ES2002a.rttm",
         "hypothesis_rttm": "hypothesis_rttm/ES2002a.rttm",
         "run_id": str(run_id),
+        "role": "test_genuine",
+        "split": "dev",
     }
     assert manifest["match_evidence"] == {"ES2002a": {}}
     assert manifest["enrolled_speaker_map"] == {"MEO069": str(enrolled_id)}
     assert manifest["environment"] == {"git_sha": "abc123"}
     assert json.loads(_dumps(manifest)) == manifest
+
+
+def test_assemble_manifest_rejects_enrollment_meeting(tmp_path: Path) -> None:
+    run_id = uuid.uuid4()
+    gold = tmp_path / "EN0001a.rttm"
+    gold.write_text("", encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="enrollment-role"):
+        assemble_manifest(
+            protocol_path=tmp_path / "protocol.json",
+            gold_paths={"EN0001a": gold},
+            run_manifest=RunManifest(runs={"EN0001a": run_id}),
+            match_evidence={"EN0001a": {}},
+            enrolled_speaker_map={},
+            out_dir=tmp_path / "out",
+            git_sha=None,
+            meeting_metadata={"EN0001a": ("enrollment", "enrollment")},
+        )
 
 
 def test_parse_run_manifest() -> None:

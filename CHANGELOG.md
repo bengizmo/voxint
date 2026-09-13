@@ -7,6 +7,27 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Speaker-attribution calibration tooling** (#114). The harness now scores
+  open-set false accepts: a slot whose gold speaker is not enrolled but that the
+  matcher assigned to a roster speaker is an `impostor_open` trial instead of
+  being dropped, and independence is reported per kind with the 50-cluster
+  floor on impostor clusters and a one-sided 95% Wilson FAR bound at cluster
+  level. Protocol manifests (schema 2) carry per-meeting roles and a
+  metadata-only dev/confirm split with seeded open-set meeting selection.
+  New maintainer tools build the roster from gold-aligned enrollment slots
+  (`tools/build_attribution_roster.py`) and re-derive match evidence on CPU
+  from stored turn embeddings (`tools/rematch_runs.py`), so a corpus needs one
+  GPU pass. `tools/calibrate_policy.py` gains `select` (pre-registered rule on
+  the dev split) and `certify` (single scoring on the confirm split, `CERTIFIED`
+  or `NO_DECISION` with reasons). AMI corpus result: `NO_DECISION` (49/50
+  impostor clusters on the confirm split, FAR upper 5.23% vs 5.00% ceiling;
+  zero auto_wrong across all 311 scoreable trials). The 50-cluster floor
+  was internally inconsistent with the Wilson method (zero errors need 52+
+  clusters to clear 5%). Defaults unchanged; pooled 0/104 evidence and the
+  protocol design finding documented in the calibration report. Evidence
+  pack committed to `tests/parity/fixtures/attribution/calibration/`,
+  contract test pins the outcome and defaults. Documented in
+  `docs/harness.md` and `docs/reports/attribution-calibration-2026-09-13.md`.
 - **Speaker-attribution GPU baseline** (#113 A5). First measured baseline for
   speaker attribution quality: 44 enrollment + 10 test AMI Mix-Headset
   meetings through the full pipeline (whisper/pyannote/titanet on CUDA).

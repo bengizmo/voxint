@@ -217,6 +217,13 @@ further: it aligns corpus gold timing to predicted diarization slots, builds
 FAR/FRR trials, and renders a dated baseline report. See the "Attribution
 evaluation" sections of [harness.md](harness.md).
 
+The grounded gate values above are the calibration target of issue #114. The
+calibration runs a pre-registered selection on a dev split and a single
+certification on a held-out confirm split, with the safety floor on impostor
+clusters (open-set false accepts) rather than on cosine alone. The rule, the
+tooling, and the `CERTIFIED` / `NO_DECISION` outcomes are documented in the
+"Calibrating the auto-display band" section of [harness.md](harness.md).
+
 ## See also
 
 - [architecture.md](architecture.md): where these gates sit in the pipeline and

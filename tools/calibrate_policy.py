@@ -2,7 +2,8 @@
 
 Maintainer tool (not part of the shipped ``voxint`` CLI). Follows the pattern
 of ``tools/export_match_evidence.py``: the ``export`` subcommand reads the
-database; ``sweep``, ``compare``, and ``baseline`` operate on files only.
+database; ``sweep``, ``compare``, ``select``, ``certify``, and ``baseline``
+operate on files only.
 
 Usage::
 
@@ -17,6 +18,13 @@ Usage::
         --trials trials.jsonl \\
         --baseline baseline_gates.json --candidate candidate_gates.json
 
+    uv run python -m tools.calibrate_policy select \\
+        --trials attribution-trials.json --out selection.json
+
+    uv run python -m tools.calibrate_policy certify \\
+        --trials attribution-trials.json --candidate selection.json \\
+        --out certification.json
+
     uv run python -m tools.calibrate_policy baseline --out baseline_gates.json
 """
 
@@ -28,13 +36,21 @@ from pathlib import Path
 from typing import Any
 
 from voxint.harness.calibration import (
+    MIN_INDEPENDENT_CLUSTERS,
     CompareResult,
+    SelectionRule,
     Trial,
+    certification_result_to_dict,
+    certify,
     check_independence,
     classify_trial,
     compare,
+    filter_split,
     gates_from_dict,
     gates_to_dict,
+    load_attribution_trials,
+    select_candidate,
+    selection_result_to_dict,
     sweep,
     sweep_point_to_dict,
     trial_from_dict,
@@ -57,17 +73,35 @@ def _dumps(payload: Any) -> str:
 
 
 def _load_trials(path: Path) -> list[Trial]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"error: cannot read trials from {path}: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError:
+        document = None
+    if isinstance(document, dict) and document.get("kind") == "attribution_trials":
+        try:
+            return load_attribution_trials(document)
+        except (KeyError, TypeError, ValueError) as exc:
+            print(
+                f"error: cannot load attribution trials from {path}: {exc}",
+                file=sys.stderr,
+            )
+            raise SystemExit(2) from exc
+
     trials: list[Trial] = []
-    with open(path, encoding="utf-8") as f:
-        for lineno, line in enumerate(f, 1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                trials.append(trial_from_dict(json.loads(line)))
-            except (json.JSONDecodeError, KeyError, ValueError) as exc:
-                print(f"error: {path}:{lineno}: {exc}", file=sys.stderr)
-                raise SystemExit(2) from exc
+    for lineno, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            trials.append(trial_from_dict(json.loads(line)))
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            print(f"error: {path}:{lineno}: {exc}", file=sys.stderr)
+            raise SystemExit(2) from exc
     return trials
 
 
@@ -84,6 +118,29 @@ def _parse_grid(raw: str | None, default: list[float]) -> list[float]:
     if raw is None:
         return default
     return sorted(float(x.strip()) for x in raw.split(","))
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_dumps(payload) + "\n", encoding="utf-8")
+
+
+def _load_candidate(path: Path) -> MatchingGates:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("expected a gates or selection object")
+        if data.get("kind") == "calibration_selection":
+            chosen = data.get("chosen_gates")
+            if chosen is None:
+                raise ValueError("selection has no chosen candidate")
+            if not isinstance(chosen, dict):
+                raise ValueError("selection chosen_gates must be an object")
+            data = chosen
+        return gates_from_dict(data)
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        print(f"error: cannot load candidate from {path}: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -183,10 +240,12 @@ def _cmd_export(args: argparse.Namespace) -> int:
 
     independence = check_independence(trials)
     print(f"  clusters: {independence.n_clusters}")
+    print(f"  genuine clusters: {independence.n_genuine_clusters}")
+    print(f"  impostor clusters: {independence.n_impostor_clusters}")
     if not independence.sufficient:
         print(
-            f"  WARNING: only {independence.n_clusters} independent clusters "
-            f"(minimum {50} for a reliable decision)"
+            f"  WARNING: only {independence.n_impostor_clusters} independent "
+            f"impostor clusters (minimum {MIN_INDEPENDENT_CLUSTERS} for a reliable FAR decision)"
         )
     return 0
 
@@ -224,6 +283,8 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
         "n_clusters": independence.n_clusters,
         "n_trials": independence.n_trials,
         "sufficient": independence.sufficient,
+        "n_genuine_clusters": independence.n_genuine_clusters,
+        "n_impostor_clusters": independence.n_impostor_clusters,
     }
 
     out_path = Path(args.out)
@@ -236,8 +297,8 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
     print(f"Sweep: {total_points} grid points across {len(strata)} strata written to {out_path}")
     if not independence.sufficient:
         print(
-            f"WARNING: only {independence.n_clusters} independent clusters "
-            f"(minimum {50} for a reliable decision)"
+            f"WARNING: only {independence.n_impostor_clusters} independent "
+            f"impostor clusters (minimum {MIN_INDEPENDENT_CLUSTERS} for a reliable FAR decision)"
         )
     return 0
 
@@ -330,6 +391,51 @@ def _cmd_compare(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# pre-registered selection and certification
+# ---------------------------------------------------------------------------
+def _cmd_select(args: argparse.Namespace) -> int:
+    trials = filter_split(_load_trials(Path(args.trials)), "dev")
+    base_gates = _load_gates(Path(args.gates)) if args.gates else MatchingGates()
+    rule = SelectionRule()
+    result = select_candidate(trials, base_gates, rule)
+    out_path = Path(args.out)
+    _write_json(out_path, selection_result_to_dict(result, rule))
+    print(f"DEV outcome: {result.outcome}")
+    print(f"  genuine clusters: {result.n_genuine_clusters}")
+    print(f"  impostor clusters: {result.n_impostor_clusters}")
+    if result.chosen_gates is not None:
+        print(
+            "  selected grounded gates: "
+            f"cosine={result.chosen_gates.grounded_min_cosine:.2f}, "
+            f"margin={result.chosen_gates.grounded_min_margin:.2f}"
+        )
+    else:
+        print(f"  reason: {result.reason}")
+    print(f"Selection written to {out_path}")
+    return 0
+
+
+def _cmd_certify(args: argparse.Namespace) -> int:
+    trials = filter_split(_load_trials(Path(args.trials)), "confirm")
+    base_gates = _load_gates(Path(args.gates)) if args.gates else MatchingGates()
+    candidate_gates = _load_candidate(Path(args.candidate))
+    rule = SelectionRule()
+    result = certify(trials, base_gates, candidate_gates, rule)
+    out_path = Path(args.out)
+    _write_json(out_path, certification_result_to_dict(result, rule))
+    print(f"CONFIRM outcome: {result.outcome}")
+    if result.reasons:
+        print(f"  reasons: {', '.join(result.reasons)}")
+    print(f"  impostor clusters: {result.post.n_impostor_clusters}")
+    print(f"  genuine clusters: {result.post.n_genuine_clusters} (descriptive)")
+    print(f"  auto wrong: {result.post.auto_wrong}")
+    print(f"  one-sided FAR upper: {result.post.far_upper_one_sided:.4f}")
+    print(f"  band changes: {len(result.changes)}")
+    print(f"Certification written to {out_path}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # baseline
 # ---------------------------------------------------------------------------
 def _cmd_baseline(args: argparse.Namespace) -> int:
@@ -413,6 +519,29 @@ def main(argv: list[str] | None = None) -> int:
     p_compare.add_argument("--candidate", required=True, help="Candidate gates JSON.")
     p_compare.add_argument("--out", default=None, help="Optional output JSON report.")
 
+    # select
+    p_select = sub.add_parser(
+        "select", help="Select the pre-registered candidate on DEV trials."
+    )
+    p_select.add_argument("--trials", required=True, help="Attribution trials JSON.")
+    p_select.add_argument(
+        "--gates", default=None, help="Base gates JSON (default: built-in gates)."
+    )
+    p_select.add_argument("--out", required=True, help="Selection JSON output.")
+
+    # certify
+    p_certify = sub.add_parser(
+        "certify", help="Certify one locked candidate on CONFIRM trials."
+    )
+    p_certify.add_argument("--trials", required=True, help="Attribution trials JSON.")
+    p_certify.add_argument(
+        "--candidate", required=True, help="Selection JSON or candidate gates JSON."
+    )
+    p_certify.add_argument(
+        "--gates", default=None, help="Base gates JSON (default: built-in gates)."
+    )
+    p_certify.add_argument("--out", required=True, help="Certification JSON output.")
+
     # baseline
     p_baseline = sub.add_parser(
         "baseline", help="Snapshot current gates from settings to a JSON file."
@@ -424,6 +553,8 @@ def main(argv: list[str] | None = None) -> int:
         "export": _cmd_export,
         "sweep": _cmd_sweep,
         "compare": _cmd_compare,
+        "select": _cmd_select,
+        "certify": _cmd_certify,
         "baseline": _cmd_baseline,
     }
     return dispatch[args.command](args)

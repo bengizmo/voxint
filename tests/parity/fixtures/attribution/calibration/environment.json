@@ -1,0 +1,30 @@
+{
+  "auto_enroll": false,
+  "driver": "610.43.02",
+  "git_sha": "41dda4bfcc1351f6b71e276cbff1432dd2423c68",
+  "gpu": "RTX 5090 32GB (maintainer hardware)",
+  "images": [
+    {
+      "created": "2026-09-13T10:44:45.970205905-06:00",
+      "image_id": "sha256:b982262ebc8c2e0637caa64c7db04fdef7d0917b6dda042d3e2f5be6c1c711ec",
+      "service": "app"
+    },
+    {
+      "created": "2026-09-06T15:32:31.974477953-06:00",
+      "image_id": "sha256:9ca160dd07c8d22b6a601c9755dd6efd307f9a81054b1102cd7962620a488ed4",
+      "service": "whisper"
+    },
+    {
+      "created": "2026-09-06T15:40:35.173051148-06:00",
+      "image_id": "sha256:eb53905f3c77e0529c05dce0a65bb92546b2b4032fd80ce71443842e81d27885",
+      "service": "pyannote"
+    },
+    {
+      "created": "2026-09-06T12:28:04.653305732-06:00",
+      "image_id": "sha256:8bb7c9f11625d48b887d64493ab50fb585332124f96756ff786d0597b5f0b499",
+      "service": "titanet"
+    }
+  ],
+  "llm_enabled": false,
+  "max_pending_requests": 64
+}
