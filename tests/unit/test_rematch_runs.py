@@ -152,7 +152,7 @@ def test_enrollment_runs_excluded_from_rematch(
         ),
     )
 
-    tallies, count = rematch_runs(
+    _tallies, count = rematch_runs(
         session,
         run_manifest=RunManifest(run_ids),
         protocol=_protocol({"EN1a": "enrollment", "TS1a": "test_genuine"}),
