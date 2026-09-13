@@ -144,7 +144,7 @@ time) and the post lane at a small concurrency of its own, so the GPU no
 longer idles while a previous run's LLM enhancement is in flight. See
 [operations.md](operations.md) for the override recipe.
 
-## Data model (alembic revisions 0001–0053)
+## Data model (alembic revisions 0001–0061)
 
 | Table | Role |
 |---|---|

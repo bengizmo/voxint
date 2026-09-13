@@ -458,7 +458,7 @@ services:
   worker:
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q celery --concurrency=1
   worker-post:
-    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.34.0}
+    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.36.0}
     pull_policy: missing
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q post --concurrency=2
     restart: unless-stopped
@@ -1448,6 +1448,27 @@ docker compose -f compose.yaml -f compose.gpu.yaml \
 
 Weights must be staged before building; see `services/synthdetect/Dockerfile`.
 
+#### Backfill CLI
+
+`voxint synthdetect backfill` scores completed runs that are missing results or
+whose results are stale (the source content hash, inference space, or calibration
+policy changed since the last scoring). The synthdetect service must be running
+and the plugin enabled in settings.
+
+```bash
+# Score all stale runs (default):
+voxint synthdetect backfill
+
+# Score a single run:
+voxint synthdetect backfill <run-id>
+
+# Force-score all completed runs, not just stale ones:
+voxint synthdetect backfill --force
+```
+
+Stranded QUEUED jobs (from a prior crash) are adopted and run inline. The command
+exits 0 on success, 2 if the plugin is disabled or the service is unreachable.
+
 ### Run-level assets (issue #41; off by default)
 
 The run detail page can carry three machine-generated assets: a **summary**,
@@ -1746,6 +1767,16 @@ Sessions are server-side, stored in the `auth_sessions` table. The session
 cookie (`voxint_session`) is `HttpOnly`, `SameSite=Lax`, and `Secure` when
 the request arrives over HTTPS (or behind a TLS-terminating proxy that sets
 `X-Forwarded-Proto: https`).
+
+### Self-service password change
+
+Any authenticated user can change their own password at `/account/password`
+(linked from the sidebar account menu). Changing the password signs out all
+other sessions for that user and rotates the current session token. The route
+returns 404 in single-operator mode (no user accounts to change).
+
+This is separate from the admin CLI `voxint user set-password`, which resets
+another user's password from the host shell.
 
 Session lifetime is controlled by `VOXINT_SESSION_TTL_SECONDS` (default:
 604800, one week). Expired sessions are cleaned up on login. Disabling a

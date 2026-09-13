@@ -1190,6 +1190,37 @@ That triggers the browser acceptance lane and not the pipeline lane.
   browser-verified at the landing commit `af60c45`, which is the release
   content minus version pins, changelog, docs, and screenshots.
 
+#### Verdict: v0.36.0, Gates A/R/E pending (2026-09-13)
+
+v0.36.0 ships speaker-attribution calibration tooling (#114), the attribution
+baseline harness (#113), self-service password change (#364), synthdetect
+backfill CLI (#146), plugin author guide (#142), and legacy review retirement
+(#158).
+
+`git diff v0.35.0..v0.36.0 -- services/` is **non-empty**: all three CUDA model
+service images were rebuilt for Blackwell (sm_120) support (#427/#428/#429).
+
+- **Titanet (#427):** replaced the NeMo/torch CUDA stack with ONNX Runtime GPU
+  1.28.0 (`CUDAExecutionProvider`), CUDA 12.8.1 runtime base. The CUDA image now
+  uses the same sha-pinned ONNX graph as the CPU image. `/healthz` reports
+  `engine: onnxruntime` (previously `nemo`), `device: cuda`.
+- **Whisper (#429):** CUDA 12.8.1 + torch 2.8.0 base (was CUDA 11.8 + torch
+  2.5.0). Same faster-whisper engine and large-v2 weights.
+- **Pyannote (#428):** CUDA 12.8.1 + torch 2.8.0 base (was CUDA 11.8 + torch
+  2.5.0). Same pyannote.audio 3.1.1 engine and vendored checkpoints.
+
+Gate evidence (all three require fresh runs, no carry-over):
+
+- **Gate A (CUDA titanet regression)**: **pending**. The titanet CUDA image
+  changed inference engine (NeMo to ONNX Runtime GPU). Re-run required on
+  Blackwell hardware (RTX 5090) to confirm the `titanet-large-v2` embedding
+  space is realized.
+- **Gate R (ROCm whisper smoke)**: **pending**. Whisper CUDA image base changed.
+  The `-rocm` image may need a corresponding rebuild. Re-run on AMD hardware.
+- **Gate E (whole-pipeline E2E)**: **pending**. The pipeline-aware diff is
+  non-empty (api, db models, e2e lifecycle, legacy review retirement). Re-run
+  required.
+
 #### Verdict: v0.34.0, Gates A/R/M carry, Gate E skipped (2026-09-04)
 
 v0.34.0 ships speaker roster tools (dedup CLI #432, reconcile CLI #430),
