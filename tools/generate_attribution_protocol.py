@@ -53,7 +53,8 @@ def main() -> int:
 
     meetings = parse_meetings_full(args.meetings_xml.read_bytes())
     recurrence = check_kill_criterion(meetings)
-    assert recurrence.baseline_viable, "AMI recurrence baseline is not viable"
+    if not recurrence.baseline_viable:
+        raise SystemExit("error: AMI recurrence baseline is not viable")
 
     manual_exclude = set(args.exclude_meetings)
     enrollment_sessions: set[str] = set()
@@ -119,7 +120,8 @@ def main() -> int:
 
     violations = validate_session_honesty(rows, enrollment_meetings, test_meetings)
     violations.extend(validate_split_honesty(rows))
-    assert not violations, "; ".join(violations)
+    if violations:
+        raise SystemExit("split validation failed: " + "; ".join(violations))
 
     exclusion_entries = [
         ExclusionEntry(m, "no gold RTTM available")

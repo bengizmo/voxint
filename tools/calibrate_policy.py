@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from voxint.harness.calibration import (
+    MIN_INDEPENDENT_CLUSTERS,
     CompareResult,
     SelectionRule,
     Trial,
@@ -244,7 +245,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     if not independence.sufficient:
         print(
             f"  WARNING: only {independence.n_impostor_clusters} independent "
-            f"impostor clusters (minimum {50} for a reliable FAR decision)"
+            f"impostor clusters (minimum {MIN_INDEPENDENT_CLUSTERS} for a reliable FAR decision)"
         )
     return 0
 
@@ -297,7 +298,7 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
     if not independence.sufficient:
         print(
             f"WARNING: only {independence.n_impostor_clusters} independent "
-            f"impostor clusters (minimum {50} for a reliable FAR decision)"
+            f"impostor clusters (minimum {MIN_INDEPENDENT_CLUSTERS} for a reliable FAR decision)"
         )
     return 0
 

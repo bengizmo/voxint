@@ -350,8 +350,8 @@ the single best slot per cross-session speaker through the operator enrollment
 path (`enroll_new_speaker`, replay-safe idempotency keys). It writes
 `enrolled_speaker_map.json` and `roster_fingerprint.json`, and refuses to run on
 a roster that already holds foreign speakers unless `--allow-existing`.
-`rematch_runs.py` calls `refresh_run_matches` for the test-role runs only and
-verifies that enrollment-run evidence did not change. Because the matcher core
+`rematch_runs.py` calls `refresh_run_matches` for the test-role runs only;
+enrollment-role runs are excluded by design. Because the matcher core
 is `evaluate_run`, the rematched evidence is exactly what the worker would have
 written with that roster.
 
@@ -380,9 +380,9 @@ anything else is `NO_DECISION` with every failing reason
 `far_bound_exceeded`). The output also carries the PRE (base gates) and POST
 (candidate) tallies on the identical trials, the full band-change listing,
 FRR, coverage, and descriptive Wilson intervals, so the report is a gold
-PRE/POST diff rather than an opinion. Both subcommands, and `sweep` and
-`compare`, read the `attribution_trials` JSON that `eval_attribution.py align`
-writes, filtering on `meeting_split`.
+PRE/POST diff rather than an opinion. `select` and `certify` filter on
+`meeting_split`; `sweep` and `compare` read the same file unfiltered for
+exploratory use.
 
 ### AMI corpus calibration result
 

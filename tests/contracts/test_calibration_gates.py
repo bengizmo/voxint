@@ -10,6 +10,8 @@ outcome for audit.
 import json
 from pathlib import Path
 
+import pytest
+
 from voxint.harness.calibration import MIN_INDEPENDENT_CLUSTERS, SelectionRule
 from voxint.speakers.matching import MatchingGates
 
@@ -61,6 +63,8 @@ def test_certification_outcome_is_no_decision() -> None:
     assert "insufficient_impostor_clusters" in cert["reasons"]
     assert "far_bound_exceeded" in cert["reasons"]
     assert cert["post"]["auto_wrong"] == 0
+    assert cert["post"]["n_impostor_clusters"] == 49
+    assert cert["post"]["far_upper_one_sided"] == pytest.approx(0.0523, abs=0.001)
 
 
 def test_selection_outcome_is_selected() -> None:

@@ -58,7 +58,7 @@ PRE used the base grounded gates, 0.70 cosine and 0.08 margin. POST used the sel
 
 The 50-cluster floor, `MIN_INDEPENDENT_CLUSTERS`, was imported from the recurrence viability check. It was not derived from the Wilson method used for certification.
 
-With zero errors, the one-sided 95% Wilson upper bound is `z² / (n + z²)`, where `z=1.645`. The bound clears the 5% ceiling only at `n >= 52`. A result of 0/50 has a 5.13% upper bound, and 0/51 has a 5.03% upper bound, so both fail certification. The floor of 50 was never independently binding. The FAR ceiling was the effective power check, and the confirm half needed at least 52 impostor clusters.
+With zero errors, the one-sided 95% Wilson upper bound is `z² / (n + z²)`, where `z=1.645`. The bound clears the 5% ceiling only at `n >= 52`. A result of 0/50 has a 5.13% upper bound, and 0/51 has a 5.04% upper bound, so both fail certification. The floor of 50 was never independently binding. The FAR ceiling was the effective power check, and the confirm half needed at least 52 impostor clusters.
 
 The complete corpus yielded only 104 impostor clusters. A two-way split therefore cannot reliably place at least 52 in each half. Future revisions should derive the sample floor from the confidence method and FAR ceiling, then check split feasibility against that derived requirement.
 
@@ -79,6 +79,8 @@ The pooled result was 0 `auto_wrong` over 104 impostor clusters. Its one-sided 9
 | FAR upper, one-sided 95% Wilson | 2.5% |
 
 Selection and certification used different splits of the same data. Pooling includes DEV, which is in-sample for selection. The pooled result is supporting evidence for the safety of the existing defaults, but it cannot replace the confirmatory protocol.
+
+The impostor clusters include both open-set meetings (speakers with no enrollment opportunity) and unenrollable cross-session speakers (14 of 62 failed the roster builder's purity/coverage/eligibility floors). Both types produce `impostor_open` trials, so the 104 impostor clusters are a mix of true open-set and enrollment attrition. This is the conservative direction: every grounded match for these speakers counts as `auto_wrong`.
 
 ## 6. Defaults decision
 

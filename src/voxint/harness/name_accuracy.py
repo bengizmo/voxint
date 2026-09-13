@@ -347,7 +347,9 @@ def wilson_ci(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
     ``[0, 1]``. Used only for single-rate reporting — paired comparisons use
     :func:`mcnemar` / :func:`clustered_bootstrap_delta`.
     """
-    if n <= 0:
+    if n < 0:
+        raise ValueError(f"n must be non-negative, got {n}")
+    if n == 0:
         return (0.0, 1.0)
     if not math.isfinite(z) or z <= 0:
         raise ValueError(f"z must be a positive finite number, got {z}")

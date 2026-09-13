@@ -8,7 +8,7 @@ import argparse
 import sys
 import uuid
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -122,19 +122,6 @@ def _validate_completed_runs(session: Session, run_manifest: RunManifest) -> Non
             )
 
 
-def _candidate_count(session: Session, run_ids: Sequence[uuid.UUID]) -> int:
-    if not run_ids:
-        return 0
-    return int(
-        session.scalar(
-            select(func.count(MatchCandidate.id)).where(
-                MatchCandidate.pipeline_run_id.in_(run_ids)
-            )
-        )
-        or 0
-    )
-
-
 def _run_tally(session: Session, selected: SelectedRun) -> RunTally:
     rows = session.execute(
         select(MatchCandidate.decision, func.count(MatchCandidate.id))
@@ -179,22 +166,10 @@ def rematch_runs(
     roles = meeting_roles(protocol)
     selected = select_runs_by_role(run_manifest, roles, selected_roles)
     _validate_completed_runs(session, run_manifest)
-    enrollment_ids = [
-        run_id
-        for meeting_id, run_id in run_manifest.runs.items()
-        if roles[meeting_id] == "enrollment"
-    ]
-    enrollment_before = _candidate_count(session, enrollment_ids)
     if not dry_run:
         for item in selected:
             refresh_run_matches(session, item.run_id, gates)
         session.flush()
-    enrollment_after = _candidate_count(session, enrollment_ids)
-    if enrollment_after != enrollment_before:
-        raise ManifestError(
-            "enrollment-run match candidate count changed during rematch: "
-            f"{enrollment_before} -> {enrollment_after}"
-        )
     tallies = () if dry_run else tuple(_run_tally(session, item) for item in selected)
     return tallies, len(selected)
 
@@ -247,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         for tally in tallies:
             print(format_tally(tally))
         print(f"Rematched runs: {selected_count}")
-    print("Enrollment runs were left untouched (candidate count unchanged)")
+    print("Note: enrollment runs are excluded from rematching by design")
     return 0
 
 

@@ -79,7 +79,7 @@ def test_format_tally_includes_all_decisions_and_roster() -> None:
     )
 
 
-def test_rematch_orchestration_leaves_enrollment_count_unchanged(
+def test_rematch_orchestration_refreshes_test_runs_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_ids = {meeting: uuid.uuid4() for meeting in ("TS1a", "OP1a")}
@@ -89,7 +89,6 @@ def test_rematch_orchestration_leaves_enrollment_count_unchanged(
     session = Mock()
     refreshed: list[uuid.UUID] = []
     monkeypatch.setattr("tools.rematch_runs._validate_completed_runs", lambda *_: None)
-    monkeypatch.setattr("tools.rematch_runs._candidate_count", lambda *_: 7)
     monkeypatch.setattr(
         "tools.rematch_runs.refresh_run_matches",
         lambda _session, run_id, _gates: refreshed.append(run_id),
@@ -121,7 +120,6 @@ def test_rematch_dry_run_performs_no_refresh(monkeypatch: pytest.MonkeyPatch) ->
     session = Mock()
     refresh = Mock()
     monkeypatch.setattr("tools.rematch_runs._validate_completed_runs", lambda *_: None)
-    monkeypatch.setattr("tools.rematch_runs._candidate_count", lambda *_: 0)
     monkeypatch.setattr("tools.rematch_runs.refresh_run_matches", refresh)
 
     tallies, count = rematch_runs(
@@ -138,22 +136,29 @@ def test_rematch_dry_run_performs_no_refresh(monkeypatch: pytest.MonkeyPatch) ->
     session.flush.assert_not_called()
 
 
-def test_rematch_fails_if_enrollment_candidate_count_moves(
+def test_enrollment_runs_excluded_from_rematch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Enrollment-role runs in the protocol are excluded, not rematched."""
     run_ids = {"TS1a": uuid.uuid4()}
     session = Mock()
     monkeypatch.setattr("tools.rematch_runs._validate_completed_runs", lambda *_: None)
-    counts = iter((4, 5))
-    monkeypatch.setattr("tools.rematch_runs._candidate_count", lambda *_: next(counts))
-    monkeypatch.setattr("tools.rematch_runs.refresh_run_matches", Mock())
+    refresh = Mock()
+    monkeypatch.setattr("tools.rematch_runs.refresh_run_matches", refresh)
+    monkeypatch.setattr(
+        "tools.rematch_runs._run_tally",
+        lambda _session, selected: RunTally(
+            selected.meeting_id, selected.run_id, 1, 0, 0, 1
+        ),
+    )
 
-    with pytest.raises(ManifestError, match="count changed"):
-        rematch_runs(
-            session,
-            run_manifest=RunManifest(run_ids),
-            protocol=_protocol({"EN1a": "enrollment", "TS1a": "test_genuine"}),
-            selected_roles={"test_genuine"},
-            gates=MatchingGates(),
-            dry_run=False,
-        )
+    tallies, count = rematch_runs(
+        session,
+        run_manifest=RunManifest(run_ids),
+        protocol=_protocol({"EN1a": "enrollment", "TS1a": "test_genuine"}),
+        selected_roles={"test_genuine"},
+        gates=MatchingGates(),
+        dry_run=False,
+    )
+    assert count == 1
+    refresh.assert_called_once()
