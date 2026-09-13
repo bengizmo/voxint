@@ -18,10 +18,10 @@ as primary calibration truth (4-model consult, issue #114).
 import enum
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from voxint.harness.name_accuracy import wilson_ci
+from voxint.harness.name_accuracy import wilson_ci, wilson_upper_one_sided
 from voxint.speakers.matching import MatchingGates
 from voxint.speakers.tiers import passes_accept, passes_grounded
 
@@ -32,6 +32,21 @@ class TrialKind(enum.StrEnum):
     GENUINE = "genuine"
     IMPOSTOR = "impostor"
     UNSCOREABLE = "unscoreable"
+
+
+class TrialDetail(enum.StrEnum):
+    GENUINE = "genuine"
+    IMPOSTOR_CLOSED = "impostor_closed"
+    IMPOSTOR_OPEN = "impostor_open"
+    UNSCOREABLE = "unscoreable"
+
+
+_DETAIL_BY_KIND = {
+    TrialKind.GENUINE: TrialDetail.GENUINE,
+    TrialKind.IMPOSTOR: TrialDetail.IMPOSTOR_CLOSED,
+    TrialKind.UNSCOREABLE: TrialDetail.UNSCOREABLE,
+}
+_DETAIL_UNSET: Any = object()
 
 
 @dataclass(frozen=True)
@@ -50,6 +65,11 @@ class Trial:
     kind: TrialKind
     truth_anchoring: str
     cluster_id: str
+    detail: TrialDetail = field(default=_DETAIL_UNSET)
+
+    def __post_init__(self) -> None:
+        if self.detail is _DETAIL_UNSET:
+            object.__setattr__(self, "detail", _DETAIL_BY_KIND[self.kind])
 
 
 @dataclass(frozen=True)
@@ -71,6 +91,10 @@ class SweepPoint:
     n_scoreable: int
     far: float
     far_ci_upper: float
+    n_impostor_clusters: int
+    n_genuine_clusters: int
+    far_upper_one_sided: float
+    genuine_cluster_coverage: float
 
 
 @dataclass(frozen=True)
@@ -104,12 +128,16 @@ class CompareResult:
 
 @dataclass(frozen=True)
 class IndependenceReport:
-    """Cluster independence check for a trial set."""
+    """Per-kind cluster independence check for a trial set."""
 
     n_clusters: int
     n_trials: int
     sufficient: bool
     cluster_sizes: dict[str, int]
+    n_genuine_clusters: int
+    n_impostor_clusters: int
+    genuine_cluster_sizes: dict[str, int]
+    impostor_cluster_sizes: dict[str, int]
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +195,7 @@ def classify_trial(
         kind=kind,
         truth_anchoring=truth_anchoring,
         cluster_id=cluster_id,
+        detail=_DETAIL_BY_KIND[kind],
     )
 
 
@@ -268,13 +297,27 @@ def sweep(
             t for t in scoreable if t.roster_size is not None and t.roster_size >= 2
         ]
 
-    n_impostor = sum(1 for t in scoreable if t.kind == TrialKind.IMPOSTOR)
+    impostors = [t for t in scoreable if t.kind == TrialKind.IMPOSTOR]
+    genuines = [t for t in scoreable if t.kind == TrialKind.GENUINE]
+    n_impostor = len(impostors)
+    impostor_clusters = {t.cluster_id for t in impostors}
+    genuine_clusters = {t.cluster_id for t in genuines}
 
     points: list[SweepPoint] = []
     for cosine in cosine_grid:
         for margin_val in margin_grid:
             gates = _grounded_gates(base_gates, cosine=cosine, margin=margin_val)
             ac, aw, rv, ab = _tally(scoreable, gates)
+            wrong_clusters = {
+                t.cluster_id
+                for t in impostors
+                if _band_label(t, gates) == "auto_attribute"
+            }
+            covered_genuine_clusters = {
+                t.cluster_id
+                for t in genuines
+                if _band_label(t, gates) == "auto_attribute"
+            }
             if n_impostor > 0:
                 far = aw / n_impostor
                 _, far_upper = wilson_ci(aw, n_impostor)
@@ -292,6 +335,16 @@ def sweep(
                     n_scoreable=ac + aw + rv + ab,
                     far=far,
                     far_ci_upper=far_upper,
+                    n_impostor_clusters=len(impostor_clusters),
+                    n_genuine_clusters=len(genuine_clusters),
+                    far_upper_one_sided=wilson_upper_one_sided(
+                        len(wrong_clusters), len(impostor_clusters)
+                    ),
+                    genuine_cluster_coverage=(
+                        len(covered_genuine_clusters) / len(genuine_clusters)
+                        if genuine_clusters
+                        else 0.0
+                    ),
                 )
             )
     return points
@@ -350,20 +403,30 @@ def compare(
 # Independence check
 # ---------------------------------------------------------------------------
 def check_independence(trials: Sequence[Trial]) -> IndependenceReport:
-    """Verify the trial set has enough independent clusters (>= 50).
+    """Verify the trial set has enough independent impostor clusters (>= 50).
 
     Independence = speaker clusters. Trials sharing a human-assigned speaker
     are correlated (same voice); resampling must be at the cluster level.
-    Fewer than 50 clusters means the calibration cannot produce a reliable
-    decision (NO_DECISION is a valid first-class outcome).
+    Fewer than 50 impostor clusters means the calibration cannot produce a
+    reliable FAR decision (NO_DECISION is a valid first-class outcome).
     """
     scoreable = _scoreable(trials)
     counts = Counter(t.cluster_id for t in scoreable)
+    genuine_counts = Counter(
+        t.cluster_id for t in scoreable if t.kind == TrialKind.GENUINE
+    )
+    impostor_counts = Counter(
+        t.cluster_id for t in scoreable if t.kind == TrialKind.IMPOSTOR
+    )
     return IndependenceReport(
         n_clusters=len(counts),
         n_trials=len(scoreable),
-        sufficient=len(counts) >= MIN_INDEPENDENT_CLUSTERS,
+        sufficient=len(impostor_counts) >= MIN_INDEPENDENT_CLUSTERS,
         cluster_sizes=dict(counts),
+        n_genuine_clusters=len(genuine_counts),
+        n_impostor_clusters=len(impostor_counts),
+        genuine_cluster_sizes=dict(genuine_counts),
+        impostor_cluster_sizes=dict(impostor_counts),
     )
 
 
@@ -383,6 +446,7 @@ def trial_to_dict(trial: Trial) -> dict[str, Any]:
         "roster_size": trial.roster_size,
         "top_speaker_id": trial.top_speaker_id,
         "kind": trial.kind.value,
+        "detail": trial.detail.value,
         "truth_anchoring": trial.truth_anchoring,
         "cluster_id": trial.cluster_id,
     }
@@ -403,6 +467,11 @@ def trial_from_dict(d: dict[str, Any]) -> Trial:
         kind=TrialKind(d["kind"]),
         truth_anchoring=d["truth_anchoring"],
         cluster_id=d["cluster_id"],
+        detail=(
+            TrialDetail(d["detail"])
+            if "detail" in d
+            else _DETAIL_BY_KIND[TrialKind(d["kind"])]
+        ),
     )
 
 
@@ -418,6 +487,10 @@ def sweep_point_to_dict(point: SweepPoint) -> dict[str, Any]:
         "n_scoreable": point.n_scoreable,
         "far": round(point.far, 6),
         "far_ci_upper": round(point.far_ci_upper, 6),
+        "n_impostor_clusters": point.n_impostor_clusters,
+        "n_genuine_clusters": point.n_genuine_clusters,
+        "far_upper_one_sided": round(point.far_upper_one_sided, 6),
+        "genuine_cluster_coverage": round(point.genuine_cluster_coverage, 6),
     }
 
 

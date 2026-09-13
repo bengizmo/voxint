@@ -183,10 +183,12 @@ def _cmd_export(args: argparse.Namespace) -> int:
 
     independence = check_independence(trials)
     print(f"  clusters: {independence.n_clusters}")
+    print(f"  genuine clusters: {independence.n_genuine_clusters}")
+    print(f"  impostor clusters: {independence.n_impostor_clusters}")
     if not independence.sufficient:
         print(
-            f"  WARNING: only {independence.n_clusters} independent clusters "
-            f"(minimum {50} for a reliable decision)"
+            f"  WARNING: only {independence.n_impostor_clusters} independent "
+            f"impostor clusters (minimum {50} for a reliable FAR decision)"
         )
     return 0
 
@@ -224,6 +226,8 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
         "n_clusters": independence.n_clusters,
         "n_trials": independence.n_trials,
         "sufficient": independence.sufficient,
+        "n_genuine_clusters": independence.n_genuine_clusters,
+        "n_impostor_clusters": independence.n_impostor_clusters,
     }
 
     out_path = Path(args.out)
@@ -236,8 +240,8 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
     print(f"Sweep: {total_points} grid points across {len(strata)} strata written to {out_path}")
     if not independence.sufficient:
         print(
-            f"WARNING: only {independence.n_clusters} independent clusters "
-            f"(minimum {50} for a reliable decision)"
+            f"WARNING: only {independence.n_impostor_clusters} independent "
+            f"impostor clusters (minimum {50} for a reliable FAR decision)"
         )
     return 0
 

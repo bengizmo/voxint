@@ -12,8 +12,8 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
-from voxint.harness.calibration import Trial, TrialKind
-from voxint.harness.name_accuracy import wilson_ci
+from voxint.harness.calibration import Trial, TrialDetail, TrialKind
+from voxint.harness.name_accuracy import wilson_ci, wilson_upper_one_sided
 from voxint.speakers.matching import MatchingGates
 from voxint.speakers.tiers import passes_accept, passes_grounded
 
@@ -278,18 +278,23 @@ def build_trials(
         scoreable = (
             item.classification in _SCOREABLE_ALIGNMENTS
             and evidence is not None
-            and gold_speaker_id is not None
             and top_speaker_id is not None
+            and item.dominant_gold_speaker is not None
         )
         if scoreable:
-            kind = (
-                TrialKind.GENUINE
-                if top_speaker_id == gold_speaker_id
-                else TrialKind.IMPOSTOR
-            )
+            if gold_speaker_id is None:
+                kind = TrialKind.IMPOSTOR
+                detail = TrialDetail.IMPOSTOR_OPEN
+            elif top_speaker_id == gold_speaker_id:
+                kind = TrialKind.GENUINE
+                detail = TrialDetail.GENUINE
+            else:
+                kind = TrialKind.IMPOSTOR
+                detail = TrialDetail.IMPOSTOR_CLOSED
             cluster_id = item.dominant_gold_speaker
         else:
             kind = TrialKind.UNSCOREABLE
+            detail = TrialDetail.UNSCOREABLE
             cluster_id = f"__unscoreable__:{item.slot_label}"
 
         evidence = evidence or {}
@@ -310,6 +315,7 @@ def build_trials(
             kind=kind,
             truth_anchoring=truth_source,
             cluster_id=str(cluster_id),
+            detail=detail,
         )
         results.append(AttributionTrial(trial, item.slot_label, item))
     return results
@@ -319,6 +325,8 @@ def build_trials(
 class AttributionSummary:
     n_genuine_trials: int
     n_impostor_trials: int
+    n_impostor_open_trials: int
+    n_impostor_closed_trials: int
     n_unscoreable: int
     n_auto_correct: int
     n_auto_wrong: int
@@ -326,10 +334,13 @@ class AttributionSummary:
     n_abstain: int
     far: float
     far_ci_upper: float
+    far_upper_one_sided: float
     frr: float
     frr_ci_upper: float
     coverage: float
     n_speaker_clusters: int
+    n_genuine_clusters: int
+    n_impostor_clusters: int
     alignment_attrition: dict[str, int]
 
 
@@ -342,11 +353,18 @@ def aggregate_trials(
     scoreable = [item.trial for item in trials if item.trial.kind != TrialKind.UNSCOREABLE]
     n_genuine = sum(trial.kind == TrialKind.GENUINE for trial in scoreable)
     n_impostor = sum(trial.kind == TrialKind.IMPOSTOR for trial in scoreable)
+    n_impostor_open = sum(
+        trial.detail == TrialDetail.IMPOSTOR_OPEN for trial in scoreable
+    )
+    n_impostor_closed = sum(
+        trial.detail == TrialDetail.IMPOSTOR_CLOSED for trial in scoreable
+    )
     n_unscoreable = len(trials) - len(scoreable)
     n_auto_correct = 0
     n_auto_wrong = 0
     n_review = 0
     n_abstain = 0
+    auto_wrong_clusters: set[str] = set()
 
     for trial in scoreable:
         fields = (
@@ -362,6 +380,7 @@ def aggregate_trials(
                 n_auto_correct += 1
             else:
                 n_auto_wrong += 1
+                auto_wrong_clusters.add(trial.cluster_id)
         elif passes_accept(*fields, active_gates):
             n_review += 1
         else:
@@ -377,10 +396,18 @@ def aggregate_trials(
         classification.value: attrition_counts[classification]
         for classification in SlotClassification
     }
+    genuine_clusters = {
+        trial.cluster_id for trial in scoreable if trial.kind == TrialKind.GENUINE
+    }
+    impostor_clusters = {
+        trial.cluster_id for trial in scoreable if trial.kind == TrialKind.IMPOSTOR
+    }
 
     return AttributionSummary(
         n_genuine_trials=n_genuine,
         n_impostor_trials=n_impostor,
+        n_impostor_open_trials=n_impostor_open,
+        n_impostor_closed_trials=n_impostor_closed,
         n_unscoreable=n_unscoreable,
         n_auto_correct=n_auto_correct,
         n_auto_wrong=n_auto_wrong,
@@ -388,9 +415,14 @@ def aggregate_trials(
         n_abstain=n_abstain,
         far=far,
         far_ci_upper=wilson_ci(n_auto_wrong, n_impostor)[1],
+        far_upper_one_sided=wilson_upper_one_sided(
+            len(auto_wrong_clusters), len(impostor_clusters)
+        ),
         frr=frr,
         frr_ci_upper=wilson_ci(false_rejects, n_genuine)[1],
         coverage=coverage,
         n_speaker_clusters=len({trial.cluster_id for trial in scoreable}),
+        n_genuine_clusters=len(genuine_clusters),
+        n_impostor_clusters=len(impostor_clusters),
         alignment_attrition=dict(attrition),
     )
