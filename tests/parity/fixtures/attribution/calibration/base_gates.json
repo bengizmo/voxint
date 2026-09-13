@@ -1,0 +1,14 @@
+{
+  "max_overlap_ratio": 0.2,
+  "turn_weight_cap_seconds": 10.0,
+  "min_turns": 2,
+  "min_seconds": 6.0,
+  "min_cosine": 0.6,
+  "min_margin": 0.05,
+  "min_vote_agreement": 0.6,
+  "grounded_min_turns": 3,
+  "grounded_min_seconds": 10.0,
+  "grounded_min_cosine": 0.7,
+  "grounded_min_margin": 0.08,
+  "grounded_min_vote_agreement": 0.67
+}

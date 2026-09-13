@@ -384,6 +384,19 @@ PRE/POST diff rather than an opinion. Both subcommands, and `sweep` and
 `compare`, read the `attribution_trials` JSON that `eval_attribution.py align`
 writes, filtering on `meeting_split`.
 
+### AMI corpus calibration result
+
+The first calibration run on 170 AMI Mix-Headset meetings returned
+`NO_DECISION`: the confirm split had 49 impostor clusters (floor: 50) and a
+one-sided 95% Wilson FAR upper bound of 5.23% (ceiling: 5.00%). Zero
+`auto_wrong` across all 311 scoreable trials. The 50-cluster floor was
+imported from the recurrence viability check and is internally inconsistent
+with the Wilson method: zero errors need at least 52 clusters to clear 5%.
+Grounded-gate defaults remain at their pre-calibration values
+(`grounded_min_cosine=0.70`, `grounded_min_margin=0.08`). Full analysis:
+[`docs/reports/attribution-calibration-2026-09-13.md`](reports/attribution-calibration-2026-09-13.md).
+Evidence pack: `tests/parity/fixtures/attribution/calibration/`.
+
 ## Feeding the harness from live runs (`voxint.harness_export`)
 
 The harness scores files; it never reads a database. `voxint.harness_export` is
