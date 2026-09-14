@@ -230,7 +230,11 @@ function SpeakerCard({
       {explanation && (
         <details className="match-why">
           <summary className="text-sm">
-            {isAmbiguous(state) ? "Why no name?" : "Why this match?"}
+            {isAmbiguous(state)
+              ? "Why no name?"
+              : isConfirmable(state)
+                ? "Why this match?"
+                : "Why no match?"}
           </summary>
           <p className="muted text-sm">{explanation}</p>
         </details>
