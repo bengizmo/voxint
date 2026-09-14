@@ -60,7 +60,12 @@ from voxint.api.csrf import (
 )
 from voxint.api.languages import LANGUAGE_NAMES, language_label
 from voxint.api.model_provenance import select_run_model_identity
-from voxint.api.pipeline_dashboard_query import degraded_stages, pipeline_dashboard_state
+from voxint.api.pipeline_dashboard_query import (
+    RunStageProgress,
+    degraded_stages,
+    estimate_run_stage_progress,
+    pipeline_dashboard_state,
+)
 from voxint.api.playback import MediaResolutionError, playback_capability, resolve_servable_media
 from voxint.api.presentation import friendly_media_label, title_from_snapshot
 from voxint.api.resource_status import (
@@ -698,6 +703,27 @@ def runs(
         if not show_archived
         else None
     )
+    stage_progress: dict[uuid.UUID, RunStageProgress] = {}
+    if dashboard is not None:
+        progress_by_stage = {stage.stage: stage for stage in dashboard.stages}
+        for item in page.items:
+            if (
+                item.status != RunStatus.RUNNING.value
+                or item.current_stage is None
+            ):
+                continue
+            stage_state = progress_by_stage.get(item.current_stage)
+            progress = estimate_run_stage_progress(
+                item.current_stage,
+                item.stage_started_at,
+                stage_state.avg_seconds if stage_state is not None else None,
+                _now,
+                using_heuristic=(
+                    stage_state.using_heuristic if stage_state is not None else False
+                ),
+            )
+            if progress is not None:
+                stage_progress[item.run_id] = progress
     return templates.TemplateResponse(
         request,
         "legacy_runs/runs.html",
@@ -705,6 +731,7 @@ def runs(
             "request": request,
             "page": page,
             "dashboard": dashboard,
+            "stage_progress": stage_progress,
             "grouped_items": grouped_items,
             "active_view": active_view,
             "view_tabs": tuple(

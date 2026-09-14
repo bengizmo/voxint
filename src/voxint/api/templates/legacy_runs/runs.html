@@ -170,7 +170,7 @@
   </details>
 
   {# Macro: one standard run row (reused by both grouped and ungrouped paths). #}
-  {% macro run_row(it) %}
+  {% macro run_row(it, progress=none) %}
     <div class="gt-row{% if it.status == 'running' %} is-machine-active{% elif it.unresolved_count > 0 and it.status == 'completed' %} is-needs-human{% endif %}">
       <span>
         <a href="/runs/{{ it.run_id }}" class="media-title" style="color:var(--ink);text-decoration:none"
@@ -179,7 +179,11 @@
         <br><span class="run-id-secondary oc-muted" style="font-size:var(--t-sm)"><code>{{ it.run_id.hex[:8] }}</code></span>
       </span>
       <span>
+        {% if it.status == "running" and progress %}
+        <span class="pill running" title="{% if progress.using_heuristic %}Estimated from a default stage duration, there is not enough history yet; as of page load{% else %}Estimated from recent completed attempts of this stage; as of page load{% endif %}">{{ humanize_stage_progress(progress.stage) }}{% if progress.overrun %} &middot; taking longer{% else %} ~{{ progress.percent }}%{% endif %}</span>
+        {% else %}
         <span class="pill {{ it.status }}">{{ humanize_status(it.status) }}</span>
+        {% endif %}
         {% if it.archived %}<span class="pill skipped">archived</span>{% endif %}
       </span>
       <span>
@@ -274,7 +278,7 @@
     {% else %}
     {# Non-Failed tabs: standard row rendering. #}
     {% for it in page.items %}
-    {{ run_row(it) }}
+    {{ run_row(it, stage_progress.get(it.run_id)) }}
     {% endfor %}
     {% endif %}
   </div>

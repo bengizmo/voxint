@@ -6,6 +6,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Jobs page stage progress in the STATUS chip** (#475). Running rows show the
+  current stage and an estimated percentage from recent completed attempts of
+  that stage, or from a default duration until enough history exists, the same
+  source as the strip's "~Xm left". The chip says "taking longer" once elapsed
+  time passes the estimate. It is a snapshot as of page load and stays plain
+  "Running" when no estimate is possible.
+
 ## [0.37.0] - 2026-09-14
 
 ### Added

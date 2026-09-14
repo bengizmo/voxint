@@ -489,6 +489,277 @@ def test_runs_renders_took_for_completed_and_dash_for_queued(
     assert queued_row[4] == "—"
 
 
+def _status_cell(body: str, run_id: uuid.UUID) -> str:
+    row = next(row for row in _runs_grid_rows(body) if run_id.hex[:8] in row[0])
+    return row[1]
+
+
+def _percent(cell: str) -> int:
+    return int(cell.rsplit("~", 1)[1].removesuffix("%"))
+
+
+def test_running_status_chip_shows_stage_progress(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    now = datetime.now(tz=UTC)
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            status=RunStatus.RUNNING,
+            stages=(
+                {
+                    "stage": "transcribe",
+                    "status": "running",
+                    "started_at": now - timedelta(seconds=300),
+                },
+            ),
+        )
+    _set_current_stage(session_factory, run_id, "transcribe")
+
+    response = client.get("/runs")
+    assert response.status_code == 200
+    row = next(
+        row for row in _runs_grid_rows(response.text) if run_id.hex[:8] in row[0]
+    )
+    assert len(row) == 7
+    cell = row[1]
+    assert cell.startswith("Transcribing ~")
+    assert 50 <= _percent(cell) <= 55
+    assert 'class="pill running"' in response.text
+    assert (
+        'title="Estimated from a default stage duration, there is not enough '
+        'history yet; as of page load"'
+        in response.text
+    )
+
+
+def test_running_status_chip_uses_learned_stage_average(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    now = datetime.now(tz=UTC)
+    history_start = now - timedelta(days=1)
+    with session_factory() as session:
+        make_run(
+            session,
+            status=RunStatus.COMPLETED,
+            created_at=history_start,
+            stages=tuple(
+                {
+                    "stage": "transcribe",
+                    "attempt": attempt,
+                    "status": "completed",
+                    "started_at": history_start + timedelta(minutes=attempt * 20),
+                    "finished_at": history_start
+                    + timedelta(minutes=attempt * 20, seconds=1000),
+                }
+                for attempt in range(1, 4)
+            ),
+        )
+        running = make_run(
+            session,
+            status=RunStatus.RUNNING,
+            created_at=now,
+            stages=(
+                {
+                    "stage": "transcribe",
+                    "status": "running",
+                    "started_at": now - timedelta(seconds=250),
+                },
+            ),
+        )
+    _set_current_stage(session_factory, running, "transcribe")
+
+    body = client.get("/runs").text
+    cell = _status_cell(body, running)
+    assert cell.startswith("Transcribing ~")
+    assert 25 <= _percent(cell) <= 27
+    assert (
+        'title="Estimated from recent completed attempts of this stage; as of page load"'
+        in body
+    )
+
+
+def test_running_status_chip_replaces_percentage_on_overrun(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    now = datetime.now(tz=UTC)
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            status=RunStatus.RUNNING,
+            stages=(
+                {
+                    "stage": "transcribe",
+                    "status": "running",
+                    "started_at": now - timedelta(seconds=900),
+                },
+            ),
+        )
+    _set_current_stage(session_factory, run_id, "transcribe")
+
+    status_cell = _status_cell(client.get("/runs").text, run_id)
+    assert "Transcribing" in status_cell
+    assert "taking longer" in status_cell
+    assert "%" not in status_cell
+
+
+def test_running_status_chip_stays_plain_without_matching_active_attempt(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    now = datetime.now(tz=UTC)
+    with session_factory() as session:
+        mismatched = make_run(
+            session,
+            status=RunStatus.RUNNING,
+            created_at=now,
+            stages=(
+                {
+                    "stage": "prepare",
+                    "status": "running",
+                    "started_at": now - timedelta(seconds=30),
+                },
+            ),
+        )
+        no_attempt = make_run(
+            session,
+            status=RunStatus.RUNNING,
+            created_at=now + timedelta(seconds=1),
+        )
+    _set_current_stage(session_factory, mismatched, "transcribe")
+    _set_current_stage(session_factory, no_attempt, "transcribe")
+
+    body = client.get("/runs").text
+    assert _status_cell(body, mismatched) == "Running"
+    assert _status_cell(body, no_attempt) == "Running"
+
+
+def test_running_status_chip_stays_plain_without_current_stage(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    now = datetime.now(tz=UTC)
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            status=RunStatus.RUNNING,
+            stages=(
+                {
+                    "stage": "transcribe",
+                    "status": "running",
+                    "started_at": now - timedelta(seconds=30),
+                },
+            ),
+        )
+
+    assert _status_cell(client.get("/runs").text, run_id) == "Running"
+
+
+def test_running_status_chip_uses_latest_active_attempt(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    now = datetime.now(tz=UTC)
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            status=RunStatus.RUNNING,
+            stages=(
+                {
+                    "stage": "transcribe",
+                    "attempt": 1,
+                    "status": "running",
+                    "started_at": now - timedelta(seconds=1800),
+                },
+                {
+                    "stage": "transcribe",
+                    "attempt": 2,
+                    "status": "running",
+                    "started_at": now - timedelta(seconds=60),
+                },
+            ),
+        )
+    _set_current_stage(session_factory, run_id, "transcribe")
+
+    cell = _status_cell(client.get("/runs").text, run_id)
+    assert cell.startswith("Transcribing ~")
+    assert 10 <= _percent(cell) <= 15
+
+
+def test_non_running_status_chips_are_unchanged(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    now = datetime.now(tz=UTC)
+    active_attempt = {
+        "stage": "transcribe",
+        "status": "running",
+        "started_at": now - timedelta(seconds=60),
+    }
+    with session_factory() as session:
+        queued = make_run(
+            session,
+            status=RunStatus.QUEUED,
+            created_at=now,
+            stages=(active_attempt,),
+        )
+        awaiting = make_run(
+            session,
+            status=RunStatus.AWAITING_ADJUDICATION,
+            created_at=now + timedelta(seconds=1),
+            stages=(active_attempt,),
+        )
+    _set_current_stage(session_factory, queued, "transcribe")
+    _set_current_stage(session_factory, awaiting, "transcribe")
+
+    first = client.get("/runs").text
+    assert _status_cell(first, queued) == "Queued"
+    assert _status_cell(first, awaiting) == "Awaiting adjudication"
+    assert "%" not in _status_cell(first, queued)
+    assert "%" not in _status_cell(first, awaiting)
+
+    with session_factory() as session:
+        paused = make_run(
+            session,
+            status=RunStatus.PAUSED,
+            created_at=now + timedelta(seconds=2),
+        )
+        completed = make_run(
+            session,
+            status=RunStatus.COMPLETED,
+            created_at=now + timedelta(seconds=3),
+        )
+    second = client.get("/runs").text
+    assert _status_cell(second, paused) == "Paused"
+    assert _status_cell(second, completed) == "Completed"
+
+
+def test_archived_running_status_chip_stays_plain(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    now = datetime.now(tz=UTC)
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            status=RunStatus.RUNNING,
+            stages=(
+                {
+                    "stage": "transcribe",
+                    "status": "running",
+                    "started_at": now - timedelta(seconds=300),
+                },
+            ),
+        )
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        run.current_stage = "transcribe"
+        run.archived_at = now
+        session.commit()
+
+    body = client.get("/runs?archived=1").text
+    cell = _status_cell(body, run_id)
+    assert cell.startswith("Running")
+    assert "Transcribing" not in cell
+    assert "%" not in cell
+    assert "Estimated from" not in body
+
+
 def test_failed_group_and_run_rows_have_seven_cells(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
@@ -538,6 +809,112 @@ def test_keyset_walks_all_runs_newest_first(
     with session_factory() as session:
         walked = _walk(session)
     assert walked == list(reversed(ids))  # newest first, every run exactly once
+
+
+def test_list_runs_exposes_current_stage_and_latest_matching_attempt(
+    session_factory: sessionmaker[Session],
+) -> None:
+    now = datetime.now(tz=UTC)
+    later = now - timedelta(seconds=60)
+    with session_factory() as session:
+        matching = make_run(
+            session,
+            status=RunStatus.RUNNING,
+            created_at=now,
+            stages=(
+                {
+                    "stage": "transcribe",
+                    "attempt": 1,
+                    "status": "running",
+                    "started_at": now - timedelta(seconds=1800),
+                },
+                {
+                    "stage": "transcribe",
+                    "attempt": 2,
+                    "status": "running",
+                    "started_at": later,
+                },
+            ),
+        )
+        no_match = make_run(
+            session,
+            status=RunStatus.RUNNING,
+            created_at=now + timedelta(seconds=1),
+            stages=(
+                {
+                    "stage": "prepare",
+                    "status": "running",
+                    "started_at": now - timedelta(seconds=30),
+                },
+            ),
+        )
+        for run_id in (matching, no_match):
+            run = session.get(PipelineRun, run_id)
+            assert run is not None
+            run.current_stage = "transcribe"
+        session.commit()
+
+        page = list_runs(
+            session,
+            status=None,
+            review=None,
+            cursor=None,
+            page_size=2,
+            gates=_GATES,
+        )
+
+    items = {item.run_id: item for item in page.items}
+    assert items[matching].current_stage == "transcribe"
+    assert items[matching].stage_started_at == later
+    assert items[no_match].current_stage == "transcribe"
+    assert items[no_match].stage_started_at is None
+
+
+def test_keyset_walk_unchanged_when_middle_run_has_multiple_active_attempts(
+    session_factory: sessionmaker[Session],
+) -> None:
+    base = datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
+    later = base + timedelta(minutes=1, seconds=30)
+    with session_factory() as session:
+        oldest = make_run(session, created_at=base)
+        middle = make_run(
+            session,
+            status=RunStatus.RUNNING,
+            created_at=base + timedelta(minutes=1),
+            stages=(
+                {
+                    "stage": "transcribe",
+                    "attempt": 1,
+                    "status": "running",
+                    "started_at": base + timedelta(minutes=1, seconds=10),
+                },
+                {
+                    "stage": "transcribe",
+                    "attempt": 2,
+                    "status": "running",
+                    "started_at": later,
+                },
+            ),
+        )
+        newest = make_run(session, created_at=base + timedelta(minutes=2))
+        middle_run = session.get(PipelineRun, middle)
+        assert middle_run is not None
+        middle_run.current_stage = "transcribe"
+        session.commit()
+
+        first_page = list_runs(
+            session,
+            status=None,
+            review=None,
+            cursor=None,
+            page_size=2,
+            gates=_GATES,
+        )
+        walked = _walk(session)
+
+    assert [item.run_id for item in first_page.items] == [newest, middle]
+    assert first_page.items[1].stage_started_at == later
+    assert walked == [newest, middle, oldest]
 
 
 def test_keyset_breaks_identical_timestamp_ties(

@@ -53,6 +53,7 @@ from voxint.api.presentation import (
     friendly_media_label,
     humanize_error,
     humanize_stage,
+    humanize_stage_progress,
     humanize_status,
     normalize_error,
     title_from_snapshot,
@@ -465,6 +466,7 @@ templates.env.globals["format_age"] = format_age
 templates.env.globals["format_clock_time"] = format_clock_time
 templates.env.globals["format_compact_duration"] = format_compact_duration
 templates.env.globals["humanize_stage"] = humanize_stage
+templates.env.globals["humanize_stage_progress"] = humanize_stage_progress
 templates.env.globals["humanize_status"] = humanize_status
 templates.env.globals["humanize_error"] = humanize_error
 templates.env.globals["normalize_error"] = normalize_error

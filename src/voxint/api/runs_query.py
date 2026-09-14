@@ -42,6 +42,7 @@ from voxint.db.models import (
     RunStatus,
     SegmentReviewState,
     StageRun,
+    StageStatus,
     TranscriptSegment,
 )
 from voxint.db.search import ts_headline, ts_query, ts_vector
@@ -220,6 +221,11 @@ class RunListItem:
     error: str | None = None
     # CAS revision for optimistic concurrency (bulk retry forms embed this).
     revision: int = 0
+    # Raw current stage, used to select the row's stage-progress label.
+    current_stage: str | None = None
+    # Latest running attempt start at current_stage; raw input for the chip
+    # estimate, not a liveness flag. May be set on non-running or archived rows.
+    stage_started_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -506,6 +512,20 @@ def list_runs(
         .correlate(PipelineRun)
         .scalar_subquery()
     )
+    # Lease validity is deliberately ignored, like stage_activity. This picks the
+    # latest running attempt per run (max started_at), while the strip's
+    # _active_started_at anchors the earliest per stage; they diverge only in the
+    # anomalous multi-RUNNING case.
+    stage_started_at = (
+        sa_select(func.max(StageRun.started_at))
+        .where(
+            StageRun.pipeline_run_id == PipelineRun.id,
+            StageRun.status == StageStatus.RUNNING.value,
+            StageRun.stage == PipelineRun.current_stage,
+        )
+        .correlate(PipelineRun)
+        .scalar_subquery()
+    )
     # Processing time is summed across every stage attempt. Finished attempts
     # contribute their own duration; unfinished claims contribute through now
     # or their lease expiry, whichever came first. Queue wait and retry/restart
@@ -531,6 +551,8 @@ def list_runs(
             PipelineRun.archived_at,
             PipelineRun.error,
             PipelineRun.revision,
+            PipelineRun.current_stage,
+            stage_started_at.label("stage_started_at"),
             MediaItem.source_path,
             PipelineRun.sidecar,
             PipelineRun.detected_language,
@@ -702,6 +724,8 @@ def list_runs(
             folder_path=row.folder_path,
             error=row.error,
             revision=row.revision,
+            current_stage=row.current_stage,
+            stage_started_at=row.stage_started_at,
         )
         for row in rows
     ]
