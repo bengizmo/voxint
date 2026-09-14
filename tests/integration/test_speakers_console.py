@@ -8,6 +8,7 @@ cross-preservation (toggles and post-action re-renders), both views, the
 empty state, and the verified badge / tier chip wiring.
 """
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -43,12 +44,14 @@ def _make_client(
     tmp_path: Path,
     *,
     speakers_enabled: bool,
+    media_enabled: bool = False,
 ) -> TestClient:
     settings = Settings(
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=tmp_path,
         console_speakers_enabled=speakers_enabled,
+        console_media_enabled=media_enabled,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
     client.auth = CREDS
@@ -415,15 +418,57 @@ def test_profile_page_renders_stats_research_and_recordings(
     assert 'id="profile-panel"' in page.text
     assert "not set" in page.text
     assert f'id="research-{speaker_id}"' in page.text
-    # Heard In rows open the editor on that recording's run (#246), not the
-    # legacy run page.
-    assert "/editor?run=" in page.text
-    assert 'href="/runs/' not in page.text
+    # With the media area off (the default) Heard In rows still drill through to
+    # the always-routed run page: the editor route would 404 (#246 review).
+    assert 'href="/runs/' in page.text
+    assert "/editor?run=" not in page.text
     assert "verified" in page.text  # the human-assign chip on the appearance
     # The "..." overflow menu carries the Archive action with its own CSRF token.
-    assert 'class="cb-overflow"' in page.text
     assert f'action="/speakers/{speaker_id}/archive' in page.text
     assert "Archive speaker" in page.text
+
+
+def test_profile_heard_in_links_open_the_editor_when_media_area_is_on(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True, media_enabled=True)
+    with session_factory() as session:
+        speaker_id = _seed_speaker_with_activity(session, "Alice", minutes_rank=2, human=True)
+        session.commit()
+    page = client.get(f"/speakers/{speaker_id}")
+    assert page.status_code == 200
+    hrefs = re.findall(r'href="(/media/[0-9a-f-]+/editor\?run=[0-9a-f-]+)"', page.text)
+    assert hrefs, "Heard In rows should link to the editor when the media area is on"
+    assert 'href="/runs/' not in page.text
+    # The link actually resolves (the editor route is area-gated).
+    editor = client.get(hrefs[0])
+    assert editor.status_code == 200
+
+
+def test_profile_overflow_archive_posts_with_its_own_csrf_token(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    with session_factory() as session:
+        speaker_id = _seed_speaker_with_activity(session, "Alice", minutes_rank=2, human=True)
+        session.commit()
+    page = client.get(f"/speakers/{speaker_id}")
+    match = re.search(
+        rf'action="(/speakers/{speaker_id}/archive[^"]*)"[^>]*>\s*'
+        r'<input type="hidden" name="csrf_token" value="([^"]+)"',
+        page.text,
+        re.S,
+    )
+    assert match, "overflow menu should carry an archive form with a CSRF token"
+    action, token = match.group(1).replace("&amp;", "&"), match.group(2)
+    # A token minted for another scope is refused.
+    wrong = client.post(action, data={"csrf_token": "not-a-token"}, follow_redirects=False)
+    assert wrong.status_code == 403
+    done = client.post(action, data={"csrf_token": token}, follow_redirects=False)
+    assert done.status_code == 303
+    assert done.headers["location"].startswith("/speakers")
+    with session_factory() as session:
+        assert session.get(Speaker, speaker_id).deleted_at is not None
 
 
 def test_profile_tombstone_redirects_and_archived_reads_only(
