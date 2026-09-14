@@ -252,7 +252,13 @@ enrichment tables. The speakers overview (`/speakers`) and detail
 per-speaker aggregates folded from effective resolution
 (`speakers/aggregate.py`: one canonical newest completed run per recording,
 human rulings over automatic matches), with voice-match tiers graded against
-the live matching gates (`speakers/tiers.py`).
+the live matching gates (`speakers/tiers.py`). The review console partitions
+labels through the three-band policy (`speakers/policy.py`, `MatchBand`);
+`LabelState` carries `candidateSpeakerId` / `candidateSpeakerName` plus
+`matchSimilarity`, `matchMargin`, and `matchVoteAgreement`, and auto-enrolled
+labels are banded from live evidence like unresolved labels. The rail derives
+its groups and copy in the pure
+`frontend/src/lib/speaker-bands.ts` module.
 - **Removing an embedding** hard-deletes the derived centroid (the minting
   decision and the raw `diarization_turns` vectors survive) and deletes all of
   that speaker's cosine assignments, because assignments carry no centroid
@@ -882,23 +888,12 @@ subsystem and adds no page routing.
   via `readProps()` and call voxint's own routes through the shared
   `api-client.ts` `apiFetch`, whose `ApiError` mirrors FastAPI's `{detail}`
   shape, the seam #54/#55 consume for capability-aware responses.
-- **Per-turn playback + fail-closed seek gating (issues #49/#55).** Two islands
-  add "play this turn"/"preview this speaker" seeking. `transcript-player`
-  (transcript.html) is fully in-React: per-line ▶ buttons and click-to-seek call
-  the shared `lib/playback.ts` `playTurn`, which seeks + plays + stops at the
-  segment end via a rate-aware guard (a one-shot `timeupdate` check plus a
-  `setTimeout` fallback, so a coarse timeupdate can't overshoot into the next
-  voice) and holds exactly one cancellable active turn. `workbench-player`
-  (run.html) is the harder case: the per-turn buttons are **server-rendered
-  inside `#labels`**, which every adjudication ruling replaces via
-  `hx-swap="innerHTML"`. So the island mounts **outside `#labels`** (wrapping the
-  `<audio>`, which survives swaps) and drives those buttons with **document-level
-  event delegation**: one delegated `click` listener scoped to the current
-  `#labels`, plus an `htmx:afterSwap` listener filtered to `#labels` swaps that
-  re-runs an "enable pass". Buttons render `disabled` + `type="button"`
-  server-side (honest JS-off default, never submitting a form); the island
-  removes `disabled` only when seeking is safe. Both listeners are installed in a
-  single StrictMode-safe effect with symmetric cleanup.
+- **Per-turn playback + fail-closed seek gating (issues #49/#55).** The
+  `media-editor` island owns the audio player, transcript, walk cursor, and
+  speaker rail. Per-line playback calls `TranscriptPlayer.playSegment()`.
+  **Hear this voice** finds the first transcript segment for the label and moves
+  the walk cursor there, which seeks and starts playback. The rail receives this
+  callback only when the playback capability allows seeking.
 - **The fail-closed capability contract (issue #55).** `api/playback.py`'s
   `playback_capability()` is the seek predicate: `seek_enabled` is true only when
   the media is actually servable, the duration is finite and positive, every
@@ -908,9 +903,6 @@ subsystem and adds no page routing.
   the islands show in a visible banner, never a bare tooltip. Media servability
   reuses `resolve_servable_media()`, the **single seam** `GET /media` itself
   calls, so capability can never advertise seeking while `/media` would 404/410.
-  "Preview this speaker" seeks a clean `DiarizationTurn` (longest non-overlap,
-  fallback longest), never the longest transcript segment, which carries only a
-  dominant-overlap label and can contain other voices.
 - **Follow-along highlight + per-speaker colors (issues #50/#47).** The
   `transcript-player` island keeps the active line in view as playback advances:
   a callback ref on the active `<p>` plus a `scrollIntoView({ block: "nearest" })`

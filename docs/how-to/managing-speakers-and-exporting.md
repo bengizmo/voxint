@@ -104,22 +104,25 @@ that speaker on future recordings until you enroll a new sample.
 
 ## How a voice joins the roster
 
-Speakers get onto the roster from the **review workbench**, while you are
-adjudicating a recording. When Voxint has separated the voices in a recording, it
-shows them as labels like `SPEAKER_00`. On the label for a voice you recognise,
-type the person's name into the **Enroll new** box and submit it. That creates a
-new roster speaker from that voice.
+Speakers get onto the roster from the **speaker rail**, while you are reviewing
+a recording. When Voxint has separated the voices, it shows them as labels like
+`SPEAKER_00`. On the label for a voice you recognise, open the speaker picker and
+choose **Add a new person…**. Enter their name and press **Add person**. That
+creates a roster speaker from the voice.
 
-![The review workbench showing a speaker label with controls to assign an
-existing speaker, enroll a new speaker by name, or mark the label
-excluded.](../images/review-workbench.png)
+![The speaker rail showing a voice card with a known-person picker, the Add a
+new person choice, and the Not a person and Can't tell actions.](../images/review-workbench.png)
+
+Voxint can also save a clear new voice automatically under a temporary name such
+as **Voice 4**. The **Matched automatically** group links to the **Speakers
+page**, where you can give that person their name.
 
 From that point on, the enrolled voice becomes a **match candidate**: on later
-recordings, Voxint compares each voice against your roster and proposes a name
-when a voice is close enough. You always confirm the match: Voxint suggests, you
-decide.
+recordings, Voxint compares each voice against your roster. A strong match is
+shown as that speaker automatically. Use **Change** in the speaker rail if it is
+wrong.
 
-For the full walkthrough of assigning, enrolling, and confirming speakers on a
+For the full walkthrough of assigning, adding, and confirming speakers on a
 recording, see **[Reviewing and adjudicating](reviewing-and-adjudicating.md)**.
 
 ### Optional: research a speaker on the web

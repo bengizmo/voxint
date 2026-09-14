@@ -430,6 +430,23 @@
     select:focus-visible, textarea:focus-visible { border-color: var(--focus-ring); }
     .label-card { border: 1px solid var(--line); border-radius: var(--r-md);
                   padding: .8rem 1rem; margin: .8rem 0; background: var(--surface); }
+    .rail-summary { font-size: 1.05rem; font-weight: 600; color: var(--ink);
+                    margin: 0 0 .25rem; line-height: 1.4; }
+    .rail-group { display: flex; flex-direction: column; gap: var(--space-3); }
+    .rail-group-title { font-size: .95rem; font-weight: 600; color: var(--ink-2);
+                        margin: .25rem 0 0; }
+    details.rail-group > summary.rail-group-title { cursor: pointer; list-style: revert; }
+    .rail-title { font-weight: 600; color: var(--ink); margin: .15rem 0 0; }
+    .label-card.rail-row { padding: .45rem .7rem; display: grid;
+                           grid-template-columns: 1fr auto; gap: .15rem .75rem;
+                           align-items: baseline; }
+    .label-card.rail-row h3 { margin: 0; font-size: .95rem; grid-column: 1; }
+    .label-card.rail-row .rail-title,
+    .label-card.rail-row .muted { grid-column: 1; }
+    .label-card.rail-row .rail-change { grid-column: 2; grid-row: 1 / span 3;
+                                        align-self: start; }
+    .label-card.rail-row .card-actions,
+    .label-card.rail-row .ruling-add { grid-column: 1 / -1; }
     .pill { display: inline-block; border-radius: var(--r-full); padding: .05rem .6rem;
             font-size: var(--t-xs); border: 1px solid var(--line); }
     .pill.unresolved { background: var(--danger-soft); border-color: var(--danger); }

@@ -117,10 +117,10 @@ uv run mypy            # CI form: packages=voxint (do NOT add tests; the parity
 The current integration tests exercise the real stage implementations against
 real Postgres and real ffmpeg but with **fake model providers** (`tests/fakes.py`:
 `FakeASR` / `FakeDiarizer` / `FakeEmbedder` / `FakeLLM` / `FailingLLM`); see
-`tests/integration/test_real_stages_e2e.py`. There is deliberately **no frontend
-test runner** (no vitest/jest): island behaviour is covered by the Python
-integration tests plus the manual browser pass below. Don't add one without
-discussing it; it is bloat this single-operator app does not need.
+`tests/integration/test_real_stages_e2e.py`. Vitest covers pure frontend helpers
+in `frontend/src/lib/*.test.ts`; run it with `cd frontend && npm test`. Island
+component behaviour remains covered by Python integration tests and the browser
+lane below.
 
 ## Choosing review depth and the browser lane
 
@@ -288,6 +288,9 @@ It is built in lanes; **landed so far:**
   database with a COMPLETED run shaped for the loop (an audio artifact,
   `duration_seconds` set, and varied-confidence segments including sub-threshold
   ones so the "uncertain" chips appear), and serves a working-tree instance. The
+  seed also accepts `--fixture rail`, which adds one label of every speaker-rail
+  card kind, and `reconcile` takes a `label_rulings` expectation for the ledger
+  rows the rail's Confirm and ruling buttons write. The
   skill then drives the review-console islands: `v` verify-and-advance, `e` +
   `⌘/Ctrl+Enter` save, `n` skip, `p` replay, click-to-edit, the type-then-verify
   discard warning (warn on the first `v`, advance on the second), and the keymap

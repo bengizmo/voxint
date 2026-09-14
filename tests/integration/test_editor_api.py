@@ -16,15 +16,13 @@ from tests.integration.conftest import seed_onboarded
 from voxint.adjudication.slots import claim_run
 from voxint.api.app import create_app
 from voxint.config import Settings
-from voxint.db.models import MediaItem, PipelineRun, RunStatus
+from voxint.db.models import EMBEDDING_DIM, DiarizationTurn, MediaItem, PipelineRun, RunStatus
 
 CREDS = ("reviewer", "s3cret")
 _CSRF_KEY = "editor-test-csrf-key"
 
 
-def _app(
-    session_factory: sessionmaker[Session], *, media_enabled: bool = True
-) -> TestClient:
+def _app(session_factory: sessionmaker[Session], *, media_enabled: bool = True) -> TestClient:
     with TemporaryDirectory() as tmpdir:
         settings = Settings(
             _env_file=None,  # type: ignore[call-arg]
@@ -75,9 +73,7 @@ def test_media_enabled_gate(
 ) -> None:
     media_id, _ = _seed_media_with_run(session_factory)
     client = _app(session_factory, media_enabled=False)
-    resp = client.get(
-        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
-    )
+    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
     assert resp.status_code == 404
 
 
@@ -86,9 +82,7 @@ def test_detail_page_renders(
 ) -> None:
     media_id, _run_id = _seed_media_with_run(session_factory)
     client = _app(session_factory)
-    resp = client.get(
-        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
-    )
+    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
 
@@ -98,9 +92,7 @@ def test_no_store_on_detail(
 ) -> None:
     media_id, _ = _seed_media_with_run(session_factory)
     client = _app(session_factory)
-    resp = client.get(
-        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
-    )
+    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
     assert resp.headers.get("cache-control") == "no-store"
 
 
@@ -109,9 +101,7 @@ def test_claim_token_read_only_when_absent(
 ) -> None:
     media_id, _ = _seed_media_with_run(session_factory)
     client = _app(session_factory)
-    resp = client.get(
-        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
-    )
+    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
     assert resp.status_code == 200
     assert "Read-only" in resp.text or "Claim this run" in resp.text
 
@@ -121,9 +111,7 @@ def test_valid_claim_token_enables_editing(
 ) -> None:
     media_id, run_id = _seed_media_with_run(session_factory)
     with session_factory() as session:
-        token = claim_run(
-            session, run_id, reviewer="reviewer", ttl_seconds=3600
-        )
+        token = claim_run(session, run_id, reviewer="reviewer", ttl_seconds=3600)
         session.commit()
 
     client = _app(session_factory)
@@ -161,9 +149,7 @@ def test_media_no_runs_renders(
         media_id = m.id
 
     client = _app(session_factory)
-    resp = client.get(
-        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
-    )
+    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
     assert resp.status_code == 200
     assert "No runs" in resp.text
 
@@ -176,9 +162,7 @@ def test_completed_run_mounts_editor_island(
 ) -> None:
     media_id, _ = _seed_media_with_run(session_factory)
     client = _app(session_factory)
-    resp = client.get(
-        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
-    )
+    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
     assert resp.status_code == 200
     assert 'data-island="media-editor"' in resp.text
     assert "data-props=" in resp.text
@@ -187,13 +171,9 @@ def test_completed_run_mounts_editor_island(
 def test_non_completed_run_has_no_island(
     session_factory: sessionmaker[Session],
 ) -> None:
-    media_id, _ = _seed_media_with_run(
-        session_factory, status=RunStatus.QUEUED.value
-    )
+    media_id, _ = _seed_media_with_run(session_factory, status=RunStatus.QUEUED.value)
     client = _app(session_factory)
-    resp = client.get(
-        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
-    )
+    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
     assert resp.status_code == 200
     assert 'data-island="media-editor"' not in resp.text
 
@@ -210,9 +190,7 @@ def test_editor_island_includes_annotation_props(
 
     media_id, run_id = _seed_media_with_run(session_factory)
     with session_factory() as session:
-        token = claim_run(
-            session, run_id, reviewer="reviewer", ttl_seconds=3600
-        )
+        token = claim_run(session, run_id, reviewer="reviewer", ttl_seconds=3600)
         session.commit()
 
     client = _app(session_factory)
@@ -248,9 +226,7 @@ def test_editor_island_no_csrf_without_claim(
 
     media_id, _ = _seed_media_with_run(session_factory)
     client = _app(session_factory)
-    resp = client.get(
-        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
-    )
+    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
     assert resp.status_code == 200
 
     text = resp.text
@@ -276,9 +252,7 @@ def test_editor_island_includes_label_states(
 
     media_id, _ = _seed_media_with_run(session_factory)
     client = _app(session_factory)
-    resp = client.get(
-        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
-    )
+    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
     assert resp.status_code == 200
 
     text = resp.text
@@ -288,3 +262,52 @@ def test_editor_island_includes_label_states(
 
     assert "labelStates" in props
     assert isinstance(props["labelStates"], list)
+
+
+def test_editor_label_states_carry_rail_partition_keys(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """#115: the speaker rail partitions on these keys, so every label has them."""
+    import json
+
+    media_id, run_id = _seed_media_with_run(session_factory)
+    with session_factory() as session:
+        vector = [0.0] * EMBEDDING_DIM
+        vector[0] = 1.0
+        session.add(
+            DiarizationTurn(
+                pipeline_run_id=run_id,
+                turn_index=0,
+                start_seconds=0.0,
+                end_seconds=8.0,
+                label="S0",
+                embedding=vector,
+                embedding_space="titanet-large-v2",
+            )
+        )
+        session.commit()
+    client = _app(session_factory)
+    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
+    assert resp.status_code == 200
+
+    text = resp.text
+    start = text.find("data-props='") + len("data-props='")
+    end = text.find("'", start)
+    props = json.loads(text[start:end])
+
+    (state,) = props["labelStates"]
+    assert state["label"] == "S0"
+    assert state["resolution"] == "unresolved"
+    assert state["band"] == "abstain"  # never evaluated: no evidence row
+    for key in (
+        "candidateSpeakerId",
+        "candidateSpeakerName",
+        "matchSimilarity",
+        "matchVoteAgreement",
+        "matchDecision",
+        "matchReason",
+        "candidatePromptAllowed",
+    ):
+        assert key in state
+    assert state["candidateSpeakerId"] is None
+    assert state["matchDecision"] is None

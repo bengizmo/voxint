@@ -551,6 +551,13 @@ def test_assign_to_existing_speaker(
     s1 = next(lb for lb in assign_labels if lb["label"] == "S1")
     assert s1["resolution"] == "human_assign"
     assert s1["speakerName"] == "Known Voice"
+    # The rail's partition (#115) keys on these; a human ruling carries no band
+    # and no candidate, but the keys must always be present.
+    assert s1["band"] is None
+    assert s1["candidateSpeakerId"] is None
+    assert s1["candidateSpeakerName"] is None
+    assert "matchSimilarity" in s1
+    assert "matchVoteAgreement" in s1
     # Assign-to-existing must NOT create an enrollment centroid.
     with session_factory() as session:
         assert session.execute(select(SpeakerEmbedding)).scalars().all() == []

@@ -205,6 +205,57 @@ regions. Assert:
 The strip is `aria-hidden` (the list is the accessible surface): never assert
 on its accessibility tree, only `data-*` attributes, the canvas, and network.
 
+### Speaker rail (#115)
+
+Seed with `--fixture rail` (12 segments, labels S0..S5, a four-person roster
+including the auto-saved `Voice 1`). Open `/runs/<RUN_ID>` and click **Review**:
+it claims the run and lands on `/media/<MEDIA_ID>/editor?run=…&token=…`, where
+the rail mounts as `[aria-label="Speaker rail"]`. Assert, in order:
+
+- **Initial partition.** `.rail-summary` reads exactly "5 voices need you, 1
+  with very little speech. 1 matched automatically."; the `Needs you (4)`
+  section lists S1, S5, S2, S3 in that order (confirmable unresolved, confirmable
+  auto-saved, ambiguous, unmatched); `Too little speech to identify (1)` (S4)
+  and `Matched automatically (1)` (S0) are closed `<details>`; no `Your rulings`
+  group yet.
+- **Card copy.** S1: "Possibly Blair Roster" + `button "Confirm Blair Roster"`,
+  pill `needs you`. S5: same headline, pill `saved automatically`, detail "Saved
+  as Voice 1 for now. Confirm if this is Blair Roster." S2: "Similar voices
+  found", **no** Confirm button, its disclosure is titled "Why no name?" and
+  its text names nobody and carries no numbers. S3: "Who is this?" with
+  disclosure "Why no match?". Open S1's "Why this match?": the text carries the
+  raw numbers (0.65 / 0.12 / 0.80) and no percent sign.
+- **Hear this voice.** Instrument `play()` as for `p`, click S1's button → one
+  `play()` call at `currentTime` 10 (S1's first line), the walk line reads
+  "Cursor on segment at 10.0 seconds, speaker S1", and **no** `/labels/` or
+  `/segments/` request fires.
+- **Confirm.** Click S1's Confirm → exactly one `POST …/labels/S1/decision`
+  (200); S1 moves to `Your rulings`, the summary drops to "4 voices need you…",
+  and the transcript lines for S1 now read "Blair Roster:". Repeat on S5 (the
+  auto-saved path) → `POST …/labels/S5/decision`.
+- **Rulings.** `Can't tell` on S3 and, after opening the too-short group,
+  `Not a person` on S4 → one decision POST each; S4's row reads "Left out".
+- **Add a new person.** On S2 pick "Add a new person…" in the picker → the
+  name box (`aria-label="Name the new person for S2"`) appears focused with
+  **Add person** disabled until text is typed. Submitting fires
+  `POST …/labels/S2/enroll`; on this seed it returns **400** ("no speaker audio
+  to create an identity from": the seed's turns carry no embeddings) and the
+  rail shows that message in its `[role="alert"]` without losing the card. That
+  is the honest error path; do not treat it as a pass for enrollment itself.
+- **Finish line.** `Can't tell` on S2 → summary "Every voice has a ruling." and
+  both `Matched automatically` and `Your rulings` are open; a `Change` button on
+  a resolved row reveals the `Reassign to…` picker.
+
+Reconcile with the rulings you made, for example:
+
+```bash
+--expect '{"verified_segment_indexes":[],"corrections":{},"progress":{"verified":0,"total":12},
+  "label_rulings":{"S1":{"decision":"assign","speaker":"Blair Roster"},
+  "S5":{"decision":"assign","speaker":"Blair Roster"},"S3":{"decision":"unknown","speaker":null},
+  "S4":{"decision":"exclude","speaker":null},"S2":{"decision":"unknown","speaker":null}}}'
+# → ok: 0 of 12 verified; corrections match; 5 label ruling(s) match / RECONCILE PASS
+```
+
 ## 3. Reconcile durable state, then always clean up
 
 Build the expectation from what you drove (segment indexes verified, index→text

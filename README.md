@@ -21,13 +21,12 @@ model to polish it. Both are off or opt-in, and clearly labelled.)
 
 ## See it in action
 
-*(All screenshots use a small synthetic three-speaker sample that ships with
-Voxint.)*
+*(All screenshots use small synthetic sample recordings, never real audio.)*
 
 | | |
 |---|---|
-| ![The adjudication queue: completed runs with voices still needing a decision](docs/images/review-queue.png) | ![The workbench: each voice shows its evidence: a confident match to accept, a heard name that is only a guess, or no name at all](docs/images/review-workbench.png) |
-| **Your review queue**: completed recordings waiting for your decisions. | **Attribute each voice**: accept a confident match, judge a heard name, or leave a voice unknown. |
+| ![The adjudication queue: completed runs with voices still needing a decision](docs/images/review-queue.png) | ![The editor with the speaker rail: a summary of how many voices need you, then one card per voice with a possible match to confirm, a Hear this voice button, and plain-language actions](docs/images/review-workbench.png) |
+| **Your review queue**: completed recordings waiting for your decisions. | **Review only the uncertain voices**: strong matches are shown automatically; you confirm the possible ones and rule on the rest. |
 | ![The guided setup wizard's readiness checks, each dependency shown as ready, failed, or unverified](docs/images/setup-wizard.png) | ![Home: needs-attention cards, quick actions, windowed activity counts, and recent activity](docs/images/home.png) |
 | **Guided setup in the browser**: honest readiness checks, plain-language fixes. | **Home** shows what needs your attention and how to add a recording. |
 

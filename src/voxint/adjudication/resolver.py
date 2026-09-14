@@ -272,10 +272,17 @@ class LabelState:
     band: "MatchBand | None" = None
     band_reason: str | None = None
     candidate_prompt_allowed: bool = True
+    # The policy's candidate (#115): the speaker a Confirm would assign. Comes
+    # from match_candidates.top_speaker_id, so it survives a gate change that
+    # reclassifies a formerly rejected row (which has no speaker_assignments).
+    candidate_speaker_id: uuid.UUID | None = None
+    candidate_speaker_name: str | None = None
     # Raw match evidence from match_candidates (#114/#115).
     match_decision: str | None = None
     match_reason: str | None = None
+    match_similarity: float | None = None
     match_margin: float | None = None
+    match_vote_agreement: float | None = None
     match_eligible_seconds: float = 0.0
 
 
@@ -538,20 +545,29 @@ def label_states(
     def canonical(speaker_id: uuid.UUID | None) -> uuid.UUID | None:
         return canonicalize(speaker_id, tombstones) if speaker_id else None
 
-    speaker_ids = {
-        canonical(p.speaker_id) for p in cosine_by_label.values() if p.speaker_id
-    } | {canonical(d.speaker_id) for d in decisions.values() if d.speaker_id}
-    speaker_ids.discard(None)
-    names: dict[uuid.UUID, str] = (
-        {
-            sid: name
-            for sid, name in session.execute(
-                select(Speaker.id, Speaker.display_name).where(Speaker.id.in_(speaker_ids))
-            ).tuples()
-        }
-        if speaker_ids
-        else {}
+    speaker_ids = (
+        {canonical(p.speaker_id) for p in cosine_by_label.values() if p.speaker_id}
+        | {canonical(d.speaker_id) for d in decisions.values() if d.speaker_id}
+        | {canonical(mc.top_speaker_id) for mc in mc_rows if mc.top_speaker_id}
     )
+    speaker_ids.discard(None)
+    speaker_rows: list[tuple[uuid.UUID, str, datetime | None, uuid.UUID | None]] = (
+        list(
+            session.execute(
+                select(
+                    Speaker.id, Speaker.display_name, Speaker.deleted_at, Speaker.merged_into_id
+                ).where(Speaker.id.in_(speaker_ids))
+            ).tuples()
+        )
+        if speaker_ids
+        else []
+    )
+    names: dict[uuid.UUID, str] = {}
+    active_ids: set[uuid.UUID] = set()
+    for sid, name, deleted_at, merged_into in speaker_rows:
+        names[sid] = name
+        if deleted_at is None and merged_into is None:
+            active_ids.add(sid)
 
     states: list[LabelState] = []
     for label, turns, seconds in turn_stats:
@@ -594,7 +610,7 @@ def label_states(
                 Resolution.HUMAN_UNKNOWN,
             ):
                 pass  # human-decided: band stays None
-            elif resolution in (Resolution.GROUNDED_COSINE, Resolution.AUTO_ENROLL):
+            elif resolution is Resolution.GROUNDED_COSINE:
                 br = BandResult(
                     band=MatchBand.AUTO_ATTRIBUTE,
                     reason="Strong enough to trust on its own.",
@@ -602,6 +618,10 @@ def label_states(
                     candidate_prompt_allowed=True,
                 )
             else:
+                # UNRESOLVED and AUTO_ENROLL alike: an auto-enrolled label is a
+                # system placeholder (#275), not a confident match, so its band
+                # and candidate come from the live evidence exactly as for an
+                # unresolved one. Resolution and queue membership are untouched.
                 br = band_for(
                     decision=mc.decision if mc else None,
                     reason=mc.reason if mc else None,
@@ -614,6 +634,12 @@ def label_states(
                     top_speaker_id=mc.top_speaker_id if mc else None,
                     gates=gates,
                 )
+        candidate_id = canonical(br.candidate_speaker_id) if br else None
+        # A speaker archived since matching is no longer a roster identity the
+        # decide route accepts, so never offer Confirm on it (names still
+        # resolve for historical attributions).
+        if candidate_id is not None and candidate_id not in active_ids:
+            candidate_id = None
 
         states.append(
             LabelState(
@@ -634,9 +660,13 @@ def label_states(
                 band=br.band if br else None,
                 band_reason=br.reason if br else None,
                 candidate_prompt_allowed=br.candidate_prompt_allowed if br else True,
+                candidate_speaker_id=candidate_id,
+                candidate_speaker_name=names.get(candidate_id) if candidate_id else None,
                 match_decision=mc.decision if mc else None,
                 match_reason=mc.reason if mc else None,
+                match_similarity=mc.similarity if mc else None,
                 match_margin=mc.margin if mc else None,
+                match_vote_agreement=mc.vote_agreement if mc else None,
                 match_eligible_seconds=mc.eligible_seconds if mc else 0.0,
             )
         )

@@ -4,9 +4,9 @@
 voices, then check and correct the words.*
 
 Voxint listens to your recording and makes its best guesses about who spoke,
-when, and what they said. Those guesses are **proposals**. This
-guide walks you through the review console, where **you have the final say**: you
-confirm or overrule every proposal, and nothing is settled until you say so.
+when, and what they said. This guide walks you through the review console, where
+you have the final say: you confirm the matches Voxint is unsure about, rule on
+the voices it could not match, and change any automatic match that is wrong.
 
 Review has two steps: start with the people, then check the words.
 
@@ -18,8 +18,8 @@ Review has two steps: start with the people, then check the words.
   are wrong.
 
 The console leads you from Step 1 to Step 2, and you can go back to the people at
-any time. Checking the words is recommended, not required: your speaker rulings
-are what settle a run.
+any time. Checking the words is recommended, not required. Voice matches and
+your speaker rulings determine when a run leaves Review.
 
 New to Voxint? The bundled [guided tutorial](../onboarding.md#3-guided-tutorial)
 walks this whole loop on a sample recording before you use your own audio; a
@@ -76,65 +76,92 @@ does the same when you open it. There is no separate claiming step.
 
 ## Workflow A: Identify the voices
 
-Opening a run shows the **slot workbench** (`/review/{id}`). Voxint separated
-the recording into voices and gave each one a placeholder label like
-`SPEAKER_00`. Your job here is to say who each label really is.
+Opening a run shows the editor with the speaker rail beside the transcript.
+Voxint separated the recording into voices and gave each one a label such as
+`SPEAKER_00`. The sentence at the top tells you how much work remains, for
+example "2 voices need you, 1 with very little speech. 3 matched
+automatically." When you are done it reads "Every voice has a ruling." If
+matching never ran on the recording, or you had not added any people yet when
+it ran, the sentence says that instead, so an empty result is never mistaken
+for a clean one.
 
-Each voice gets a **card** showing what Voxint knows about it (how many turns
-it took and how many seconds it spoke) plus whatever evidence it could gather
-about the person's identity. Read the evidence carefully, because there are
-**three very different kinds**, and Voxint labels them honestly:
+The rail puts voices into these groups:
 
-- **A grounded machine match.** "Strong voice match: *Jordan*." Voxint compared
-  this voice's sound to speakers you enrolled before and found a close match
-  against real voice evidence. Open **Why this match?** to see the exact
-  similarity score behind it. A weaker match reads "Possible voice match"
-  instead. This is the strongest signal, but it is still a suggestion for
-  **you** to accept.
-- **A heard name (a guess).** "Heard name (unverified): *"Alex"*" or
-  "Self-introduced (unverified): *"…this is Alex…"*." Someone in the audio said
-  a name. That tells you a name is *probably* in the room; it does **not** tell
-  you this voice belongs to that person. Treat it as a lead, not a fact.
-- **No name at all.** Voxint has a voice but nothing to attach to it. You
-  decide entirely.
+- **Needs you** is open. These voices need your decision.
+- **Too little speech to identify** is closed at first. These voices still need
+  a ruling, so open the group and review them.
+- **Matched automatically** is closed while work remains. These voices are
+  settled by a strong voice match or an automatic save.
+- **Your rulings** is also closed while work remains. It holds decisions you
+  made during review.
 
-**Grounded is not the same as heard.** A *grounded* match is measured from the
-voice itself, against speakers you enrolled. A *heard* name is just words the
-recording contained. Never let a heard name stand in for identity on its own;
-confirm it by listening.
+When no voice still needs a ruling, **Matched automatically** and **Your
+rulings** open. You can open or close any group shown with a disclosure arrow.
 
-![A voice card in the review workbench showing three kinds of evidence: a
-grounded cosine match to an enrolled speaker, a heard name marked unverified,
-and a voice with no name, each with Assign, Enroll new, Exclude, and Unknown
-buttons.](../images/review-workbench.png)
+![The speaker rail beside the transcript, with its summary sentence, an open
+Needs you group, and disclosures for voices with too little speech, automatic
+matches, and your rulings.](../images/review-workbench.png)
 
-### Listen before you rule
+### Read a voice card
 
-Each card has a **preview this speaker** button that plays a clean stretch of
-this voice, and each transcript line under it has its own play button for just
-that line. Use them to confirm what you're about to decide. (If playback controls
-are greyed out, a banner explains why, usually that the audio can't be reliably
-lined up with the timeline; you can still scrub the main player by hand.)
+A card starts with the voice label and a pill such as **needs you** or **saved
+automatically**. Its headline and reason explain what Voxint found:
 
-### Rule on each voice
+- **Possibly Jordan** means the voice resembles a known person but needs your
+  check. The reason reads **Not strong enough to confirm without your check.**
+  Press **Confirm Jordan** if the match is right. Confirming assigns the existing
+  speaker to this recording. It does not add another voice sample.
+- A possible match can also say **Saved as Voice 4 for now. Confirm if this is
+  Jordan.** Voxint already saved the voice under a temporary name, but the
+  possible match still needs your ruling.
+- **Similar voices found** means two known speakers sound close. No candidate
+  name or **Confirm** button is shown. Open **Why no name?** for the explanation,
+  then listen and choose.
+- **Who is this?** appears when Voxint has no useful candidate. The reason says
+  why in plain words, for example **Not enough clear speech to match.** or
+  **No known speakers to compare against.**
 
-Every card gives you four choices:
+Below the reason, the card shows the number of turns and seconds of speech. If
+the audio can be played from the timeline, **Hear this voice** jumps to the
+first transcript line for that voice and plays it. Listen before you rule.
+
+Open **Why this match?** (or **Why no match?** on a card with no candidate) to
+see the reason followed by the raw scores, such as "Voice similarity 0.72. Lead
+over the next closest voice 0.05. Agreement across this voice's speech 0.75."
+With one known person on your roster the lead reads "none (only one known
+speaker)." These scores are never shown as percentages.
+
+> **A voice match and a heard name are different evidence.** A voice match
+> compares the sound with saved voice samples. The line **Heard name
+> (unverified): "Alex".** reports a name spoken in the recording. Treat it as a
+> lead and listen before assigning the voice.
+
+### Rule on a voice
+
+Use the actions on the card:
 
 | Action | What it does |
 |---|---|
-| **Assign** | This voice is an **existing** speaker on your roster. Pick them from the list. |
-| **Enroll new** | This is a **new** person. Type their name; Voxint adds them to your roster and remembers this voice for next time. |
-| **Exclude** | This "voice" isn't a person you want in the results (background noise, a TV, a passer-by). Leave it out. |
-| **Unknown** | You genuinely can't tell who this is. A valid, honest ruling, better than a wrong guess. |
+| **Confirm Jordan** | Records your ruling that this voice is the suggested known person. It does not add a voice sample. |
+| **Someone else…** or **Known person…** | This voice is a different person from your roster: pick them from the list. Choose **Add a new person…** at the end of the list to type a name, then press **Add person**; that adds them to your roster and keeps this voice as their sample. **Cancel** closes the name box. |
+| **Not a person** | This "voice" is background noise, music, a TV, or someone you do not want in the results. Leaves it out. |
+| **Can't tell** | You genuinely cannot tell who this is. An honest ruling that settles the voice; you can change it later. |
 
-A card's pill shows where it stands: **needs ruling**, **assigned**,
-**excluded**, **unknown**, or a **machine** suggestion still waiting for your
-accept. A voice is "resolved" once you've ruled on it.
+### Check automatic matches and earlier rulings
 
-If Voxint offered **name hints** (from metadata or the transcript), you can
-**Accept** or **Reject** each one. Accepting a hint records your review of it; it
-does **not** assign a speaker. Assigning is always the explicit **Assign** or
-**Enroll new** action.
+Open **Matched automatically** to see voices already shown as a known person.
+A voice match has a **voice match** pill and reads **Shown as Jordan**, with the
+reason **Matched by voice.** An automatically saved voice has a **saved
+automatically** pill and reads **Saved as Voice 4**. Its reason is **Saved
+automatically so Voxint can recognise this voice later. Name them on the
+Speakers page.** The **Speakers page** link takes you there.
+
+Open **Your rulings** to see rows with a **your ruling** pill. They read the
+person's name with **Your ruling.**, **Left out** with **Your ruling: not a
+person.**, or **Could not tell** with **Your ruling.**
+
+Each row has **Change**. Press it to reveal the same actions with a **Reassign
+to…** picker. Press **Hide** to close the actions again.
 
 ### One person split across two labels ("same speaker")
 
@@ -143,7 +170,7 @@ Diarization sometimes splits **one** person into two labels: you'll see
 with the **"Same speaker across labels?"** panel:
 
 1. **Tick** the labels that are the same person in this recording.
-2. Choose **who they are**: an existing speaker, or enroll a new one.
+2. Choose **who they are**: an existing speaker, or **Add a new person…**.
 3. Press **Preview merge…** to see the **exact change** Voxint will make (how
    many turns and transcript segments move) before anything happens.
 4. **Confirm**.
@@ -335,8 +362,9 @@ A few deliberate rules:
 
 ## Finishing a run
 
-A run leaves the **Review** list once **every voice has a ruling** (the workbench
-cards all show a decision, not "needs ruling"). Checking the words in Step 2 is
+A run leaves the **Review** list once every voice has your ruling or a strong
+voice match. A voice with very little speech still needs a ruling; **Not a
+person** and **Can't tell** both settle it. Checking the words in Step 2 is
 recommended, and it is how you get a transcript you can fully trust, but it is
 not what removes the run from Review. A run can drop off the list with some lines
 still unchecked. To keep checking or to export it afterwards, reopen it from

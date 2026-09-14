@@ -159,9 +159,15 @@ def media_detail_page(
                     "band": s.band.value if s.band else None,
                     "bandReason": s.band_reason,
                     "candidatePromptAllowed": s.candidate_prompt_allowed,
+                    "candidateSpeakerId": (
+                        str(s.candidate_speaker_id) if s.candidate_speaker_id else None
+                    ),
+                    "candidateSpeakerName": s.candidate_speaker_name,
                     "matchDecision": s.match_decision,
                     "matchReason": s.match_reason,
+                    "matchSimilarity": s.match_similarity,
                     "matchMargin": s.match_margin,
+                    "matchVoteAgreement": s.match_vote_agreement,
                     "matchEligibleSeconds": s.match_eligible_seconds,
                 }
                 for s in states
