@@ -193,6 +193,13 @@
         {% if it.claim_live %}<span class="pill grounded">claimed{% if it.claimed_by %} · {{ it.claimed_by }}{% endif %}</span>{% endif %}
       </span>
       <span>{% if it.language %}{{ language_label(it.language) }}{% else %}<span class="oc-muted">—</span>{% endif %}</span>
+      <span>
+        {% if it.status in ("completed", "failed") and it.elapsed_seconds is not none %}
+        <span title="Processing time, from the first pipeline stage starting to the last finishing">{{ format_compact_duration(it.elapsed_seconds|int) }}</span>
+        {% elif it.status == "running" and it.elapsed_seconds is not none %}
+        <span class="oc-muted" title="Processing so far, as of page load">{{ format_compact_duration(it.elapsed_seconds|int) }}</span>
+        {% else %}<span class="oc-muted">—</span>{% endif %}
+      </span>
       <span><span title="{{ it.created_at.strftime("%Y-%m-%d %H:%M UTC") }}">{{ format_age(it.created_at, now=now) }}</span></span>
       <span class="gt-action">
         {% if it.status == "completed" and it.unresolved_count > 0 %}
@@ -223,12 +230,13 @@
   {% if not page.items %}
   <p class="oc-muted">No runs match{% if has_active_filters %} these filters{% endif %}{% if active_view != LifecycleView.ALL %} in this view{% endif %}.</p>
   {% else %}
-  <div class="grid-table" style="grid-template-columns: 1fr auto auto auto auto auto;" role="region" aria-label="Runs">
+  <div class="grid-table" style="grid-template-columns: 1fr auto auto auto auto auto auto;" role="region" aria-label="Runs">
     <div class="gt-header">
       <span>MEDIA</span>
       <span>STATUS</span>
       <span>REVIEW</span>
       <span>LANGUAGE</span>
+      <span>TOOK</span>
       <span>CREATED</span>
       <span></span>
     </div>
@@ -243,6 +251,7 @@
           <br><span class="oc-muted" style="font-size:var(--t-sm)">{{ entry.items|length }} failed runs</span>
         </span>
         <span><span class="pill failed">Failed × {{ entry.items|length }}</span></span>
+        <span><span class="oc-muted">—</span></span>
         <span><span class="oc-muted">—</span></span>
         <span><span class="oc-muted">—</span></span>
         <span><span title="{{ entry.items[0].created_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(entry.items[0].created_at, now=now) }}</span></span>

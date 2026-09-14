@@ -7,6 +7,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Jobs page TOOK column** (#244). Each run shows its processing time (first
+  stage start to last stage finish, so queue wait is excluded) as `3m40s`-style
+  durations; running rows show the time so far as of page load.
+
 - **Exception-review speaker rail** (#115, epic #112 phase 3). The editor's
   speaker rail now opens with one sentence ("2 voices need you, 1 with very
   little speech. 3 matched automatically.") and groups voices by what they

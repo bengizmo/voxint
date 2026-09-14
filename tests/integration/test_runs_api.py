@@ -10,6 +10,7 @@ import re
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +91,7 @@ def make_run(
     audio: bool = False,
     language: str | None = None,
     language_probability: float | None = None,
+    error: str | None = None,
 ) -> uuid.UUID:
     """Seed one media item + run with controllable review state.
 
@@ -108,6 +110,7 @@ def make_run(
         status=status.value,
         detected_language=language,
         detected_language_probability=language_probability,
+        error=error,
     )
     if created_at is not None:
         run.created_at = created_at
@@ -184,6 +187,55 @@ def make_run(
     return run.id
 
 
+class _RunsGridParser(HTMLParser):
+    """Collect text from each direct span child of a rendered runs row."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[list[str]] = []
+        self._cells: list[list[str]] | None = None
+        self._div_depth = 0
+        self._span_depth = 0
+        self._direct_cell: int | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "div":
+            classes = dict(attrs).get("class", "") or ""
+            if self._cells is None and "gt-row" in classes.split():
+                self._cells = []
+                self._div_depth = 1
+            elif self._cells is not None:
+                self._div_depth += 1
+        elif tag == "span" and self._cells is not None:
+            if self._div_depth == 1 and self._span_depth == 0:
+                self._cells.append([])
+                self._direct_cell = len(self._cells) - 1
+            self._span_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._cells is None:
+            return
+        if tag == "span":
+            self._span_depth -= 1
+            if self._span_depth == 0:
+                self._direct_cell = None
+        elif tag == "div":
+            self._div_depth -= 1
+            if self._div_depth == 0:
+                self.rows.append([" ".join("".join(parts).split()) for parts in self._cells])
+                self._cells = None
+
+    def handle_data(self, data: str) -> None:
+        if self._cells is not None and self._direct_cell is not None:
+            self._cells[self._direct_cell].append(data)
+
+
+def _runs_grid_rows(body: str) -> list[list[str]]:
+    parser = _RunsGridParser()
+    parser.feed(body)
+    return parser.rows
+
+
 # --- resolver parity: the SQL classification must match label_states() --------
 
 
@@ -198,9 +250,7 @@ def test_sql_classification_matches_resolver(
             "fully_resolved": make_run(
                 session, labels=["S0", "S1"], decided=["S0"], grounded=["S1"]
             ),
-            "ungrounded_is_unresolved": make_run(
-                session, labels=["S0"], ungrounded=["S0"]
-            ),
+            "ungrounded_is_unresolved": make_run(session, labels=["S0"], ungrounded=["S0"]),
             "zero_labels": make_run(session, labels=[]),
             "orphan_decision_ignored": make_run(
                 session, labels=["S0"], orphan_decisions=["GHOST"]
@@ -213,9 +263,7 @@ def test_sql_classification_matches_resolver(
     with session_factory() as session:
         for name, run_id in cases.items():
             states = label_states(session, run_id)
-            py_unresolved = sum(
-                1 for s in states if s.resolution is Resolution.UNRESOLVED
-            )
+            py_unresolved = sum(1 for s in states if s.resolution is Resolution.UNRESOLVED)
             py_labels = len(states)
 
             sql_exists = session.scalar(select(unresolved_label_exists(run_id)))
@@ -325,6 +373,99 @@ def test_claimed_filter_only_live_claims(
     assert "claimed" in body
 
 
+def test_list_runs_elapsed_excludes_queue_wait_and_keeps_fallback(
+    session_factory: sessionmaker[Session],
+) -> None:
+    created = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+    with session_factory() as session:
+        completed = make_run(
+            session,
+            created_at=created,
+            stages=(
+                {
+                    "stage": "acquire",
+                    "status": "completed",
+                    "started_at": created + timedelta(minutes=10),
+                    "finished_at": created + timedelta(minutes=12),
+                },
+                {
+                    "stage": "prepare",
+                    "status": "completed",
+                    "started_at": created + timedelta(minutes=11),
+                    "finished_at": created + timedelta(minutes=13, seconds=40),
+                },
+            ),
+        )
+        queued = make_run(session, status=RunStatus.QUEUED, created_at=created)
+        fallback = make_run(session, created_at=created)
+        fallback_run = session.get(PipelineRun, fallback)
+        assert fallback_run is not None
+        fallback_run.updated_at = created + timedelta(seconds=75)
+        session.commit()
+
+        page = list_runs(
+            session,
+            status=None,
+            review=None,
+            cursor=None,
+            page_size=10,
+            gates=_GATES,
+        )
+
+    items = {item.run_id: item for item in page.items}
+    assert items[completed].elapsed_seconds == pytest.approx(220, abs=1)
+    assert items[queued].elapsed_seconds is None
+    assert items[fallback].elapsed_seconds is not None
+
+
+def test_runs_renders_took_for_completed_and_dash_for_queued(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    created = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+    with session_factory() as session:
+        completed = make_run(
+            session,
+            created_at=created,
+            stages=(
+                {
+                    "stage": "acquire",
+                    "status": "completed",
+                    "started_at": created + timedelta(minutes=10),
+                    "finished_at": created + timedelta(minutes=13, seconds=40),
+                },
+            ),
+        )
+        queued = make_run(
+            session,
+            status=RunStatus.QUEUED,
+            created_at=created + timedelta(minutes=1),
+        )
+
+    response = client.get("/runs")
+    assert response.status_code == 200
+    assert "<span>TOOK</span>" in response.text
+    rows = _runs_grid_rows(response.text)
+    completed_row = next(row for row in rows if completed.hex[:8] in row[0])
+    queued_row = next(row for row in rows if queued.hex[:8] in row[0])
+    assert completed_row[4] == "3m40s"
+    assert queued_row[4] == "—"
+
+
+def test_failed_group_and_run_rows_have_seven_cells(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        make_run(session, status=RunStatus.FAILED, error="decoder unavailable")
+        make_run(session, status=RunStatus.FAILED, error="decoder unavailable")
+
+    response = client.get("/runs?view=failed")
+    assert response.status_code == 200
+    rows = _runs_grid_rows(response.text)
+    assert any("2 failed runs" in cell for row in rows for cell in row)
+    assert rows
+    assert all(len(row) == 7 for row in rows)
+
+
 # --- keyset pagination --------------------------------------------------------
 
 
@@ -333,7 +474,11 @@ def _walk(session: Session) -> list[uuid.UUID]:
     cursor: Cursor | None = None
     for _ in range(100):  # guard against a cursor that never terminates
         page = list_runs(
-            session, status=None, review=None, cursor=cursor, page_size=2,
+            session,
+            status=None,
+            review=None,
+            cursor=cursor,
+            page_size=2,
             gates=_GATES,
         )
         seen.extend(item.run_id for item in page.items)
@@ -572,7 +717,6 @@ def test_parse_transcript_text_defaults_and_rejects() -> None:
         parse_transcript_text("sideways")
 
 
-
 # Interactive transcript page tests (variants, island props, fallback lines,
 # color classes, text validation) were removed in issue #158: the interactive
 # transcript stepper is retired and redirects to the media editor.
@@ -608,7 +752,6 @@ def test_run_detail_multi_artifact_hides_audio_link(
     assert f"/media/{run_id}" not in client.get(f"/runs/{run_id}").text
 
 
-
 # test_export_bytes_exact_and_html_shares_lines and test_transcript_html_escaped
 # were removed in issue #158 (interactive transcript retired; export byte-exact
 # tests are covered by test_export_formats_content_types_and_payloads).
@@ -633,9 +776,7 @@ def test_transcript_read_mode_groups_and_drops_island(
                 ("S1", "bye", None),  # [20, 28]  new speaker → new paragraph
             ],
         )
-    resp = client.get(
-        f"/runs/{run_id}/transcript", params={"read": "1", "timestamps": "false"}
-    )
+    resp = client.get(f"/runs/{run_id}/transcript", params={"read": "1", "timestamps": "false"})
     assert resp.status_code == 200
     body = resp.text
     # Two paragraphs: S0's two lines merged, S1 alone.
@@ -658,14 +799,10 @@ def test_transcript_read_mode_timestamps_toggle(
             segments=[("S0", "hello", None), ("S0", "there", None)],  # [0,8]+[10,18]
         )
     # timestamps=true → the merged paragraph opens with the full run span.
-    on = client.get(
-        f"/runs/{run_id}/transcript", params={"read": "1", "timestamps": "true"}
-    ).text
+    on = client.get(f"/runs/{run_id}/transcript", params={"read": "1", "timestamps": "true"}).text
     assert format_timespan(0.0, 18.0) in on
     # timestamps=false → no bracketed range.
-    off = client.get(
-        f"/runs/{run_id}/transcript", params={"read": "1", "timestamps": "false"}
-    ).text
+    off = client.get(f"/runs/{run_id}/transcript", params={"read": "1", "timestamps": "false"}).text
     assert format_timespan(0.0, 18.0) not in off
     assert "[00:00:" not in off
 
@@ -674,9 +811,7 @@ def test_transcript_read_mode_preserves_query_in_toggles(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
     with session_factory() as session:
-        run_id = make_run(
-            session, labels=["S0"], segments=[("S0", "raw hi", "enh hi")]
-        )
+        run_id = make_run(session, labels=["S0"], segments=[("S0", "raw hi", "enh hi")])
     body = client.get(
         f"/runs/{run_id}/transcript",
         params={"read": "1", "timestamps": "false", "text": "raw"},
@@ -688,7 +823,6 @@ def test_transcript_read_mode_preserves_query_in_toggles(
     assert f'href="{base}?text=raw&read=1&timestamps=true"' in body
     assert f'href="{base}?text=raw&read=1&timestamps=false"' in body
     assert 'aria-current="page">raw' in body
-
 
 
 # test_transcript_read_mode_entry_link_on_normal_view and
@@ -726,9 +860,7 @@ def test_transcript_read_mode_attribution_matches_export(
     export = client.get(f"/review/{run_id}/export.txt").text
     assert s0 in export and "(excluded) S1" in export
     # A raw read view ignores the enhancement, exactly like the raw export.
-    raw = client.get(
-        f"/runs/{run_id}/transcript", params={"read": "1", "text": "raw"}
-    ).text
+    raw = client.get(f"/runs/{run_id}/transcript", params={"read": "1", "text": "raw"}).text
     assert "s0 raw" in raw and "s0 enh" not in raw
 
 
@@ -737,12 +869,8 @@ def test_transcript_read_mode_escapes_hostile_text(
 ) -> None:
     payload = "<script>alert(1)</script>"
     with session_factory() as session:
-        run_id = make_run(
-            session, labels=["S0"], segments=[("S0", payload, None)]
-        )
-    body = client.get(
-        f"/runs/{run_id}/transcript", params={"read": "1", "text": "raw"}
-    ).text
+        run_id = make_run(session, labels=["S0"], segments=[("S0", payload, None)])
+    body = client.get(f"/runs/{run_id}/transcript", params={"read": "1", "text": "raw"}).text
     assert payload not in body  # Jinja autoescape neutralizes raw HTML
     assert "&lt;script&gt;" in body
 
@@ -762,9 +890,7 @@ def test_transcript_read_mode_rejects_bad_text(
 ) -> None:
     with session_factory() as session:
         run_id = make_run(session, labels=["S0"], grounded=["S0"])
-    resp = client.get(
-        f"/runs/{run_id}/transcript", params={"read": "1", "text": "sideways"}
-    )
+    resp = client.get(f"/runs/{run_id}/transcript", params={"read": "1", "text": "sideways"})
     assert resp.status_code == 422
 
 
@@ -788,9 +914,7 @@ def test_export_md_route_bytes_and_media_type(
     assert resp.headers["content-type"].startswith("text/markdown")
     assert resp.content == expected.encode()
     # ?timestamps=false drops the per-paragraph range for a clean reading copy.
-    clean = client.get(
-        f"/review/{run_id}/export.md", params={"timestamps": "false"}
-    ).text
+    clean = client.get(f"/review/{run_id}/export.md", params={"timestamps": "false"}).text
     assert ts0 not in clean and "hello" in clean
 
 
@@ -820,13 +944,15 @@ def test_list_runs_sidecar_title_wins_over_scraped(
             status=RunStatus.COMPLETED.value,
             sidecar={"title": "Operator title"},
         )
-        without_sidecar = PipelineRun(
-            media_item_id=media.id, status=RunStatus.COMPLETED.value
-        )
+        without_sidecar = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
         session.add_all([with_sidecar, without_sidecar])
         session.commit()
         page = list_runs(
-            session, status=None, review=None, cursor=None, page_size=10,
+            session,
+            status=None,
+            review=None,
+            cursor=None,
+            page_size=10,
             gates=_GATES,
         )
         titles = {item.run_id: item.title for item in page.items}

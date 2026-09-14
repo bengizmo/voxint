@@ -208,8 +208,10 @@ class RunListItem:
     # Detected language code (issue #124); None for runs not yet transcribed or
     # transcribed before the column existed — the template renders an honest "—".
     language: str | None = None
-    # Wall-clock seconds since created_at. Completed/failed: to last stage
-    # finished_at. Running: to now (live elapsed). Other statuses: None.
+    # Processing seconds from the first stage claim to the last stage finish,
+    # excluding queue wait. Running: first claim to now. created_at/updated_at
+    # are fallbacks for rare legacy/seeded runs without stages and may inflate
+    # their value; other statuses have no elapsed value.
     elapsed_seconds: float | None = None
     # Settings folder path (from media_folder via media_item); None for uploads
     # or media with no folder assignment.
@@ -271,13 +273,13 @@ def group_failed_runs(
         if len(group_items) == 1:
             result.append(group_items[0])
         else:
-            ordered = sorted(
-                group_items, key=lambda it: it.created_at, reverse=True
+            ordered = sorted(group_items, key=lambda it: it.created_at, reverse=True)
+            result.append(
+                FailedRunGroup(
+                    error_label=label,
+                    items=tuple(ordered),
+                )
             )
-            result.append(FailedRunGroup(
-                error_label=label,
-                items=tuple(ordered),
-            ))
     return result
 
 
@@ -482,18 +484,28 @@ def list_runs(
         .correlate(PipelineRun)
         .scalar_subquery()
     )
-    # updated_at fallback: approximation for legacy/seeded runs with no stage
-    # rows. updated_at has onupdate=func.now(), so a later note/archive edit
-    # can inflate this — acceptable for the rare legacy case.
+    first_started = (
+        sa_select(func.min(StageRun.started_at))
+        .where(StageRun.pipeline_run_id == PipelineRun.id)
+        .correlate(PipelineRun)
+        .scalar_subquery()
+    )
+    # Elapsed is processing time, measured from the first stage claim
+    # (StageRun.started_at is stamped when a worker claims the stage; see
+    # src/voxint/pipeline/engine.py) to the last stage finish, so queue wait is
+    # excluded.
+    # created_at/updated_at are fallbacks for legacy or seeded runs with no
+    # stage rows and may inflate the value for that rare case.
     elapsed = cast(
         func.extract(
             "epoch",
-            func.coalesce(last_finished, PipelineRun.updated_at) - PipelineRun.created_at,
+            func.coalesce(last_finished, PipelineRun.updated_at)
+            - func.coalesce(first_started, PipelineRun.created_at),
         ),
         Float,
     )
     running_elapsed = cast(
-        func.extract("epoch", func.now() - PipelineRun.created_at),
+        func.extract("epoch", func.now() - func.coalesce(first_started, PipelineRun.created_at)),
         Float,
     )
     stmt = (
