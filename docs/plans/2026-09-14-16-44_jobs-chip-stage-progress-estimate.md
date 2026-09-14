@@ -1,6 +1,6 @@
 # Plan: per-run stage progress estimate in the Jobs STATUS chip (#475)
 
-Status: in-progress
+Status: done
 
 ## Goal
 
@@ -361,3 +361,22 @@ learned-scenario values above.
 - Low, Grok, accepted: the read-model field comment says it is not a
   liveness flag.
 
+
+## Completion notes
+
+- Closed 2026-09-14. Verified against the final diff on
+  `feat/475-stage-progress-chip` (commits `ceaf40c`, `77dc575`).
+- Slices 1 to 3: every acceptance scenario has a named test in
+  `tests/unit/test_pipeline_dashboard_query.py`,
+  `tests/unit/test_presentation.py`, or
+  `tests/integration/test_runs_api.py`; scoped run 238 passed, ruff and
+  mypy clean.
+- Slice 4: browser pass run twice on maintainer hardware (before and after
+  the review fixes) with two ORM-seeded running runs; both chips, titles,
+  class, seven cells, and the strip verified in Playwright. PASS.
+- Spec files touched: none (no living spec declared).
+- Drift: none. The learned-scenario values and the range assertions were
+  folded into the plan during review.
+- Follow-ups: real transcribe progress from the whisper service stays
+  deferred (issue #475 comment); an out-of-band chip refresh on the strip
+  poll is available if page-load staleness bothers the operator.
