@@ -755,7 +755,10 @@ def runs(
                 run_status_counts(session),
                 queue_paused=_queue_paused,
             ),
-            "degraded": _detect_degraded(request),
+            "degraded": _detect_degraded(
+                ((service.name, service.up) for service in snapshot.services),
+                llm_enabled=settings.llm_enabled,
+            ),
             "aux_jobs": recent_aux_jobs(session),
             "settings_status_url": str(request.url_for("settings_status")),
             "next_url": next_url,

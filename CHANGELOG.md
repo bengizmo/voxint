@@ -7,9 +7,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
-- **Jobs page TOOK column** (#244). Each run shows its processing time (first
-  stage start to last stage finish, so queue wait is excluded) as `3m40s`-style
-  durations; running rows show the time so far as of page load.
+- **Jobs page TOOK column** (#244). Each run shows its processing time summed
+  across stage attempts, so queue wait and retry gaps are excluded, as
+  `3m40s`-style durations; running rows show the time so far as of page load.
 
 - **Degraded stage cells on the Jobs page** (#244). When a model service is down
   or the local AI model is off, the progress strip marks the affected stage with

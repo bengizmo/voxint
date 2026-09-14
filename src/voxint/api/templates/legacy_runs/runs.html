@@ -195,7 +195,7 @@
       <span>{% if it.language %}{{ language_label(it.language) }}{% else %}<span class="oc-muted">—</span>{% endif %}</span>
       <span>
         {% if it.status in ("completed", "failed") and it.elapsed_seconds is not none %}
-        <span title="Processing time, from the first pipeline stage starting to the last finishing">{{ format_compact_duration(it.elapsed_seconds|int) }}</span>
+        <span title="Processing time across every stage attempt; queue wait and retry gaps are excluded">{{ format_compact_duration(it.elapsed_seconds|int) }}</span>
         {% elif it.status == "running" and it.elapsed_seconds is not none %}
         <span class="oc-muted" title="Processing so far, as of page load">{{ format_compact_duration(it.elapsed_seconds|int) }}</span>
         {% else %}<span class="oc-muted">—</span>{% endif %}

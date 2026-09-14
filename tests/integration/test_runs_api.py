@@ -377,8 +377,9 @@ def test_list_runs_elapsed_excludes_queue_wait_and_keeps_fallback(
     session_factory: sessionmaker[Session],
 ) -> None:
     created = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+    now = datetime.now(tz=UTC)
     with session_factory() as session:
-        completed = make_run(
+        single_attempt = make_run(
             session,
             created_at=created,
             stages=(
@@ -386,13 +387,48 @@ def test_list_runs_elapsed_excludes_queue_wait_and_keeps_fallback(
                     "stage": "acquire",
                     "status": "completed",
                     "started_at": created + timedelta(minutes=10),
+                    "finished_at": created + timedelta(minutes=13, seconds=40),
+                },
+            ),
+        )
+        retried = make_run(
+            session,
+            created_at=created,
+            stages=(
+                {
+                    "stage": "acquire",
+                    "attempt": 1,
+                    "status": "failed",
+                    "started_at": created + timedelta(minutes=10),
                     "finished_at": created + timedelta(minutes=12),
                 },
                 {
-                    "stage": "prepare",
+                    "stage": "acquire",
+                    "attempt": 2,
                     "status": "completed",
-                    "started_at": created + timedelta(minutes=11),
-                    "finished_at": created + timedelta(minutes=13, seconds=40),
+                    "started_at": created + timedelta(hours=9),
+                    "finished_at": created + timedelta(hours=9, minutes=1, seconds=40),
+                },
+            ),
+        )
+        running = make_run(
+            session,
+            status=RunStatus.RUNNING,
+            created_at=created,
+            stages=(
+                {
+                    "stage": "acquire",
+                    "attempt": 1,
+                    "status": "running",
+                    "started_at": created + timedelta(minutes=10),
+                    "lease_expires_at": created + timedelta(minutes=11),
+                },
+                {
+                    "stage": "acquire",
+                    "attempt": 2,
+                    "status": "running",
+                    "started_at": now - timedelta(seconds=30),
+                    "lease_expires_at": now + timedelta(minutes=10),
                 },
             ),
         )
@@ -413,9 +449,11 @@ def test_list_runs_elapsed_excludes_queue_wait_and_keeps_fallback(
         )
 
     items = {item.run_id: item for item in page.items}
-    assert items[completed].elapsed_seconds == pytest.approx(220, abs=1)
+    assert items[single_attempt].elapsed_seconds == pytest.approx(220, abs=1)
+    assert items[retried].elapsed_seconds == pytest.approx(220, abs=1)
+    assert items[running].elapsed_seconds == pytest.approx(90, abs=5)
     assert items[queued].elapsed_seconds is None
-    assert items[fallback].elapsed_seconds is not None
+    assert items[fallback].elapsed_seconds == pytest.approx(75, abs=1)
 
 
 def test_runs_renders_took_for_completed_and_dash_for_queued(

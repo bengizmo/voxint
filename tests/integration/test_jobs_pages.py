@@ -5,10 +5,10 @@ After the canonical /runs surface replaced the Jobs pages, /jobs and
 The query-vocabulary mapping preserves intent: /jobs?filter=failed lands on
 /runs?view=failed, not just /runs.
 
-Tests that exercised the old page content (pipeline board, run table, detail
-sections) are removed: the canonical /runs surface carries those now. Helpers
-imported from jobs.py (_detect_degraded, _pipeline_summary) are still tested
-via the /runs page and their unit tests here.
+Tests that exercised the old page content (run table, detail sections) are
+removed: the canonical /runs surface carries those now. The pipeline board and
+helpers imported from jobs.py (_detect_degraded, _pipeline_summary) are still
+tested via the /runs page and their unit tests here.
 """
 
 from __future__ import annotations
@@ -113,6 +113,8 @@ def _progress_client(
         voxint_password=CREDS[1],
         media_root=tmp_path,
         llm_enabled=True,
+        # Keep the primed snapshot stable between setup and the GET on slow CI.
+        resource_status_ttl_seconds=3600.0,
     )
     client = TestClient(
         create_app(settings=settings, session_factory=session_factory),
@@ -165,7 +167,7 @@ def test_progress_strip_degrades_and_recovers_on_cached_service_health(
     assert "is-degraded" not in recovered.text
 
 
-def test_idle_progress_strip_shows_cached_service_degradation(
+def test_runs_page_uses_cached_service_degradation_for_banner_and_strip(
     session_factory: sessionmaker[Session],
     tmp_path: Path,
     clean_resource_cache: None,
@@ -173,10 +175,11 @@ def test_idle_progress_strip_shows_cached_service_degradation(
     client, settings = _progress_client(session_factory, tmp_path)
     _prime_resource_cache(settings, transcription_up=False)
 
-    response = client.get("/runs/progress-strip")
+    response = client.get("/runs")
 
     assert response.status_code == 200
     assert "Pipeline idle" in response.text
+    assert "Transcription is paused." in response.text
     assert "paused: transcriber is down" in response.text
 
 
