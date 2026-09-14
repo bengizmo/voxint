@@ -1190,7 +1190,7 @@ That triggers the browser acceptance lane and not the pipeline lane.
   browser-verified at the landing commit `af60c45`, which is the release
   content minus version pins, changelog, docs, and screenshots.
 
-#### Verdict: v0.36.0, Gates A/R/E pending (2026-09-13)
+#### Verdict: v0.36.0/v0.36.1, Gates A/R/E pending (2026-09-13)
 
 v0.36.0 ships speaker-attribution calibration tooling (#114), the attribution
 baseline harness (#113), self-service password change (#364), synthdetect
@@ -1220,6 +1220,10 @@ Gate evidence (all three require fresh runs, no carry-over):
 - **Gate E (whole-pipeline E2E)**: **pending**. The pipeline-aware diff is
   non-empty (api, db models, e2e lifecycle, legacy review retirement). Re-run
   required.
+
+v0.36.1 is a patch: the pyannote CPU Dockerfile was reverted from torch 2.8.0
+to 2.5.0 (torch 2.8.0 CPU exceeded the CI smoke startup timeout on both arches).
+The CUDA Dockerfile is unchanged. Gates A/R/E carry from v0.36.0 (still pending).
 
 #### Verdict: v0.34.0, Gates A/R/M carry, Gate E skipped (2026-09-04)
 
