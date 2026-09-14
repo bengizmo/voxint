@@ -7,6 +7,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 
+## [0.36.1] - 2026-09-14
+
+### Fixed
+- **Pyannote CPU image startup failure.** Reverted the pyannote CPU Dockerfile
+  from torch 2.8.0 back to 2.5.0. The Blackwell PR (#428) had bumped torch in
+  both CUDA and CPU Dockerfiles, but torch 2.8.0 CPU exceeded the CI smoke
+  startup timeout on both arches. The CUDA image stays on 2.8.0 (needed for
+  CUDA 12.8.1 / Blackwell). Updated the torch-pin contract test to document the
+  intentional CUDA/CPU divergence.
+
+
 ## [0.36.0] - 2026-09-13
 
 ### Added
@@ -4180,7 +4191,8 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.36.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.36.1...HEAD
+[0.36.1]: https://github.com/bengizmo/voxint/compare/v0.36.0...v0.36.1
 [0.36.0]: https://github.com/bengizmo/voxint/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/bengizmo/voxint/compare/v0.27.0...v0.35.0
 [0.27.0]: https://github.com/bengizmo/voxint/compare/v0.26.0...v0.27.0
