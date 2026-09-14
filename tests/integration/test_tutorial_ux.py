@@ -25,6 +25,7 @@ from voxint.app_settings import get_app_settings
 from voxint.config import Settings
 from voxint.db.models import MediaItem, PipelineRun, RunStatus
 from voxint.db.session import session_scope
+from voxint.speakers.matching import MatchingGates
 from voxint.tutorial.seed import seed_tutorial_run
 
 CREDS = ("reviewer", "s3cret")
@@ -459,7 +460,10 @@ def test_full_walkthrough_resolves_and_leaves_queue(
     _decide(client, tutorial_run_id, HEARD_LABEL, token, "exclude")
     _decide(client, tutorial_run_id, UNRESOLVED_LABEL, token, "exclude")
     with session_scope(session_factory) as session:
-        assert not any(e.run_id == tutorial_run_id for e in adjudication_queue(session))
+        assert not any(
+            e.run_id == tutorial_run_id
+            for e in adjudication_queue(session, gates=MatchingGates())
+        )
     finish = client.post(
         "/settings/tutorial/complete",
         data={"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETTINGS)},

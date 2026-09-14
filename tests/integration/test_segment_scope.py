@@ -26,6 +26,7 @@ from voxint.adjudication.resolver import (
 from voxint.api.app import create_app
 from voxint.config import Settings
 from voxint.db.models import MediaItem, PipelineRun, RunStatus, Speaker, TranscriptSegment
+from voxint.speakers.matching import MatchingGates
 from voxint.speakers.roster import merge_speakers
 
 _CSRF_KEY = "review-api-test-csrf-key"
@@ -138,7 +139,10 @@ def test_segment_override_does_not_resolve_the_label(
         # And the segment row never enters label-effective.
         assert "S1" not in effective_decisions(session, run_id)
         # The run stays in the adjudication queue (S1 still needs a label ruling).
-        assert any(e.run_id == run_id for e in adjudication_queue(session))
+        assert any(
+            e.run_id == run_id
+            for e in adjudication_queue(session, gates=MatchingGates())
+        )
 
 
 def test_inherit_resets_live_not_frozen(

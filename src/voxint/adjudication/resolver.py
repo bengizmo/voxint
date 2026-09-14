@@ -10,9 +10,11 @@ is where they meet, at read time:
   surfaced as a suggestion, never as attribution.
 - ``exclude`` suppresses speaker attribution, never transcript text.
 
-A label is **unresolved** (needs adjudication) when it has neither an
-effective human decision nor a grounded cosine proposal. A COMPLETED run with
-at least one unresolved label is in the adjudication queue.
+A label is **unresolved** when it has neither an effective human decision nor
+a grounded cosine proposal. A label **needs ruling** (issue #472) when it is
+unresolved OR is a confirmable auto-enrolled label whose live evidence yields
+a candidate the operator can one-click confirm. A COMPLETED run with at least
+one needs-ruling label is in the adjudication queue.
 """
 
 import enum
@@ -72,8 +74,13 @@ def _label_unresolved(
     A (run, label) is UNRESOLVED when it has neither a human decision nor a
     grounded cosine proposal. *Any* decision kind (assign/exclude/unknown)
     resolves the label, so the append-only newest-wins precedence is irrelevant
-    to this binary — presence of a single decision row is enough. Kept beside
+    to this binary -- presence of a single decision row is enough. Kept beside
     the Python resolver so the two definitions move together.
+
+    This predicate covers label-resolution only (gate-independent). For queue
+    membership and surface filtering use ``review_needed_label_exists`` /
+    ``review_needed_label_count`` which OR in confirmable auto-enrolled labels
+    (issue #472).
     """
     # Explicit multi-level correlation is required: without it SQLAlchemy
     # reintroduces ``pipeline_runs`` into each inner EXISTS FROM, turning the
@@ -130,6 +137,122 @@ def unresolved_label_count(run_id: RunIdRef) -> ScalarSelect[int]:
         .where(
             DiarizationTurn.pipeline_run_id == run_id,
             _label_unresolved(run_id, DiarizationTurn.label),
+        )
+        .scalar_subquery()
+    )
+
+
+def _confirmable_auto_enroll(
+    run_id: RunIdRef,
+    label: ColumnExpressionArgument[str],
+    gates: MatchingGates,
+) -> ColumnElement[bool]:
+    """Whether a label's effective auto-enroll has acceptable active evidence.
+
+    Two documented approximations relative to the Python resolver:
+
+    1. **Merge chains**: Python follows multi-level merge chains via
+       ``canonical()`` before checking active status. This SQL uses a direct
+       join (single-level), which is conservative: it is slightly
+       under-inclusive for merged speakers whose target is active.
+    2. **REVOKE rows**: this predicate (and ``_label_unresolved``) treats a
+       REVOKE row as a decision that supersedes the auto-enroll. Python's
+       ``effective_decisions()`` voids both the revoke and its target,
+       restoring the label to unresolved. This divergence surfaces only when
+       an auto-enroll is explicitly revoked, which is rare at single-operator
+       scale. A shared effective-decision SQL builder would fix both
+       predicates.
+    """
+    newer = aliased(AdjudicationDecision)
+    return (
+        select(1)
+        .select_from(AdjudicationDecision)
+        .join(
+            MatchCandidate,
+            and_(
+                MatchCandidate.pipeline_run_id == run_id,
+                MatchCandidate.diarization_label == label,
+            ),
+        )
+        .join(Speaker, MatchCandidate.top_speaker_id == Speaker.id)
+        .where(
+            AdjudicationDecision.pipeline_run_id == run_id,
+            AdjudicationDecision.diarization_label == label,
+            AdjudicationDecision.decision == Decision.AUTO_ENROLL.value,
+            AdjudicationDecision.transcript_segment_id.is_(None),
+            ~(
+                select(1)
+                .where(
+                    newer.pipeline_run_id == run_id,
+                    newer.diarization_label == label,
+                    newer.transcript_segment_id.is_(None),
+                    or_(
+                        newer.created_at > AdjudicationDecision.created_at,
+                        and_(
+                            newer.created_at == AdjudicationDecision.created_at,
+                            newer.id > AdjudicationDecision.id,
+                        ),
+                    ),
+                )
+                .correlate(PipelineRun, DiarizationTurn, AdjudicationDecision)
+                .exists()
+            ),
+            MatchCandidate.similarity.is_not(None),
+            MatchCandidate.vote_agreement.is_not(None),
+            MatchCandidate.similarity >= gates.min_cosine,
+            or_(
+                MatchCandidate.margin >= gates.min_margin,
+                and_(
+                    MatchCandidate.margin.is_(None),
+                    MatchCandidate.roster_size == 1,
+                ),
+            ),
+            MatchCandidate.vote_agreement >= gates.min_vote_agreement,
+            MatchCandidate.eligible_turns >= gates.min_turns,
+            MatchCandidate.eligible_seconds >= gates.min_seconds,
+            or_(
+                MatchCandidate.margin.is_(None),
+                MatchCandidate.margin >= gates.grounded_min_margin,
+            ),
+            Speaker.deleted_at.is_(None),
+            Speaker.merged_into_id.is_(None),
+        )
+        .correlate(PipelineRun, DiarizationTurn)
+        .exists()
+    )
+
+
+def _label_review_needed(
+    run_id: RunIdRef, label: ColumnExpressionArgument[str], gates: MatchingGates
+) -> ColumnElement[bool]:
+    """Whether a label is unresolved or has a confirmable auto-enroll."""
+    return or_(
+        _label_unresolved(run_id, label),
+        _confirmable_auto_enroll(run_id, label, gates),
+    )
+
+
+def review_needed_label_exists(run_id: RunIdRef, gates: MatchingGates) -> Exists:
+    """EXISTS a diarization-turn label of ``run_id`` that needs review."""
+    return (
+        select(1)
+        .where(
+            DiarizationTurn.pipeline_run_id == run_id,
+            _label_review_needed(run_id, DiarizationTurn.label, gates),
+        )
+        .exists()
+    )
+
+
+def review_needed_label_count(
+    run_id: RunIdRef, gates: MatchingGates
+) -> ScalarSelect[int]:
+    """Count of distinct turn-labels for ``run_id`` that need review."""
+    return (
+        select(func.count(distinct(DiarizationTurn.label)))
+        .where(
+            DiarizationTurn.pipeline_run_id == run_id,
+            _label_review_needed(run_id, DiarizationTurn.label, gates),
         )
         .scalar_subquery()
     )
@@ -284,6 +407,22 @@ class LabelState:
     match_margin: float | None = None
     match_vote_agreement: float | None = None
     match_eligible_seconds: float = 0.0
+
+
+def needs_ruling(state: LabelState) -> bool:
+    """True when the operator still has an open question on this label.
+
+    Covers two cases: a truly unresolved label (no decision, no grounded
+    cosine) AND a confirmable auto-enrolled label whose live evidence yields
+    a candidate the operator can confirm with one click (issue #472).
+    """
+    if state.resolution is Resolution.UNRESOLVED:
+        return True
+    return (
+        state.resolution is Resolution.AUTO_ENROLL
+        and state.candidate_speaker_id is not None
+        and state.candidate_prompt_allowed
+    )
 
 
 def effective_decisions(
@@ -677,6 +816,9 @@ def label_states(
 class QueueEntry:
     run_id: uuid.UUID
     source_path: str
+    # Labels that need a ruling: truly unresolved plus confirmable
+    # auto-enrolled labels (issue #472). Named ``unresolved_labels`` for
+    # backward compatibility; the sort="unresolved" ordering uses this count.
     unresolved_labels: int
     total_labels: int
     claimed_by: str | None
@@ -699,12 +841,17 @@ class QueueEntry:
 QUEUE_SORTS = ("oldest", "unresolved")
 
 
-def adjudication_queue(session: Session, *, sort: str = "oldest") -> list[QueueEntry]:
-    """COMPLETED runs with at least one unresolved label.
+def adjudication_queue(
+    session: Session, *, gates: MatchingGates, sort: str = "oldest"
+) -> list[QueueEntry]:
+    """COMPLETED runs with at least one label that needs a ruling.
 
-    Ordered oldest-first (FIFO fairness, the default) or — with
-    ``sort="unresolved"`` — most-unresolved-first, tie-broken oldest-first.
-    Exact per-run resolution at single-operator scale — correctness over a
+    A label needs a ruling when it is truly unresolved (no decision, no
+    grounded cosine) OR is a confirmable auto-enrolled label whose live
+    evidence yields a candidate the operator can one-click confirm (issue
+    #472). Ordered oldest-first (FIFO fairness, the default) or -- with
+    ``sort="unresolved"`` -- most-needs-ruling-first, tie-broken oldest.
+    Exact per-run resolution at single-operator scale -- correctness over a
     clever SQL reduction of the precedence rules. Both the media item and its
     (usually absent) source-metadata snapshot are eager-loaded so enriching a
     row with a friendly title costs no per-run follow-up query.
@@ -735,9 +882,9 @@ def adjudication_queue(session: Session, *, sort: str = "oldest") -> list[QueueE
     ).scalars()
     entries: list[QueueEntry] = []
     for run in runs:
-        states = label_states(session, run.id)
-        unresolved = sum(1 for s in states if s.resolution is Resolution.UNRESOLVED)
-        if unresolved == 0:
+        states = label_states(session, run.id, gates=gates)
+        open_count = sum(1 for s in states if needs_ruling(s))
+        if open_count == 0:
             continue
         claim_live = (
             run.review_claim_expires_at is not None and run.review_claim_expires_at > now
@@ -747,7 +894,7 @@ def adjudication_queue(session: Session, *, sort: str = "oldest") -> list[QueueE
             QueueEntry(
                 run_id=run.id,
                 source_path=run.media_item.source_path,
-                unresolved_labels=unresolved,
+                unresolved_labels=open_count,
                 total_labels=len(states),
                 claimed_by=run.review_claimed_by if claim_live else None,
                 # Operator intent beats scraped context: a sidecar title
@@ -765,18 +912,16 @@ def adjudication_queue(session: Session, *, sort: str = "oldest") -> list[QueueE
     return entries
 
 
-def review_backlog_count(session: Session) -> int:
-    """How many runs are eligible for review — the queue's length, by construction.
+def review_backlog_count(session: Session, *, gates: MatchingGates) -> int:
+    """How many runs are eligible for review -- the queue's length, by construction.
 
     The dashboard's "Continue review (N)" affordance and the review queue it
     links to must never disagree (issue #117). Deriving the count from
     :func:`adjudication_queue` rather than a parallel status tally makes that
     drift impossible: both share the one predicate (``COMPLETED``, not archived,
-    at least one unresolved label). The old dashboard counted
-    ``AWAITING_ADJUDICATION`` runs — a status a successful pipeline never ends
-    in — so its "Review backlog" card was structurally wrong. At single-operator
-    scale the handful of ``QueueEntry`` objects this materializes costs nothing;
+    at least one label that :func:`needs_ruling`). At single-operator scale
+    the handful of ``QueueEntry`` objects this materializes costs nothing;
     correctness of the invariant beats a separate ``COUNT(*)`` that could rot
     away from the queue predicate again.
     """
-    return len(adjudication_queue(session))
+    return len(adjudication_queue(session, gates=gates))

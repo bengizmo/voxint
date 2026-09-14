@@ -26,6 +26,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   seed gains a `rail` fixture covering every card kind plus a ledger check in
   `reconcile` (`label_rulings`).
 
+- **Review queue counts confirmable auto-enrolled voices** (#472). A run whose
+  only open question is "confirm this auto-enrolled voice" now appears in the
+  Review queue, the home-page backlog count, the Runs "Needs attention" tab,
+  and the Media "Needs review" filter. Previously, auto-enrolled labels counted
+  as resolved even when the speaker rail showed them in Needs you with a
+  one-click Confirm. The new `review_needed` SQL predicate (`_label_review_needed`,
+  `review_needed_label_exists`, `review_needed_label_count`) sits beside the
+  original `_label_unresolved` (unchanged) and ORs in labels whose effective
+  auto-enroll decision has live evidence that passes the accept gate with a
+  non-ambiguous active candidate. Eight-scenario Python/SQL parity test ensures
+  the two paths agree.
+
 ### Changed
 - `LabelState` and both island serializers carry the policy candidate
   (`candidateSpeakerId`/`candidateSpeakerName`, from

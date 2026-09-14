@@ -3,6 +3,7 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.adjudication.ledger import record_decision
@@ -11,7 +12,9 @@ from voxint.adjudication.resolver import (
     adjudication_queue,
     effective_decisions,
     label_states,
+    needs_ruling,
     review_backlog_count,
+    review_needed_label_count,
 )
 from voxint.adjudication.slots import claim_run
 from voxint.db.models import (
@@ -30,6 +33,7 @@ from voxint.speakers.matching import MatchingGates
 from voxint.speakers.policy import MatchBand
 
 SPACE = "titanet-large-v2"
+DEFAULT_GATES = MatchingGates()
 
 
 def make_completed_run(session: Session) -> uuid.UUID:
@@ -237,7 +241,7 @@ def test_queue_lists_only_completed_runs_with_unresolved_labels(
         add_turn(session, running.id, 0, "S0")
         session.commit()
 
-        entries = adjudication_queue(session)
+        entries = adjudication_queue(session, gates=DEFAULT_GATES)
         assert [e.run_id for e in entries] == [queued_run]
         assert entries[0].unresolved_labels == 1
         assert entries[0].claimed_by is None
@@ -245,7 +249,7 @@ def test_queue_lists_only_completed_runs_with_unresolved_labels(
         # A live claim surfaces in the queue row.
         claim_run(session, queued_run, reviewer="ben", ttl_seconds=600)
         session.commit()
-        assert adjudication_queue(session)[0].claimed_by == "ben"
+        assert adjudication_queue(session, gates=DEFAULT_GATES)[0].claimed_by == "ben"
 
 
 def test_queue_entry_carries_display_context(
@@ -275,7 +279,7 @@ def test_queue_entry_carries_display_context(
         add_turn(session, run.id, 0, "S0")
         session.commit()
 
-        entry = adjudication_queue(session)[0]
+        entry = adjudication_queue(session, gates=DEFAULT_GATES)[0]
         assert entry.title == "City Council 2026-08"
         assert entry.duration_seconds == 125.0
         assert entry.created_at is not None
@@ -285,7 +289,9 @@ def test_queue_entry_carries_display_context(
         bare = make_completed_run(session)
         add_turn(session, bare, 0, "S0")
         session.commit()
-        entry = next(e for e in adjudication_queue(session) if e.run_id == bare)
+        entry = next(
+            e for e in adjudication_queue(session, gates=DEFAULT_GATES) if e.run_id == bare
+        )
         assert entry.title is None
         assert entry.duration_seconds is None
         assert entry.created_at is not None
@@ -319,7 +325,11 @@ def test_queue_sidecar_title_wins_over_scraped_title(
         session.flush()
         add_turn(session, run.id, 0, "S0")
         session.commit()
-        entry = next(e for e in adjudication_queue(session) if e.run_id == run.id)
+        entry = next(
+            e
+            for e in adjudication_queue(session, gates=DEFAULT_GATES)
+            if e.run_id == run.id
+        )
         assert entry.title == "Operator title"
 
     # A sidecar without a usable title falls back to the scraped one.
@@ -346,7 +356,11 @@ def test_queue_sidecar_title_wins_over_scraped_title(
         session.flush()
         add_turn(session, run.id, 0, "S0")
         session.commit()
-        entry = next(e for e in adjudication_queue(session) if e.run_id == run.id)
+        entry = next(
+            e
+            for e in adjudication_queue(session, gates=DEFAULT_GATES)
+            if e.run_id == run.id
+        )
         assert entry.title == "Scraped title"
 
 
@@ -372,16 +386,23 @@ def test_queue_sort_unresolved_orders_by_voice_count(
         session.commit()
 
         # Default: oldest-first (FIFO), unchanged behaviour.
-        assert [e.run_id for e in adjudication_queue(session)] == [one_a, two, one_b]
+        assert [e.run_id for e in adjudication_queue(session, gates=DEFAULT_GATES)] == [
+            one_a,
+            two,
+            one_b,
+        ]
 
         # Unresolved-first: the two-voice run leads; the two one-voice runs keep
         # their oldest-first order among the tie (stable sort).
-        by_work = adjudication_queue(session, sort="unresolved")
+        by_work = adjudication_queue(session, gates=DEFAULT_GATES, sort="unresolved")
         assert [e.run_id for e in by_work] == [two, one_a, one_b]
         assert [e.unresolved_labels for e in by_work] == [2, 1, 1]
 
         # An unknown sort degrades to the default order rather than erroring.
-        assert [e.run_id for e in adjudication_queue(session, sort="bogus")] == [
+        assert [
+            e.run_id
+            for e in adjudication_queue(session, gates=DEFAULT_GATES, sort="bogus")
+        ] == [
             one_a,
             two,
             one_b,
@@ -396,7 +417,11 @@ def test_review_backlog_count_matches_queue_length(
     fully-ruled, still-running, and archived-with-unresolved."""
     # Empty system: no runs, no backlog.
     with session_factory() as session:
-        assert review_backlog_count(session) == len(adjudication_queue(session)) == 0
+        assert (
+            review_backlog_count(session, gates=DEFAULT_GATES)
+            == len(adjudication_queue(session, gates=DEFAULT_GATES))
+            == 0
+        )
 
     with session_factory() as session:
         # Eligible: completed with an unresolved voice.
@@ -431,7 +456,11 @@ def test_review_backlog_count_matches_queue_length(
         session.get(PipelineRun, archived).archived_at = datetime.now(tz=UTC)
         session.commit()
 
-        assert review_backlog_count(session) == len(adjudication_queue(session)) == 1
+        assert (
+            review_backlog_count(session, gates=DEFAULT_GATES)
+            == len(adjudication_queue(session, gates=DEFAULT_GATES))
+            == 1
+        )
 
         # Resolving the one eligible run drops the backlog to zero, still in step.
         record_decision(
@@ -443,7 +472,47 @@ def test_review_backlog_count_matches_queue_length(
             idempotency_key="k-eligible-backlog",
         )
         session.commit()
-        assert review_backlog_count(session) == len(adjudication_queue(session)) == 0
+        assert (
+            review_backlog_count(session, gates=DEFAULT_GATES)
+            == len(adjudication_queue(session, gates=DEFAULT_GATES))
+            == 0
+        )
+
+        # A confirmable auto-enroll is the only open question on this run.
+        auto_enrolled = make_completed_run(session)
+        add_turn(session, auto_enrolled, 0, "S0")
+        candidate = add_speaker(session, "Backlog Candidate")
+        voice = add_speaker(session, "Voice Backlog")
+        add_candidate(
+            session,
+            auto_enrolled,
+            "S0",
+            decision="accepted",
+            reason="accepted",
+            top_speaker_id=candidate,
+            similarity=0.65,
+            margin=0.10,
+            vote_agreement=0.75,
+            eligible_turns=3,
+            eligible_seconds=15.0,
+            roster_size=2,
+            grounded=False,
+        )
+        record_decision(
+            session,
+            pipeline_run_id=auto_enrolled,
+            diarization_label="S0",
+            decision=Decision.AUTO_ENROLL,
+            operator="auto_enroll",
+            idempotency_key="k-auto-enroll-backlog",
+            speaker_id=voice,
+        )
+        session.commit()
+
+        queue = adjudication_queue(session, gates=DEFAULT_GATES)
+        assert review_backlog_count(session, gates=DEFAULT_GATES) == len(queue) == 1
+        assert queue[0].run_id == auto_enrolled
+        assert queue[0].unresolved_labels == 1
 
 
 def add_candidate(
@@ -479,6 +548,133 @@ def add_candidate(
             roster_size=roster_size,
         )
     )
+
+
+def test_review_needed_python_sql_parity(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The SQL dashboard count and Python resolver agree on open questions."""
+    gates = DEFAULT_GATES
+    with session_factory() as session:
+        runs: dict[str, uuid.UUID] = {}
+
+        def one_label_run(scenario: str) -> uuid.UUID:
+            run_id = make_completed_run(session)
+            add_turn(session, run_id, 0, "S0")
+            runs[scenario] = run_id
+            return run_id
+
+        def auto_enroll_run(
+            scenario: str,
+            *,
+            similarity: float,
+            margin: float | None,
+            roster_size: int = 2,
+            archive_candidate: bool = False,
+        ) -> tuple[uuid.UUID, uuid.UUID]:
+            run_id = one_label_run(scenario)
+            candidate = add_speaker(session, f"{scenario} Candidate")
+            if archive_candidate:
+                candidate_row = session.get(Speaker, candidate)
+                assert candidate_row is not None
+                candidate_row.deleted_at = datetime.now(tz=UTC)
+            voice = add_speaker(session, f"{scenario} Voice")
+            add_candidate(
+                session,
+                run_id,
+                "S0",
+                decision="accepted",
+                reason="accepted",
+                top_speaker_id=candidate,
+                similarity=similarity,
+                margin=margin,
+                vote_agreement=0.75,
+                eligible_turns=3,
+                eligible_seconds=15.0,
+                roster_size=roster_size,
+                grounded=False,
+            )
+            record_decision(
+                session,
+                pipeline_run_id=run_id,
+                diarization_label="S0",
+                decision=Decision.AUTO_ENROLL,
+                operator="auto_enroll",
+                idempotency_key=f"parity-{scenario}-auto-enroll",
+                speaker_id=voice,
+            )
+            return run_id, candidate
+
+        # No decision and no grounded cosine.
+        one_label_run("UNRESOLVED")
+
+        grounded = one_label_run("GROUNDED_COSINE")
+        grounded_speaker = add_speaker(session, "Grounded Speaker")
+        session.add(
+            SpeakerAssignment(
+                pipeline_run_id=grounded,
+                diarization_label="S0",
+                speaker_id=grounded_speaker,
+                method="cosine",
+                confidence=0.9,
+                grounded=True,
+            )
+        )
+
+        human = one_label_run("HUMAN_ASSIGN")
+        human_speaker = add_speaker(session, "Human Speaker")
+        record_decision(
+            session,
+            pipeline_run_id=human,
+            diarization_label="S0",
+            decision=Decision.ASSIGN,
+            operator="ben",
+            idempotency_key="parity-human-assign",
+            speaker_id=human_speaker,
+        )
+
+        auto_enroll_run("AUTO_ENROLL_REVIEW", similarity=0.65, margin=0.10)
+        auto_enroll_run("AUTO_ENROLL_ABSTAIN", similarity=0.50, margin=0.10)
+        auto_enroll_run("AUTO_ENROLL_AMBIGUOUS", similarity=0.65, margin=0.06)
+        auto_enroll_run(
+            "AUTO_ENROLL_SINGLE_SPEAKER",
+            similarity=0.65,
+            margin=None,
+            roster_size=1,
+        )
+
+        superseded, _ = auto_enroll_run(
+            "AUTO_ENROLL_SUPERSEDED", similarity=0.65, margin=0.10
+        )
+        session.commit()
+        replacement = add_speaker(session, "Superseding Human")
+        record_decision(
+            session,
+            pipeline_run_id=superseded,
+            diarization_label="S0",
+            decision=Decision.ASSIGN,
+            operator="ben",
+            idempotency_key="parity-auto-enroll-superseded-human",
+            speaker_id=replacement,
+        )
+
+        auto_enroll_run(
+            "AUTO_ENROLL_ARCHIVED",
+            similarity=0.65,
+            margin=0.10,
+            archive_candidate=True,
+        )
+        session.commit()
+
+        for scenario, run_id in runs.items():
+            sql_count = session.execute(
+                select(review_needed_label_count(run_id, gates))
+            ).scalar()
+            states = label_states(session, run_id, gates=gates)
+            python_count = sum(1 for state in states if needs_ruling(state))
+            assert sql_count == python_count, (
+                f"SQL={sql_count}, Python={python_count} for {scenario}"
+            )
 
 
 def test_label_states_carry_policy_candidate_and_evidence(
@@ -570,7 +766,7 @@ def test_label_states_carry_policy_candidate_and_evidence(
         # S4: never evaluated (no evidence row).
         session.commit()
 
-        by_label = {s.label: s for s in label_states(session, run_id, gates=MatchingGates())}
+        by_label = {s.label: s for s in label_states(session, run_id, gates=DEFAULT_GATES)}
 
         s0 = by_label["S0"]
         assert s0.band is MatchBand.AUTO_ATTRIBUTE
@@ -676,7 +872,7 @@ def test_auto_enrolled_label_is_banded_by_live_evidence(
         )
         session.commit()
 
-        by_label = {s.label: s for s in label_states(session, run_id, gates=MatchingGates())}
+        by_label = {s.label: s for s in label_states(session, run_id, gates=DEFAULT_GATES)}
 
         s0 = by_label["S0"]
         assert s0.resolution is Resolution.AUTO_ENROLL  # resolution untouched
@@ -692,8 +888,10 @@ def test_auto_enrolled_label_is_banded_by_live_evidence(
         assert s1.band is MatchBand.ABSTAIN
         assert s1.candidate_prompt_allowed is False
 
-        # Neither auto-enrolled label counts as unresolved for the queue.
-        assert adjudication_queue(session) == []
+        queue = adjudication_queue(session, gates=DEFAULT_GATES)
+        assert len(queue) == 1
+        assert queue[0].run_id == run_id
+        assert queue[0].unresolved_labels == 1  # S0 is confirmable
 
 
 def test_candidate_follows_merges_and_never_names_an_archived_speaker(
@@ -744,7 +942,7 @@ def test_candidate_follows_merges_and_never_names_an_archived_speaker(
         )
         session.commit()
 
-        by_label = {s.label: s for s in label_states(session, run_id, gates=MatchingGates())}
+        by_label = {s.label: s for s in label_states(session, run_id, gates=DEFAULT_GATES)}
 
         s0 = by_label["S0"]
         assert s0.band is MatchBand.REVIEW

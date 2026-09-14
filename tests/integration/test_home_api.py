@@ -34,6 +34,7 @@ from voxint.db.models import (
     StageRun,
     StageStatus,
 )
+from voxint.speakers.matching import MatchingGates
 
 CREDS = ("reviewer", "s3cret")
 
@@ -178,7 +179,7 @@ def test_home_attention_counts_match_their_queues(
 
     seed_snapshot(session_factory)
     with session_factory() as session:
-        queue = adjudication_queue(session)
+        queue = adjudication_queue(session, gates=MatchingGates())
         eligible = len(queue)
         voices = sum(e.unresolved_labels for e in queue)
     assert (eligible, voices) == (1, 1)
