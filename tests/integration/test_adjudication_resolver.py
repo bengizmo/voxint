@@ -694,3 +694,64 @@ def test_auto_enrolled_label_is_banded_by_live_evidence(
 
         # Neither auto-enrolled label counts as unresolved for the queue.
         assert adjudication_queue(session) == []
+
+
+def test_candidate_follows_merges_and_never_names_an_archived_speaker(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """#115: the Confirm target is the merge target, and an archived speaker is
+    never offered (the decide route would reject it), while its name still
+    resolves for display."""
+    with session_factory() as session:
+        run_id = make_completed_run(session)
+        for index, label in enumerate(["S0", "S0", "S1", "S1"]):
+            add_turn(session, run_id, index, label)
+        bob = add_speaker(session, "Bob")
+        bobby = add_speaker(session, "Bobby")
+        bobby_row = session.get(Speaker, bobby)
+        assert bobby_row is not None
+        bobby_row.merged_into_id = bob
+        bobby_row.merged_at = datetime.now(tz=UTC)
+        gone = add_speaker(session, "Gone")
+        gone_row = session.get(Speaker, gone)
+        assert gone_row is not None
+        gone_row.deleted_at = datetime.now(tz=UTC)
+        # S0: evidence names the merged-away source; Confirm must target Bob.
+        add_candidate(
+            session,
+            run_id,
+            "S0",
+            decision="accepted",
+            reason="accepted",
+            top_speaker_id=bobby,
+            similarity=0.65,
+            margin=0.1,
+            vote_agreement=0.8,
+            grounded=False,
+        )
+        # S1: evidence names a speaker archived since matching.
+        add_candidate(
+            session,
+            run_id,
+            "S1",
+            decision="accepted",
+            reason="accepted",
+            top_speaker_id=gone,
+            similarity=0.65,
+            margin=0.1,
+            vote_agreement=0.8,
+            grounded=False,
+        )
+        session.commit()
+
+        by_label = {s.label: s for s in label_states(session, run_id, gates=MatchingGates())}
+
+        s0 = by_label["S0"]
+        assert s0.band is MatchBand.REVIEW
+        assert s0.candidate_speaker_id == bob
+        assert s0.candidate_speaker_name == "Bob"
+
+        s1 = by_label["S1"]
+        assert s1.band is MatchBand.REVIEW
+        assert s1.candidate_speaker_id is None
+        assert s1.candidate_speaker_name is None

@@ -173,15 +173,15 @@ export function coverage(states: LabelStateShape[]): Coverage {
 }
 
 export function summary(rail: RailPartition, matchCoverage: Coverage): string {
+  const needsYou = rail.needsYou.length + rail.tooShort.length;
+  if (needsYou === 0) {
+    return "Every voice has a ruling.";
+  }
   if (matchCoverage.kind === "not_run") {
     return "Voice matching did not run on this recording.";
   }
   if (matchCoverage.kind === "no_roster") {
-    return "No known speakers to match against yet. Add people below so Voxint can recognise their voices on later recordings.";
-  }
-  const needsYou = rail.needsYou.length + rail.tooShort.length;
-  if (needsYou === 0) {
-    return "Every voice has a ruling.";
+    return "No known speakers were on your roster when this recording was matched. Add people below so Voxint can recognise their voices on later recordings.";
   }
   const short = rail.tooShort.length
     ? `, ${rail.tooShort.length} with very little speech`
@@ -199,13 +199,13 @@ export function whyText(state: LabelStateShape): string | null {
   }
   const parts = state.bandReason === null ? [] : [state.bandReason];
   parts.push(`Voice similarity ${similarity.toFixed(2)}.`);
-  parts.push(
-    `Lead over the next closest voice ${
-      state.matchMargin === null
-        ? "none (only one known speaker)"
-        : state.matchMargin.toFixed(2)
-    }.`,
-  );
+  if (state.matchMargin !== null) {
+    parts.push(`Lead over the next closest voice ${state.matchMargin.toFixed(2)}.`);
+  } else if (state.matchDecision !== null) {
+    // A recorded match with no margin means a one-speaker roster; a run with
+    // no match row at all says nothing about the roster.
+    parts.push("Lead over the next closest voice none (only one known speaker).");
+  }
   if (state.matchVoteAgreement !== null) {
     parts.push(`Agreement across this voice's speech ${state.matchVoteAgreement.toFixed(2)}.`);
   }

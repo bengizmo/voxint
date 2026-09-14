@@ -359,6 +359,19 @@ def test_reconcile_checks_label_rulings(
         problems = reconcile_run(session, run_id, unlisted)
     assert any("S3" in problem and "unlisted" in problem for problem in problems)
 
+    # An explicit empty mapping means "the browser ruled on nothing": both
+    # human rulings are unlisted; the seed's auto_enroll row on S5 is not.
+    none_expected = expectation({})
+    with session_factory() as session:
+        problems = reconcile_run(session, run_id, none_expected)
+    assert sorted(p.split(":")[0] for p in problems) == ["label S1", "label S3"]
+
+    # An absent key skips the ledger check entirely.
+    absent = Expectation.from_dict({"progress": {"verified": 0, "total": len(_RAIL_SEGMENTS)}})
+    assert absent.label_rulings is None
+    with session_factory() as session:
+        assert reconcile_run(session, run_id, absent) == []
+
 
 @pytest.mark.parametrize(
     "label_rulings",

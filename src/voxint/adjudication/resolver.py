@@ -551,16 +551,23 @@ def label_states(
         | {canonical(mc.top_speaker_id) for mc in mc_rows if mc.top_speaker_id}
     )
     speaker_ids.discard(None)
-    names: dict[uuid.UUID, str] = (
-        {
-            sid: name
-            for sid, name in session.execute(
-                select(Speaker.id, Speaker.display_name).where(Speaker.id.in_(speaker_ids))
+    speaker_rows: list[tuple[uuid.UUID, str, datetime | None, uuid.UUID | None]] = (
+        list(
+            session.execute(
+                select(
+                    Speaker.id, Speaker.display_name, Speaker.deleted_at, Speaker.merged_into_id
+                ).where(Speaker.id.in_(speaker_ids))
             ).tuples()
-        }
+        )
         if speaker_ids
-        else {}
+        else []
     )
+    names: dict[uuid.UUID, str] = {}
+    active_ids: set[uuid.UUID] = set()
+    for sid, name, deleted_at, merged_into in speaker_rows:
+        names[sid] = name
+        if deleted_at is None and merged_into is None:
+            active_ids.add(sid)
 
     states: list[LabelState] = []
     for label, turns, seconds in turn_stats:
@@ -628,6 +635,11 @@ def label_states(
                     gates=gates,
                 )
         candidate_id = canonical(br.candidate_speaker_id) if br else None
+        # A speaker archived since matching is no longer a roster identity the
+        # decide route accepts, so never offer Confirm on it (names still
+        # resolve for historical attributions).
+        if candidate_id is not None and candidate_id not in active_ids:
+            candidate_id = None
 
         states.append(
             LabelState(

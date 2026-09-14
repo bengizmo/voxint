@@ -40,7 +40,7 @@ interface SpeakerRailProps {
 
 type Speaker = { id: string; displayName: string };
 type Decide = (label: string, action: string, speakerId?: string) => void;
-type Enroll = (label: string, name: string) => void;
+type Enroll = (label: string, name: string) => Promise<boolean>;
 
 function RulingRow({
   state,
@@ -63,9 +63,12 @@ function RulingRow({
   const addPerson = () => {
     const trimmed = name.trim();
     if (!trimmed || busy) return;
-    onEnroll(state.label, trimmed);
-    setName("");
-    setAdding(false);
+    void onEnroll(state.label, trimmed).then((ok) => {
+      if (ok) {
+        setName("");
+        setAdding(false);
+      }
+    });
   };
   const placeholder =
     mode === "change"
@@ -85,7 +88,7 @@ function RulingRow({
             onDecide(state.label, "assign", state.candidateSpeakerId!)
           }
         >
-          Confirm {state.candidateSpeakerName}
+          Confirm {state.candidateSpeakerName ?? "this voice"}
         </button>
       )}
       <div className="card-actions my-1">
@@ -98,7 +101,6 @@ function RulingRow({
             const value = event.currentTarget.value;
             if (value === "__new") setAdding(true);
             else if (value) onDecide(state.label, "assign", value);
-            event.currentTarget.value = "";
             event.currentTarget.blur();
           }}
         >
@@ -636,8 +638,8 @@ export function SpeakerRail({
   );
 
   const enroll = useCallback(
-    async (label: string, displayName: string) => {
-      if (!reviewToken || busyRef.current) return;
+    async (label: string, displayName: string): Promise<boolean> => {
+      if (!reviewToken || busyRef.current) return false;
       busyRef.current = true;
       setBusy(true);
       setError(null);
@@ -660,12 +662,14 @@ export function SpeakerRail({
         );
         const data = (await res.json()) as LabelsResult;
         adoptResult(data);
+        return true;
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
           onClaimLost();
         } else {
           setError(err instanceof ApiError ? err.detail : "Enrollment failed.");
         }
+        return false;
       } finally {
         busyRef.current = false;
         setBusy(false);
@@ -679,9 +683,7 @@ export function SpeakerRail({
   const decideFromRow: Decide = (label, action, speakerId) => {
     void decide(label, action, speakerId);
   };
-  const enrollFromRow: Enroll = (label, name) => {
-    void enroll(label, name);
-  };
+  const enrollFromRow: Enroll = (label, name) => enroll(label, name);
 
   return (
     <div className="lib-sidebar" role="complementary" aria-label="Speaker rail">

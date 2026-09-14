@@ -316,13 +316,21 @@ describe("summary", () => {
     );
   });
 
-  it("uses coverage override messages", () => {
-    expect(summary(emptyPartition(), { kind: "not_run" })).toBe(
+  it("uses coverage override messages while work remains", () => {
+    const pending = emptyPartition({ needsYou: [make()] });
+    expect(summary(pending, { kind: "not_run" })).toBe(
       "Voice matching did not run on this recording.",
     );
-    expect(summary(emptyPartition(), { kind: "no_roster" })).toBe(
-      "No known speakers to match against yet. Add people below so Voxint can recognise their voices on later recordings.",
+    expect(summary(pending, { kind: "no_roster" })).toBe(
+      "No known speakers were on your roster when this recording was matched. Add people below so Voxint can recognise their voices on later recordings.",
     );
+  });
+
+  it("lets the finish line beat a coverage override", () => {
+    expect(summary(emptyPartition({ yourRulings: [make()] }), { kind: "no_roster" })).toBe(
+      "Every voice has a ruling.",
+    );
+    expect(summary(emptyPartition(), { kind: "not_run" })).toBe("Every voice has a ruling.");
   });
 });
 
@@ -350,6 +358,19 @@ describe("whyText", () => {
     ).toBe(
       "Strong match. Voice similarity 0.88. Lead over the next closest voice none (only one known speaker).",
     );
+  });
+
+  it("omits the lead sentence when matching recorded no row", () => {
+    expect(
+      whyText(
+        make({
+          bandReason: "Strong enough to trust on its own.",
+          cosineConfidence: 0.9,
+          matchDecision: null,
+          matchMargin: null,
+        }),
+      ),
+    ).toBe("Strong enough to trust on its own. Voice similarity 0.90.");
   });
 
   it("describes match evidence with margin and agreement", () => {

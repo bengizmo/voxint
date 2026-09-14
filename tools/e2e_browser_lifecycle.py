@@ -44,7 +44,7 @@ import subprocess
 import sys
 import uuid
 import wave
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
@@ -799,6 +799,13 @@ class Expectation:
     one ``SegmentSplitBoundary``; segments NOT listed here must have none.
     ``expected_annotations`` — exact ``TranscriptAnnotation`` count for the run
     (``None`` skips the check; default ``None``).
+
+    Speaker rail (#115): ``label_rulings`` — label → ``(decision, speaker
+    name or None)`` for the effective human ruling the browser must have left.
+    ``None`` (key absent) skips the check; a present mapping, even ``{}``, is
+    exact: every listed label must carry that ruling and no other label may
+    carry a human ruling (``auto_enroll`` rows are the seed's, not the
+    browser's, and are ignored).
     """
 
     verified_indexes: frozenset[int]
@@ -806,7 +813,7 @@ class Expectation:
     progress: tuple[int, int]
     split_parent_indexes: frozenset[int] = frozenset()
     expected_annotations: int | None = None
-    label_rulings: dict[str, tuple[str, str | None]] = field(default_factory=dict)
+    label_rulings: dict[str, tuple[str, str | None]] | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> Expectation:
@@ -846,16 +853,19 @@ class Expectation:
             raise ValueError(
                 f"expected_annotations must be a non-negative integer or null, got {raw_annot!r}"
             )
-        raw_rulings = data.get("label_rulings", {})
-        if not isinstance(raw_rulings, dict):
+        raw_rulings = data.get("label_rulings")
+        if raw_rulings is not None and not isinstance(raw_rulings, dict):
             raise ValueError("label_rulings must be an object")
-        label_rulings: dict[str, tuple[str, str | None]] = {}
+        label_rulings: dict[str, tuple[str, str | None]] | None = (
+            None if raw_rulings is None else {}
+        )
         allowed_decisions = {
             Decision.ASSIGN.value,
             Decision.EXCLUDE.value,
             Decision.UNKNOWN.value,
         }
-        for label, raw_ruling in raw_rulings.items():
+        for label, raw_ruling in (raw_rulings or {}).items():
+            assert label_rulings is not None  # narrowing: raw_rulings was a dict
             if not isinstance(label, str) or not label:
                 raise ValueError("label_rulings keys must be non-empty strings")
             if not isinstance(raw_ruling, dict) or set(raw_ruling) != {
@@ -969,7 +979,7 @@ def reconcile_run(session: Session, run_id: uuid.UUID, expect: Expectation) -> l
         if got_annot != expect.expected_annotations:
             problems.append(f"annotation count={got_annot}, expected {expect.expected_annotations}")
 
-    if expect.label_rulings:
+    if expect.label_rulings is not None:
         rulings = effective_decisions(session, run_id)
         for label, (want_decision, want_speaker) in expect.label_rulings.items():
             row = rulings.get(label)
@@ -1019,7 +1029,9 @@ def cmd_reconcile(args: argparse.Namespace) -> None:
             print(f"  - {problem}", file=sys.stderr)
         fail(f"durable state does not match the expectation ({len(problems)} mismatch(es)).")
     ruling_status = (
-        f"; {len(expect.label_rulings)} label ruling(s) match" if expect.label_rulings else ""
+        f"; {len(expect.label_rulings)} label ruling(s) match"
+        if expect.label_rulings is not None
+        else ""
     )
     print(
         f"ok: {expect.progress[0]} of {expect.progress[1]} verified; "
