@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   FALLBACK_ANNOTATION_LIMITS,
@@ -20,6 +20,7 @@ import { makeNonce } from "../lib/nonce";
 import type { PlaybackCapability } from "../lib/playback";
 import type { Turn } from "../lib/peaks";
 import type { OutlineProps } from "../lib/outline";
+import type { LabelStateShape } from "../lib/speaker-bands";
 import { useAnnotations } from "./AnnotationLayer";
 import { KeymapHelp } from "./KeymapHelp";
 import { OutlinePanel } from "./OutlinePanel";
@@ -30,7 +31,7 @@ import {
   REVIEW_KEY,
   SAVE_EDIT_LABEL,
 } from "./keymap";
-import { type LabelStateShape, type LabelsResult, SpeakerRail } from "./SpeakerRail";
+import { type LabelsResult, SpeakerRail } from "./SpeakerRail";
 import { UndoToast } from "./UndoToast";
 import {
   type Segment,
@@ -270,6 +271,20 @@ export function MediaEditor({
     segments,
     initialSegments,
     play,
+  );
+  const hearableLabels = useMemo(
+    () =>
+      new Set(
+        segments.flatMap((segment) => (segment.label ? [segment.label] : [])),
+      ),
+    [segments],
+  );
+  const hearVoice = useCallback(
+    (label: string) => {
+      const index = segments.findIndex((segment) => segment.label === label);
+      if (index >= 0) goTo(index);
+    },
+    [segments, goTo],
   );
 
   const postForm = useFormPost(
@@ -1113,6 +1128,8 @@ export function MediaEditor({
             speakers={speakers}
             onClaimLost={onAnnotationClaimLost}
             onLabelsChanged={onLabelsChanged}
+            onHearVoice={capability.seekEnabled ? hearVoice : undefined}
+            hearableLabels={hearableLabels}
           />
         </div>
 

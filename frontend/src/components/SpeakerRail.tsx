@@ -2,14 +2,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, apiFetch } from "../lib/api-client";
 import { makeNonce } from "../lib/nonce";
+import {
+  coverage,
+  headline,
+  isAmbiguous,
+  isConfirmable,
+  isHumanRuling,
+  partition,
+  summary,
+  whyText,
+  type LabelStateShape,
+} from "../lib/speaker-bands";
 import type { Segment } from "./TranscriptPlayer";
-
-function confidenceBand(score: number | null): string {
-  if (score == null || !isFinite(score)) return "unknown";
-  if (score >= 0.8) return "likely";
-  if (score >= 0.5) return "possible";
-  return "low";
-}
 
 export interface LabelsResult {
   labels: LabelStateShape[];
@@ -22,28 +26,6 @@ export type UndoPayload =
   | { kind: "enroll"; decisionId: string; expiresAt: string }
   | { kind: "merge"; mergeNonce: string; expiresAt: string };
 
-export interface LabelStateShape {
-  label: string;
-  paletteIndex: number | null;
-  turnCount: number;
-  totalSeconds: number;
-  resolution: string;
-  speakerId: string | null;
-  speakerName: string | null;
-  cosineConfidence: number | null;
-  cosineSpeakerId: string | null;
-  cosineSpeakerName: string | null;
-  cosineGrounded: boolean;
-  llmHintName: string | null;
-  band: string | null;
-  bandReason: string | null;
-  candidatePromptAllowed: boolean;
-  matchDecision: string | null;
-  matchReason: string | null;
-  matchMargin: number | null;
-  matchEligibleSeconds: number;
-}
-
 interface SpeakerRailProps {
   runId: string;
   reviewToken: string | null;
@@ -52,49 +34,222 @@ interface SpeakerRailProps {
   speakers: { id: string; displayName: string }[];
   onClaimLost: () => void;
   onLabelsChanged: (result: LabelsResult) => void;
+  onHearVoice?: (label: string) => void;
+  hearableLabels?: ReadonlySet<string>;
 }
 
-function isResolved(s: LabelStateShape): boolean {
-  return s.resolution !== "unresolved";
-}
+type Speaker = { id: string; displayName: string };
+type Decide = (label: string, action: string, speakerId?: string) => void;
+type Enroll = (label: string, name: string) => void;
 
-function resolutionSummary(s: LabelStateShape): string {
-  switch (s.resolution) {
-    case "grounded_cosine":
-      return `Machine-matched: ${s.speakerName}`;
-    case "human_assign":
-      return `Assigned: ${s.speakerName}`;
-    case "auto_enroll":
-      return `Auto-enrolled: ${s.speakerName}`;
-    case "human_exclude":
-      return "Excluded";
-    case "human_unknown":
-      return "Marked unknown";
-    default:
-      return s.resolution;
-  }
-}
+function RulingRow({
+  state,
+  speakers,
+  busy,
+  onDecide,
+  onEnroll,
+  mode,
+}: {
+  state: LabelStateShape;
+  speakers: Speaker[];
+  busy: boolean;
+  onDecide: Decide;
+  onEnroll: Enroll;
+  mode: "needs-you" | "change";
+}) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const confirmable = isConfirmable(state);
+  const addPerson = () => {
+    const trimmed = name.trim();
+    if (!trimmed || busy) return;
+    onEnroll(state.label, trimmed);
+    setName("");
+    setAdding(false);
+  };
+  const placeholder =
+    mode === "change"
+      ? "Reassign to…"
+      : confirmable
+        ? "Someone else…"
+        : "Known person…";
 
-function resolutionBadge(s: LabelStateShape): React.JSX.Element {
-  switch (s.resolution) {
-    case "unresolved":
-      return <span className="pill unresolved">needs ruling</span>;
-    case "grounded_cosine":
-      return <span className="pill grounded">machine: {s.speakerName}</span>;
-    case "human_assign":
-      return <span className="pill human">assigned: {s.speakerName}</span>;
-    case "auto_enroll":
-      return <span className="pill grounded">auto: {s.speakerName}</span>;
-    case "human_exclude":
-      return <span className="pill human">excluded</span>;
-    case "human_unknown":
-      return <span className="pill human">unknown</span>;
-    default:
-      return <span className="pill">{s.resolution}</span>;
-  }
+  return (
+    <>
+      {mode === "needs-you" && confirmable && (
+        <button
+          type="button"
+          className="primary"
+          disabled={busy}
+          onClick={() =>
+            onDecide(state.label, "assign", state.candidateSpeakerId!)
+          }
+        >
+          Confirm {state.candidateSpeakerName}
+        </button>
+      )}
+      <div className="card-actions my-1">
+        <select
+          className="text-sm"
+          value=""
+          disabled={busy}
+          aria-label={`${state.label}: choose who this is`}
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            if (value === "__new") setAdding(true);
+            else if (value) onDecide(state.label, "assign", value);
+            event.currentTarget.value = "";
+            event.currentTarget.blur();
+          }}
+        >
+          <option value="">{placeholder}</option>
+          {speakers.map((speaker) => (
+            <option key={speaker.id} value={speaker.id}>
+              {speaker.displayName}
+            </option>
+          ))}
+          <option value="__new">Add a new person…</option>
+        </select>
+        <button
+          type="button"
+          className="text-sm secondary"
+          title="Background noise, music, a TV: not a person to keep in the results."
+          disabled={busy}
+          onClick={() => onDecide(state.label, "exclude")}
+        >
+          Not a person
+        </button>
+        <button
+          type="button"
+          className="text-sm secondary"
+          title="Records that you could not tell who this is. It settles this voice; you can change it later."
+          disabled={busy}
+          onClick={() => onDecide(state.label, "unknown")}
+        >
+          Can't tell
+        </button>
+      </div>
+      {adding && (
+        <div className="ruling-add flex items-center my-1">
+          <input
+            type="text"
+            value={name}
+            onChange={(event) => setName(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") addPerson();
+            }}
+            placeholder="new person's name"
+            maxLength={120}
+            className="text-sm mr-2"
+            aria-label={`Name the new person for ${state.label}`}
+            autoFocus
+          />
+          <button
+            type="button"
+            className="text-sm mr-2"
+            disabled={busy || !name.trim()}
+            onClick={addPerson}
+          >
+            Add person
+          </button>
+          <button
+            type="button"
+            className="text-sm secondary"
+            disabled={busy}
+            onClick={() => {
+              setName("");
+              setAdding(false);
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+    </>
+  );
 }
 
 function SpeakerCard({
+  state,
+  reviewToken,
+  writable,
+  speakers,
+  busy,
+  onDecide,
+  onEnroll,
+  onHearVoice,
+}: {
+  state: LabelStateShape;
+  reviewToken: string | null;
+  writable: boolean;
+  speakers: Speaker[];
+  busy: boolean;
+  onDecide: Decide;
+  onEnroll: Enroll;
+  onHearVoice?: (label: string) => void;
+}) {
+  const copy = headline(state);
+  const explanation = whyText(state);
+
+  return (
+    <div
+      className={`label-card${state.paletteIndex != null ? ` spk-${state.paletteIndex}` : ""}`}
+    >
+      <h3>
+        {state.label}{" "}
+        <span
+          className={`pill ${state.resolution === "auto_enroll" ? "grounded" : "unresolved"}`}
+        >
+          {state.resolution === "auto_enroll"
+            ? "saved automatically"
+            : "needs you"}
+        </span>
+      </h3>
+      <p className="rail-title">{copy.title}</p>
+      <p className="muted text-sm">{copy.detail}</p>
+      <div className="flex items-center">
+        <p className="muted text-sm">
+          {state.turnCount} turns, {Math.round(state.totalSeconds)}s.
+          {state.llmHintName && (
+            <>
+              {" "}
+              Heard name (unverified): &ldquo;{state.llmHintName}&rdquo;.
+            </>
+          )}
+        </p>
+        {onHearVoice && (
+          <button
+            type="button"
+            className="text-sm secondary"
+            onClick={() => onHearVoice(state.label)}
+          >
+            Hear this voice
+          </button>
+        )}
+      </div>
+      {explanation && (
+        <details className="match-why">
+          <summary className="text-sm">
+            {isAmbiguous(state) ? "Why no name?" : "Why this match?"}
+          </summary>
+          <p className="muted text-sm">{explanation}</p>
+        </details>
+      )}
+      {writable && reviewToken && (
+        <RulingRow
+          state={state}
+          speakers={speakers}
+          busy={busy}
+          onDecide={onDecide}
+          onEnroll={onEnroll}
+          mode="needs-you"
+        />
+      )}
+    </div>
+  );
+}
+
+function ResolvedRow({
   state,
   reviewToken,
   writable,
@@ -106,260 +261,58 @@ function SpeakerCard({
   state: LabelStateShape;
   reviewToken: string | null;
   writable: boolean;
-  speakers: { id: string; displayName: string }[];
+  speakers: Speaker[];
   busy: boolean;
-  onDecide: (label: string, action: string, speakerId?: string) => void;
-  onEnroll: (label: string, name: string) => void;
+  onDecide: Decide;
+  onEnroll: Enroll;
 }) {
-  const [enrollName, setEnrollName] = useState("");
   const [expanded, setExpanded] = useState(false);
-  const resolved = isResolved(state);
+  const copy = headline(state);
+  const pill = isHumanRuling(state)
+    ? "your ruling"
+    : state.resolution === "auto_enroll"
+      ? "saved automatically"
+      : "voice match";
 
   return (
     <div
-      className={`label-card${state.paletteIndex != null ? ` spk-${state.paletteIndex}` : ""}`}
+      className={`label-card rail-row${state.paletteIndex != null ? ` spk-${state.paletteIndex}` : ""}`}
     >
-      {resolved ? (
-        <>
-          <h3 className="flex items-center">
-            {state.label}{" "}
-            <span className="muted text-sm ml-2">{resolutionSummary(state)}</span>
-            {writable && reviewToken && (
-              <button
-                type="button"
-                onClick={() => setExpanded((on) => !on)}
-                aria-expanded={expanded}
-                className="text-sm ml-auto secondary"
-              >
-                {expanded ? "Hide" : "Change"}
-              </button>
-            )}
-          </h3>
-          {expanded && writable && reviewToken && (
-            <div className="card-actions my-1">
-              <div className="flex items-center my-1">
-                <select
-                  className="text-sm mr-2"
-                  value=""
-                  disabled={busy}
-                  aria-label={`Reassign ${state.label} to a different speaker`}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    e.currentTarget.blur();
-                    if (val) onDecide(state.label, "assign", val);
-                  }}
-                >
-                  <option value="">Reassign to…</option>
-                  {speakers.map((sp) => (
-                    <option key={sp.id} value={sp.id}>
-                      {sp.displayName}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={() => onDecide(state.label, "exclude")}
-                  disabled={busy}
-                  className="text-sm mr-2 secondary"
-                >
-                  Exclude
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onDecide(state.label, "unknown")}
-                  disabled={busy}
-                  className="text-sm secondary"
-                >
-                  Unknown
-                </button>
-              </div>
-            </div>
-          )}
-        </>
-      ) : (
-        <>
-          <h3>
-            {state.label} {resolutionBadge(state)}
-          </h3>
-          <p className="muted text-sm">
-            {state.turnCount} turns, {Math.round(state.totalSeconds)}s.
-            {state.cosineSpeakerName && (
-              <>
-                {" "}
-                {state.cosineGrounded ? "Strong" : "Possible"} voice match:{" "}
-                {state.cosineSpeakerName}.
-              </>
-            )}
-            {state.llmHintName && (
-              <>
-                {" "}
-                Heard name (unverified): &ldquo;{state.llmHintName}&rdquo;.
-              </>
-            )}
-          </p>
-          {state.cosineSpeakerName && (
-            <details className="match-why">
-              <summary className="text-sm">Why this match?</summary>
-              <p className="muted text-sm">
-                Voice similarity {confidenceBand(state.cosineConfidence)} ({state.cosineConfidence?.toFixed(2) ?? "—"}){" "}
-                to {state.cosineSpeakerName}
-                {state.cosineGrounded
-                  ? ", strong enough to trust on its own"
-                  : ", not strong enough to confirm without your check"}
-                .
-              </p>
-            </details>
-          )}
-          {writable && reviewToken && (
-            <div className="card-actions my-1">
-              {state.cosineGrounded && state.cosineSpeakerId ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onDecide(state.label, "assign", state.cosineSpeakerId!)
-                    }
-                    disabled={busy}
-                    className="primary mr-2"
-                  >
-                    Confirm {state.cosineSpeakerName}
-                  </button>
-                  <details>
-                    <summary className="text-sm secondary">More options</summary>
-                    <div className="flex items-center my-1">
-                      <select
-                        className="text-sm mr-2"
-                        value=""
-                        disabled={busy}
-                        aria-label={`Assign ${state.label} to a speaker`}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          e.currentTarget.blur();
-                          if (val) onDecide(state.label, "assign", val);
-                        }}
-                      >
-                        <option value="">Assign to…</option>
-                        {speakers.map((sp) => (
-                          <option key={sp.id} value={sp.id}>
-                            {sp.displayName}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => onDecide(state.label, "exclude")}
-                        disabled={busy}
-                        className="text-sm mr-2 secondary"
-                      >
-                        Exclude
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onDecide(state.label, "unknown")}
-                        disabled={busy}
-                        className="text-sm secondary"
-                      >
-                        Unknown
-                      </button>
-                    </div>
-                    <div className="flex items-center my-1">
-                      <input
-                        type="text"
-                        value={enrollName}
-                        onChange={(e) => setEnrollName(e.target.value)}
-                        placeholder="new speaker name"
-                        maxLength={120}
-                        className="text-sm mr-2"
-                        aria-label={`Enroll ${state.label} as a new speaker`}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const name = enrollName.trim();
-                          if (name) {
-                            onEnroll(state.label, name);
-                            setEnrollName("");
-                          }
-                        }}
-                        disabled={busy || !enrollName.trim()}
-                        className="text-sm"
-                      >
-                        Enroll new
-                      </button>
-                    </div>
-                  </details>
-                </>
-              ) : (
-                <>
-                  <p className="text-sm">Who is this?</p>
-                  <div className="flex items-center my-1">
-                    <select
-                      className="text-sm mr-2"
-                      value=""
-                      disabled={busy}
-                      aria-label={`Assign ${state.label} to a known speaker`}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        e.currentTarget.blur();
-                        if (val) onDecide(state.label, "assign", val);
-                      }}
-                    >
-                      <option value="">Known person…</option>
-                      {speakers.map((sp) => (
-                        <option key={sp.id} value={sp.id}>
-                          {sp.displayName}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => onDecide(state.label, "exclude")}
-                      disabled={busy}
-                      className="text-sm mr-2 secondary"
-                      title="Mark this speaker label as not a person (background noise, music, etc.)"
-                    >
-                      Not a person
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onDecide(state.label, "unknown")}
-                      disabled={busy}
-                      className="text-sm secondary"
-                      title="Skip for now — come back to this label later"
-                    >
-                      Not sure
-                    </button>
-                  </div>
-                  <div className="flex items-center my-1">
-                    <input
-                      type="text"
-                      value={enrollName}
-                      onChange={(e) => setEnrollName(e.target.value)}
-                      placeholder="new speaker name"
-                      maxLength={120}
-                      className="text-sm mr-2"
-                      aria-label={`Enroll ${state.label} as a new speaker`}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const name = enrollName.trim();
-                        if (name) {
-                          onEnroll(state.label, name);
-                          setEnrollName("");
-                        }
-                      }}
-                      disabled={busy || !enrollName.trim()}
-                      className="text-sm"
-                    >
-                      Add person
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </>
+      <h3>
+        {state.label}{" "}
+        <span className={`pill ${isHumanRuling(state) ? "human" : "grounded"}`}>
+          {pill}
+        </span>
+      </h3>
+      <span className="rail-title">{copy.title}</span>
+      <span className="muted text-sm">
+        {copy.detail}{" "}
+        {state.resolution === "auto_enroll" && !isConfirmable(state) && (
+          <a href="/speakers" className="text-sm">
+            Speakers page
+          </a>
+        )}
+      </span>
+      {writable && reviewToken && (
+        <button
+          type="button"
+          className="rail-change text-sm secondary"
+          aria-expanded={expanded}
+          disabled={busy}
+          onClick={() => setExpanded((open) => !open)}
+        >
+          {expanded ? "Hide" : "Change"}
+        </button>
+      )}
+      {expanded && writable && reviewToken && (
+        <RulingRow
+          state={state}
+          speakers={speakers}
+          busy={busy}
+          onDecide={onDecide}
+          onEnroll={onEnroll}
+          mode="change"
+        />
       )}
     </div>
   );
@@ -526,7 +479,7 @@ function MergePanel({
               disabled={busy || mergeBusy}
             >
               <option value="">choose</option>
-              <option value="new">Enroll a new speaker…</option>
+              <option value="new">Add a new person…</option>
               {speakers.map((sp) => (
                 <option key={sp.id} value={sp.id}>
                   {sp.displayName}
@@ -539,7 +492,7 @@ function MergePanel({
               type="text"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              placeholder="new speaker name"
+              placeholder="new person's name"
               maxLength={120}
               className="text-sm mr-2"
             />
@@ -603,6 +556,8 @@ export function SpeakerRail({
   speakers,
   onClaimLost,
   onLabelsChanged,
+  onHearVoice,
+  hearableLabels,
 }: SpeakerRailProps) {
   const [labelStates, setLabelStates] =
     useState<LabelStateShape[]>(initialStates);
@@ -715,27 +670,111 @@ export function SpeakerRail({
     [reviewToken, runId, onClaimLost, adoptResult],
   );
 
-  // Sort: unresolved labels first, then resolved.
-  const sortedStates = [...labelStates].sort((a, b) => {
-    const aR = isResolved(a) ? 1 : 0;
-    const bR = isResolved(b) ? 1 : 0;
-    return aR - bR;
-  });
+  const groups = partition(labelStates);
+  const settled = groups.needsYou.length + groups.tooShort.length === 0;
+  const decideFromRow: Decide = (label, action, speakerId) => {
+    void decide(label, action, speakerId);
+  };
+  const enrollFromRow: Enroll = (label, name) => {
+    void enroll(label, name);
+  };
 
   return (
     <div className="lib-sidebar" role="complementary" aria-label="Speaker rail">
-      {sortedStates.map((s) => (
-        <SpeakerCard
-          key={s.label}
-          state={s}
-          reviewToken={reviewToken}
-          writable={writable}
-          speakers={speakers}
-          busy={busy}
-          onDecide={(l, a, sp) => void decide(l, a, sp)}
-          onEnroll={(l, n) => void enroll(l, n)}
-        />
-      ))}
+      <p className="rail-summary" aria-live="polite">
+        {summary(groups, coverage(labelStates))}
+      </p>
+      {groups.needsYou.length > 0 && (
+        <section className="rail-group" aria-labelledby="rail-needs-you">
+          <h3 id="rail-needs-you" className="rail-group-title">
+            Needs you <span className="muted">({groups.needsYou.length})</span>
+          </h3>
+          {groups.needsYou.map((state) => (
+            <SpeakerCard
+              key={state.label}
+              state={state}
+              reviewToken={reviewToken}
+              writable={writable}
+              speakers={speakers}
+              busy={busy}
+              onDecide={decideFromRow}
+              onEnroll={enrollFromRow}
+              onHearVoice={
+                onHearVoice && hearableLabels?.has(state.label)
+                  ? onHearVoice
+                  : undefined
+              }
+            />
+          ))}
+        </section>
+      )}
+      {groups.tooShort.length > 0 && (
+        <details className="rail-group">
+          <summary className="rail-group-title">
+            Too little speech to identify{" "}
+            <span className="muted">({groups.tooShort.length})</span>
+          </summary>
+          {groups.tooShort.map((state) => (
+            <SpeakerCard
+              key={state.label}
+              state={state}
+              reviewToken={reviewToken}
+              writable={writable}
+              speakers={speakers}
+              busy={busy}
+              onDecide={decideFromRow}
+              onEnroll={enrollFromRow}
+              onHearVoice={
+                onHearVoice && hearableLabels?.has(state.label)
+                  ? onHearVoice
+                  : undefined
+              }
+            />
+          ))}
+        </details>
+      )}
+      {groups.matchedAutomatically.length > 0 && (
+        <details className="rail-group" open={settled || undefined}>
+          <summary className="rail-group-title">
+            Matched automatically{" "}
+            <span className="muted">
+              ({groups.matchedAutomatically.length})
+            </span>
+          </summary>
+          {groups.matchedAutomatically.map((state) => (
+            <ResolvedRow
+              key={state.label}
+              state={state}
+              reviewToken={reviewToken}
+              writable={writable}
+              speakers={speakers}
+              busy={busy}
+              onDecide={decideFromRow}
+              onEnroll={enrollFromRow}
+            />
+          ))}
+        </details>
+      )}
+      {groups.yourRulings.length > 0 && (
+        <details className="rail-group" open={settled || undefined}>
+          <summary className="rail-group-title">
+            Your rulings{" "}
+            <span className="muted">({groups.yourRulings.length})</span>
+          </summary>
+          {groups.yourRulings.map((state) => (
+            <ResolvedRow
+              key={state.label}
+              state={state}
+              reviewToken={reviewToken}
+              writable={writable}
+              speakers={speakers}
+              busy={busy}
+              onDecide={decideFromRow}
+              onEnroll={enrollFromRow}
+            />
+          ))}
+        </details>
+      )}
       {writable && reviewToken && (
         <MergePanel
           runId={runId}
