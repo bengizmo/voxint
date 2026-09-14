@@ -1190,6 +1190,75 @@ That triggers the browser acceptance lane and not the pipeline lane.
   browser-verified at the landing commit `af60c45`, which is the release
   content minus version pins, changelog, docs, and screenshots.
 
+#### Verdict: v0.37.0, Gates A/R/M carry, Gate E browser lane run fresh (PASS), pipeline lane blocked (2026-09-14)
+
+v0.37.0 ships the Jobs page TOOK column and degraded stage cells (#244), the
+exception-review speaker rail (#115), the review-queue predicate for
+confirmable auto-enrolled voices (#472), and speaker detail polish (#246).
+
+`git diff v0.36.1..v0.37.0 -- services/` is **empty**. All three inference
+model services (whisper, pyannote, titanet), the whisper `-rocm` flavor, and
+the synthdetect container are **byte-identical** to v0.36.1.
+
+- **Gate A (CUDA titanet regression)**: services unchanged. **Carries.** The
+  v0.36.0/v0.36.1 block above recorded Gate A as pending; the standing evidence
+  is the 2026-09-06 measurement on an RTX 5090 (sm_120, driver 610 open, CUDA
+  12.8.1) at the Blackwell landing commits (#427/#428/#429): titanet cosine min
+  0.9999964 against the committed references with zero gate crossings, whisper
+  transcript byte-identical, pyannote diarization byte-identical. The three
+  CUDA Dockerfiles have not changed since those commits (`cc94ff0`, `9df4762`,
+  `c1fdcfb`), so that measurement covers v0.36.x and v0.37.0. A re-measure
+  against the published tag was not possible at cut time: the maintainer NVIDIA
+  host had a userspace/kernel driver mismatch pending a reboot.
+- **Gate R (ROCm)**: `services/whisper/Dockerfile.rocm` is unchanged since
+  2026-08-21 (v0.33.0). **Carries** the standing ROCm verdict. No AMD hardware
+  is available to the maintainer at present, so the v0.36 note that the `-rocm`
+  image "may need a corresponding rebuild" stays an open question rather than a
+  measurement; the image itself has not changed.
+- **Gate M (Metal)**: no metal-lane paths changed. **Carries** the standing
+  Metal verdict.
+- **Gate E (whole-pipeline E2E)**: the pipeline-aware diff is **non-empty**
+  (`src/voxint/api/` routers, queries and templates; `frontend/src/components/
+  {SpeakerRail,MediaEditor}.tsx` and `frontend/src/lib/speaker-bands.ts`;
+  `tools/e2e_browser_lifecycle.py`).
+  - **Browser review lane run fresh on the release content (`4d7c770` plus
+    version pins) on maintainer hardware, Playwright, seed-only disposable DB:
+    PASS.** Speaker rail (`--fixture rail`, 12 segments, four-person roster):
+    initial partition and summary sentence exact; Needs you order S1, S5, S2,
+    S3 with the expected headline, pill, and disclosure copy; "Why this match?"
+    carries the raw 0.65 / 0.12 / 0.80 with no percent sign; Hear this voice
+    fires one instrumented `play()` at 10 s with the walk line "Cursor on
+    segment at 10.0 seconds, speaker S1" and no label or segment request;
+    Confirm on S1 and S5 each a single `POST /labels/<L>/decision` 200, the
+    summary dropping to "4 voices need you" and transcript lines reading
+    "Blair Roster:"; Can't tell on S3 and Not a person on S4 one decision POST
+    each, S4 reading "Left out"; Add a new person on S2 shows the focused name
+    box with Add person disabled until typed, and submitting takes the honest
+    `POST /labels/S2/enroll` 400 path with the message in the rail alert and
+    the card retained; Can't tell on S2 reaches "Every voice has a ruling."
+    with both Matched automatically and Your rulings open and Change revealing
+    the "Reassign to..." picker. Reconcile: `0 of 12 verified; corrections
+    match; 5 label ruling(s) match`, RECONCILE PASS. Also asserted on the same
+    instance: the Runs grid renders seven cells per row with the TOOK header,
+    and the progress strip's `ps-degraded` cells and the degraded banner agree
+    (all three services absent on the throwaway instance, so "Transcribe
+    paused: transcriber is down" is the expected state); the speaker profile's
+    Heard In rows link to `/media/<id>/editor?run=<run>` (followed to 200) and
+    the overflow menu carries Archive with a CSRF token.
+  - The review-stepper transcript lane (#53/#57/#58) was not re-run: its island
+    sources are byte-identical to v0.36.1 (the frontend diff is limited to the
+    rail files above), and the rail lane exercises the same editor page that
+    hosts them.
+  - **Pipeline lane: blocked.** `tests/e2e/test_real_pipeline.py` hardcodes
+    whisper `device: rocm` and no AMD hardware is available; the pipeline
+    stages, clients and enrichment code are unchanged since v0.36.1
+    (`src/voxint/{pipeline,clients,enrichment,db}/` are outside this
+    release's diff).
+
+Gates A/R/M carried on byte-identical services; Gate E browser lane green on
+the release content; pipeline lane blocked on hardware, with no pipeline code
+in the diff.
+
 #### Verdict: v0.36.0/v0.36.1, Gates A/R/E pending (2026-09-13)
 
 v0.36.0 ships speaker-attribution calibration tooling (#114), the attribution
