@@ -705,15 +705,22 @@ def runs(
     )
     stage_progress: dict[uuid.UUID, RunStageProgress] = {}
     if dashboard is not None:
-        avg_by_stage = {stage.stage: stage.avg_seconds for stage in dashboard.stages}
+        progress_by_stage = {stage.stage: stage for stage in dashboard.stages}
         for item in page.items:
-            if item.status != RunStatus.RUNNING.value:
+            if (
+                item.status != RunStatus.RUNNING.value
+                or item.current_stage is None
+            ):
                 continue
+            stage_state = progress_by_stage.get(item.current_stage)
             progress = estimate_run_stage_progress(
                 item.current_stage,
                 item.stage_started_at,
-                avg_by_stage.get(item.current_stage) if item.current_stage else None,
+                stage_state.avg_seconds if stage_state is not None else None,
                 _now,
+                using_heuristic=(
+                    stage_state.using_heuristic if stage_state is not None else False
+                ),
             )
             if progress is not None:
                 stage_progress[item.run_id] = progress

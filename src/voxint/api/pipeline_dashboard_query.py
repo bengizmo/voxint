@@ -14,6 +14,7 @@ migration; these counts are advisory.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -97,6 +98,7 @@ class RunStageProgress:
     stage: str
     percent: int | None
     overrun: bool
+    using_heuristic: bool
 
 
 @dataclass(frozen=True)
@@ -207,21 +209,36 @@ def estimate_run_stage_progress(
     started_at: datetime | None,
     avg_seconds: float | None,
     now: datetime,
+    *,
+    using_heuristic: bool = False,
 ) -> RunStageProgress | None:
     """Estimate one run's stage progress from the inputs used by ``compute_stage_eta``.
 
     The result is a snapshot as of ``now`` for the once-rendered Jobs grid; it
-    does not tick or poll after page load.
+    does not tick or poll after page load. ``started_at`` and ``now`` must both
+    be timezone-aware datetimes.
     """
-    if stage is None or started_at is None or avg_seconds is None or avg_seconds <= 0:
+    if (
+        stage is None
+        or started_at is None
+        or avg_seconds is None
+        or not math.isfinite(avg_seconds)
+        or avg_seconds <= 0
+    ):
         return None
     elapsed_seconds = max((now - started_at).total_seconds(), 0.0)
     if elapsed_seconds >= avg_seconds:
-        return RunStageProgress(stage=stage, percent=None, overrun=True)
+        return RunStageProgress(
+            stage=stage,
+            percent=None,
+            overrun=True,
+            using_heuristic=using_heuristic,
+        )
     return RunStageProgress(
         stage=stage,
         percent=int(elapsed_seconds / avg_seconds * 100),
         overrun=False,
+        using_heuristic=using_heuristic,
     )
 
 

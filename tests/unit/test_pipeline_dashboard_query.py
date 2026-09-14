@@ -60,7 +60,9 @@ class TestEstimateRunStageProgress:
     started_at = datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
 
     def test_start_and_clock_skew_are_zero_percent(self) -> None:
-        expected = RunStageProgress(stage="transcribe", percent=0, overrun=False)
+        expected = RunStageProgress(
+            stage="transcribe", percent=0, overrun=False, using_heuristic=False
+        )
         assert (
             estimate_run_stage_progress(
                 "transcribe", self.started_at, 600.0, self.started_at
@@ -83,7 +85,9 @@ class TestEstimateRunStageProgress:
             self.started_at,
             600.0,
             self.started_at + timedelta(seconds=300),
-        ) == RunStageProgress(stage="transcribe", percent=50, overrun=False)
+        ) == RunStageProgress(
+            stage="transcribe", percent=50, overrun=False, using_heuristic=False
+        )
 
     def test_just_below_average_floors_to_ninety_nine(self) -> None:
         assert estimate_run_stage_progress(
@@ -91,7 +95,9 @@ class TestEstimateRunStageProgress:
             self.started_at,
             600.0,
             self.started_at + timedelta(seconds=599.9),
-        ) == RunStageProgress(stage="transcribe", percent=99, overrun=False)
+        ) == RunStageProgress(
+            stage="transcribe", percent=99, overrun=False, using_heuristic=False
+        )
 
     @pytest.mark.parametrize("elapsed_seconds", [600, 900])
     def test_at_or_beyond_average_is_overrun(self, elapsed_seconds: int) -> None:
@@ -100,7 +106,20 @@ class TestEstimateRunStageProgress:
             self.started_at,
             600.0,
             self.started_at + timedelta(seconds=elapsed_seconds),
-        ) == RunStageProgress(stage="transcribe", percent=None, overrun=True)
+        ) == RunStageProgress(
+            stage="transcribe", percent=None, overrun=True, using_heuristic=False
+        )
+
+    def test_heuristic_provenance_passes_through(self) -> None:
+        assert estimate_run_stage_progress(
+            "transcribe",
+            self.started_at,
+            600.0,
+            self.started_at + timedelta(seconds=300),
+            using_heuristic=True,
+        ) == RunStageProgress(
+            stage="transcribe", percent=50, overrun=False, using_heuristic=True
+        )
 
     @pytest.mark.parametrize(
         ("stage", "started_at", "avg_seconds"),
@@ -109,6 +128,8 @@ class TestEstimateRunStageProgress:
             ("transcribe", None, 600.0),
             ("transcribe", started_at, None),
             ("transcribe", started_at, 0.0),
+            ("transcribe", started_at, float("nan")),
+            ("transcribe", started_at, float("inf")),
         ],
     )
     def test_missing_or_nonpositive_inputs_return_none(

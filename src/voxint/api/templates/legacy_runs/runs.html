@@ -180,7 +180,7 @@
       </span>
       <span>
         {% if it.status == "running" and progress %}
-        <span class="pill running" title="Estimated from the typical time this stage takes; as of page load">{{ humanize_stage_progress(progress.stage) }}{% if progress.overrun %} &middot; taking longer{% else %} ~{{ progress.percent }}%{% endif %}</span>
+        <span class="pill running" title="{% if progress.using_heuristic %}Estimated from a default stage duration, there is not enough history yet; as of page load{% else %}Estimated from recent completed attempts of this stage; as of page load{% endif %}">{{ humanize_stage_progress(progress.stage) }}{% if progress.overrun %} &middot; taking longer{% else %} ~{{ progress.percent }}%{% endif %}</span>
         {% else %}
         <span class="pill {{ it.status }}">{{ humanize_status(it.status) }}</span>
         {% endif %}

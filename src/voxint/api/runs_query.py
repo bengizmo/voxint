@@ -42,6 +42,7 @@ from voxint.db.models import (
     RunStatus,
     SegmentReviewState,
     StageRun,
+    StageStatus,
     TranscriptSegment,
 )
 from voxint.db.search import ts_headline, ts_query, ts_vector
@@ -222,7 +223,8 @@ class RunListItem:
     revision: int = 0
     # Raw current stage, used to select the row's stage-progress label.
     current_stage: str | None = None
-    # Latest running attempt start at current_stage; None when none matches.
+    # Latest running attempt start at current_stage; raw input for the chip
+    # estimate, not a liveness flag. May be set on non-running or archived rows.
     stage_started_at: datetime | None = None
 
 
@@ -510,14 +512,15 @@ def list_runs(
         .correlate(PipelineRun)
         .scalar_subquery()
     )
-    # Match stage_activity and the progress strip: lease validity is deliberately
-    # ignored. max(started_at) defensively picks among anomalous concurrent
-    # RUNNING attempts at the run's current stage.
+    # Lease validity is deliberately ignored, like stage_activity. This picks the
+    # latest running attempt per run (max started_at), while the strip's
+    # _active_started_at anchors the earliest per stage; they diverge only in the
+    # anomalous multi-RUNNING case.
     stage_started_at = (
         sa_select(func.max(StageRun.started_at))
         .where(
             StageRun.pipeline_run_id == PipelineRun.id,
-            StageRun.status == "running",
+            StageRun.status == StageStatus.RUNNING.value,
             StageRun.stage == PipelineRun.current_stage,
         )
         .correlate(PipelineRun)

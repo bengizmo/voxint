@@ -494,6 +494,10 @@ def _status_cell(body: str, run_id: uuid.UUID) -> str:
     return row[1]
 
 
+def _percent(cell: str) -> int:
+    return int(cell.rsplit("~", 1)[1].removesuffix("%"))
+
+
 def test_running_status_chip_shows_stage_progress(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
@@ -514,10 +518,17 @@ def test_running_status_chip_shows_stage_progress(
 
     response = client.get("/runs")
     assert response.status_code == 200
-    assert _status_cell(response.text, run_id) == "Transcribing ~50%"
+    row = next(
+        row for row in _runs_grid_rows(response.text) if run_id.hex[:8] in row[0]
+    )
+    assert len(row) == 7
+    cell = row[1]
+    assert cell.startswith("Transcribing ~")
+    assert 50 <= _percent(cell) <= 55
     assert 'class="pill running"' in response.text
     assert (
-        'title="Estimated from the typical time this stage takes; as of page load"'
+        'title="Estimated from a default stage duration, there is not enough '
+        'history yet; as of page load"'
         in response.text
     )
 
@@ -559,7 +570,13 @@ def test_running_status_chip_uses_learned_stage_average(
     _set_current_stage(session_factory, running, "transcribe")
 
     body = client.get("/runs").text
-    assert _status_cell(body, running) == "Transcribing ~25%"
+    cell = _status_cell(body, running)
+    assert cell.startswith("Transcribing ~")
+    assert 25 <= _percent(cell) <= 27
+    assert (
+        'title="Estimated from recent completed attempts of this stage; as of page load"'
+        in body
+    )
 
 
 def test_running_status_chip_replaces_percentage_on_overrun(
@@ -616,6 +633,26 @@ def test_running_status_chip_stays_plain_without_matching_active_attempt(
     assert _status_cell(body, no_attempt) == "Running"
 
 
+def test_running_status_chip_stays_plain_without_current_stage(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    now = datetime.now(tz=UTC)
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            status=RunStatus.RUNNING,
+            stages=(
+                {
+                    "stage": "transcribe",
+                    "status": "running",
+                    "started_at": now - timedelta(seconds=30),
+                },
+            ),
+        )
+
+    assert _status_cell(client.get("/runs").text, run_id) == "Running"
+
+
 def test_running_status_chip_uses_latest_active_attempt(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
@@ -641,7 +678,9 @@ def test_running_status_chip_uses_latest_active_attempt(
         )
     _set_current_stage(session_factory, run_id, "transcribe")
 
-    assert _status_cell(client.get("/runs").text, run_id) == "Transcribing ~10%"
+    cell = _status_cell(client.get("/runs").text, run_id)
+    assert cell.startswith("Transcribing ~")
+    assert 10 <= _percent(cell) <= 15
 
 
 def test_non_running_status_chips_are_unchanged(
@@ -714,9 +753,11 @@ def test_archived_running_status_chip_stays_plain(
         session.commit()
 
     body = client.get("/runs?archived=1").text
-    assert 'class="pill running">Running</span>' in body
-    assert "Transcribing" not in _status_cell(body, run_id)
-    assert "%" not in _status_cell(body, run_id)
+    cell = _status_cell(body, run_id)
+    assert cell.startswith("Running")
+    assert "Transcribing" not in cell
+    assert "%" not in cell
+    assert "Estimated from" not in body
 
 
 def test_failed_group_and_run_rows_have_seven_cells(

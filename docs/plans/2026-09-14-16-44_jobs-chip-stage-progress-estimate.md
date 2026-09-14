@@ -71,9 +71,12 @@ uses for its "~Xm left" cells. Real transcribe progress from the whisper service
    argument; the standard call site passes `stage_progress.get(it.run_id)`,
    the grouped failed path passes nothing. For a running row with an estimate
    the chip keeps `class="pill running"` and its text becomes
-   `<Stage-ing> ~NN%` or `<Stage-ing> · taking longer`, with
-   `title="Estimated from the typical time this stage takes; as of page load"`.
-   Without an estimate the chip stays "Running".
+   `<Stage-ing> ~NN%` or `<Stage-ing> · taking longer`. The title names the
+   source honestly: with a learned average, "Estimated from recent completed
+   attempts of this stage; as of page load"; with the heuristic (fewer than 3
+   samples), "Estimated from a default stage duration, there is not enough
+   history yet; as of page load". `RunStageProgress.using_heuristic` carries
+   the flag from `StageProgress`. Without an estimate the chip stays "Running".
 5. **Wording.** `presentation.humanize_stage_progress(value)` returns a
    present-participle label per stage (Acquiring, Preparing, Transcribing,
    Diarizing & embedding, Enhancing & matching, Finalizing), falling back to
@@ -115,21 +118,27 @@ The system SHALL render, for each Jobs-page row whose run status is `running`
 and for which an active attempt at the run's current stage and a typical
 duration for that stage are both known, a STATUS chip reading the stage's
 progress label followed by an estimated percentage, and SHALL mark the chip as
-an estimate in its title text.
+an estimate in its title text, naming whether the estimate comes from recent
+completed attempts or from a default duration.
 
 #### Scenario: within the typical duration (page)
 - GIVEN a running run whose current stage is `transcribe`, with one running
   attempt at that stage started 300 seconds before page load, and no learned
   history so the GPU heuristic (600 s) applies
 - WHEN the operator loads `/runs`
-- THEN the row's STATUS chip reads "Transcribing ~50%", keeps the
-  `pill running` class, and carries the estimate title
+- THEN the row's STATUS chip reads "Transcribing ~NN%" with NN in 50..55
+  (a few seconds of test latency cannot move it further), keeps the
+  `pill running` class, has seven cells in its row, and carries the
+  default-duration title
 
 #### Scenario: learned average beats the heuristic (page)
 - GIVEN at least three completed `transcribe` attempts within 90 days of
-  100 s each, and a running run at `transcribe` started 25 s before page load
+  1000 s each, and a running run at `transcribe` started 250 s before page
+  load (1000 s gives 10 s of latency headroom per percent; the original
+  100 s / 25 s pairing had under 1 s)
 - WHEN the operator loads `/runs`
-- THEN the chip reads "Transcribing ~25%"
+- THEN the chip reads "Transcribing ~NN%" with NN in 25..27 and the page
+  carries the recent-completed-attempts title
 
 #### Scenario: percent never claims done (pure)
 - GIVEN stage `transcribe`, avg 600 s, and `now` exactly 599.9 s after
@@ -166,17 +175,20 @@ built (archived view), or when the row's status is not `running`.
 
 #### Scenario: no active attempt matches (page)
 - GIVEN a running run whose only running attempt is at a stage other than
-  `current_stage`, and another running run with no stage rows at all
+  `current_stage`, another running run with no stage rows at all, and (in a
+  separate request, page size 2) a running run with a running attempt but a
+  NULL `current_stage`
 - WHEN the operator loads `/runs`
-- THEN both chips read "Running"
+- THEN every such chip reads "Running"
 
 #### Scenario: latest attempt wins (page)
 - GIVEN a running run at `transcribe` with two anomalous concurrent RUNNING
   attempts at that stage, one started 1800 s before page load and one
   started 60 s before page load
 - WHEN the operator loads `/runs`
-- THEN the chip reads "Transcribing ~10%", because selection is by greatest
-  `started_at`, not by attempt number or lease expiry
+- THEN the chip reads "Transcribing ~NN%" with NN in 10..15, because
+  selection is by greatest `started_at`, not by attempt number or lease
+  expiry
 
 #### Scenario: non-running statuses are untouched (page, split across
 requests because the test client pages at 2 rows)
@@ -255,8 +267,9 @@ Spec deltas: none (no living spec declared)
 ## Testing strategy
 
 - Unit: estimate boundaries (0, floor, 99.9-case floors to 99, exactly-avg
-  overrun, beyond, missing inputs, avg 0, negative elapsed); label map covers
-  every `Stage` value and falls back for an unknown value.
+  overrun, beyond, missing inputs, avg 0, NaN and inf avg, negative elapsed,
+  heuristic flag pass-through); label map covers every `Stage` value and
+  falls back for an unknown value.
 - Integration: each page scenario via `make_run` (accepts `StageRun` kwargs)
   and `_set_current_stage`; the grid parser `_runs_grid_rows` reads the
   STATUS cell text; the title and class are asserted directly on the HTML;
@@ -280,11 +293,18 @@ Spec deltas: none (no living spec declared)
   subquery-heavy list statement; bounded by page size. Accepting; no measured
   cost expected on a single-operator database. No lateral join or composite
   index without measured need.
-- Open: chip wording for the two compound stages ("Diarizing & embedding",
-  "Enhancing & matching") versus the strip's "Diarize & embed"; display-only
-  and easy to change.
-- Open: whether "· taking longer" should read "· taking longer than usual" to
-  match the strip footer verbatim (chip length). Default: the short form.
+- Resolved: the chip uses present participles ("Diarizing & embedding",
+  "Enhancing & matching") while the strip keeps its imperative labels
+  ("Diarize & embed"). The chip describes an activity in progress, the strip
+  names a stage; both forms stay.
+- Resolved: the chip says "· taking longer", not "· taking longer than
+  usual". With fewer than 3 samples the comparison is against a default, not
+  this installation's history, so "than usual" would overclaim.
+- Known asymmetry: the chip anchors on the latest running attempt per run
+  (max `started_at`), the strip's `_active_started_at` on the earliest per
+  stage (min). They diverge only when a run carries two RUNNING rows at the
+  same stage, which the engine never produces; documented in the query
+  comment.
 
 ## Review notes
 
@@ -309,3 +329,35 @@ Resolution of each point:
 7. Process bloat: accepted in part. The speculative real-progress
    architecture is dropped from the plan; the issue comment is one sentence.
    The presentation helper and CHANGELOG stay.
+
+### Code review (three reviewers: Codex lead, Grok, Kimi)
+
+No Critical or High findings from any reviewer. All three confirmed every
+acceptance scenario is covered by a test and reported no drift beyond the
+learned-scenario values above.
+
+- Medium, Codex (1/3), accepted: the title said "typical time" even when the
+  number was a fixed default. `using_heuristic` now flows into the chip and
+  the title names the source; CHANGELOG reworded.
+- Medium, Grok and Codex (2/3), accepted: exact page percentages under a
+  600 s heuristic have only 6 s of latency headroom. Page tests now assert a
+  small range; exact boundaries stay in the pure tests. Codex's alternative
+  (a patchable clock seam in the route) was rejected as a production seam
+  added for a test.
+- Medium, Grok (1/3), accepted: the archived test's raw-HTML substring was
+  replaced by parsed-cell and "no estimate title in body" assertions.
+- Medium, Grok (1/3), skipped: chip versus strip overrun wording. Resolved
+  above in favour of the short form for honesty.
+- Medium, Kimi (1/3), accepted as a comment fix: the query comment claimed
+  parity with the strip; it now states the max-versus-min asymmetry.
+- Low, Grok and Kimi (2/3), accepted: `StageStatus.RUNNING.value` replaces
+  the string literal.
+- Low, Kimi, accepted: `math.isfinite` guard, tz-aware contract in the
+  docstring, redundant conditional in the route removed (mypy rejects a None
+  key, so the route skips NULL `current_stage` explicitly), NULL
+  `current_stage` page test added.
+- Low, Codex, accepted: the seven-cells test only rendered grouped failure
+  rows, so the standard-row test now asserts seven cells too.
+- Low, Grok, accepted: the read-model field comment says it is not a
+  liveness flag.
+
