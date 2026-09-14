@@ -6,6 +6,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-09-14
+
 ### Added
 - **Jobs page TOOK column** (#244). Each run shows its processing time summed
   across stage attempts, so queue wait and retry gaps are excluded, as
@@ -4249,7 +4251,8 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.36.1...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.37.0...HEAD
+[0.37.0]: https://github.com/bengizmo/voxint/compare/v0.36.1...v0.37.0
 [0.36.1]: https://github.com/bengizmo/voxint/compare/v0.36.0...v0.36.1
 [0.36.0]: https://github.com/bengizmo/voxint/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/bengizmo/voxint/compare/v0.27.0...v0.35.0
