@@ -1661,6 +1661,7 @@ def _list(args: argparse.Namespace) -> int:
     from voxint.api.runs_query import list_runs, parse_status_filter
     from voxint.config import SettingsError, get_settings
     from voxint.db.session import build_session_factory
+    from voxint.speakers.matching import gates_from_settings
 
     try:
         status = parse_status_filter(args.status)
@@ -1684,7 +1685,14 @@ def _list(args: argparse.Namespace) -> int:
     try:
         factory = build_session_factory(engine)
         with factory() as session:
-            page = list_runs(session, status=status, review=None, cursor=None, page_size=limit)
+            page = list_runs(
+                session,
+                status=status,
+                review=None,
+                cursor=None,
+                page_size=limit,
+                gates=gates_from_settings(settings),
+            )
     finally:
         engine.dispose()
 

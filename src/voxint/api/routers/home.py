@@ -24,7 +24,9 @@ from voxint.api.routers.deps import (
     templates,
 )
 from voxint.api.stats_query import run_status_counts, windowed_counts
+from voxint.config import Settings
 from voxint.db.models import RunStatus
+from voxint.speakers.matching import gates_from_settings
 
 router = APIRouter(dependencies=[Depends(require_onboarded)])
 
@@ -58,7 +60,8 @@ def home(
     span = next(s for value, _, s in _WINDOWS if value == selected)
     since = None if span is None else now - span
 
-    queue = adjudication_queue(session)
+    settings: Settings = request.app.state.settings
+    queue = adjudication_queue(session, gates=gates_from_settings(settings))
     status_counts = run_status_counts(session)
 
     context = {
@@ -73,6 +76,8 @@ def home(
         "review_backlog": len(queue),
         "unresolved_voices": sum(entry.unresolved_labels for entry in queue),
         "failed_runs": status_counts.get(RunStatus.FAILED.value, 0),
-        "activity": group_activity(recent_activity(session, limit=30))[:10],
+        "activity": group_activity(
+            recent_activity(session, limit=30, gates=gates_from_settings(settings))
+        )[:10],
     }
     return templates.TemplateResponse(request, "home/home.html", context)

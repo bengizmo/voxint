@@ -296,7 +296,10 @@ def test_seed_rail_fixture_renders_every_band(
         assert states["S5"].candidate_speaker_name == "Blair Roster"
         assert states["S5"].candidate_prompt_allowed is True
 
-        assert any(entry.run_id == run_id for entry in adjudication_queue(session))
+        assert any(
+            entry.run_id == run_id
+            for entry in adjudication_queue(session, gates=MatchingGates())
+        )
 
 
 def test_reconcile_checks_label_rulings(
