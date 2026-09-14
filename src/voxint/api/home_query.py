@@ -21,7 +21,7 @@ from sqlalchemy import func
 from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
 
-from voxint.adjudication.resolver import unresolved_label_count
+from voxint.adjudication.resolver import review_needed_label_count
 from voxint.api.presentation import title_from_snapshot
 from voxint.db.models import (
     MediaItem,
@@ -31,6 +31,7 @@ from voxint.db.models import (
     Speaker,
     StageRun,
 )
+from voxint.speakers.matching import MatchingGates
 
 
 @dataclass(frozen=True)
@@ -74,7 +75,9 @@ class GroupedActivityItem:
 _TERMINAL_STATUSES = (RunStatus.COMPLETED.value, RunStatus.FAILED.value)
 
 
-def _run_rows(session: Session, *, limit: int, terminal: bool) -> list[ActivityItem]:
+def _run_rows(
+    session: Session, *, limit: int, terminal: bool, gates: MatchingGates
+) -> list[ActivityItem]:
     """Newest runs by start (``terminal=False``) or by last stage finish."""
     last_finished = (
         sa_select(func.max(StageRun.finished_at))
@@ -101,7 +104,9 @@ def _run_rows(session: Session, *, limit: int, terminal: bool) -> list[ActivityI
     ]
     if terminal:
         columns.append(
-            func.coalesce(unresolved_label_count(PipelineRun.id), 0).label("unresolved_count")
+            func.coalesce(review_needed_label_count(PipelineRun.id, gates), 0).label(
+                "unresolved_count"
+            )
         )
     stmt = (
         sa_select(*columns)
@@ -157,15 +162,17 @@ def _speaker_rows(session: Session, *, limit: int) -> list[ActivityItem]:
     ]
 
 
-def recent_activity(session: Session, *, limit: int = 10) -> list[ActivityItem]:
+def recent_activity(
+    session: Session, *, limit: int = 10, gates: MatchingGates
+) -> list[ActivityItem]:
     """The newest ``limit`` activity items across the three source families.
 
     Deterministic under equal timestamps: ties order by kind then by the row's
     own id, so two page loads over unchanged data render identically.
     """
     merged = [
-        *_run_rows(session, limit=limit, terminal=False),
-        *_run_rows(session, limit=limit, terminal=True),
+        *_run_rows(session, limit=limit, terminal=False, gates=gates),
+        *_run_rows(session, limit=limit, terminal=True, gates=gates),
         *_speaker_rows(session, limit=limit),
     ]
     merged.sort(key=lambda i: (i.at, i.kind, str(i.run_id or i.speaker_id)), reverse=True)

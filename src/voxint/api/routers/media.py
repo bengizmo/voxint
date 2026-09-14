@@ -102,6 +102,7 @@ from voxint.media.executor import (
 from voxint.media.operations import OperationRefused
 from voxint.media.purge import build_manifest, execute_purge, plan_purge
 from voxint.media.registration import register_folder, unregister_folder_by_id
+from voxint.speakers.matching import gates_from_settings
 
 # require_onboarded first (an un-onboarded operator is sent to setup), then the
 # area gate (404 when the flag is off) — the same order the module docstring and
@@ -400,6 +401,7 @@ def _library_context(
         trashed=trashed,
         search=clean_search or None,
         status=selected_status or None,
+        gates=gates_from_settings(settings),
     )
     folder_groups, ungrouped_items = group_by_folder(rows)
     summary = media_summary(folder_groups, ungrouped_items)

@@ -32,6 +32,9 @@ from voxint.db.models import (
     TranscriptSegment,
 )
 from voxint.db.search import ts_query, ts_vector
+from voxint.speakers.matching import MatchingGates
+
+_GATES = MatchingGates()
 
 CREDS = ("reviewer", "s3cret")
 
@@ -81,6 +84,7 @@ def search(
             created_to=created_to,
             language=language,
         ),
+        gates=_GATES,
     )
     return [item.run_id for item in page.items]
 
@@ -208,6 +212,7 @@ class TestCorrectedTextSearch:
                 cursor=None,
                 page_size=10,
                 filters=SearchFilters(q="krypton"),
+                gates=_GATES,
             )
             (item,) = [i for i in page.items if i.run_id == run]
             assert item.snippet is not None
@@ -363,6 +368,7 @@ class TestKeysetUnderSearch:
                     cursor=cursor,
                     page_size=2,
                     filters=filters,
+                    gates=_GATES,
                 )
                 seen.extend(item.run_id for item in page.items)
                 if page.next_cursor is None:
@@ -404,6 +410,7 @@ class TestLanguageFacet:
                 cursor=None,
                 page_size=10,
                 filters=None,
+                gates=_GATES,
             )
             by_id = {item.run_id: item.language for item in page.items}
             assert by_id[tagged] == "es"
@@ -451,6 +458,7 @@ class TestLanguageFacet:
                     cursor=cursor,
                     page_size=2,
                     filters=filters,
+                    gates=_GATES,
                 )
                 seen.extend(item.run_id for item in page.items)
                 if page.next_cursor is None:
@@ -539,6 +547,7 @@ class TestSnippets:
                 cursor=None,
                 page_size=10,
                 filters=SearchFilters(q="txv"),
+                gates=_GATES,
             )
             (item,) = [i for i in page.items if i.run_id == run]
             assert item.snippet is not None
@@ -558,6 +567,7 @@ class TestSnippets:
                 cursor=None,
                 page_size=10,
                 filters=SearchFilters(),
+                gates=_GATES,
             )
             assert all(item.snippet is None for item in page.items)
 

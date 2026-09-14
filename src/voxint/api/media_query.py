@@ -24,7 +24,7 @@ from sqlalchemy import func, or_
 from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
 
-from voxint.adjudication.resolver import unresolved_label_count
+from voxint.adjudication.resolver import review_needed_label_count
 from voxint.db.models import (
     MediaFolder,
     MediaItem,
@@ -32,6 +32,7 @@ from voxint.db.models import (
     PipelineRun,
     Project,
 )
+from voxint.speakers.matching import MatchingGates
 
 
 @dataclass(frozen=True)
@@ -236,7 +237,7 @@ SORT_LABELS: Final[tuple[tuple[str, str], ...]] = (
 
 # Status filter keys — the allowlist. The WHERE clause is built in
 # media_library() because "needs_review" and "reviewed" depend on
-# unresolved_label_count (a correlated subquery), not just run status.
+# review_needed_label_count (a correlated subquery), not just run status.
 _STATUS_FILTER_KEYS: Final[frozenset[str]] = frozenset(
     {"needs_review", "failed", "reviewed"}
 )
@@ -275,6 +276,7 @@ def media_library(
     trashed: bool = False,
     search: str | None = None,
     status: str | None = None,
+    gates: MatchingGates,
 ) -> list[MediaLibraryRow]:
     """The media library rows, newest-first by default.
 
@@ -338,7 +340,9 @@ def media_library(
         # _label_unresolved's .correlate(PipelineRun, DiarizationTurn) would
         # re-add the entire latest subquery into each nested EXISTS if given a
         # subquery column reference.
-        func.coalesce(unresolved_label_count(PipelineRun.id), 0).label("unresolved_count"),
+        func.coalesce(review_needed_label_count(PipelineRun.id, gates), 0).label(
+            "unresolved_count"
+        ),
     )
     # Outer: most media has no metadata snapshot (uploads, pre-#36 runs), sits under
     # no settings folder, or belongs to a folder with no project.
@@ -377,7 +381,7 @@ def media_library(
         )
 
     if status and status in _STATUS_FILTER_KEYS:
-        unresolved = func.coalesce(unresolved_label_count(PipelineRun.id), 0)
+        unresolved = func.coalesce(review_needed_label_count(PipelineRun.id, gates), 0)
         if status == "needs_review":
             # awaiting_adjudication OR completed-with-unresolved-labels (the
             # "needs you" state the chip shows).

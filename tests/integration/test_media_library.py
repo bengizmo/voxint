@@ -27,6 +27,9 @@ from voxint.db.models import (
     RunStatus,
     SourceKind,
 )
+from voxint.speakers.matching import MatchingGates
+
+_GATES = MatchingGates()
 
 CREDS = ("reviewer", "s3cret")
 
@@ -372,7 +375,7 @@ def test_latest_run_per_file_wins(
         )
         session.commit()
 
-        rows = media_library(session)
+        rows = media_library(session, gates=_GATES)
     assert len(rows) == 1
     # The newer (completed) run, not the older failed one.
     assert rows[0].latest_run_status == RunStatus.COMPLETED.value
@@ -386,7 +389,7 @@ def test_archived_runs_are_excluded(
         _add_run(session, media, status=RunStatus.COMPLETED, archived=True)
         session.commit()
 
-        rows = media_library(session)
+        rows = media_library(session, gates=_GATES)
     assert len(rows) == 1
     # A file whose only run is archived reads as "not processed yet".
     assert rows[0].latest_run_id is None
@@ -399,7 +402,7 @@ def test_media_with_no_run_has_no_status(
     with session_factory() as session:
         _add_media(session, source_path="incoming/c.wav")
         session.commit()
-        rows = media_library(session)
+        rows = media_library(session, gates=_GATES)
     assert rows[0].latest_run_id is None
 
 
@@ -408,7 +411,7 @@ def test_limit_truncates(session_factory: sessionmaker[Session]) -> None:
         _add_media(session, source_path="incoming/d1.wav")
         _add_media(session, source_path="incoming/d2.wav")
         session.commit()
-        rows = media_library(session, limit=1)
+        rows = media_library(session, gates=_GATES, limit=1)
     assert len(rows) == 1
 
 
@@ -435,8 +438,8 @@ def test_sort_by_name_orders_alphabetically(
             created_at=now - timedelta(hours=1),
         )
         session.commit()
-        by_name = [r.source_title for r in media_library(session, sort="name")]
-        by_added = [r.source_title for r in media_library(session, sort="added")]
+        by_name = [r.source_title for r in media_library(session, gates=_GATES, sort="name")]
+        by_added = [r.source_title for r in media_library(session, gates=_GATES, sort="added")]
     assert by_name == ["Alpha", "Zed"]
     assert by_added == ["Zed", "Alpha"]
 

@@ -45,6 +45,9 @@ from voxint.db.models import (
     TranscriptSegment,
 )
 from voxint.export import format_timespan
+from voxint.speakers.matching import MatchingGates
+
+_GATES = MatchingGates()
 
 CREDS = ("reviewer", "s3cret")
 SPACE = "titanet-large-v2"
@@ -330,7 +333,8 @@ def _walk(session: Session) -> list[uuid.UUID]:
     cursor: Cursor | None = None
     for _ in range(100):  # guard against a cursor that never terminates
         page = list_runs(
-            session, status=None, review=None, cursor=cursor, page_size=2
+            session, status=None, review=None, cursor=cursor, page_size=2,
+            gates=_GATES,
         )
         seen.extend(item.run_id for item in page.items)
         if page.next_cursor is None:
@@ -822,7 +826,8 @@ def test_list_runs_sidecar_title_wins_over_scraped(
         session.add_all([with_sidecar, without_sidecar])
         session.commit()
         page = list_runs(
-            session, status=None, review=None, cursor=None, page_size=10
+            session, status=None, review=None, cursor=None, page_size=10,
+            gates=_GATES,
         )
         titles = {item.run_id: item.title for item in page.items}
         assert titles[with_sidecar.id] == "Operator title"

@@ -28,9 +28,9 @@ from sqlalchemy.orm import Session
 
 from voxint.adjudication.resolver import (
     label_count,
+    review_needed_label_count,
+    review_needed_label_exists,
     speaker_attributed_exists,
-    unresolved_label_count,
-    unresolved_label_exists,
 )
 from voxint.api.languages import language_label
 from voxint.api.presentation import title_from_snapshot
@@ -45,6 +45,7 @@ from voxint.db.models import (
     TranscriptSegment,
 )
 from voxint.db.search import ts_headline, ts_query, ts_vector
+from voxint.speakers.matching import MatchingGates
 from voxint.speakers.roster import alias_ids
 
 
@@ -463,6 +464,7 @@ def list_runs(
     lifecycle: LifecycleView | None = None,
     filters: SearchFilters | None = None,
     archived: bool = False,
+    gates: MatchingGates,
 ) -> RunsPage:
     """One bounded, newest-first keyset page of runs matching the filters.
 
@@ -508,7 +510,7 @@ def list_runs(
             PipelineRun.detected_language,
             MediaSourceMetadata.title.label("source_title"),
             MediaFolder.path.label("folder_path"),
-            unresolved_label_count(PipelineRun.id).label("unresolved_count"),
+            review_needed_label_count(PipelineRun.id, gates).label("unresolved_count"),
             label_count(PipelineRun.id).label("label_count"),
             claim_live.label("claim_live"),
             case(
@@ -540,7 +542,7 @@ def list_runs(
                 PipelineRun.status == RunStatus.AWAITING_ADJUDICATION.value,
                 and_(
                     PipelineRun.status == RunStatus.COMPLETED.value,
-                    unresolved_label_exists(PipelineRun.id),
+                    review_needed_label_exists(PipelineRun.id, gates),
                 ),
             )
         )
@@ -567,12 +569,12 @@ def list_runs(
     if review is ReviewFilter.NEEDED:
         stmt = stmt.where(
             PipelineRun.status == RunStatus.COMPLETED.value,
-            unresolved_label_exists(PipelineRun.id),
+            review_needed_label_exists(PipelineRun.id, gates),
         )
     elif review is ReviewFilter.RESOLVED:
         stmt = stmt.where(
             PipelineRun.status == RunStatus.COMPLETED.value,
-            ~unresolved_label_exists(PipelineRun.id),
+            ~review_needed_label_exists(PipelineRun.id, gates),
         )
     elif review is ReviewFilter.CLAIMED:
         stmt = stmt.where(claim_live)

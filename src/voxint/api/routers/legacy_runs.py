@@ -197,6 +197,7 @@ from voxint.media.source_metadata import RAW_URL_KEYS
 from voxint.pipeline.stages.context import StageDataError, normalized_audio_path
 from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
 from voxint.plugins.registry import PluginRegistry
+from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import searchable_speakers
 from voxint.tutorial.steps import TutorialPage
 
@@ -662,6 +663,7 @@ def runs(
         page_size=settings.runs_page_size,
         filters=search_filters,
         archived=show_archived,
+        gates=gates_from_settings(settings),
     )
     next_url = (
         runs_url(
