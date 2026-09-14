@@ -415,8 +415,15 @@ def test_profile_page_renders_stats_research_and_recordings(
     assert 'id="profile-panel"' in page.text
     assert "not set" in page.text
     assert f'id="research-{speaker_id}"' in page.text
-    assert "/runs/" in page.text  # recordings drill through to the run page
+    # Heard In rows open the editor on that recording's run (#246), not the
+    # legacy run page.
+    assert "/editor?run=" in page.text
+    assert 'href="/runs/' not in page.text
     assert "verified" in page.text  # the human-assign chip on the appearance
+    # The "..." overflow menu carries the Archive action with its own CSRF token.
+    assert 'class="cb-overflow"' in page.text
+    assert f'action="/speakers/{speaker_id}/archive' in page.text
+    assert "Archive speaker" in page.text
 
 
 def test_profile_tombstone_redirects_and_archived_reads_only(
