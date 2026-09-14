@@ -10,19 +10,20 @@
      hx-trigger="every {{ '60s' if dashboard.is_idle else '15s' }}"
      hx-swap="outerHTML">
   {% if dashboard.is_idle %}
-  <div class="ps-idle">Pipeline idle{% if dashboard.workload.queue_paused %} &middot; <span class="ps-wl-paused">queue paused</span>{% endif %}</div>
+  <div class="ps-idle">Pipeline idle{% if dashboard.workload.queue_paused %} &middot; <span class="ps-wl-paused">queue paused</span>{% endif %}{% for s in dashboard.stages if s.degraded %} &middot; <span class="ps-degraded">{{ humanize_stage(s.stage) }} paused: {{ s.degraded_reason }}</span>{% endfor %}</div>
   {% else %}
   <div class="ps-stages">
     {% for s in dashboard.stages %}
-    <div class="ps-stage{% if s.active > 0 %} is-active{% endif %}">
+    <div class="ps-stage{% if s.active > 0 %} is-active{% endif %}{% if s.degraded %} is-degraded{% endif %}">
       <div class="ps-stage-header">
-        <span class="ps-dot{% if s.active > 0 %} ps-dot-ok{% elif s.queued > 0 %} ps-dot-warn{% else %} ps-dot-idle{% endif %}"></span>
+        <span class="ps-dot{% if s.degraded %} ps-dot-warn{% elif s.active > 0 %} ps-dot-ok{% elif s.queued > 0 %} ps-dot-warn{% else %} ps-dot-idle{% endif %}"></span>
         <span class="ps-stage-name">{{ humanize_stage(s.stage) }}</span>
       </div>
       <div class="ps-counts">
         <span class="ps-count-main">{{ s.active }}</span>
         {% if s.queued > 0 %}<span class="ps-count-queued">+{{ s.queued }}q</span>{% endif %}
       </div>
+      {% if s.degraded %}<div class="ps-degraded">paused: {{ s.degraded_reason }}</div>{% endif %}
       {% if s.active > 0 and s.active_started_at %}
       <div class="ps-timer" data-started-at="{{ s.active_started_at.isoformat() }}">
         {{ format_compact_duration((dashboard.generated_at - s.active_started_at).total_seconds()|int) }}

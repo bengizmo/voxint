@@ -208,8 +208,10 @@ class RunListItem:
     # Detected language code (issue #124); None for runs not yet transcribed or
     # transcribed before the column existed — the template renders an honest "—".
     language: str | None = None
-    # Wall-clock seconds since created_at. Completed/failed: to last stage
-    # finished_at. Running: to now (live elapsed). Other statuses: None.
+    # Processing seconds summed across every stage attempt (finished attempts by
+    # their own duration, the live claim to now, an abandoned claim only to its
+    # lease expiry); queue wait and retry/restart gaps are excluded;
+    # created_at/updated_at fallback for legacy runs with no stage rows.
     elapsed_seconds: float | None = None
     # Settings folder path (from media_folder via media_item); None for uploads
     # or media with no folder assignment.
@@ -271,13 +273,13 @@ def group_failed_runs(
         if len(group_items) == 1:
             result.append(group_items[0])
         else:
-            ordered = sorted(
-                group_items, key=lambda it: it.created_at, reverse=True
+            ordered = sorted(group_items, key=lambda it: it.created_at, reverse=True)
+            result.append(
+                FailedRunGroup(
+                    error_label=label,
+                    items=tuple(ordered),
+                )
             )
-            result.append(FailedRunGroup(
-                error_label=label,
-                items=tuple(ordered),
-            ))
     return result
 
 
@@ -476,23 +478,47 @@ def list_runs(
         PipelineRun.review_claim_expires_at.isnot(None),
         PipelineRun.review_claim_expires_at > func.now(),
     )
-    last_finished = (
-        sa_select(func.max(StageRun.finished_at))
+    processing_seconds = (
+        sa_select(
+            cast(
+                func.sum(
+                    case(
+                        (
+                            StageRun.finished_at.isnot(None),
+                            func.extract(
+                                "epoch", StageRun.finished_at - StageRun.started_at
+                            ),
+                        ),
+                        else_=func.extract(
+                            "epoch",
+                            func.least(
+                                func.coalesce(StageRun.lease_expires_at, func.now()),
+                                func.now(),
+                            )
+                            - StageRun.started_at,
+                        ),
+                    )
+                ),
+                Float,
+            )
+        )
         .where(StageRun.pipeline_run_id == PipelineRun.id)
         .correlate(PipelineRun)
         .scalar_subquery()
     )
-    # updated_at fallback: approximation for legacy/seeded runs with no stage
-    # rows. updated_at has onupdate=func.now(), so a later note/archive edit
-    # can inflate this — acceptable for the rare legacy case.
-    elapsed = cast(
+    # Processing time is summed across every stage attempt. Finished attempts
+    # contribute their own duration; unfinished claims contribute through now
+    # or their lease expiry, whichever came first. Queue wait and retry/restart
+    # gaps are excluded. Legacy or seeded runs with no stage rows retain their
+    # created_at/updated_at fallback.
+    terminal_fallback = cast(
         func.extract(
             "epoch",
-            func.coalesce(last_finished, PipelineRun.updated_at) - PipelineRun.created_at,
+            PipelineRun.updated_at - PipelineRun.created_at,
         ),
         Float,
     )
-    running_elapsed = cast(
+    running_fallback = cast(
         func.extract("epoch", func.now() - PipelineRun.created_at),
         Float,
     )
@@ -514,8 +540,14 @@ def list_runs(
             label_count(PipelineRun.id).label("label_count"),
             claim_live.label("claim_live"),
             case(
-                (PipelineRun.status.in_(("completed", "failed")), elapsed),
-                (PipelineRun.status == "running", running_elapsed),
+                (
+                    PipelineRun.status.in_(("completed", "failed")),
+                    func.coalesce(processing_seconds, terminal_fallback),
+                ),
+                (
+                    PipelineRun.status == "running",
+                    func.coalesce(processing_seconds, running_fallback),
+                ),
                 else_=None,
             ).label("elapsed_seconds"),
         )

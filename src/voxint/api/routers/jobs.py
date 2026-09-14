@@ -1,15 +1,15 @@
-"""Compatibility redirects from the legacy Jobs URLs to canonical Runs URLs."""
+"""Compatibility redirects and shared presentation helpers for Runs URLs."""
 
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Final
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from starlette.responses import RedirectResponse
 
-from voxint.api.health_probe import probe_services
 from voxint.api.resource_status import ResourceStripView
 from voxint.api.routers.deps import require_onboarded
 from voxint.db.models import RunStatus
@@ -48,24 +48,21 @@ _SERVICE_CONSEQUENCES: Final[dict[str, tuple[str, str]]] = {
 }
 
 
-def _detect_degraded(request: Request) -> list[DegradedService]:
-    settings = request.app.state.settings
-    try:
-        probes = probe_services(settings)
-    except Exception:
-        return []
+def _detect_degraded(
+    services: Iterable[tuple[str, bool]], *, llm_enabled: bool | None
+) -> list[DegradedService]:
     degraded = []
-    for probe in probes:
-        if not probe.up and probe.name in _SERVICE_CONSEQUENCES:
-            headline, detail = _SERVICE_CONSEQUENCES[probe.name]
+    for name, up in services:
+        if not up and name in _SERVICE_CONSEQUENCES:
+            headline, detail = _SERVICE_CONSEQUENCES[name]
             degraded.append(
                 DegradedService(
-                    name=probe.name,
+                    name=name,
                     consequence=headline,
                     detail=detail,
                 )
             )
-    if settings.llm_enabled is False:
+    if llm_enabled is False:
         degraded.append(
             DegradedService(
                 name="enrichment",

@@ -7,6 +7,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Jobs page TOOK column** (#244). Each run shows its processing time summed
+  across stage attempts, so queue wait and retry gaps are excluded, as
+  `3m40s`-style durations; running rows show the time so far as of page load.
+
+- **Degraded stage cells on the Jobs page** (#244). When a model service is down
+  or the local AI model is off, the progress strip marks the affected stage with
+  an amber dot, amber name, and a short reason ("paused: transcriber is down"),
+  and clears it on its next poll once the service is back. Fed from the cached
+  resource snapshot, so no extra health probing.
+
 - **Exception-review speaker rail** (#115, epic #112 phase 3). The editor's
   speaker rail now opens with one sentence ("2 voices need you, 1 with very
   little speech. 3 matched automatically.") and groups voices by what they

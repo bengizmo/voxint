@@ -14,8 +14,10 @@ migration; these counts are advisory.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Final
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -50,6 +52,16 @@ _COMPUTE_BOUND_STAGES: frozenset[str] = frozenset({
     Stage.DIARIZE_EMBED.value,
 })
 
+# Which stage a down model service pauses, with the plain-language reason the
+# strip shows in that cell. Keys are the probe names in health_probe._SERVICES
+# (contract-tested); enrichment is a settings flag, not a probe, so it is
+# handled in degraded_stages directly.
+_SERVICE_STAGE: Final[dict[str, tuple[Stage, str]]] = {
+    "transcription": (Stage.TRANSCRIBE, "transcriber is down"),
+    "diarization": (Stage.DIARIZE_EMBED, "voice separation is down"),
+    "speaker embedding": (Stage.DIARIZE_EMBED, "speaker matching is down"),
+}
+
 _CPU_TIER_FACTOR = 4.0
 
 
@@ -71,6 +83,11 @@ class StageProgress:
     avg_seconds: float | None
     eta_seconds: float | None
     using_heuristic: bool
+    # A model service this stage depends on is down (or the local AI model is
+    # off): the cell renders amber with the reason. Fed from the cached resource
+    # snapshot by the route, so the strip self-recovers on its next poll.
+    degraded: bool = False
+    degraded_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -176,13 +193,35 @@ def compute_stage_eta(
     return avg_seconds
 
 
+def degraded_stages(
+    services: Iterable[tuple[str, bool]], *, llm_enabled: bool | None
+) -> dict[str, str]:
+    """Map cached service reachability to ``{stage: reason}`` for the strip.
+
+    The per-cell counterpart of the page banner in ``routers/jobs.py``. The
+    caller feeds it the cached resource snapshot (never a fresh probe); an empty
+    snapshot marks nothing degraded, so missing telemetry never claims a paused
+    stage. Two services pausing the same stage join their reasons with "and".
+    """
+    reasons: dict[str, list[str]] = {}
+    down_services = {name for name, up in services if not up}
+    for name, (stage, reason) in _SERVICE_STAGE.items():
+        if name in down_services:
+            reasons.setdefault(stage.value, []).append(reason)
+    if llm_enabled is False:
+        reasons.setdefault(Stage.ENHANCE_MATCH.value, []).append("local AI model is off")
+    return {stage: " and ".join(stage_reasons) for stage, stage_reasons in reasons.items()}
+
+
 def pipeline_dashboard_state(
     session: Session,
     now: datetime,
     compute_tier: str,
     queue_paused: bool,
+    degraded: Mapping[str, str] | None = None,
 ) -> PipelineDashboardState:
     """Composite read model for the progress strip."""
+    degraded = degraded or {}
     activity: list[StageActivity] = stage_activity(session)
     durations = _successful_avg_durations(session, now)
     started_at_by_stage = _active_started_at(session)
@@ -223,6 +262,8 @@ def pipeline_dashboard_state(
             avg_seconds=avg_seconds,
             eta_seconds=eta,
             using_heuristic=using_heuristic,
+            degraded=sv in degraded,
+            degraded_reason=degraded.get(sv),
         ))
 
     outstanding = status_counts.get(RunStatus.QUEUED.value, 0) + status_counts.get(

@@ -1,13 +1,16 @@
 """Pure-function tests for the pipeline dashboard read model (#423)."""
 
+from voxint.api import health_probe
 from voxint.api.pipeline_dashboard_query import (
     _CPU_TIER_FACTOR,
     _HEURISTIC_GPU_SECONDS,
     _MIN_HISTORY_SAMPLES,
+    _SERVICE_STAGE,
     StageProgress,
     _estimate_drain,
     _heuristic_seconds,
     compute_stage_eta,
+    degraded_stages,
 )
 
 
@@ -67,6 +70,39 @@ class TestHeuristicSeconds:
 
     def test_unknown_stage_returns_default(self) -> None:
         assert _heuristic_seconds("unknown_stage", "gpu") == 120.0
+
+
+class TestDegradedStages:
+    def test_transcription_down(self) -> None:
+        assert degraded_stages([("transcription", False)], llm_enabled=True) == {
+            "transcribe": "transcriber is down"
+        }
+
+    def test_diarization_and_embedding_down(self) -> None:
+        assert degraded_stages(
+            [("diarization", False), ("speaker embedding", False)],
+            llm_enabled=True,
+        ) == {"diarize_embed": "voice separation is down and speaker matching is down"}
+
+    def test_only_embedding_down(self) -> None:
+        assert degraded_stages([("speaker embedding", False)], llm_enabled=True) == {
+            "diarize_embed": "speaker matching is down"
+        }
+
+    def test_llm_disabled_with_services_up(self) -> None:
+        services = [(name, True) for name in _SERVICE_STAGE]
+        assert degraded_stages(services, llm_enabled=False) == {
+            "enhance_match": "local AI model is off"
+        }
+
+    def test_missing_telemetry_does_not_degrade(self) -> None:
+        assert degraded_stages([], llm_enabled=None) == {}
+
+    def test_unknown_service_ignored(self) -> None:
+        assert degraded_stages([("future service", False)], llm_enabled=True) == {}
+
+    def test_service_mapping_matches_probe_names(self) -> None:
+        assert set(_SERVICE_STAGE) <= {name for name, _ in health_probe._SERVICES}
 
 
 class TestEstimateDrain:

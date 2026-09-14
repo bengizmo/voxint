@@ -5,27 +5,38 @@ After the canonical /runs surface replaced the Jobs pages, /jobs and
 The query-vocabulary mapping preserves intent: /jobs?filter=failed lands on
 /runs?view=failed, not just /runs.
 
-Tests that exercised the old page content (pipeline board, run table, detail
-sections) are removed: the canonical /runs surface carries those now. Helpers
-imported from jobs.py (_detect_degraded, _pipeline_summary) are still tested
-via the /runs page and their unit tests here.
+Tests that exercised the old page content (run table, detail sections) are
+removed: the canonical /runs surface carries those now. The pipeline board and
+helpers imported from jobs.py (_detect_degraded, _pipeline_summary) are still
+tested via the /runs page and their unit tests here.
 """
 
 from __future__ import annotations
 
+import re
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
+from voxint.api.resource_status import (
+    _reset_cache_for_tests,
+    collect_resource_status,
+)
 from voxint.config import Settings
 from voxint.db.models import MediaItem, PipelineRun, RunStatus
 
 CREDS = ("reviewer", "s3cret")
+
+_ASR_PORT = 8022
+_DIARIZER_PORT = 8024
+_EMBEDDER_PORT = 8021
 
 
 def _client(
@@ -56,18 +67,120 @@ def _make_run(
         session.add(media)
         session.flush()
         run = PipelineRun(
-            media_item_id=media.id, status=status.value,
+            media_item_id=media.id,
+            status=status.value,
         )
         session.add(run)
         session.commit()
         return run.id
 
 
-@pytest.fixture()
-def client(
+def _prime_resource_cache(settings: Settings, *, transcription_up: bool) -> None:
+    def healthy(service: str) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "service": service,
+                "model": f"{service}-model",
+                "model_loaded": True,
+            },
+        )
+
+    responses = {
+        _ASR_PORT: (
+            healthy("whisper")
+            if transcription_up
+            else httpx.Response(503, json={"status": "degraded", "model": None})
+        ),
+        _DIARIZER_PORT: healthy("pyannote"),
+        _EMBEDDER_PORT: healthy("titanet"),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/healthz"
+        return responses[request.url.port or 0]
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as probe_client:
+        collect_resource_status(settings, client=probe_client, force=True)
+
+
+def _progress_client(
     session_factory: sessionmaker[Session], tmp_path: Path
-) -> TestClient:
+) -> tuple[TestClient, Settings]:
+    settings = Settings(
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+        media_root=tmp_path,
+        llm_enabled=True,
+        # Keep the primed snapshot stable between setup and the GET on slow CI.
+        resource_status_ttl_seconds=3600.0,
+    )
+    client = TestClient(
+        create_app(settings=settings, session_factory=session_factory),
+        follow_redirects=False,
+    )
+    client.auth = CREDS
+    seed_onboarded(session_factory, llm_enabled=True)
+    return client, settings
+
+
+@pytest.fixture()
+def clean_resource_cache() -> Iterator[None]:
+    _reset_cache_for_tests()
+    try:
+        yield
+    finally:
+        _reset_cache_for_tests()
+
+
+@pytest.fixture()
+def client(session_factory: sessionmaker[Session], tmp_path: Path) -> TestClient:
     return _client(session_factory, tmp_path)
+
+
+# ---- /runs progress strip degradation ----
+
+
+def test_progress_strip_degrades_and_recovers_on_cached_service_health(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+    clean_resource_cache: None,
+) -> None:
+    client, settings = _progress_client(session_factory, tmp_path)
+    _make_run(session_factory, status=RunStatus.RUNNING)
+
+    _prime_resource_cache(settings, transcription_up=False)
+    degraded = client.get("/runs/progress-strip")
+    assert degraded.status_code == 200
+    transcribe_marker = '<span class="ps-stage-name">Transcribe</span>'
+    marker_at = degraded.text.index(transcribe_marker)
+    stage_classes = re.findall(r'<div class="(ps-stage(?: [^"]*)?)"', degraded.text[:marker_at])
+    assert "is-degraded" in stage_classes[-1].split()
+    assert "paused: transcriber is down" in degraded.text[marker_at:]
+    assert degraded.text.count("is-degraded") == 1
+
+    _reset_cache_for_tests()
+    _prime_resource_cache(settings, transcription_up=True)
+    recovered = client.get("/runs/progress-strip")
+    assert recovered.status_code == 200
+    assert "is-degraded" not in recovered.text
+
+
+def test_runs_page_uses_cached_service_degradation_for_banner_and_strip(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+    clean_resource_cache: None,
+) -> None:
+    client, settings = _progress_client(session_factory, tmp_path)
+    _prime_resource_cache(settings, transcription_up=False)
+
+    response = client.get("/runs")
+
+    assert response.status_code == 200
+    assert "Pipeline idle" in response.text
+    assert "Transcription is paused." in response.text
+    assert "paused: transcriber is down" in response.text
 
 
 # ---- /jobs redirect tests ----
@@ -117,9 +230,7 @@ def test_jobs_unknown_filter_falls_through(client: TestClient) -> None:
 
 def test_jobs_requires_auth(session_factory: sessionmaker[Session], tmp_path: Path) -> None:
     """Like every console page, /jobs is behind operator auth."""
-    settings = Settings(
-        voxint_user=CREDS[0], voxint_password=CREDS[1], media_root=tmp_path
-    )
+    settings = Settings(voxint_user=CREDS[0], voxint_password=CREDS[1], media_root=tmp_path)
     client = TestClient(
         create_app(settings=settings, session_factory=session_factory),
         follow_redirects=False,
@@ -176,9 +287,7 @@ def test_jobs_filter_redirects_render_200(
     expected_view: str,
 ) -> None:
     """Each /jobs?filter=X redirect lands on a valid /runs?view=Y page (200)."""
-    settings = Settings(
-        voxint_user=CREDS[0], voxint_password=CREDS[1], media_root=tmp_path
-    )
+    settings = Settings(voxint_user=CREDS[0], voxint_password=CREDS[1], media_root=tmp_path)
     follow_client = TestClient(
         create_app(settings=settings, session_factory=session_factory),
         follow_redirects=True,
@@ -199,10 +308,15 @@ def test_pipeline_summary_includes_gpu_busy() -> None:
 
     strip = ResourceStripView(
         telemetry_present=True,
-        gpus=(GpuActivity(
-            gpu_uuid="GPU-abc", short_uuid="abc",
-            state="busy", utilization_percent=95, services=("transcription",),
-        ),),
+        gpus=(
+            GpuActivity(
+                gpu_uuid="GPU-abc",
+                short_uuid="abc",
+                state="busy",
+                utilization_percent=95,
+                services=("transcription",),
+            ),
+        ),
         warnings=(),
         unavailable_services=(),
         collected_age_seconds=1.0,
@@ -218,17 +332,21 @@ def test_pipeline_summary_no_gpu_when_idle() -> None:
 
     strip = ResourceStripView(
         telemetry_present=True,
-        gpus=(GpuActivity(
-            gpu_uuid="GPU-abc", short_uuid="abc",
-            state="idle", utilization_percent=5, services=("transcription",),
-        ),),
+        gpus=(
+            GpuActivity(
+                gpu_uuid="GPU-abc",
+                short_uuid="abc",
+                state="idle",
+                utilization_percent=5,
+                services=("transcription",),
+            ),
+        ),
         warnings=(),
         unavailable_services=(),
         collected_age_seconds=1.0,
     )
     summary = _pipeline_summary({"running": 1}, resource_strip=strip)
     assert "GPU busy" not in summary
-
 
 
 # test_legacy_transcript_crumb_uses_runs was removed in issue #158 (interactive

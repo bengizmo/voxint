@@ -60,7 +60,7 @@ from voxint.api.csrf import (
 )
 from voxint.api.languages import LANGUAGE_NAMES, language_label
 from voxint.api.model_provenance import select_run_model_identity
-from voxint.api.pipeline_dashboard_query import pipeline_dashboard_state
+from voxint.api.pipeline_dashboard_query import degraded_stages, pipeline_dashboard_state
 from voxint.api.playback import MediaResolutionError, playback_capability, resolve_servable_media
 from voxint.api.presentation import friendly_media_label, title_from_snapshot
 from voxint.api.resource_status import (
@@ -684,8 +684,17 @@ def runs(
     )
     _queue_paused = is_queue_paused(session)
     _now = datetime.now(UTC)
+    # Degraded stage cells read the cached resource snapshot (short-TTL,
+    # single-flight); never a fresh probe on the page or the strip poll.
+    snapshot = collect_resource_status_or_empty(settings)
+    degraded = degraded_stages(
+        ((service.name, service.up) for service in snapshot.services),
+        llm_enabled=settings.llm_enabled,
+    )
     dashboard = (
-        pipeline_dashboard_state(session, _now, settings.compute_tier, _queue_paused)
+        pipeline_dashboard_state(
+            session, _now, settings.compute_tier, _queue_paused, degraded=degraded
+        )
         if not show_archived
         else None
     )
@@ -746,7 +755,10 @@ def runs(
                 run_status_counts(session),
                 queue_paused=_queue_paused,
             ),
-            "degraded": _detect_degraded(request),
+            "degraded": _detect_degraded(
+                ((service.name, service.up) for service in snapshot.services),
+                llm_enabled=settings.llm_enabled,
+            ),
             "aux_jobs": recent_aux_jobs(session),
             "settings_status_url": str(request.url_for("settings_status")),
             "next_url": next_url,
@@ -806,8 +818,13 @@ def runs_progress_strip(
     settings: Settings = request.app.state.settings
     now = datetime.now(UTC)
     _queue_paused = is_queue_paused(session)
+    snapshot = collect_resource_status_or_empty(settings)
+    degraded = degraded_stages(
+        ((service.name, service.up) for service in snapshot.services),
+        llm_enabled=settings.llm_enabled,
+    )
     dashboard = pipeline_dashboard_state(
-        session, now, settings.compute_tier, _queue_paused
+        session, now, settings.compute_tier, _queue_paused, degraded=degraded
     )
     response = templates.TemplateResponse(
         request,
