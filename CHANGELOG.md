@@ -6,6 +6,42 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Exception-review speaker rail** (#115, epic #112 phase 3). The editor's
+  speaker rail now opens with one sentence ("2 voices need you, 1 with very
+  little speech. 3 matched automatically.") and groups voices by what they
+  need: a Needs you group (a possible match with a one-click **Confirm** that
+  records a human assignment of the existing speaker, never an enrollment;
+  ambiguous matches shown as "Similar voices found" with no candidate named;
+  unmatched voices with the plain reason), a collapsed Too little speech to
+  identify group, and collapsed Matched automatically / Your rulings rows with
+  a Change toggle. Voices that auto-enrollment saved as "Voice N" but that still
+  carry a possible roster match appear in Needs you ("Possibly Jordan, saved as
+  Voice 4 for now"). Every card that needs a ruling has **Hear this voice**,
+  which seeks the player to that voice. "Why this match?" shows the raw
+  similarity, lead over the next closest voice, and agreement, never a
+  percentage. A run whose roster was empty at match time says so instead of
+  looking like a run with no matches. The rail's grouping and copy live in
+  `frontend/src/lib/speaker-bands.ts` with vitest coverage; the browser lane
+  seed gains a `rail` fixture covering every card kind plus a ledger check in
+  `reconcile` (`label_rulings`).
+
+### Changed
+- `LabelState` and both island serializers carry the policy candidate
+  (`candidateSpeakerId`/`candidateSpeakerName`, from
+  `match_candidates.top_speaker_id`) plus `matchSimilarity` and
+  `matchVoteAgreement`. Auto-enrolled labels are now banded by their live
+  match evidence like unresolved ones instead of a hard-coded auto-attribute
+  band; resolution and queue membership are unchanged.
+
+### Fixed
+- The rail's "Confirm" button only rendered for grounded labels, which are
+  already resolved, so the review band (accepted but not grounded) never got a
+  one-click confirm. The "Not sure" tooltip said "come back later" although
+  unknown is a final ruling that settles the voice; it is now "Can't tell" with
+  honest copy. The rail's private 0.8/0.5 "likely/possible/low" similarity
+  scale, which disagreed with the real matching gates, is gone.
+
 
 ## [0.36.1] - 2026-09-14
 

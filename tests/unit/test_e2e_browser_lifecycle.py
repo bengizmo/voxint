@@ -258,7 +258,7 @@ def test_benchmark_segments_custom_count() -> None:
 
 
 def test_fixture_choices_tuple() -> None:
-    assert FIXTURE_CHOICES == ("review", "editor", "benchmark")
+    assert FIXTURE_CHOICES == ("review", "editor", "benchmark", "rail")
 
 
 def test_parser_seed_fixture_flag() -> None:

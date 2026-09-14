@@ -44,7 +44,7 @@ import subprocess
 import sys
 import uuid
 import wave
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
@@ -53,24 +53,39 @@ from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from voxint.adjudication.ledger import record_decision
+from voxint.adjudication.resolver import effective_decisions
 from voxint.adjudication.review_state import verified_progress
 from voxint.app_settings import complete_onboarding
 from voxint.clients.llm import enhanced_size_ceiling
 from voxint.db.models import (
     ArtifactKind,
+    AssignmentMethod,
     AudioArtifact,
+    Decision,
     DiarizationTurn,
+    MatchCandidate,
     MediaItem,
     PipelineRun,
     RunStatus,
     SegmentReviewState,
     SegmentSplitBoundary,
     Speaker,
+    SpeakerAssignment,
     TranscriptAnnotation,
     TranscriptSegment,
 )
 from voxint.domain_packs.corrections import parse_corrections
 from voxint.domain_packs.corrector import CORRECTOR_VERSION, apply_corrections
+from voxint.speakers.matching import (
+    DECISION_ACCEPTED,
+    DECISION_INELIGIBLE,
+    DECISION_REJECTED,
+    REASON_ACCEPTED,
+    REASON_BELOW_COSINE,
+    REASON_TOO_FEW_TURNS,
+    MatchingGates,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FRONTEND_DIR = REPO_ROOT / "frontend"
@@ -134,8 +149,7 @@ _EDITOR_SEGMENTS: tuple[tuple[str, str, float | None], ...] = (
     ),
     (
         "S2",
-        "We validated both the row counts and ran a checksum"
-        " comparison against the source tables.",
+        "We validated both the row counts and ran a checksum comparison against the source tables.",
         0.90,
     ),
     ("S0", "Good.", 0.96),
@@ -143,8 +157,7 @@ _EDITOR_SEGMENTS: tuple[tuple[str, str, float | None], ...] = (
     ("S0", "Next item is the deployment timeline for the new feature.", 0.88),
     (  # long, split-eligible
         "S3",
-        "We are targeting Thursday for staging and Friday for production"
-        " if the smoke tests pass.",
+        "We are targeting Thursday for staging and Friday for production if the smoke tests pass.",
         0.82,
     ),
     ("S1", "I think we should add an extra day of buffer.", 0.35),
@@ -169,8 +182,7 @@ _EDITOR_SEGMENTS: tuple[tuple[str, str, float | None], ...] = (
     ("S0", "What is the proposed fix?", 0.95),
     (  # long, split-eligible
         "S2",
-        "We are planning to switch from exact match to fuzzy matching"
-        " with a relevance threshold.",
+        "We are planning to switch from exact match to fuzzy matching with a relevance threshold.",
         0.88,
     ),
     ("S3", "That should cover most of the reported cases.", 0.84),
@@ -189,11 +201,27 @@ _EDITOR_SEGMENTS: tuple[tuple[str, str, float | None], ...] = (
 # Must NOT include _CORRECTED_SEGMENT_INDEX (correction trace blocks splitting).
 _EDITOR_SPLIT_ELIGIBLE: frozenset[int] = frozenset({4, 7, 12, 19, 20, 23})
 
-FIXTURE_CHOICES = ("review", "editor", "benchmark")
+_RAIL_SEGMENTS: tuple[tuple[str, str, float | None], ...] = (
+    ("S0", "Good morning everyone, thanks for joining.", 0.9),
+    ("S0", "Let us begin with the project update.", 0.9),
+    ("S1", "The rollout completed on schedule.", 0.9),
+    ("S1", "Customer feedback has been encouraging.", 0.9),
+    ("S2", "I reviewed the support queue yesterday.", 0.9),
+    ("S2", "Two requests still need follow-up.", 0.9),
+    ("S3", "Could we revisit the launch timeline?", 0.9),
+    ("S3", "I can share the revised dates tomorrow.", 0.9),
+    ("S4", "The budget note is ready.", 0.9),
+    ("S4", "I will send it after this meeting.", 0.9),
+    ("S5", "The final dashboard checks passed.", 0.9),
+    ("S5", "We can close the remaining action item.", 0.9),
+)
+
+FIXTURE_CHOICES = ("review", "editor", "benchmark", "rail")
 
 _FIXTURE_SEGMENTS: dict[str, tuple[tuple[str, str, float | None], ...]] = {
     "review": _SEED_SEGMENTS,
     "editor": _EDITOR_SEGMENTS,
+    "rail": _RAIL_SEGMENTS,
 }
 
 
@@ -210,9 +238,7 @@ def _benchmark_segments(count: int = 2000) -> tuple[tuple[str, str, float | None
     return tuple(result)
 
 
-def _faithful_word_timings(
-    raw_text: str, start: float, end: float
-) -> list[dict[str, object]]:
+def _faithful_word_timings(raw_text: str, start: float, end: float) -> list[dict[str, object]]:
     """Deterministic word timings faithful to ``raw_text``.
 
     Splits on whitespace and distributes time evenly. The joined word texts
@@ -345,6 +371,180 @@ def _silent_wav_bytes(seconds: float) -> bytes:
     return buf.getvalue()
 
 
+def _seed_rail_evidence(
+    session: Session, run_id: uuid.UUID, speakers: dict[str, uuid.UUID]
+) -> None:
+    gates = MatchingGates()
+    assert (
+        gates.min_cosine,
+        gates.min_margin,
+        gates.min_vote_agreement,
+        gates.min_turns,
+        gates.min_seconds,
+    ) == (0.60, 0.05, 0.60, 2, 6.0)
+    assert (
+        gates.grounded_min_cosine,
+        gates.grounded_min_margin,
+        gates.grounded_min_vote_agreement,
+        gates.grounded_min_turns,
+        gates.grounded_min_seconds,
+    ) == (0.70, 0.08, 0.67, 3, 10.0)
+
+    assignment_rows = (
+        ("S0", "Ada Roster", 0.90, True),
+        ("S1", "Blair Roster", 0.65, False),
+        ("S2", "Cass Roster", 0.65, False),
+        ("S5", "Blair Roster", 0.66, False),
+    )
+    for label, assignment_speaker_name, confidence, assignment_grounded in assignment_rows:
+        session.add(
+            SpeakerAssignment(
+                pipeline_run_id=run_id,
+                diarization_label=label,
+                speaker_id=speakers[assignment_speaker_name],
+                method=AssignmentMethod.COSINE.value,
+                confidence=confidence,
+                grounded=assignment_grounded,
+            )
+        )
+
+    candidate_rows: tuple[
+        tuple[
+            str,
+            str,
+            str,
+            str | None,
+            float | None,
+            float | None,
+            float | None,
+            bool | None,
+            int,
+            float,
+            int | None,
+        ],
+        ...,
+    ] = (
+        (
+            "S0",
+            DECISION_ACCEPTED,
+            REASON_ACCEPTED,
+            "Ada Roster",
+            0.90,
+            0.20,
+            0.90,
+            True,
+            4,
+            30.0,
+            3,
+        ),
+        (
+            "S1",
+            DECISION_ACCEPTED,
+            REASON_ACCEPTED,
+            "Blair Roster",
+            0.65,
+            0.12,
+            0.80,
+            False,
+            4,
+            30.0,
+            3,
+        ),
+        (
+            "S2",
+            DECISION_ACCEPTED,
+            REASON_ACCEPTED,
+            "Cass Roster",
+            0.65,
+            0.06,
+            0.80,
+            False,
+            4,
+            30.0,
+            3,
+        ),
+        (
+            "S3",
+            DECISION_REJECTED,
+            REASON_BELOW_COSINE,
+            "Cass Roster",
+            0.40,
+            0.10,
+            0.70,
+            None,
+            4,
+            30.0,
+            3,
+        ),
+        (
+            "S4",
+            DECISION_INELIGIBLE,
+            REASON_TOO_FEW_TURNS,
+            None,
+            None,
+            None,
+            None,
+            None,
+            1,
+            2.0,
+            None,
+        ),
+        (
+            "S5",
+            DECISION_ACCEPTED,
+            REASON_ACCEPTED,
+            "Blair Roster",
+            0.66,
+            0.11,
+            0.80,
+            False,
+            4,
+            30.0,
+            3,
+        ),
+    )
+    for (
+        label,
+        decision,
+        reason,
+        speaker_name,
+        similarity,
+        margin,
+        vote,
+        grounded,
+        turns,
+        seconds,
+        roster_size,
+    ) in candidate_rows:
+        session.add(
+            MatchCandidate(
+                pipeline_run_id=run_id,
+                diarization_label=label,
+                decision=decision,
+                reason=reason,
+                embedding_space="titanet-large-v2",
+                top_speaker_id=(speakers[speaker_name] if speaker_name else None),
+                similarity=similarity,
+                margin=margin,
+                vote_agreement=vote,
+                grounded=grounded,
+                eligible_turns=turns,
+                eligible_seconds=seconds,
+                roster_size=roster_size,
+            )
+        )
+
+    record_decision(
+        session,
+        pipeline_run_id=run_id,
+        diarization_label="S5",
+        decision=Decision.AUTO_ENROLL,
+        operator="auto_enroll",
+        idempotency_key=f"e2e-auto-enroll:{run_id}:S5",
+        speaker_id=speakers["Voice 1"],
+    )
+
+
 def seed_browser_run(
     session: Session,
     media_root: Path,
@@ -355,16 +555,12 @@ def seed_browser_run(
 
     Returns ``(run_id, media_id)``. ``fixture`` selects the segment set:
     ``"review"`` (5 segments, backward compat), ``"editor"`` (30 segments,
-    4 speakers, split-eligible text), or ``"benchmark"`` (2000 segments).
+    4 speakers, split-eligible text), ``"benchmark"`` (2000 segments), or
+    ``"rail"`` (12 segments covering every speaker-rail state).
     """
     if fixture not in FIXTURE_CHOICES:
-        raise ValueError(
-            f"unknown fixture {fixture!r}; must be one of {FIXTURE_CHOICES}"
-        )
-    segments = (
-        _benchmark_segments() if fixture == "benchmark"
-        else _FIXTURE_SEGMENTS[fixture]
-    )
+        raise ValueError(f"unknown fixture {fixture!r}; must be one of {FIXTURE_CHOICES}")
+    segments = _benchmark_segments() if fixture == "benchmark" else _FIXTURE_SEGMENTS[fixture]
     seg_seconds = 0.5 if fixture == "benchmark" else _SEGMENT_SECONDS
     duration = seg_seconds * len(segments)
     media = MediaItem(
@@ -408,9 +604,16 @@ def seed_browser_run(
     # <select>). These are curation identities only — no embeddings, so speaker
     # MATCHING still never runs; the segments keep their detected S0/S1 labels
     # and the roster is merely the assignable set the relabel endpoint accepts.
-    for name in ("Ada Roster", "Blair Roster"):
-        session.add(Speaker(display_name=name))
+    speaker_rows = [Speaker(display_name=name) for name in ("Ada Roster", "Blair Roster")]
+    session.add_all(speaker_rows)
     session.flush()
+    if fixture == "rail":
+        extra_speakers = [Speaker(display_name=name) for name in ("Cass Roster", "Voice 1")]
+        session.add_all(extra_speakers)
+        session.flush()
+        speaker_rows.extend(extra_speakers)
+        speakers = {speaker.display_name: speaker.id for speaker in speaker_rows}
+        _seed_rail_evidence(session, run.id, speakers)
 
     audio_rel = f"artifacts/{run.id}/normalized.wav"
     audio_abs = media_root / audio_rel
@@ -530,8 +733,10 @@ def cmd_seed(args: argparse.Namespace) -> None:
         session.commit()
         run_id, media_id = seed_browser_run(session, media_root, fixture=fixture)
     engine.dispose()
-    seg_count = len(_benchmark_segments()) if fixture == "benchmark" else len(
-        _FIXTURE_SEGMENTS.get(fixture, _SEED_SEGMENTS)
+    seg_count = (
+        len(_benchmark_segments())
+        if fixture == "benchmark"
+        else len(_FIXTURE_SEGMENTS.get(fixture, _SEED_SEGMENTS))
     )
     print(f"ok: seeded COMPLETED {fixture} run with {seg_count} segments")
     print(f"RUN_ID={run_id}")
@@ -601,6 +806,7 @@ class Expectation:
     progress: tuple[int, int]
     split_parent_indexes: frozenset[int] = frozenset()
     expected_annotations: int | None = None
+    label_rulings: dict[str, tuple[str, str | None]] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> Expectation:
@@ -638,9 +844,37 @@ class Expectation:
             isinstance(raw_annot, bool) or not isinstance(raw_annot, int) or raw_annot < 0
         ):
             raise ValueError(
-                "expected_annotations must be a non-negative integer"
-                f" or null, got {raw_annot!r}"
+                f"expected_annotations must be a non-negative integer or null, got {raw_annot!r}"
             )
+        raw_rulings = data.get("label_rulings", {})
+        if not isinstance(raw_rulings, dict):
+            raise ValueError("label_rulings must be an object")
+        label_rulings: dict[str, tuple[str, str | None]] = {}
+        allowed_decisions = {
+            Decision.ASSIGN.value,
+            Decision.EXCLUDE.value,
+            Decision.UNKNOWN.value,
+        }
+        for label, raw_ruling in raw_rulings.items():
+            if not isinstance(label, str) or not label:
+                raise ValueError("label_rulings keys must be non-empty strings")
+            if not isinstance(raw_ruling, dict) or set(raw_ruling) != {
+                "decision",
+                "speaker",
+            }:
+                raise ValueError(
+                    f"label ruling for {label!r} must contain exactly decision and speaker"
+                )
+            decision = raw_ruling["decision"]
+            speaker = raw_ruling["speaker"]
+            if decision not in allowed_decisions:
+                raise ValueError(f"label ruling for {label!r} has invalid decision {decision!r}")
+            if decision == Decision.ASSIGN.value:
+                if not isinstance(speaker, str):
+                    raise ValueError(f"label ruling for {label!r} requires a speaker string")
+            elif speaker is not None:
+                raise ValueError(f"label ruling for {label!r} requires speaker to be null")
+            label_rulings[label] = (decision, speaker)
         return cls(
             verified_indexes=frozenset(indexes),
             corrections=corrections,
@@ -650,6 +884,7 @@ class Expectation:
             ),
             split_parent_indexes=frozenset(split_idxs),
             expected_annotations=raw_annot,
+            label_rulings=label_rulings,
         )
 
 
@@ -684,15 +919,11 @@ def reconcile_run(session: Session, run_id: uuid.UUID, expect: Expectation) -> l
         is_verified = state is not None and state.verified_at is not None
         want_verified = index in expect.verified_indexes
         if is_verified != want_verified:
-            problems.append(
-                f"segment {index}: verified={is_verified}, expected {want_verified}"
-            )
+            problems.append(f"segment {index}: verified={is_verified}, expected {want_verified}")
         got_corr = state.corrected_text if state is not None else None
         want_corr = expect.corrections.get(index)
         if got_corr != want_corr:
-            problems.append(
-                f"segment {index}: corrected_text={got_corr!r}, expected {want_corr!r}"
-            )
+            problems.append(f"segment {index}: corrected_text={got_corr!r}, expected {want_corr!r}")
         # The paired-shape CHECK guarantees corrected_at iff corrected_text; assert
         # the pairing held so a half-written row is caught here, not at export.
         if state is not None and (state.corrected_text is None) != (state.corrected_at is None):
@@ -736,9 +967,30 @@ def reconcile_run(session: Session, run_id: uuid.UUID, expect: Expectation) -> l
             .count()
         )
         if got_annot != expect.expected_annotations:
-            problems.append(
-                f"annotation count={got_annot}, expected {expect.expected_annotations}"
-            )
+            problems.append(f"annotation count={got_annot}, expected {expect.expected_annotations}")
+
+    if expect.label_rulings:
+        rulings = effective_decisions(session, run_id)
+        for label, (want_decision, want_speaker) in expect.label_rulings.items():
+            row = rulings.get(label)
+            if row is None:
+                problems.append(f"label {label}: expected ruling {want_decision!r}, none found")
+                continue
+            if row.decision != want_decision:
+                problems.append(
+                    f"label {label}: decision={row.decision!r}, expected {want_decision!r}"
+                )
+                continue
+            if want_decision == Decision.ASSIGN.value:
+                speaker = session.get(Speaker, row.speaker_id)
+                got_speaker = speaker.display_name if speaker is not None else None
+                if got_speaker != want_speaker:
+                    problems.append(
+                        f"label {label}: speaker={got_speaker!r}, expected {want_speaker!r}"
+                    )
+        for label, row in rulings.items():
+            if row.decision != Decision.AUTO_ENROLL.value and label not in expect.label_rulings:
+                problems.append(f"label {label}: unexpected unlisted ruling {row.decision!r}")
 
     return problems
 
@@ -766,7 +1018,13 @@ def cmd_reconcile(args: argparse.Namespace) -> None:
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         fail(f"durable state does not match the expectation ({len(problems)} mismatch(es)).")
-    print(f"ok: {expect.progress[0]} of {expect.progress[1]} verified; corrections match")
+    ruling_status = (
+        f"; {len(expect.label_rulings)} label ruling(s) match" if expect.label_rulings else ""
+    )
+    print(
+        f"ok: {expect.progress[0]} of {expect.progress[1]} verified; "
+        f"corrections match{ruling_status}"
+    )
     print("RECONCILE PASS")
 
 
@@ -858,7 +1116,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--fixture",
         choices=FIXTURE_CHOICES,
         default="review",
-        help="segment fixture: review (5 segs), editor (30 segs), benchmark (2000 segs)",
+        help=(
+            "segment fixture: review (5 segs), editor (30 segs), "
+            "benchmark (2000 segs), rail (12 segs)"
+        ),
     )
     p_seed.set_defaults(func=cmd_seed)
 
