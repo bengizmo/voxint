@@ -107,6 +107,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_onboarded)])
 
+
 def _publish_research_job(job_id: uuid.UUID) -> bool:
     """Enqueue a committed research job, returning False on a broker outage.
 
@@ -157,9 +158,7 @@ def _research_state(
         .order_by(ResearchJob.created_at.desc(), ResearchJob.id.desc())
         .limit(1)
     ).scalar_one_or_none()
-    sids = (
-        sorted(alias_ids(session, speaker.id), key=str) if include_aliases else [speaker.id]
-    )
+    sids = sorted(alias_ids(session, speaker.id), key=str) if include_aliases else [speaker.id]
     views = [
         view
         for sid in sids
@@ -167,9 +166,7 @@ def _research_state(
         if view.candidate.field in _PROFILE_FIELDS
     ]
     row = get_app_settings(session)
-    authority = parse_authority_domains(
-        resolve_effective_source_authority_domains(row, settings)
-    )
+    authority = parse_authority_domains(resolve_effective_source_authority_domains(row, settings))
     triage: dict[uuid.UUID, TriageScore] = {
         view.candidate.id: _triage_for(view, voice=None, peer_count=1, authority=authority)
         for view in views
@@ -294,9 +291,7 @@ def _overview_context(
                 select(PipelineRun)
                 .where(PipelineRun.id.in_(reminder_run_ids))
                 .options(
-                    selectinload(PipelineRun.media_item).selectinload(
-                        MediaItem.source_metadata
-                    )
+                    selectinload(PipelineRun.media_item).selectinload(MediaItem.source_metadata)
                 )
             ).scalars()
         }
@@ -308,8 +303,7 @@ def _overview_context(
         "overview": overview,
         "reminder_runs": reminder_runs,
         "voiceprints": {
-            row.entry.speaker.id: voiceprint_bars(row.entry.embeddings)
-            for row in overview.rows
+            row.entry.speaker.id: voiceprint_bars(row.entry.embeddings) for row in overview.rows
         },
         "sort": sort,
         "sorts": SORT_LABELS,
@@ -370,6 +364,7 @@ def _roster_response(request: Request, session: Session, error: str | None = Non
 # refusals (RosterError) re-render the roster with the message inline, while
 # missing speakers/embeddings stay real 404s.
 
+
 @router.get("/speakers")
 def speakers_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     # Content branch, not an access gate (#159): /speakers shipped long before
@@ -382,6 +377,7 @@ def speakers_page(request: Request, operator: OperatorDep, session: SessionDep) 
     return templates.TemplateResponse(
         request, "speakers/speakers.html", _roster_context(request, session)
     )
+
 
 @router.post("/speakers")
 def speaker_create(
@@ -402,6 +398,7 @@ def speaker_create(
     target = f"/speakers/{speaker.id}" if _speakers_flag_on(request) else "/speakers"
     return RedirectResponse(target, status_code=303)
 
+
 @router.post("/speakers/{speaker_id}/rename")
 def speaker_rename(
     speaker_id: uuid.UUID,
@@ -420,6 +417,7 @@ def speaker_rename(
         session.rollback()
         return _roster_response(request, session, error=str(exc))
     return _roster_response(request, session)
+
 
 @router.post("/speakers/{speaker_id}/merge")
 def speaker_merge(
@@ -440,6 +438,7 @@ def speaker_merge(
         return _roster_response(request, session, error=str(exc))
     return _roster_response(request, session)
 
+
 @router.post("/speakers/{speaker_id}/archive")
 def speaker_archive(
     speaker_id: uuid.UUID,
@@ -458,6 +457,7 @@ def speaker_archive(
         return _roster_response(request, session, error=str(exc))
     return _roster_response(request, session)
 
+
 @router.post("/speakers/{speaker_id}/restore")
 def speaker_restore(
     speaker_id: uuid.UUID,
@@ -475,6 +475,7 @@ def speaker_restore(
         session.rollback()
         return _roster_response(request, session, error=str(exc))
     return _roster_response(request, session)
+
 
 @router.post("/speakers/{speaker_id}/embeddings/{embedding_id}/delete")
 def speaker_embedding_delete(
@@ -495,10 +496,12 @@ def speaker_embedding_delete(
         return _roster_response(request, session, error=str(exc))
     return _roster_response(request, session)
 
+
 # ---- Web-research jobs + profile-draft review (issue #40) -----------------
 # All research mutations answer with the per-speaker fragment; the fragment
 # re-polls itself (hx-trigger="every 3s") only while its job is active, so
 # polling stops the moment a terminal render goes out.
+
 
 def _speaker_or_404(session: Session, speaker_id: uuid.UUID) -> Speaker:
     speaker = session.get(Speaker, speaker_id)
@@ -506,11 +509,13 @@ def _speaker_or_404(session: Session, speaker_id: uuid.UUID) -> Speaker:
         raise HTTPException(status_code=404, detail="no such speaker")
     return speaker
 
+
 @router.get("/speakers/{speaker_id}/research")
 def research_fragment(
     speaker_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
 ) -> Response:
     return _research_response(request, session, _speaker_or_404(session, speaker_id))
+
 
 @router.post("/speakers/{speaker_id}/research/start")
 def research_start(
@@ -573,6 +578,7 @@ def research_start(
     _publish_research_job(job_id)
     return _research_response(request, session, speaker)
 
+
 @router.post("/speakers/{speaker_id}/research/{job_id}/cancel")
 def research_cancel(
     speaker_id: uuid.UUID,
@@ -593,6 +599,7 @@ def research_cancel(
     # not after this response finishes rendering.
     session.commit()
     return _research_response(request, session, speaker)
+
 
 @router.post("/speakers/{speaker_id}/research/candidates/{candidate_id}/decision")
 def decide_profile_candidate(
@@ -672,7 +679,6 @@ def decide_profile_candidate(
     return _research_response(request, session, speaker)
 
 
-
 # ---- Speaker profile page (Console 2.0 P4, issue #159) ---------------------
 # New routes, so they ride the area gate (404 while console_speakers_enabled
 # is off) — unlike GET /speakers, which is live and branches skins instead.
@@ -704,21 +710,21 @@ def _profile_context(
     gates = gates_from_settings(settings)
     evidence = evidence_for(session, aggregate.grounded_keys)
     run_ids = {a.run_id for a in aggregate.appearances}
-    runs_by_id = {
-        run.id: run
-        for run in session.execute(
-            select(PipelineRun)
-            .where(PipelineRun.id.in_(run_ids))
-            .options(
-                selectinload(PipelineRun.media_item).selectinload(
-                    MediaItem.source_metadata
-                ),
-                selectinload(PipelineRun.media_item).selectinload(
-                    MediaItem.media_folder
+    runs_by_id = (
+        {
+            run.id: run
+            for run in session.execute(
+                select(PipelineRun)
+                .where(PipelineRun.id.in_(run_ids))
+                .options(
+                    selectinload(PipelineRun.media_item).selectinload(MediaItem.source_metadata),
+                    selectinload(PipelineRun.media_item).selectinload(MediaItem.media_folder),
                 )
-            )
-        ).scalars()
-    } if run_ids else {}
+            ).scalars()
+        }
+        if run_ids
+        else {}
+    )
     insights = get_speaker_insights(session, speaker.id) if aggregate.files > 0 else None
     insights_eligible = aggregate.files >= 2 and aggregate.segments >= 10
     return {
@@ -734,6 +740,7 @@ def _profile_context(
         "research_qs": "?page=profile",
         "active_nav": "speakers",
         "now": datetime.now(UTC),
+        "csrf_archive": mint_csrf_token(request.app.state.csrf_secret, CSRF_ROSTER_ARCHIVE),
         **_profile_panel_context(request, session, speaker, error),
         **_research_csrf(request),
     }
@@ -787,9 +794,7 @@ def speaker_insights_fragment(
     )
 
 
-@router.post(
-    "/speakers/{speaker_id}/profile", dependencies=[Depends(require_speakers_enabled)]
-)
+@router.post("/speakers/{speaker_id}/profile", dependencies=[Depends(require_speakers_enabled)])
 def speaker_profile_edit(
     speaker_id: uuid.UUID,
     request: Request,
@@ -818,9 +823,7 @@ def speaker_profile_edit(
         )
     try:
         if action == "clear" or not (value or "").strip():
-            clear_profile_field(
-                session, speaker_id=speaker.id, field=field, operator=operator
-            )
+            clear_profile_field(session, speaker_id=speaker.id, field=field, operator=operator)
         else:
             set_profile_field(
                 session,
