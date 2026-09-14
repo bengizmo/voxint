@@ -458,7 +458,7 @@ services:
   worker:
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q celery --concurrency=1
   worker-post:
-    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.36.0}
+    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.36.1}
     pull_policy: missing
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q post --concurrency=2
     restart: unless-stopped
