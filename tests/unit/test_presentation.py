@@ -13,6 +13,7 @@ from voxint.api.presentation import (
     format_size,
     friendly_media_label,
     humanize_stage,
+    humanize_stage_progress,
     humanize_status,
 )
 
@@ -204,6 +205,27 @@ def test_format_age_normalizes_naive_operands() -> None:
 )
 def test_humanize_stage(value: str, expected: str) -> None:
     assert humanize_stage(value) == expected
+
+
+def test_humanize_stage_progress_labels_every_stage() -> None:
+    from voxint.db.models import Stage
+
+    expected = {
+        Stage.ACQUIRE: "Acquiring",
+        Stage.PREPARE: "Preparing",
+        Stage.TRANSCRIBE: "Transcribing",
+        Stage.DIARIZE_EMBED: "Diarizing & embedding",
+        Stage.ENHANCE_MATCH: "Enhancing & matching",
+        Stage.FINALIZE: "Finalizing",
+    }
+    assert {stage: humanize_stage_progress(stage.value) for stage in Stage} == expected
+    assert all(
+        label.endswith("ing") or "ing &" in label for label in expected.values()
+    )
+
+
+def test_humanize_unknown_stage_progress_falls_back() -> None:
+    assert humanize_stage_progress("new_future_stage") == "New future stage"
 
 
 @pytest.mark.parametrize(

@@ -91,6 +91,15 @@ class StageProgress:
 
 
 @dataclass(frozen=True)
+class RunStageProgress:
+    """One run's page-load snapshot of estimated progress through a stage."""
+
+    stage: str
+    percent: int | None
+    overrun: bool
+
+
+@dataclass(frozen=True)
 class WorkloadSummary:
     """Aggregate workload counters for the footer."""
 
@@ -191,6 +200,29 @@ def compute_stage_eta(
     if is_active and elapsed_seconds is not None:
         return max(avg_seconds - elapsed_seconds, 0.0)
     return avg_seconds
+
+
+def estimate_run_stage_progress(
+    stage: str | None,
+    started_at: datetime | None,
+    avg_seconds: float | None,
+    now: datetime,
+) -> RunStageProgress | None:
+    """Estimate one run's stage progress from the inputs used by ``compute_stage_eta``.
+
+    The result is a snapshot as of ``now`` for the once-rendered Jobs grid; it
+    does not tick or poll after page load.
+    """
+    if stage is None or started_at is None or avg_seconds is None or avg_seconds <= 0:
+        return None
+    elapsed_seconds = max((now - started_at).total_seconds(), 0.0)
+    if elapsed_seconds >= avg_seconds:
+        return RunStageProgress(stage=stage, percent=None, overrun=True)
+    return RunStageProgress(
+        stage=stage,
+        percent=int(elapsed_seconds / avg_seconds * 100),
+        overrun=False,
+    )
 
 
 def degraded_stages(

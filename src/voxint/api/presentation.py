@@ -234,6 +234,15 @@ _STAGE_LABELS = {
     "enhance_match": "Enhance & match",
 }
 
+_STAGE_PROGRESS_LABELS = {
+    "acquire": "Acquiring",
+    "prepare": "Preparing",
+    "transcribe": "Transcribing",
+    "diarize_embed": "Diarizing & embedding",
+    "enhance_match": "Enhancing & matching",
+    "finalize": "Finalizing",
+}
+
 
 def humanize_stage(value: str) -> str:
     """A pipeline stage identifier as an operator-readable label. Display only.
@@ -243,6 +252,11 @@ def humanize_stage(value: str) -> str:
     this for the visible text alone.
     """
     return _STAGE_LABELS.get(value, _humanize_enum(value))
+
+
+def humanize_stage_progress(value: str) -> str:
+    """A stage identifier as a present-participle progress label."""
+    return _STAGE_PROGRESS_LABELS.get(value, humanize_stage(value))
 
 
 def humanize_status(value: str) -> str:
