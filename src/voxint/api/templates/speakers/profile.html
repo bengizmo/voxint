@@ -17,6 +17,16 @@
     </p>
   </div>
 </details>
+<details class="cb-overflow">
+  <summary class="cb-btn cb-btn-secondary" aria-label="More actions">…</summary>
+  <div class="cb-overflow-menu">
+    <form method="post" action="/speakers/{{ speaker.id }}/archive?sort={{ sort|default('name') }}&view={{ view|default('table') }}"
+          style="padding: var(--space-2) var(--space-3);">
+      <input type="hidden" name="csrf_token" value="{{ csrf_archive }}">
+      <button type="submit" class="danger" style="width:100%">Archive speaker</button>
+    </form>
+  </div>
+</details>
 {% endif %}
 {% endblock %}
 
@@ -142,7 +152,7 @@ and web research is off. Restore the speaker from the
     <div class="gt-row">
       <span>
         {% if runs_by_id.get(a.run_id) %}
-        <a href="/runs/{{ a.run_id }}">{{ run_source_title(runs_by_id[a.run_id]) }}</a>
+        <a href="/media/{{ a.media_id }}/editor?run={{ a.run_id }}">{{ run_source_title(runs_by_id[a.run_id]) }}</a>
         {% else %}<span class="oc-muted">recording removed</span>{% endif %}
         {% if a.human_assigned %}{{ chip("verified") }}{% endif %}
       </span>
@@ -162,7 +172,7 @@ and web research is off. Restore the speaker from the
       </span>
       <span class="gt-action">
         {% if runs_by_id.get(a.run_id) %}
-        <a href="/runs/{{ a.run_id }}">Open →</a>
+        <a href="/media/{{ a.media_id }}/editor?run={{ a.run_id }}">Open →</a>
         {% endif %}
       </span>
     </div>
