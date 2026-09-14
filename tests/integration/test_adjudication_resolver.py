@@ -18,6 +18,7 @@ from voxint.db.models import (
     EMBEDDING_DIM,
     Decision,
     DiarizationTurn,
+    MatchCandidate,
     MediaItem,
     MediaSourceMetadata,
     PipelineRun,
@@ -25,6 +26,8 @@ from voxint.db.models import (
     Speaker,
     SpeakerAssignment,
 )
+from voxint.speakers.matching import MatchingGates
+from voxint.speakers.policy import MatchBand
 
 SPACE = "titanet-large-v2"
 
@@ -441,3 +444,253 @@ def test_review_backlog_count_matches_queue_length(
         )
         session.commit()
         assert review_backlog_count(session) == len(adjudication_queue(session)) == 0
+
+
+def add_candidate(
+    session: Session,
+    run_id: uuid.UUID,
+    label: str,
+    *,
+    decision: str,
+    reason: str,
+    top_speaker_id: uuid.UUID | None,
+    similarity: float | None = None,
+    margin: float | None = None,
+    vote_agreement: float | None = None,
+    grounded: bool | None = None,
+    eligible_turns: int = 4,
+    eligible_seconds: float = 30.0,
+    roster_size: int | None = 3,
+) -> None:
+    session.add(
+        MatchCandidate(
+            pipeline_run_id=run_id,
+            diarization_label=label,
+            decision=decision,
+            reason=reason,
+            embedding_space=SPACE,
+            top_speaker_id=top_speaker_id,
+            similarity=similarity,
+            margin=margin,
+            vote_agreement=vote_agreement,
+            grounded=grounded,
+            eligible_turns=eligible_turns,
+            eligible_seconds=eligible_seconds,
+            roster_size=roster_size,
+        )
+    )
+
+
+def test_label_states_carry_policy_candidate_and_evidence(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """#115: the rail confirms the POLICY candidate, so it must be on LabelState.
+
+    The candidate comes from ``match_candidates.top_speaker_id`` and its name
+    resolves through the same names map as every other speaker, so a formerly
+    rejected row that a gate change reclassifies as review still names someone.
+    """
+    with session_factory() as session:
+        run_id = make_completed_run(session)
+        for index, label in enumerate(["S0", "S0", "S1", "S1", "S2", "S2", "S3", "S4"]):
+            add_turn(session, run_id, index, label)
+        alice = add_speaker(session, "Alice")
+        bob = add_speaker(session, "Bob")
+        carol = add_speaker(session, "Carol")
+        # S0: grounded proposal, resolved by the machine.
+        session.add(
+            SpeakerAssignment(
+                pipeline_run_id=run_id,
+                diarization_label="S0",
+                speaker_id=alice,
+                method="cosine",
+                confidence=0.9,
+                grounded=True,
+            )
+        )
+        add_candidate(
+            session,
+            run_id,
+            "S0",
+            decision="accepted",
+            reason="accepted",
+            top_speaker_id=alice,
+            similarity=0.9,
+            margin=0.2,
+            vote_agreement=0.9,
+            grounded=True,
+        )
+        # S1: accepted but not grounded (the review band) — proposal row + evidence.
+        session.add(
+            SpeakerAssignment(
+                pipeline_run_id=run_id,
+                diarization_label="S1",
+                speaker_id=bob,
+                method="cosine",
+                confidence=0.65,
+                grounded=False,
+            )
+        )
+        add_candidate(
+            session,
+            run_id,
+            "S1",
+            decision="accepted",
+            reason="accepted",
+            top_speaker_id=bob,
+            similarity=0.65,
+            margin=0.1,
+            vote_agreement=0.8,
+            grounded=False,
+        )
+        # S2: rejected — no proposal row, evidence names the nearest voice.
+        add_candidate(
+            session,
+            run_id,
+            "S2",
+            decision="rejected",
+            reason="below_cosine",
+            top_speaker_id=carol,
+            similarity=0.4,
+            margin=0.1,
+            vote_agreement=0.8,
+        )
+        # S3: ineligible — no candidate at all.
+        add_candidate(
+            session,
+            run_id,
+            "S3",
+            decision="ineligible",
+            reason="too_few_turns",
+            top_speaker_id=None,
+            eligible_turns=1,
+            eligible_seconds=2.0,
+            roster_size=None,
+        )
+        # S4: never evaluated (no evidence row).
+        session.commit()
+
+        by_label = {s.label: s for s in label_states(session, run_id, gates=MatchingGates())}
+
+        s0 = by_label["S0"]
+        assert s0.band is MatchBand.AUTO_ATTRIBUTE
+        assert s0.candidate_speaker_id == alice
+        assert s0.candidate_speaker_name == "Alice"
+
+        s1 = by_label["S1"]
+        assert s1.resolution is Resolution.UNRESOLVED
+        assert s1.band is MatchBand.REVIEW
+        assert s1.candidate_prompt_allowed is True
+        # Policy candidate and proposal speaker agree for an accepted row.
+        assert s1.candidate_speaker_id == s1.cosine_speaker_id == bob
+        assert s1.candidate_speaker_name == "Bob"
+        assert s1.match_similarity == 0.65
+        assert s1.match_vote_agreement == 0.8
+
+        s2 = by_label["S2"]
+        assert s2.band is MatchBand.ABSTAIN
+        assert s2.cosine_speaker_id is None  # no proposal row
+        assert s2.candidate_speaker_id == carol  # nearest voice still named
+        assert s2.candidate_speaker_name == "Carol"
+        assert s2.candidate_prompt_allowed is False  # never confirmable
+
+        s3 = by_label["S3"]
+        assert s3.band is MatchBand.ABSTAIN
+        assert s3.candidate_speaker_id is None
+        assert s3.match_reason == "too_few_turns"
+
+        s4 = by_label["S4"]
+        assert s4.band is MatchBand.ABSTAIN
+        assert s4.match_decision is None
+        assert s4.candidate_speaker_id is None
+        assert s4.match_similarity is None
+
+
+def test_auto_enrolled_label_is_banded_by_live_evidence(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """#115: an auto-enrolled label is a placeholder, so its band comes from the
+    recorded evidence like an unresolved one — the review tail stays visible
+    even after auto-enroll (#275) has saved the voice as ``Voice N``."""
+    with session_factory() as session:
+        run_id = make_completed_run(session)
+        for index, label in enumerate(["S0", "S0", "S1", "S1"]):
+            add_turn(session, run_id, index, label)
+        alice = add_speaker(session, "Alice")
+        bob = add_speaker(session, "Bob")
+        voice_1 = add_speaker(session, "Voice 1")
+        voice_2 = add_speaker(session, "Voice 2")
+        # S0: auto-enrolled as Voice 1, but the matcher had an ungrounded
+        # candidate (Bob) — the operator should still get to confirm Bob.
+        session.add(
+            SpeakerAssignment(
+                pipeline_run_id=run_id,
+                diarization_label="S0",
+                speaker_id=bob,
+                method="cosine",
+                confidence=0.65,
+                grounded=False,
+            )
+        )
+        add_candidate(
+            session,
+            run_id,
+            "S0",
+            decision="accepted",
+            reason="accepted",
+            top_speaker_id=bob,
+            similarity=0.65,
+            margin=0.1,
+            vote_agreement=0.8,
+            grounded=False,
+        )
+        record_decision(
+            session,
+            pipeline_run_id=run_id,
+            diarization_label="S0",
+            decision=Decision.AUTO_ENROLL,
+            operator="auto_enroll",
+            idempotency_key="k-ae-s0",
+            speaker_id=voice_1,
+        )
+        # S1: auto-enrolled as Voice 2 with a clear rejection — nothing to confirm.
+        add_candidate(
+            session,
+            run_id,
+            "S1",
+            decision="rejected",
+            reason="below_cosine",
+            top_speaker_id=alice,
+            similarity=0.3,
+            margin=0.05,
+            vote_agreement=0.7,
+        )
+        record_decision(
+            session,
+            pipeline_run_id=run_id,
+            diarization_label="S1",
+            decision=Decision.AUTO_ENROLL,
+            operator="auto_enroll",
+            idempotency_key="k-ae-s1",
+            speaker_id=voice_2,
+        )
+        session.commit()
+
+        by_label = {s.label: s for s in label_states(session, run_id, gates=MatchingGates())}
+
+        s0 = by_label["S0"]
+        assert s0.resolution is Resolution.AUTO_ENROLL  # resolution untouched
+        assert s0.speaker_name == "Voice 1"
+        assert s0.band is MatchBand.REVIEW
+        assert s0.candidate_speaker_id == bob
+        assert s0.candidate_speaker_name == "Bob"
+        assert s0.candidate_prompt_allowed is True
+
+        s1 = by_label["S1"]
+        assert s1.resolution is Resolution.AUTO_ENROLL
+        assert s1.speaker_name == "Voice 2"
+        assert s1.band is MatchBand.ABSTAIN
+        assert s1.candidate_prompt_allowed is False
+
+        # Neither auto-enrolled label counts as unresolved for the queue.
+        assert adjudication_queue(session) == []
