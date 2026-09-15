@@ -48,6 +48,7 @@ from voxint.db.models import (
     Project,
     RunStatus,
     SavedQuote,
+    SegmentEmbedding,
     Speaker,
     SpeakerAssignment,
     TranscriptSegment,
@@ -1535,6 +1536,21 @@ def test_delete_project_cascade(session_factory: sessionmaker[Session]) -> None:
         session.add(segment)
         session.flush()
         segment_id = segment.id
+        embedding = SegmentEmbedding(
+            pipeline_run_id=run_id,
+            embedding_space="test-space",
+            generation=1,
+            chunk_index=0,
+            start_seconds=0.0,
+            end_seconds=1.0,
+            text_rendering="raw",
+            chunk_text="foo",
+            content_hash="d" * 64,
+            embedding=[0.1] * 384,
+        )
+        session.add(embedding)
+        session.flush()
+        embedding_id = embedding.id
         session.add(
             LearnedCorrectionEvidence(learned_correction_id=correction_id, segment_id=segment_id)
         )
@@ -1598,6 +1614,10 @@ def test_delete_project_cascade(session_factory: sessionmaker[Session]) -> None:
         assert session.get(PipelineRun, run_id).status == "completed"
         assert session.get(TranscriptSegment, segment_id).pipeline_run_id == run_id
         assert session.get(TranscriptSegment, segment_id).raw_text == "foo"
+        emb = session.get(SegmentEmbedding, embedding_id)
+        assert emb is not None
+        assert emb.pipeline_run_id == run_id
+        assert emb.chunk_text == "foo"
 
         control = session.get(Project, control_id)
         assert control is not None
@@ -1807,8 +1827,9 @@ def test_delete_confirm_empty_project(
     page = client.get(f"/projects/{pid}/delete")
     assert page.status_code == 200
     assert "cannot be undone" in page.text
-    assert "learned correction" not in page.text
-    assert "saved quote" not in page.text
+    assert "0 learned corrections" in page.text
+    assert "0 saved quotes" in page.text
+    assert "0 folders" in page.text
 
 
 def test_delete_post_invalid_csrf_is_403(

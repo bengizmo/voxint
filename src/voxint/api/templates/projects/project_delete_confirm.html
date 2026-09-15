@@ -14,20 +14,14 @@
   <h3 style="margin-top: var(--space-3); margin-bottom: var(--space-2);">Will be deleted</h3>
   <ul>
     <li>The project and all its settings (vocabulary, corrections, learning configuration)</li>
-    {% if counts.learned_correction_count %}
     <li>{{ counts.learned_correction_count }} learned correction{{ '' if counts.learned_correction_count == 1 else 's' }} and their evidence</li>
-    {% endif %}
-    {% if counts.saved_quote_count %}
     <li>{{ counts.saved_quote_count }} saved quote{{ '' if counts.saved_quote_count == 1 else 's' }}</li>
-    {% endif %}
     <li>Cached analysis artifacts (insights, trends)</li>
   </ul>
 
   <h3 style="margin-top: var(--space-3); margin-bottom: var(--space-2);">Will be kept</h3>
   <ul>
-    {% if counts.folder_count %}
     <li>{{ counts.folder_count }} folder{{ '' if counts.folder_count == 1 else 's' }} (will become unassigned)</li>
-    {% endif %}
     <li>All recordings, transcripts, pipeline runs, and embeddings</li>
   </ul>
 </div>
