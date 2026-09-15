@@ -382,6 +382,10 @@ class Project(Base):
     learn_corrections: Mapped[bool] = mapped_column(
         Boolean, server_default=text("false"), default=False
     )
+    # Inertness choke points when archived: (1) ingest/service._folder_and_project
+    # returns (folder, None), (2) adjudication/learned_corrections._resolve_project
+    # filters archived, (3) api/saved_quotes.save_quote refuses new saves.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     folders: Mapped[list["MediaFolder"]] = relationship(back_populates="project")
     learned_corrections: Mapped[list["LearnedCorrection"]] = relationship(

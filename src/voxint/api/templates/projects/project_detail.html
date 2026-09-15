@@ -3,8 +3,9 @@
 {% block title %}Voxint — {{ detail.name }}{% endblock %}
 
 {% block cb_breadcrumb %}projects / <strong>{{ detail.name }}</strong>{% endblock %}
-{% block cb_summary %}{{ chip("active") }}{% endblock %}
+{% block cb_summary %}{{ chip("archived" if detail.archived_at else "active") }}{% endblock %}
 {% block cb_actions %}
+{% if not detail.archived_at %}
 <details class="cb-overflow">
   <summary class="cb-btn cb-btn-secondary">Rename</summary>
   <form class="cb-overflow-menu" style="padding: var(--space-3); display: flex; gap: var(--space-2); align-items: center;"
@@ -14,6 +15,28 @@
     <button type="submit" class="cb-btn cb-btn-primary">Save</button>
   </form>
 </details>
+<details class="cb-overflow">
+  <summary class="cb-btn cb-btn-secondary" aria-label="More actions">&hellip;</summary>
+  <div class="cb-overflow-menu">
+    <form method="post" action="/projects/{{ detail.id }}/archive"
+          style="padding: var(--space-2) var(--space-3);">
+      <input type="hidden" name="csrf_token" value="{{ csrf_archive }}">
+      <button type="submit" class="danger" style="width:100%">Archive project</button>
+    </form>
+  </div>
+</details>
+{% else %}
+<details class="cb-overflow">
+  <summary class="cb-btn cb-btn-secondary" aria-label="More actions">&hellip;</summary>
+  <div class="cb-overflow-menu">
+    <form method="post" action="/projects/{{ detail.id }}/restore"
+          style="padding: var(--space-2) var(--space-3);">
+      <input type="hidden" name="csrf_token" value="{{ csrf_restore }}">
+      <button type="submit" style="width:100%">Restore project</button>
+    </form>
+  </div>
+</details>
+{% endif %}
 {% endblock %}
 
 {% block body %}
@@ -113,6 +136,9 @@
 {% endif %}
 {%- endmacro %}
 
+{% if detail.archived_at %}
+<p class="notice error" role="alert">This project is archived: its settings are read-only, and new recordings in its folders no longer use its vocabulary or corrections. Existing quotes can still be edited. Restore it to edit settings again.</p>
+{% endif %}
 {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
 
 {# The fields this project actually overrides, named so the supersede copy never
@@ -358,8 +384,10 @@
       {% for term in detail.vocabulary %}
       <span class="vocab-chip">{{ term }}</span>
       {% endfor %}
+      {% if not detail.archived_at %}
       <span class="vocab-chip vocab-chip-add" tabindex="0" role="button"
             onclick="this.closest('section').querySelector('details.pd-edit-toggle').open=true">+ add term</span>
+      {% endif %}
     </div>
     {% elif detail.vocabulary is not none %}
     <p class="oc-muted">No terms (explicitly set to none).</p>
@@ -367,6 +395,7 @@
     <p class="oc-muted">Inheriting from the folder pack or global settings.</p>
     {% endif %}
 
+    {% if not detail.archived_at %}
     {% if vocabulary_error %}<p class="notice error" role="alert">{{ vocabulary_error }}</p>{% endif %}
     <details class="pd-edit-toggle">
       <summary>Edit vocabulary</summary>
@@ -389,11 +418,15 @@
     </details>
 
     <p class="oc-muted pd-helper">Applies to the next run — finished transcripts don't change.</p>
+    {% else %}
+    <p class="oc-muted pd-helper">Inactive while archived.</p>
+    {% endif %}
   </section>
 
   <section class="oc-section">
     <div class="oc-section-header">
       <h2 class="oc-section-title">AUTO-CORRECT RULES</h2>
+      {% if not detail.archived_at %}
       <form method="post" action="/projects/{{ detail.id }}/learning" style="display:inline-flex;align-items:center;gap:var(--space-2)">
         <input type="hidden" name="csrf_token" value="{{ csrf_learning }}">
         <input type="hidden" name="enabled" value="{{ 'off' if detail.learn_corrections else 'on' }}">
@@ -403,16 +436,19 @@
         </label>
         {% if detail.corrections is none %}<span class="oc-muted" style="font-size:0.75rem">(set corrections first)</span>{% endif %}
       </form>
+      {% endif %}
     </div>
     <p class="oc-muted">fix a repeated mishearing once, it's fixed everywhere</p>
-    {% if detail.learn_corrections %}
+    {% if not detail.archived_at and detail.learn_corrections %}
     <p class="oc-muted" style="font-size:0.8125rem">When on, Voxint watches your transcript edits in this project and suggests a rule once the same fix appears in 3 segments. Suggestions never apply until you accept them. Turning this off stops watching; accepted rules stay.</p>
     {% endif %}
 
+    {% if not detail.archived_at %}
     {% if corrections_error %}<p class="notice error" role="alert">{{ corrections_error }}</p>{% endif %}
 
     <div data-island="corrections-editor" data-props='{{ corrections_props|tojson }}'>
       <noscript><p class="oc-muted">Editing corrections needs JavaScript. Current rules are shown below. <a href="#" class="oc-section-link">+ add rule</a> (requires JavaScript)</p></noscript>
+    {% endif %}
       {% if detail.corrections %}
       <div class="grid-table pd-rules-grid" role="region" aria-label="Correction rules" tabindex="0"
            style="grid-template-columns: 1fr auto 1fr auto auto;">
@@ -426,7 +462,7 @@
         {% for rule in detail.corrections %}
         <div class="gt-row">
           <span><code>{{ rule.match }}</code></span>
-          <span class="pd-arrow">→</span>
+          <span class="pd-arrow">&rarr;</span>
           <span><code>{{ rule.replace }}</code></span>
           <span>{% if detail.learned_counts and rule.id in detail.learned_counts %}learned x{{ detail.learned_counts[rule.id] }}{% else %}manual{% endif %}</span>
           <span></span>
@@ -438,6 +474,7 @@
       {% else %}
       <p class="oc-muted">Inheriting from the folder pack or global corrections.</p>
       {% endif %}
+    {% if not detail.archived_at %}
     </div>
 
     {% if detail.suggestions %}
@@ -455,7 +492,7 @@
         {% for s in detail.suggestions %}
         <div class="gt-row">
           <span><code>{{ s.match }}</code></span>
-          <span class="pd-arrow">→</span>
+          <span class="pd-arrow">&rarr;</span>
           <span><code>{{ s.replace }}</code></span>
           <span>{{ s.count }} segments</span>
           <span style="display:flex;gap:var(--space-2)">
@@ -483,6 +520,7 @@
       <button type="submit" class="cb-btn cb-btn-secondary">Reset to inherited corrections</button>
     </form>
     {% endif %}
+    {% endif %}
   </section>
 </div>
 
@@ -490,7 +528,7 @@
   <section class="oc-section">
     <div class="oc-section-header">
       <h2 class="oc-section-title">MEDIA FOLDERS</h2>
-      {% if detail.assignable %}<a href="#" class="oc-section-link" onclick="this.closest('section').querySelector('details.pd-edit-toggle').open=true; return false;">+ link folder</a>{% endif %}
+      {% if not detail.archived_at and detail.assignable %}<a href="#" class="oc-section-link" onclick="this.closest('section').querySelector('details.pd-edit-toggle').open=true; return false;">+ link folder</a>{% endif %}
     </div>
     {% if detail.folders %}
     <ul class="pd-sidebar-list">
@@ -507,7 +545,7 @@
           </form>
         </div>
         {% if folder.domain_pack %}
-        <span class="oc-muted pd-pack-note">{{ folder.domain_pack }} pack{% if detail.has_own_config %} · {{ own_fields }} superseded by this project{% endif %}</span>
+        <span class="oc-muted pd-pack-note">{{ folder.domain_pack }} pack{% if not detail.archived_at and detail.has_own_config %} &middot; {{ own_fields }} superseded by this project{% endif %}</span>
         {% endif %}
       </li>
       {% endfor %}
@@ -516,6 +554,7 @@
     <p class="oc-muted">No folders yet.</p>
     {% endif %}
 
+    {% if not detail.archived_at %}
     {% if detail.assignable %}
     <details class="pd-edit-toggle">
       <summary>Assign a folder</summary>
@@ -534,6 +573,7 @@
     </details>
     {% else %}
     <p class="oc-muted">Every registered folder is already assigned to a project. Register more in <a href="/settings">Settings</a>.</p>
+    {% endif %}
     {% endif %}
   </section>
 

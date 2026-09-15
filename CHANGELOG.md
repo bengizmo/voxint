@@ -6,6 +6,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Project archive and restore** (#477). Archive a project from the detail
+  page's overflow menu to make it inert: settings become read-only, new
+  recordings in its folders no longer inherit its vocabulary or corrections,
+  learned-corrections capture stops, and new quote saves are refused. Folders
+  stay linked, history and insights stay live, existing quotes remain editable.
+  Restore reverses archive with no data loss. Archived projects appear in a
+  collapsed "Archived projects" section on the list page and are labelled
+  "(archived)" in the Explore and media folder pickers. Migration 0064;
+  downgrade drops archive state (archived projects come back active).
+
 ## [0.38.0] - 2026-09-15
 
 ### Added

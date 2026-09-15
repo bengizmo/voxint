@@ -81,8 +81,17 @@ def _row_to_dict(row: KWICRow) -> dict[str, Any]:
 
 
 def _filter_projects(session: Session) -> list[dict[str, Any]]:
-    rows = session.execute(select(Project.id, Project.name).order_by(Project.name)).all()
-    return [{"id": str(r.id), "name": r.name} for r in rows]
+    rows = session.execute(
+        select(Project.id, Project.name, Project.archived_at)
+        .order_by(Project.archived_at.isnot(None), Project.name)
+    ).all()
+    return [
+        {
+            "id": str(r.id),
+            "name": f"{r.name} (archived)" if r.archived_at else r.name,
+        }
+        for r in rows
+    ]
 
 
 def _filter_speakers(session: Session) -> list[dict[str, Any]]:

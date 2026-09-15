@@ -336,12 +336,13 @@ class UrlValidationError(IngestError):
 def _folder_and_project(
     session: Session, media_folder_id: uuid.UUID
 ) -> tuple[MediaFolder | None, Project | None]:
-    """The run's owning folder and its project, loaded together (issue #153).
+    """The run's owning folder and its configuration-eligible project (#153, #477).
 
     One relational read (eager-joined project) so a concurrent folder/project
     edit under READ COMMITTED cannot assemble a hybrid config from separate
     point-reads. Returns ``(folder, project)``; ``project`` is ``None`` when the
-    folder joins none, and ``(None, None)`` if the folder row is gone.
+    folder joins none OR when the joined project is archived (its config no
+    longer applies to new runs), and ``(None, None)`` if the folder row is gone.
     """
     folder = session.execute(
         select(MediaFolder)
@@ -350,7 +351,10 @@ def _folder_and_project(
     ).scalar_one_or_none()
     if folder is None:
         return None, None
-    return folder, folder.project
+    project = folder.project
+    if project is not None and project.archived_at is not None:
+        return folder, None
+    return folder, project
 
 
 @dataclass(frozen=True)

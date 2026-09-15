@@ -37,13 +37,14 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_project(session: Session, segment: TranscriptSegment) -> Project | None:
-    """Walk segment -> run -> media_item -> folder -> project, all nullable."""
+    """Walk segment -> run -> media_item -> folder -> active project (#477)."""
     row = session.execute(
         select(Project)
         .join(MediaFolder, MediaFolder.project_id == Project.id)
         .join(MediaItem, MediaItem.media_folder_id == MediaFolder.id)
         .join(PipelineRun, PipelineRun.media_item_id == MediaItem.id)
         .where(PipelineRun.id == segment.pipeline_run_id)
+        .where(Project.archived_at.is_(None))
     ).scalar_one_or_none()
     return row
 
@@ -162,9 +163,14 @@ def observe_segment_edit(session: Session, segment: TranscriptSegment) -> None:
 
             # Serialize per-project to prevent concurrent-run races on
             # suggestion creation, orphan cleanup, and the 256-row cap.
-            session.execute(
-                select(Project.id).where(Project.id == project.id).with_for_update()
-            )
+            # The archived predicate closes the resolve-then-lock window (#477).
+            locked = session.execute(
+                select(Project.id)
+                .where(Project.id == project.id, Project.archived_at.is_(None))
+                .with_for_update()
+            ).scalar_one_or_none()
+            if locked is None:
+                return
 
             review_state = session.get(SegmentReviewState, segment.id)
             corrected_text = review_state.corrected_text if review_state else None

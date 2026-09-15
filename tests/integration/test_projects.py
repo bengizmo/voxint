@@ -20,10 +20,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
 from voxint.api.csrf import (
+    CSRF_PROJECT_ARCHIVE,
     CSRF_PROJECT_ASSIGN,
     CSRF_PROJECT_CORRECTIONS,
     CSRF_PROJECT_LEARNING,
     CSRF_PROJECT_RENAME,
+    CSRF_PROJECT_RESTORE,
     CSRF_PROJECT_UNLINK,
     CSRF_PROJECT_VOCAB,
     mint_csrf_token,
@@ -1098,3 +1100,349 @@ def test_detail_read_model_has_learning_fields(
         assert detail.learn_corrections is True
         assert detail.suggestions == []
         assert detail.learned_counts == {}
+
+
+# ---- archive / restore (#477) ------------------------------------------------
+
+
+def test_overflow_archive_form_scrapes_with_csrf(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Active detail page has a '...' menu with an archive form + CSRF token."""
+    with session_factory() as session:
+        project = _make_project(session)
+        pid = project.id
+        session.commit()
+    page = client.get(f"/projects/{pid}")
+    match = re.search(
+        rf'action="(/projects/{pid}/archive)"[^>]*>\s*'
+        r'<input type="hidden" name="csrf_token" value="([^"]+)"',
+        page.text,
+        re.S,
+    )
+    assert match, "overflow menu should carry an archive form with a CSRF token"
+    assert "active" in page.text.lower()
+
+
+def test_archive_wrong_csrf_is_403(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        pid = project.id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/archive",
+        data={"csrf_token": "wrong"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+    with session_factory() as session:
+        assert session.get(Project, pid).archived_at is None
+
+
+def test_restore_wrong_csrf_is_403(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/restore",
+        data={"csrf_token": "wrong"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+    with session_factory() as session:
+        assert session.get(Project, pid).archived_at is not None
+
+
+def test_archive_round_trip(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Archive then restore: detail page flips chips and controls."""
+    with session_factory() as session:
+        project = _make_project(session)
+        pid = project.id
+        session.commit()
+
+    # Archive
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_ARCHIVE)
+    resp = client.post(
+        f"/projects/{pid}/archive",
+        data={"csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        assert session.get(Project, pid).archived_at is not None
+
+    # Detail page shows archived state
+    page = client.get(f"/projects/{pid}")
+    assert "archived" in page.text.lower()
+    assert "This project is archived" in page.text
+    # No rename dropdown
+    assert 'action="/projects/' + str(pid) + '/rename"' not in page.text
+    # Has restore form
+    assert f'/projects/{pid}/restore' in page.text
+
+    # Restore
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_RESTORE)
+    resp = client.post(
+        f"/projects/{pid}/restore",
+        data={"csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        assert session.get(Project, pid).archived_at is None
+
+    # Back to active
+    page = client.get(f"/projects/{pid}")
+    assert "This project is archived" not in page.text
+    assert f'/projects/{pid}/rename' in page.text
+
+
+def test_archive_idempotent(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        session.commit()
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_ARCHIVE)
+    resp = client.post(
+        f"/projects/{pid}/archive",
+        data={"csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+
+def test_restore_idempotent(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        pid = project.id
+        session.commit()
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_RESTORE)
+    resp = client.post(
+        f"/projects/{pid}/restore",
+        data={"csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+
+def test_archive_missing_project_is_404(client: TestClient) -> None:
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_ARCHIVE)
+    resp = client.post(
+        f"/projects/{uuid.uuid4()}/archive",
+        data={"csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 404
+
+
+def test_restore_missing_project_is_404(client: TestClient) -> None:
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_RESTORE)
+    resp = client.post(
+        f"/projects/{uuid.uuid4()}/restore",
+        data={"csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "route_suffix,data_extra",
+    [
+        ("/rename", {"name": "New name"}),
+        ("/vocabulary", {"mode": "set", "vocabulary": "term"}),
+        ("/vocabulary", {"mode": "inherit"}),
+        ("/corrections", {"mode": "set", "rules": "[]"}),
+        ("/corrections", {"mode": "inherit"}),
+        ("/learning", {"enabled": "on"}),
+        ("/learning", {"enabled": "off"}),
+    ],
+    ids=[
+        "rename",
+        "vocabulary-set",
+        "vocabulary-inherit",
+        "corrections-set",
+        "corrections-inherit",
+        "learning-on",
+        "learning-off",
+    ],
+)
+def test_mutation_routes_409_on_archived(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    route_suffix: str,
+    data_extra: dict,
+) -> None:
+    """Every config mutation route refuses with 409 on an archived project."""
+    with session_factory() as session:
+        project = _make_project(session)
+        project.archived_at = datetime.now(UTC)
+        # Set corrections so learning-on doesn't hit the "set corrections first" branch
+        project.corrections = []
+        pid = project.id
+        session.commit()
+
+    # Determine which CSRF action this route needs
+    csrf_map = {
+        "/rename": CSRF_PROJECT_RENAME,
+        "/vocabulary": CSRF_PROJECT_VOCAB,
+        "/corrections": CSRF_PROJECT_CORRECTIONS,
+        "/learning": CSRF_PROJECT_LEARNING,
+    }
+    action = csrf_map[route_suffix]
+    token = mint_csrf_token(client.app.state.csrf_secret, action)
+
+    resp = client.post(
+        f"/projects/{pid}{route_suffix}",
+        data={"csrf_token": token, **data_extra},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 409, f"{route_suffix} should be 409 on archived"
+
+    # Verify no state changed
+    with session_factory() as session:
+        proj = session.get(Project, pid)
+        assert proj.archived_at is not None
+        assert proj.name == "Election coverage"
+
+
+def test_assign_folder_409_on_archived(
+    client: TestClient, session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        folder = MediaFolder(path="test/audio")
+        session.add(folder)
+        session.flush()
+        fid = folder.id
+        session.commit()
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_ASSIGN)
+    resp = client.post(
+        f"/projects/{pid}/folders",
+        data={"csrf_token": token, "folder_id": str(fid)},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 409
+    with session_factory() as session:
+        assert session.get(MediaFolder, fid).project_id is None
+
+
+def test_unlink_folder_allowed_on_archived(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Unlink is the one mutation allowed on archived projects."""
+    with session_factory() as session:
+        project = _make_project(session)
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        folder = MediaFolder(path="test/audio", project_id=pid)
+        session.add(folder)
+        session.flush()
+        fid = folder.id
+        session.commit()
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_UNLINK)
+    resp = client.post(
+        f"/projects/{pid}/folders/{fid}/unlink",
+        data={"csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        assert session.get(MediaFolder, fid).project_id is None
+
+
+def test_create_project_with_archived_name_gives_guidance(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session, name="Archived One")
+        project.archived_at = datetime.now(UTC)
+        session.commit()
+    token = _csrf(client, "/projects")
+    resp = client.post(
+        "/projects",
+        data={"name": "Archived One", "csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 409
+    assert "Restore it instead" in resp.text
+
+
+def test_list_page_partitions_active_and_archived(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        _make_project(session, name="Active A")
+        _make_project(session, name="Active B")
+        archived = _make_project(session, name="Old project")
+        archived.archived_at = datetime.now(UTC)
+        session.commit()
+    page = client.get("/projects")
+    assert "2 projects, 1 archived" in page.text
+    assert "Archived projects (1)" in page.text.replace("ARCHIVED PROJECTS", "Archived projects")
+    # The restore form is inside the archived section
+    assert "/restore" in page.text
+
+
+def test_archived_detail_hides_controls(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """An archived project with populated config hides edit controls."""
+    with session_factory() as session:
+        project = _make_project(session)
+        project.vocabulary = ["term1", "term2"]
+        project.corrections = [{"id": "r1", "match": "foo", "replace": "bar"}]
+        project.learn_corrections = True
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        folder = MediaFolder(path="test/audio", project_id=pid, domain_pack="legal")
+        session.add(folder)
+        session.commit()
+
+    page = client.get(f"/projects/{pid}")
+    text = page.text
+
+    # Chip
+    assert "archived" in text.lower()
+    # Banner
+    assert "This project is archived" in text
+    # No rename
+    assert f'/projects/{pid}/rename' not in text
+    # No "+ add term"
+    assert "+ add term" not in text
+    # No edit vocabulary details
+    assert "Edit vocabulary" not in text
+    # Inactive helper text
+    assert "Inactive while archived" in text
+    # No learning toggle form
+    assert "Learn from my edits" not in text
+    # Corrections editor island not mounted (no data-island="corrections-editor")
+    assert 'data-island="corrections-editor"' not in text
+    # Static rules still shown
+    assert "foo" in text and "bar" in text
+    # No reset button
+    assert "Reset to inherited" not in text
+    # No "+ link folder"
+    assert "+ link folder" not in text
+    # No assign form
+    assert "Assign a folder" not in text
+    # Supersede note suppressed
+    assert "superseded by this project" not in text
+    # Unlink stays
+    assert "unlink" in text
+    # Restore available
+    assert f'/projects/{pid}/restore' in text

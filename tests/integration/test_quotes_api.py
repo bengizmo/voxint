@@ -417,3 +417,73 @@ def test_segment_delete_cascades_to_quotes(
         session.delete(segment)
         session.commit()
     assert _saved_quote_count(session_factory) == 0
+
+
+# ---- archived project inertness (#477) ----------------------------------------
+
+
+def test_save_quote_refused_on_archived_project(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """A quote save against an archived project's recording is 422 with an
+    honest message. Restoring the project lets the save succeed."""
+    from datetime import UTC, datetime
+
+    run_id, segment_id, project_id = _seed_project_run(session_factory)
+    assert project_id is not None
+
+    with session_factory() as session:
+        project = session.get(Project, project_id)
+        assert project is not None
+        project.archived_at = datetime.now(UTC)
+        session.commit()
+
+    resp = client.post("/quotes", data=_save_form(run_id, segment_id, client))
+    assert resp.status_code == 422
+    body = resp.json()
+    assert "archived" in body["error"].lower()
+    assert _quotes(session_factory) == []
+
+    with session_factory() as session:
+        project = session.get(Project, project_id)
+        assert project is not None
+        project.archived_at = None
+        session.commit()
+
+    resp = client.post("/quotes", data=_save_form(run_id, segment_id, client))
+    assert resp.status_code == 201
+    assert len(_quotes(session_factory)) == 1
+
+
+def test_existing_quote_editable_on_archived_project(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Note update and delete on an existing quote from an archived project
+    still succeed."""
+    from datetime import UTC, datetime
+
+    run_id, segment_id, project_id = _seed_project_run(session_factory)
+    assert project_id is not None
+
+    quote_id = client.post(
+        "/quotes", data=_save_form(run_id, segment_id, client)
+    ).json()["id"]
+
+    with session_factory() as session:
+        project = session.get(Project, project_id)
+        assert project is not None
+        project.archived_at = datetime.now(UTC)
+        session.commit()
+
+    resp = client.patch(
+        f"/quotes/{quote_id}",
+        data={"note": "key evidence", "csrf_token": _manage_token(client)},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["note"] == "key evidence"
+
+    resp = client.request(
+        "DELETE", f"/quotes/{quote_id}", data={"csrf_token": _manage_token(client)}
+    )
+    assert resp.status_code == 200
+    assert _quotes(session_factory) == []

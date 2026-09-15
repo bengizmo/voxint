@@ -350,6 +350,14 @@
     true
   ],
   [
+    "/projects/{project_id}/archive",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/projects/{project_id}/corrections",
     [
       "POST"
@@ -391,6 +399,14 @@
   ],
   [
     "/projects/{project_id}/rename",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/projects/{project_id}/restore",
     [
       "POST"
     ],
