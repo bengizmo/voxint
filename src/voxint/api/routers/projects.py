@@ -543,6 +543,8 @@ def handle_suggestion(
     learned = session.get(LearnedCorrection, suggestion_id)
     if learned is None or learned.project_id != project_id:
         raise HTTPException(status_code=404, detail="no such suggestion")
+    if learned.status != "suggested":
+        raise HTTPException(status_code=409, detail="suggestion already handled")
     if decision == "dismiss":
         dismiss_suggestion(session, learned)
         session.commit()

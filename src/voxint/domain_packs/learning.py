@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from voxint.domain_packs.corrections import (
     CorrectionRule,
+    DomainPackError,
     find_first,
     is_word_char,
     parse_corrections,
@@ -71,13 +72,23 @@ def extract_substitutions(
 
     edited_runs = _tokenize(edited)
     matcher = difflib.SequenceMatcher(None, base_runs, edited_runs, autojunk=False)
+    opcodes = matcher.get_opcodes()
 
-    replaced_word_count = 0
+    # First pass: total ALL replaced base words to detect wholesale rewrites.
+    replaced_word_count = sum(
+        _word_count_in_span(base_runs, i1, i2)
+        for tag, i1, i2, _, _ in opcodes
+        if tag == "replace"
+    )
     max_replaced = max(MAX_LEARNED_WORDS_PER_SIDE, base_words // 2)
+    if replaced_word_count > max_replaced:
+        return ()
+
+    # Second pass: extract learnable candidates.
     candidates: list[Substitution] = []
     seen: set[tuple[str, str]] = set()
 
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+    for tag, i1, i2, j1, j2 in opcodes:
         if tag != "replace":
             continue
 
@@ -97,8 +108,6 @@ def extract_substitutions(
         if replace_words < 1 or replace_words > MAX_LEARNED_WORDS_PER_SIDE:
             continue
 
-        replaced_word_count += match_words
-
         key = (match_text, replace_text)
         if key in seen:
             continue
@@ -110,7 +119,7 @@ def extract_substitutions(
         )
         try:
             parse_corrections([rule.to_mapping()])
-        except Exception:
+        except DomainPackError:
             continue
 
         if find_first(rule, base) is None:
@@ -122,8 +131,5 @@ def extract_substitutions(
 
         if len(candidates) >= MAX_PAIRS_PER_SEGMENT:
             break
-
-    if replaced_word_count > max_replaced:
-        return ()
 
     return tuple(candidates)

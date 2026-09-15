@@ -160,6 +160,12 @@ def observe_segment_edit(session: Session, segment: TranscriptSegment) -> None:
             if project.corrections is None:
                 return
 
+            # Serialize per-project to prevent concurrent-run races on
+            # suggestion creation, orphan cleanup, and the 256-row cap.
+            session.execute(
+                select(Project.id).where(Project.id == project.id).with_for_update()
+            )
+
             review_state = session.get(SegmentReviewState, segment.id)
             corrected_text = review_state.corrected_text if review_state else None
             if corrected_text is None:

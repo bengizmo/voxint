@@ -106,6 +106,18 @@ class TestRewriteCutoff:
         result = _extract(base, edited)
         assert result == ()
 
+    def test_cutoff_counts_all_opcodes_not_just_first_four(self) -> None:
+        """A 12-word base with 7 one-word replacements (>6 = 12//2) is a
+        wholesale rewrite even though each individual replacement is small."""
+        base_words = [f"w{i}" for i in range(12)]
+        edited_words = list(base_words)
+        for i in [0, 2, 4, 6, 8, 9, 10]:
+            edited_words[i] = f"x{i}"
+        base = " ".join(base_words)
+        edited = " ".join(edited_words)
+        result = _extract(base, edited)
+        assert result == ()
+
 
 class TestCaps:
     def test_pair_cap_at_max(self) -> None:
