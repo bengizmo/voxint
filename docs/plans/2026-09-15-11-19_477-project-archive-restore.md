@@ -1,6 +1,6 @@
 # #477 Project archive and restore
 
-Status: in-progress
+Status: done
 
 ## Goal
 
@@ -486,3 +486,30 @@ undo it.
 **Rejected:** none. The two-session deterministic ordering test suggested
 under finding 3 is deferred as disproportionate for a single-operator tool
 (recorded under Testing strategy).
+
+## Completion notes
+
+**Completed:** 2026-09-15. PR #486 merged at `22db4d0`, all 5 slices landed.
+
+**Verification:** 4572 contract + unit tests pass, 113 integration tests for
+the touched files pass (migration 0064, projects, config resolution, quotes
+API, project archive contract). Three-model code review (Codex, Grok, Kimi)
+with 4 findings fixed and 3 dismissed. Browser acceptance lane passed all 8
+assertions (archive/restore round trip, read-only controls, suggestions
+read-only, list-page partition, detail-page restore, Explore picker labels,
+Explore save-on-archived error message).
+
+**Scenario coverage:** 12 of 15 acceptance scenarios have dedicated automated
+tests. Three lack a dedicated test, all accepted in code review as non-blocking
+test-only gaps (no code defects): learning inertness retract-without-capture,
+membership stays live, picker label assertions. The first two are WHERE-predicate
+additions with no new code path; the third was verified in the browser lane.
+
+**Spec files updated:** none (no living spec declared).
+
+**Drift:** `test_migration_0016.py` received a 1-line import adjustment; no
+feature drift.
+
+**Follow-ups:** hard delete (cascade semantics for learned corrections, saved
+quotes, corpus-analysis artifacts by `scope_id`). The three test gaps above
+are candidates for a test-debt pass.
