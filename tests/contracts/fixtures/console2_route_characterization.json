@@ -366,6 +366,22 @@
     true
   ],
   [
+    "/projects/{project_id}/delete",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/projects/{project_id}/delete",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/projects/{project_id}/folders",
     [
       "POST"

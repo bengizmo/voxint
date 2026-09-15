@@ -34,6 +34,8 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_restore }}">
       <button type="submit" style="width:100%">Restore project</button>
     </form>
+    <a href="/projects/{{ detail.id }}/delete"
+       class="danger" style="display:block; padding: var(--space-2) var(--space-3); text-align:center;">Delete permanently</a>
   </div>
 </details>
 {% endif %}

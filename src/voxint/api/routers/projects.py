@@ -37,6 +37,7 @@ from voxint.api.csrf import (
     CSRF_PROJECT_ASSIGN,
     CSRF_PROJECT_CORRECTIONS,
     CSRF_PROJECT_CREATE,
+    CSRF_PROJECT_DELETE,
     CSRF_PROJECT_LEARNING,
     CSRF_PROJECT_RENAME,
     CSRF_PROJECT_RESTORE,
@@ -46,7 +47,7 @@ from voxint.api.csrf import (
     mint_csrf_token,
 )
 from voxint.api.project_insights import get_project_insights
-from voxint.api.projects_query import list_projects, project_detail
+from voxint.api.projects_query import list_projects, project_delete_counts, project_detail
 from voxint.api.routers.deps import (
     OperatorDep,
     SessionDep,
@@ -69,8 +70,10 @@ from voxint.domain_packs.corrections import (
 )
 from voxint.projects.lifecycle import (
     ProjectArchivedError,
+    ProjectNotArchivedError,
     ProjectNotFoundError,
     archive_project,
+    delete_project,
     describe_project_name_owner,
     require_active_project,
     restore_project,
@@ -636,3 +639,53 @@ def project_restore(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     session.commit()
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+@router.get("/projects/{project_id}/delete")
+def project_delete_confirm(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    project_id: uuid.UUID,
+) -> Response:
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"no project {project_id}")
+    if project.archived_at is None:
+        return RedirectResponse(f"/projects/{project_id}", status_code=303)
+    counts = project_delete_counts(session, project_id)
+    return templates.TemplateResponse(
+        request,
+        "projects/project_delete_confirm.html",
+        {
+            "request": request,
+            "active_nav": "projects",
+            "project": project,
+            "counts": counts,
+            "csrf_delete": mint_csrf_token(
+                request.app.state.csrf_secret, CSRF_PROJECT_DELETE
+            ),
+        },
+    )
+
+
+@router.post("/projects/{project_id}/delete")
+def project_delete(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    project_id: uuid.UUID,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    _require_csrf(request, CSRF_PROJECT_DELETE, csrf_token)
+    try:
+        delete_project(session, project_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ProjectNotArchivedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="This project is not archived. Archive it first.",
+        ) from exc
+    session.commit()
+    return RedirectResponse("/projects", status_code=303)

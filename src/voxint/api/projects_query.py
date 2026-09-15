@@ -30,6 +30,7 @@ from voxint.db.models import (
     PipelineRun,
     Project,
     RunStatus,
+    SavedQuote,
 )
 from voxint.domain_packs.learning import LEARN_THRESHOLD_SEGMENTS
 
@@ -319,4 +320,37 @@ def project_detail(
         suggestions=suggestions,
         learned_counts=learned_counts,
         archived_at=project.archived_at,
+    )
+
+
+@dataclass(frozen=True)
+class ProjectDeleteCounts:
+    """Blast-radius preview for the hard-delete confirmation page (#488)."""
+
+    learned_correction_count: int
+    saved_quote_count: int
+    folder_count: int
+
+
+def project_delete_counts(session: Session, project_id: uuid.UUID) -> ProjectDeleteCounts:
+    """Count data that will be affected by deleting the project."""
+    correction_count = session.execute(
+        sa_select(func.count()).select_from(LearnedCorrection).where(
+            LearnedCorrection.project_id == project_id
+        )
+    ).scalar_one()
+    quote_count = session.execute(
+        sa_select(func.count()).select_from(SavedQuote).where(
+            SavedQuote.project_id == project_id
+        )
+    ).scalar_one()
+    folder_count = session.execute(
+        sa_select(func.count()).select_from(MediaFolder).where(
+            MediaFolder.project_id == project_id
+        )
+    ).scalar_one()
+    return ProjectDeleteCounts(
+        learned_correction_count=correction_count,
+        saved_quote_count=quote_count,
+        folder_count=folder_count,
     )

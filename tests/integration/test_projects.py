@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select as sa_select
+from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
@@ -23,6 +25,8 @@ from voxint.api.csrf import (
     CSRF_PROJECT_ARCHIVE,
     CSRF_PROJECT_ASSIGN,
     CSRF_PROJECT_CORRECTIONS,
+    CSRF_PROJECT_CREATE,
+    CSRF_PROJECT_DELETE,
     CSRF_PROJECT_LEARNING,
     CSRF_PROJECT_RENAME,
     CSRF_PROJECT_RESTORE,
@@ -34,15 +38,25 @@ from voxint.api.projects_query import project_detail
 from voxint.config import Settings
 from voxint.db.models import (
     AdjudicationDecision,
+    CorpusAnalysisArtifact,
     DiarizationTurn,
     LearnedCorrection,
+    LearnedCorrectionEvidence,
     MediaFolder,
     MediaItem,
     PipelineRun,
     Project,
     RunStatus,
+    SavedQuote,
+    SegmentEmbedding,
     Speaker,
     SpeakerAssignment,
+    TranscriptSegment,
+)
+from voxint.projects.lifecycle import (
+    ProjectNotArchivedError,
+    ProjectNotFoundError,
+    delete_project,
 )
 
 CREDS = ("reviewer", "s3cret")
@@ -1478,3 +1492,516 @@ def test_suggestion_409_on_archived(
     with session_factory() as session:
         assert session.get(LearnedCorrection, sid) is not None
         assert session.get(LearnedCorrection, sid).status == "suggested"
+
+
+# ---- hard delete (#488) -----------------------------------------------------
+
+
+def test_delete_project_cascade(session_factory: sessionmaker[Session]) -> None:
+    """Delete project-owned data while preserving media and unrelated scopes."""
+    with session_factory() as session:
+        target = _make_project(session, "Target")
+        target.archived_at = datetime.now(UTC)
+        control = _make_project(session, "Control")
+        target_id, control_id = target.id, control.id
+        target_folder = MediaFolder(
+            path="test/delete/target", project_id=target_id, domain_pack="legal", watch=False
+        )
+        control_folder = MediaFolder(path="test/delete/control", project_id=control_id)
+        correction = LearnedCorrection(
+            project_id=target_id, match="foo", replace="bar", status="suggested"
+        )
+        control_correction = LearnedCorrection(
+            project_id=control_id, match="control", replace="untouched", status="suggested"
+        )
+        session.add_all([target_folder, control_folder, correction, control_correction])
+        session.flush()
+        folder_id, control_folder_id = target_folder.id, control_folder.id
+        correction_id, control_correction_id = correction.id, control_correction.id
+        item = MediaItem(source_path="test/delete/target/audio.wav", media_folder_id=folder_id)
+        session.add(item)
+        session.flush()
+        item_id = item.id
+        run = PipelineRun(media_item_id=item_id, status="completed")
+        session.add(run)
+        session.flush()
+        run_id = run.id
+        segment = TranscriptSegment(
+            pipeline_run_id=run_id,
+            segment_index=0,
+            start_seconds=0,
+            end_seconds=1,
+            raw_text="foo",
+        )
+        session.add(segment)
+        session.flush()
+        segment_id = segment.id
+        embedding = SegmentEmbedding(
+            pipeline_run_id=run_id,
+            embedding_space="test-space",
+            generation=1,
+            chunk_index=0,
+            start_seconds=0.0,
+            end_seconds=1.0,
+            text_rendering="raw",
+            chunk_text="foo",
+            content_hash="d" * 64,
+            embedding=[0.1] * 384,
+        )
+        session.add(embedding)
+        session.flush()
+        embedding_id = embedding.id
+        session.add(
+            LearnedCorrectionEvidence(learned_correction_id=correction_id, segment_id=segment_id)
+        )
+        session.add(
+            SavedQuote(
+                project_id=target_id,
+                segment_id=segment_id,
+                run_id=run_id,
+                search_query="foo",
+                left_context="",
+                hit="foo",
+                right_context="",
+                media_title="Target audio",
+                start_seconds=0,
+                operator="reviewer",
+            )
+        )
+        for kind in ("project_insights", "temporal_trends"):
+            session.add(
+                CorpusAnalysisArtifact(
+                    scope_kind="project", scope_id=target_id, artifact_kind=kind,
+                    generation=1, source_hash="a" * 64, payload={},
+                )
+            )
+        control_artifact = CorpusAnalysisArtifact(
+            scope_kind="project", scope_id=control_id, artifact_kind="project_insights",
+            generation=1, source_hash="b" * 64, payload={},
+        )
+        corpus_artifact = CorpusAnalysisArtifact(
+            scope_kind="corpus", scope_id=None, artifact_kind="term_stats",
+            generation=1, source_hash="c" * 64, payload={},
+        )
+        session.add_all([control_artifact, corpus_artifact])
+        session.flush()
+        control_artifact_id, corpus_artifact_id = control_artifact.id, corpus_artifact.id
+        session.commit()
+
+    with session_factory() as session:
+        delete_project(session, target_id)
+        session.commit()
+
+    with session_factory() as session:
+        assert session.get(Project, target_id) is None
+        assert session.query(LearnedCorrection).filter_by(project_id=target_id).all() == []
+        # Evidence is owned by the correction, with no direct project FK.
+        assert session.query(LearnedCorrectionEvidence).filter_by(
+            learned_correction_id=correction_id
+        ).all() == []
+        assert session.query(SavedQuote).filter_by(project_id=target_id).all() == []
+        assert session.query(CorpusAnalysisArtifact).filter_by(
+            scope_kind="project", scope_id=target_id
+        ).all() == []
+        folder = session.get(MediaFolder, folder_id)
+        assert folder is not None
+        assert folder.project_id is None
+        assert folder.path == "test/delete/target"
+        assert folder.domain_pack == "legal"
+        assert folder.watch is False
+        assert session.get(MediaItem, item_id).media_folder_id == folder_id
+        assert session.get(PipelineRun, run_id).media_item_id == item_id
+        assert session.get(PipelineRun, run_id).status == "completed"
+        assert session.get(TranscriptSegment, segment_id).pipeline_run_id == run_id
+        assert session.get(TranscriptSegment, segment_id).raw_text == "foo"
+        emb = session.get(SegmentEmbedding, embedding_id)
+        assert emb is not None
+        assert emb.pipeline_run_id == run_id
+        assert emb.chunk_text == "foo"
+
+        control = session.get(Project, control_id)
+        assert control is not None
+        assert control.name == "Control"
+        assert control.archived_at is None
+        control_folder = session.get(MediaFolder, control_folder_id)
+        assert control_folder.project_id == control_id
+        assert control_folder.path == "test/delete/control"
+        control_correction = session.get(LearnedCorrection, control_correction_id)
+        assert control_correction.project_id == control_id
+        assert control_correction.match == "control"
+        assert control_correction.replace == "untouched"
+        assert control_correction.status == "suggested"
+        control_artifact = session.get(CorpusAnalysisArtifact, control_artifact_id)
+        assert control_artifact.scope_kind == "project"
+        assert control_artifact.scope_id == control_id
+        assert control_artifact.artifact_kind == "project_insights"
+        assert control_artifact.generation == 1
+        assert control_artifact.source_hash == "b" * 64
+        assert control_artifact.payload == {}
+        corpus_artifact = session.get(CorpusAnalysisArtifact, corpus_artifact_id)
+        assert corpus_artifact.scope_kind == "corpus"
+        assert corpus_artifact.scope_id is None
+        assert corpus_artifact.artifact_kind == "term_stats"
+        assert corpus_artifact.generation == 1
+        assert corpus_artifact.source_hash == "c" * 64
+        assert corpus_artifact.payload == {}
+
+        folder.project_id = control_id
+        session.commit()
+
+    with session_factory() as session:
+        assert session.get(MediaFolder, folder_id).project_id == control_id
+
+
+def test_delete_active_project_raises(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        pid = _make_project(session, "Active").id
+        session.commit()
+
+    with session_factory() as session:
+        with pytest.raises(ProjectNotArchivedError):
+            delete_project(session, pid)
+        session.commit()
+
+    with session_factory() as session:
+        project = session.get(Project, pid)
+        assert project is not None
+        assert project.archived_at is None
+
+
+def test_delete_missing_project_raises(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session, pytest.raises(ProjectNotFoundError):
+        delete_project(session, uuid.uuid4())
+
+
+def test_delete_project_double_delete(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        project = _make_project(session, "Delete twice")
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        session.commit()
+        delete_project(session, pid)
+        session.commit()
+
+    with session_factory() as session, pytest.raises(ProjectNotFoundError):
+        delete_project(session, pid)
+
+
+def test_delete_project_name_reuse(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        project = _make_project(session, "Reusable Name")
+        project.corrections = [{"id": "r1", "match": "foo", "replace": "bar"}]
+        project.vocabulary = ["old vocabulary"]
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        session.commit()
+        delete_project(session, pid)
+        session.commit()
+
+    with session_factory() as session:
+        project = _make_project(session, "Reusable Name")
+        new_id = project.id
+        assert new_id != pid
+        assert project.corrections is None
+        assert project.vocabulary is None
+        assert project.learned_corrections == []
+        session.commit()
+
+    with session_factory() as session:
+        assert session.get(Project, pid) is None
+        project = session.get(Project, new_id)
+        assert project.name == "Reusable Name"
+        assert project.corrections is None
+        assert project.vocabulary is None
+        assert project.learned_corrections == []
+
+
+def test_project_fk_inventory(session_factory: sessionmaker[Session]) -> None:
+    """Every FK into projects.id must have an explicit lifecycle decision."""
+    with session_factory() as session:
+        rows = session.execute(text("""
+            SELECT fk.table_name, source.column_name, rc.delete_rule
+            FROM information_schema.referential_constraints AS rc
+            JOIN information_schema.table_constraints AS fk
+              ON fk.constraint_catalog = rc.constraint_catalog
+             AND fk.constraint_schema = rc.constraint_schema
+             AND fk.constraint_name = rc.constraint_name
+            JOIN information_schema.constraint_column_usage AS target
+              ON target.constraint_catalog = rc.unique_constraint_catalog
+             AND target.constraint_schema = rc.unique_constraint_schema
+             AND target.constraint_name = rc.unique_constraint_name
+            JOIN information_schema.key_column_usage AS source
+              ON source.constraint_catalog = fk.constraint_catalog
+             AND source.constraint_schema = fk.constraint_schema
+             AND source.constraint_name = fk.constraint_name
+             AND source.table_schema = fk.table_schema
+             AND source.table_name = fk.table_name
+            WHERE fk.constraint_type = 'FOREIGN KEY'
+              AND target.table_schema = current_schema()
+              AND target.table_name = 'projects'
+              AND target.column_name = 'id'
+        """)).all()
+    assert len(rows) == 3
+    assert {tuple(row) for row in rows} == {
+        ("learned_corrections", "project_id", "CASCADE"),
+        ("saved_quotes", "project_id", "CASCADE"),
+        ("media_folders", "project_id", "SET NULL"),
+    }
+
+
+# ---- hard delete routes (#488, slice 3) --------------------------------------
+
+
+def test_delete_confirm_page_shows_counts(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session, "Confirm counts")
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        for i in range(3):
+            session.add(
+                LearnedCorrection(
+                    project_id=pid, match=f"m{i}", replace=f"r{i}", status="suggested"
+                )
+            )
+        folder = MediaFolder(path="test/delete-confirm/f1", project_id=pid)
+        session.add(folder)
+        session.flush()
+        item = MediaItem(source_path="test/delete-confirm/a.wav", media_folder_id=folder.id)
+        session.add(item)
+        session.flush()
+        run = PipelineRun(media_item_id=item.id, status="completed")
+        session.add(run)
+        session.flush()
+        seg = TranscriptSegment(
+            pipeline_run_id=run.id, segment_index=0,
+            start_seconds=0, end_seconds=1, raw_text="x",
+        )
+        session.add(seg)
+        session.flush()
+        for i in range(2):
+            session.add(
+                SavedQuote(
+                    project_id=pid, segment_id=seg.id, run_id=run.id,
+                    search_query=f"q{i}", left_context="", hit="x",
+                    right_context="", media_title="a", start_seconds=0,
+                    operator="reviewer",
+                )
+            )
+        session.commit()
+    page = client.get(f"/projects/{pid}/delete")
+    assert page.status_code == 200
+    assert "Permanently delete project" in page.text
+    assert "Confirm counts" in page.text
+    assert "3 learned corrections" in page.text
+    assert "2 saved quotes" in page.text
+    assert "1 folder" in page.text
+    assert "Cancel" in page.text
+
+
+def test_delete_confirm_active_redirects(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session, "Still active").id
+        session.commit()
+    resp = client.get(f"/projects/{pid}/delete", follow_redirects=False)
+    assert resp.status_code == 303
+    assert f"/projects/{pid}" in resp.headers["location"]
+
+
+def test_delete_confirm_missing_is_404(client: TestClient) -> None:
+    resp = client.get(f"/projects/{uuid.uuid4()}/delete")
+    assert resp.status_code == 404
+
+
+def test_delete_confirm_empty_project(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session, "Empty archived")
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        session.commit()
+    page = client.get(f"/projects/{pid}/delete")
+    assert page.status_code == 200
+    assert "cannot be undone" in page.text
+    assert "0 learned corrections" in page.text
+    assert "0 saved quotes" in page.text
+    assert "0 folders" in page.text
+
+
+def test_delete_post_invalid_csrf_is_403(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session, "Bad csrf")
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/delete",
+        data={"csrf_token": "wrong"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+    with session_factory() as session:
+        assert session.get(Project, pid) is not None
+
+
+def test_delete_post_missing_csrf_is_403(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session, "No csrf")
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        session.commit()
+    resp = client.post(f"/projects/{pid}/delete", follow_redirects=False)
+    assert resp.status_code == 403
+    with session_factory() as session:
+        assert session.get(Project, pid) is not None
+
+
+def test_delete_post_cross_action_csrf_is_403(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session, "Cross csrf")
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        session.commit()
+    archive_token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_ARCHIVE)
+    resp = client.post(
+        f"/projects/{pid}/delete",
+        data={"csrf_token": archive_token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+    with session_factory() as session:
+        assert session.get(Project, pid) is not None
+
+
+def test_delete_post_success_redirects(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session, "Delete me")
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        session.commit()
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_DELETE)
+    resp = client.post(
+        f"/projects/{pid}/delete",
+        data={"csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/projects"
+    with session_factory() as session:
+        assert session.get(Project, pid) is None
+
+
+def test_delete_post_active_is_409(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session, "Not archived yet").id
+        session.commit()
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_DELETE)
+    resp = client.post(
+        f"/projects/{pid}/delete",
+        data={"csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 409
+    with session_factory() as session:
+        assert session.get(Project, pid) is not None
+
+
+def test_delete_post_double_submit_is_404(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session, "Double submit")
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        session.commit()
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_DELETE)
+    resp1 = client.post(
+        f"/projects/{pid}/delete",
+        data={"csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp1.status_code == 303
+    token2 = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_DELETE)
+    resp2 = client.post(
+        f"/projects/{pid}/delete",
+        data={"csrf_token": token2},
+        follow_redirects=False,
+    )
+    assert resp2.status_code == 404
+
+
+def test_archived_detail_shows_delete_link(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session, "Has delete link")
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        session.commit()
+    page = client.get(f"/projects/{pid}")
+    assert f"/projects/{pid}/delete" in page.text
+    assert "Delete permanently" in page.text
+
+
+def test_active_detail_hides_delete_link(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session, "No delete link").id
+        session.commit()
+    page = client.get(f"/projects/{pid}")
+    assert "Delete permanently" not in page.text
+
+
+def test_delete_name_reuse_via_routes(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    create_token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_CREATE)
+    resp = client.post(
+        "/projects",
+        data={"csrf_token": create_token, "name": "Reuse via route"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        project = session.execute(
+            sa_select(Project).where(Project.name == "Reuse via route")
+        ).scalar_one()
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        session.commit()
+    delete_token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_DELETE)
+    resp = client.post(
+        f"/projects/{pid}/delete",
+        data={"csrf_token": delete_token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    create_token2 = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_CREATE)
+    resp = client.post(
+        "/projects",
+        data={"csrf_token": create_token2, "name": "Reuse via route"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        new_project = session.execute(
+            sa_select(Project).where(Project.name == "Reuse via route")
+        ).scalar_one()
+        assert new_project.id != pid
+        assert new_project.corrections is None
+        assert new_project.vocabulary is None

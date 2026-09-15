@@ -7,6 +7,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Project hard delete** (#488). Permanently delete an archived project from a
+  confirmation page that shows what will be destroyed (learned corrections,
+  saved quotes, analysis artifacts) and what will survive (folders become
+  unassigned, recordings and transcripts remain). Requires archive first.
 - **Project archive and restore** (#477). Archive a project from the detail
   page's overflow menu to make it inert: settings become read-only, new
   recordings in its folders no longer inherit its vocabulary or corrections,

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Voxint — delete {{ project.name }}{% endblock %}
+
+{% block cb_breadcrumb %}projects / <strong>{{ project.name }}</strong> / delete{% endblock %}
+{% block cb_summary %}{% endblock %}
+{% block cb_actions %}{% endblock %}
+
+{% block body %}
+<h1>Permanently delete project</h1>
+
+<div class="card" style="border-color: var(--danger); margin-bottom: var(--space-4);">
+  <p><strong>{{ project.name }}</strong> will be permanently deleted. This cannot be undone.</p>
+
+  <h3 style="margin-top: var(--space-3); margin-bottom: var(--space-2);">Will be deleted</h3>
+  <ul>
+    <li>The project and all its settings (vocabulary, corrections, learning configuration)</li>
+    <li>{{ counts.learned_correction_count }} learned correction{{ '' if counts.learned_correction_count == 1 else 's' }} and their evidence</li>
+    <li>{{ counts.saved_quote_count }} saved quote{{ '' if counts.saved_quote_count == 1 else 's' }}</li>
+    <li>Cached analysis artifacts (insights, trends)</li>
+  </ul>
+
+  <h3 style="margin-top: var(--space-3); margin-bottom: var(--space-2);">Will be kept</h3>
+  <ul>
+    <li>{{ counts.folder_count }} folder{{ '' if counts.folder_count == 1 else 's' }} (will become unassigned)</li>
+    <li>All recordings, transcripts, pipeline runs, and embeddings</li>
+  </ul>
+</div>
+
+<div style="display: flex; gap: var(--space-3); align-items: center;">
+  <form method="post" action="/projects/{{ project.id }}/delete">
+    <input type="hidden" name="csrf_token" value="{{ csrf_delete }}">
+    <button type="submit" class="danger">Permanently delete project</button>
+  </form>
+  <a href="/projects/{{ project.id }}">Cancel</a>
+</div>
+{% endblock %}
