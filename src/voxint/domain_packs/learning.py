@@ -9,9 +9,9 @@ from __future__ import annotations
 import difflib
 from dataclasses import dataclass
 
+from voxint.domain_packs.base import DomainPackError
 from voxint.domain_packs.corrections import (
     CorrectionRule,
-    DomainPackError,
     find_first,
     is_word_char,
     parse_corrections,
