@@ -24,6 +24,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
+from sqlalchemy import select as sa_select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -32,11 +33,13 @@ from voxint.adjudication.learned_corrections import (
     dismiss_suggestion,
 )
 from voxint.api.csrf import (
+    CSRF_PROJECT_ARCHIVE,
     CSRF_PROJECT_ASSIGN,
     CSRF_PROJECT_CORRECTIONS,
     CSRF_PROJECT_CREATE,
     CSRF_PROJECT_LEARNING,
     CSRF_PROJECT_RENAME,
+    CSRF_PROJECT_RESTORE,
     CSRF_PROJECT_UNLINK,
     CSRF_PROJECT_VOCAB,
     CSRF_QUOTE_MANAGE,
@@ -64,21 +67,48 @@ from voxint.domain_packs.corrections import (
     OperatorCorrectionError,
     normalize_operator_corrections,
 )
+from voxint.projects.lifecycle import (
+    ProjectArchivedError,
+    ProjectNotFoundError,
+    archive_project,
+    describe_project_name_owner,
+    require_active_project,
+    restore_project,
+)
 
 router = APIRouter(
     dependencies=[Depends(require_onboarded), Depends(require_projects_enabled)]
 )
 
 
+def _active_project_or_error(session: Session, project_id: uuid.UUID) -> Project:
+    """Return the project if it exists and is active, else raise HTTP 404/409."""
+    try:
+        return require_active_project(session, project_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ProjectArchivedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="This project is archived. Restore it to make changes.",
+        ) from exc
+
+
 def _list_context(
     request: Request, session: SessionDep, *, error: str | None = None, name: str = ""
 ) -> dict[str, Any]:
+    all_projects = list_projects(session)
+    active = [p for p in all_projects if p.archived_at is None]
+    archived = [p for p in all_projects if p.archived_at is not None]
+    secret = request.app.state.csrf_secret
     return {
         "request": request,
         "active_nav": "projects",
         "now": datetime.now(UTC),
-        "projects": list_projects(session),
-        "csrf_create": mint_csrf_token(request.app.state.csrf_secret, CSRF_PROJECT_CREATE),
+        "projects": active,
+        "archived_projects": archived,
+        "csrf_create": mint_csrf_token(secret, CSRF_PROJECT_CREATE),
+        "csrf_restore": mint_csrf_token(secret, CSRF_PROJECT_RESTORE),
         "error": error,
         "name_value": name,
     }
@@ -117,17 +147,17 @@ def create_project(
     try:
         session.commit()
     except IntegrityError:
-        # The unique-name constraint: a friendly 409 re-render, not a 500.
         session.rollback()
+        owner = session.execute(
+            sa_select(Project).where(Project.name == cleaned)
+        ).scalar_one_or_none()
+        guidance = describe_project_name_owner(owner) if owner else (
+            f"A project named “{cleaned}” already exists."
+        )
         return templates.TemplateResponse(
             request,
             "projects/projects.html",
-            _list_context(
-                request,
-                session,
-                error=f"A project named “{cleaned}” already exists.",
-                name=name,
-            ),
+            _list_context(request, session, error=guidance, name=name),
             status_code=409,
         )
     return RedirectResponse(f"/projects/{project.id}", status_code=303)
@@ -206,6 +236,8 @@ def _detail_context(
         "error": error,
         "assigned": assigned,
         "csrf_learning": mint_csrf_token(secret, CSRF_PROJECT_LEARNING),
+        "csrf_archive": mint_csrf_token(secret, CSRF_PROJECT_ARCHIVE),
+        "csrf_restore": mint_csrf_token(secret, CSRF_PROJECT_RESTORE),
         "quote_board_props": _quote_board_props(request, session, detail),
     }
 
@@ -255,9 +287,7 @@ def assign_folder(
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> Response:
     _require_csrf(request, CSRF_PROJECT_ASSIGN, csrf_token)
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail=f"no project {project_id}")
+    _active_project_or_error(session, project_id)
 
     def _reject(message: str) -> Response:
         detail = project_detail(session, project_id)
@@ -320,9 +350,7 @@ def rename_project(
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> Response:
     _require_csrf(request, CSRF_PROJECT_RENAME, csrf_token)
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail=f"no project {project_id}")
+    project = _active_project_or_error(session, project_id)
     clean = name.strip()
     if not clean:
         detail = project_detail(session, project_id)
@@ -338,13 +366,17 @@ def rename_project(
         with session.begin_nested():
             project.name = clean
     except IntegrityError:
+        owner = session.execute(
+            sa_select(Project).where(Project.name == clean)
+        ).scalar_one_or_none()
+        guidance = describe_project_name_owner(owner) if owner else (
+            f"A project named {clean!r} already exists."
+        )
         detail = project_detail(session, project_id)
         return templates.TemplateResponse(
             request,
             "projects/project_detail.html",
-            _detail_context(
-                request, session, detail, error=f"A project named {clean!r} already exists."
-            ),
+            _detail_context(request, session, detail, error=guidance),
             status_code=409,
         )
     session.commit()
@@ -371,9 +403,7 @@ def set_project_vocabulary(
     the message and the operator's own submitted text.
     """
     _require_csrf(request, CSRF_PROJECT_VOCAB, csrf_token)
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail=f"no project {project_id}")
+    project = _active_project_or_error(session, project_id)
     if mode not in ("set", "inherit"):
         # The declared contract is set|inherit; anything else is a malformed
         # request (a stale form or a typo). Refuse rather than fall through to
@@ -439,9 +469,7 @@ def set_project_corrections(
     """
     _require_csrf(request, CSRF_PROJECT_CORRECTIONS, csrf_token)
     wants_json = "application/json" in (request.headers.get("accept") or "")
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail=f"no project {project_id}")
+    project = _active_project_or_error(session, project_id)
 
     def _reject(message: str, row: int | None) -> Response:
         if wants_json:
@@ -503,9 +531,7 @@ def set_project_learning(
 ) -> Response:
     """Toggle the learn-from-edits feature for a project (#476)."""
     _require_csrf(request, CSRF_PROJECT_LEARNING, csrf_token)
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail=f"no project {project_id}")
+    project = _active_project_or_error(session, project_id)
     want_on = enabled == "on"
     if want_on and project.corrections is None:
         detail = project_detail(session, project_id)
@@ -537,9 +563,7 @@ def handle_suggestion(
 ) -> Response:
     """Accept or dismiss a learned correction suggestion (#476)."""
     _require_csrf(request, CSRF_PROJECT_LEARNING, csrf_token)
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail=f"no project {project_id}")
+    project = _active_project_or_error(session, project_id)
     learned = session.get(LearnedCorrection, suggestion_id)
     if learned is None or learned.project_id != project_id:
         raise HTTPException(status_code=404, detail="no such suggestion")
@@ -578,3 +602,37 @@ def handle_suggestion(
         session.commit()
         return RedirectResponse(f"/projects/{project_id}", status_code=303)
     raise HTTPException(status_code=400, detail="decision must be accept or dismiss")
+
+
+@router.post("/projects/{project_id}/archive")
+def project_archive(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    project_id: uuid.UUID,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    _require_csrf(request, CSRF_PROJECT_ARCHIVE, csrf_token)
+    try:
+        archive_project(session, project_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    session.commit()
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+@router.post("/projects/{project_id}/restore")
+def project_restore(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    project_id: uuid.UUID,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    _require_csrf(request, CSRF_PROJECT_RESTORE, csrf_token)
+    try:
+        restore_project(session, project_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    session.commit()
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)

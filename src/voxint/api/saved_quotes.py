@@ -15,9 +15,11 @@ from voxint.db.models import (
     MediaFolder,
     MediaItem,
     PipelineRun,
+    Project,
     SavedQuote,
     TranscriptSegment,
 )
+from voxint.projects.lifecycle import ProjectArchivedError
 
 
 class QuoteDuplicateError(Exception):
@@ -82,6 +84,11 @@ def save_quote(
     if project_id is None:
         msg = "This recording is not assigned to a project."
         raise ValueError(msg)
+    project = session.get(Project, project_id)
+    if project is not None and project.archived_at is not None:
+        raise ProjectArchivedError(
+            "This recording's project is archived. Restore it to save quotes."
+        )
     _verify_segment_belongs_to_run(session, segment_id, run_id)
     normalized_note = note.strip() or None if note else None
     query_trimmed = search_query.strip()

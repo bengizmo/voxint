@@ -207,6 +207,7 @@ function SaveButton({
   const key = `${row.segment_id}:${query}`;
   const alreadySaved = savedSet.has(key);
   const [state, setState] = useState<SaveState>(alreadySaved ? "saved" : "idle");
+  const errorMsg = useRef<string | null>(null);
 
   const handleClick = useCallback(async () => {
     if (state === "saved" || state === "saving") return;
@@ -232,6 +233,10 @@ function SaveButton({
         setState("duplicate");
         onSaved(key);
       } else if (res.status === 422) {
+        try {
+          const data = await res.json();
+          errorMsg.current = data.error || null;
+        } catch { /* ignore parse failures */ }
         setState("no-project");
       } else {
         setState("error");
@@ -260,7 +265,7 @@ function SaveButton({
         : state === "saving"
           ? "Saving…"
           : state === "no-project"
-            ? "Recording not in a project"
+            ? (errorMsg.current ?? "Recording not in a project")
             : state === "error"
               ? "Save failed"
               : "Save to quote board";

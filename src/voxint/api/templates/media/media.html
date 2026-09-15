@@ -106,7 +106,7 @@
   <select id="{{ select_id }}" name="media_folder_id">
     <option value="">No folder — use global settings</option>
     {% for opt in folder_options %}
-    <option value="{{ opt.id }}">{{ opt.path }}{% if opt.project_name %} — {{ opt.project_name }}{% endif %}</option>
+    <option value="{{ opt.id }}">{{ opt.path }}{% if opt.project_name %} — {{ opt.project_name }}{% if opt.project_archived %} (archived){% endif %}{% endif %}</option>
     {% endfor %}
   </select>
   <small class="oc-muted">Applies this folder's vocabulary and corrections. The file is not moved.</small>
@@ -157,7 +157,7 @@
     <ul class="lib-folders">
       {% for opt in folder_options %}
       <li>
-        <span><code>{{ opt.path }}</code>{% if opt.project_name %} <span class="oc-muted">— {{ opt.project_name }}</span>{% endif %}</span>
+        <span><code>{{ opt.path }}</code>{% if opt.project_name %} <span class="oc-muted">— {{ opt.project_name }}{% if opt.project_archived %} (archived){% endif %}</span>{% endif %}</span>
         <form method="post" action="/media/folders">
           <input type="hidden" name="csrf_token" value="{{ csrf_media_folders }}">
           <input type="hidden" name="action" value="remove">
@@ -253,7 +253,7 @@
       <select id="assign-folder" name="media_folder_id">
         <option value=""{% if not attempted_folder_id %} selected{% endif %}>No folder — use global settings</option>
         {% for opt in folder_options %}
-        <option value="{{ opt.id }}"{% if (opt.id|string) == attempted_folder_id %} selected{% endif %}>{{ opt.path }}{% if opt.project_name %} — {{ opt.project_name }}{% endif %}</option>
+        <option value="{{ opt.id }}"{% if (opt.id|string) == attempted_folder_id %} selected{% endif %}>{{ opt.path }}{% if opt.project_name %} — {{ opt.project_name }}{% if opt.project_archived %} (archived){% endif %}{% endif %}</option>
         {% endfor %}
       </select>
     </label>

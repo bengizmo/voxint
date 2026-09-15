@@ -145,4 +145,5 @@ def test_single_alembic_head() -> None:
     # 0059 = queue_paused column on app_settings, issue #419.
     # 0060 = synthdetect source_content_hash column, issue #146.
     # 0063 = watch-folder pickup marker, issue #478.
-    assert list(heads) == ["0063"]
+    # 0064 = project archived_at, issue #477.
+    assert list(heads) == ["0064"]

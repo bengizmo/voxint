@@ -144,11 +144,12 @@ time) and the post lane at a small concurrency of its own, so the GPU no
 longer idles while a previous run's LLM enhancement is in flight. See
 [operations.md](operations.md) for the override recipe.
 
-## Data model (alembic revisions 0001–0061)
+## Data model (alembic revisions 0001–0064)
 
 | Table | Role |
 |---|---|
 | `app_settings` | single-row instance configuration set by the first-run setup wizard: onboarding-complete flag, custom vocabulary, LLM-enhancement toggle/endpoint, guided-tutorial state (revision 0006), and (revision 0021) one nullable column per in-UI-editable feature flag (`enrichment_names_enabled`, `enrichment_names_llm_enabled`, `enrichment_run_assets_enabled`, `enrichment_run_assets_autogenerate`, `voxint_web_research`, `enrichment_web_research_enabled`, `ytdlp_enabled`, `source_authority_domains`, `web_search_base_url`, `web_search_api_key`). These resolve **row-over-env** through `app_settings.resolve_effective_<flag>` (NULL/blank inherits the environment default, a stored value overrides it, following the `llm_*` tri-state precedent); `web_search_api_key` is a credential handled like `llm_api_key` (plaintext at rest, resolver-only, never rendered/logged). The cross-flag invariants live in one `validate_effective_flags` shared with the boot-time config validator. Revision **0029** adds a `corrections` JSONB list: the operator's console-authored deterministic correction rules (#84, edited at **Settings → Corrections**). Unlike the row-over-env flags above, corrections are **not** resolved live: at submit they are unioned onto the run's resolved pack and **frozen** into `pipeline_runs.domain_pack`, so #82 composition and #83 provenance read them off the immutable snapshot unchanged (vocabulary is live-unioned; corrections must be per-run-frozen). Registered media folders and per-folder domain-pack selection live in the `media_folders` relation (since #153, revision 0040; the legacy `app_settings` columns were dropped in revision 0046) |
+| `projects` | named groupings of media folders with project-scoped config (revision 0040, #153). Vocabulary and corrections overrides follow ADR 0002 per-field replacement. `archived_at` (revision 0064, #477) makes a project inert: its folders stay linked, but new runs in those folders resolve config as if the project were absent, learned-corrections capture stops, and new quote saves are refused. Three choke points enforce inertness: `ingest/service._folder_and_project`, `adjudication/learned_corrections._resolve_project`, and `api/saved_quotes.save_quote` |
 | `media_items` | media identity, one row per source file. `source_path` (UNIQUE) is already present for local/uploaded media, pre-assigned and materialized by ACQUIRE for URL runs; a nullable, non-unique `source_url` records URL provenance (revision 0005) |
 | `media_source_metadata` | **write-once** acquisition context, 0-or-1 per media item (revision 0009): normalized extractor fields (title, uploader/channel, description, upload date, source-claimed duration, tags, canonical URL, extractor name/version) plus a bounded, allowlisted, schema-versioned `raw` JSONB subset and `acquired_at`. Context, not identity: nothing here feeds attribution, and a MediaItem is per-acquisition, so a snapshot can never rewrite the context a past adjudication was made against |
 | `pipeline_runs` | execution state + CAS revision, plus the reviewer claim (token, holder, expiry), the operator's free-text `operator_notes` (revision 0009: human input, kept structurally apart from scraped metadata, edited last-write-wins outside the CAS), and the **write-once** `domain_pack` JSONB snapshot resolved at submit (revision 0017: the exact pack the run was transcribed with, read by the worker and enrichment; `NULL` on pre-0017 runs) |
@@ -615,7 +616,9 @@ resolution spec is the P2a addendum to ADR 0002. The `media_folders` relation is
 authoritative, edited through the folder browser on the setup wizard's media
 step and under **Settings → Media folders**. The pre-P2a
 `app_settings.media_folders` and `app_settings.folder_domain_packs` columns were
-dropped in revision 0046.
+dropped in revision 0046. An archived project is skipped: its folders resolve as
+if unassigned for new runs, learned-corrections capture and new quote saves are
+off, history and membership stay live.
 
 Console 2.0 P2b (#154) makes `/media` operable behind the same
 `CONSOLE_MEDIA_ENABLED` flag. Upload and URL fetch move onto the page (each may

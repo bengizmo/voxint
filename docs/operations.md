@@ -937,6 +937,18 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   `requeue_failed_run`), so the CLI path is also covered. `/runs` hides archived by
   default; `?archived=1` shows the archived-only view. Home, `/metrics`, and
   `voxint stats` exclude archived runs from their counts.
+- **`POST /projects/{id}/archive`** and **`POST /projects/{id}/restore`**:
+  archive or restore a project from its detail page's overflow menu. An archived
+  project keeps its folders, history, and insights viewable but becomes inert:
+  settings are read-only, new runs in its folders inherit no project config
+  (folder/global fallback applies), learned-corrections capture stops, and new
+  quote saves are refused. Existing quotes remain editable and folders stay
+  linked. Restore reverses archive with no data loss. The list page shows
+  archived projects in a collapsed section; the Explore and media folder pickers
+  label them "(archived)". Hard delete is not supported; this is reversible
+  soft-archive only. **Rollback note**: downgrading past migration 0064 drops
+  the `archived_at` column; archived projects come back active under the old
+  code, and a re-upgrade leaves them with `archived_at` NULL (active).
 - **`POST /runs/{id}/media/delete`**: **destructive**, terminal-only. Deletes
   only *this run's* derived audio (its `AudioArtifact` + `AudioChunk` rows and
   files) to reclaim disk; files are unlinked **after** the DB delete commits,

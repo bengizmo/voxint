@@ -43,6 +43,7 @@ class ProjectSummary:
     description: str | None
     folder_count: int
     created_at: datetime
+    archived_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,7 @@ class ProjectDetail:
     learn_corrections: bool = False
     suggestions: list[CorrectionSuggestion] | None = None
     learned_counts: dict[str, int] | None = None
+    archived_at: datetime | None = None
 
 
 def list_projects(session: Session) -> list[ProjectSummary]:
@@ -118,11 +120,16 @@ def list_projects(session: Session) -> list[ProjectSummary]:
             Project.name,
             Project.description,
             Project.created_at,
+            Project.archived_at,
             func.count(MediaFolder.id).label("folder_count"),
         )
         .outerjoin(MediaFolder, MediaFolder.project_id == Project.id)
         .group_by(Project.id)
-        .order_by(func.lower(Project.name), Project.id)
+        .order_by(
+            Project.archived_at.isnot(None),
+            func.lower(Project.name),
+            Project.id,
+        )
     )
     return [
         ProjectSummary(
@@ -131,6 +138,7 @@ def list_projects(session: Session) -> list[ProjectSummary]:
             description=row.description,
             folder_count=row.folder_count,
             created_at=row.created_at.astimezone(UTC),
+            archived_at=row.archived_at.astimezone(UTC) if row.archived_at else None,
         )
         for row in rows
     ]
@@ -310,4 +318,5 @@ def project_detail(
         learn_corrections=project.learn_corrections,
         suggestions=suggestions,
         learned_counts=learned_counts,
+        archived_at=project.archived_at,
     )

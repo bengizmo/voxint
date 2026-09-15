@@ -24,6 +24,7 @@ from voxint.api.saved_quotes import (
     update_quote_note,
 )
 from voxint.db.models import MAX_QUOTE_NOTE_CHARS, Project, SavedQuote
+from voxint.projects.lifecycle import ProjectArchivedError
 
 quotes_router = APIRouter(dependencies=[Depends(require_onboarded)])
 router = quotes_router
@@ -67,6 +68,11 @@ def save_quote_endpoint(
             start_seconds=start_seconds,
             operator=operator,
             note=note,
+        )
+    except ProjectArchivedError as exc:
+        return JSONResponse(
+            {"ok": False, "error": str(exc)},
+            status_code=422,
         )
     except ValueError:
         return JSONResponse(

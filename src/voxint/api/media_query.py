@@ -184,6 +184,7 @@ class FolderOption:
     id: uuid.UUID
     path: str
     project_name: str | None
+    project_archived: bool = False
 
 
 def folder_options(session: Session) -> list[FolderOption]:
@@ -193,12 +194,18 @@ def folder_options(session: Session) -> list[FolderOption]:
             MediaFolder.id,
             MediaFolder.path,
             Project.name.label("project_name"),
+            Project.archived_at.label("project_archived_at"),
         )
         .outerjoin(Project, Project.id == MediaFolder.project_id)
         .order_by(func.lower(MediaFolder.path))
     )
     return [
-        FolderOption(id=row.id, path=row.path, project_name=row.project_name)
+        FolderOption(
+            id=row.id,
+            path=row.path,
+            project_name=row.project_name,
+            project_archived=row.project_archived_at is not None,
+        )
         for row in session.execute(stmt)
     ]
 

@@ -30,6 +30,7 @@ from voxint.config import Settings
 from voxint.db.models import MediaFolder, PipelineRun, Project
 from voxint.ingest import preview_effective_config, submit_media_item
 from voxint.ingest.sidecar import parse_sidecar
+from voxint.projects.lifecycle import archive_project, restore_project
 
 # One distinctive value per layer, per field. If any resolution leaked a masked
 # layer, the frozen list would carry the wrong sentinel and the assertion fails.
@@ -401,3 +402,91 @@ def test_preview_no_folder_is_global_baseline(
     assert preview.project_name is None
     assert preview.vocabulary_count == len(GLOBAL_VOCAB)
     assert preview.corrections_count == len(GLOBAL_CORR_IDS)
+
+
+# --- Archived project inertness (#477) ----------------------------------------
+
+
+def test_archived_project_drops_out_of_resolution(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    """An archived project's config does not apply to new runs or previews.
+
+    With a project that sets both vocabulary and corrections, archiving causes
+    the resolution to fall through to the folder pack (or global baseline).
+    Restoring re-enables the project layer.
+    """
+    settings = _make_settings(tmp_path)
+    _seed_global(session_factory)
+
+    folder_path = "proj-arch"
+    with session_factory() as session:
+        project = Project(
+            name="Project arch",
+            vocabulary=list(PROJECT_VOCAB),
+            corrections=[dict(r) for r in PROJECT_CORR],
+        )
+        session.add(project)
+        session.flush()
+        project_id = project.id
+        folder = MediaFolder(
+            path=folder_path, project_id=project.id, domain_pack=FOLDER_PACK
+        )
+        session.add(folder)
+        session.commit()
+        folder_id = folder.id
+
+    # Before archive: project wins
+    with session_factory() as session:
+        preview = preview_effective_config(session, folder_id, settings=settings)
+    assert preview.vocabulary_source == "project"
+    assert preview.corrections_source == "project"
+    assert preview.project_name == "Project arch"
+
+    # Archive the project
+    with session_factory() as session:
+        archive_project(session, project_id)
+        session.commit()
+
+    # After archive: project drops out, folder pack wins
+    with session_factory() as session:
+        preview = preview_effective_config(session, folder_id, settings=settings)
+    assert preview.vocabulary_source == "folder"
+    assert preview.corrections_source == "folder"
+    assert preview.project_name is None
+
+    # Submit under archived project: frozen snapshot should NOT carry project config
+    with session_factory() as session:
+        run = submit_media_item(session, f"{folder_path}/a.wav", settings=settings)
+        session.commit()
+        run_id = run.run_id
+    with session_factory() as session:
+        snapshot = session.get(PipelineRun, run_id).domain_pack  # type: ignore[union-attr]
+    assert snapshot is not None
+    assert snapshot["vocabulary"] == FOLDER_VOCAB
+    assert _corr_ids(snapshot) == ["fo"]
+    assert snapshot.get("provenance", {}).get("project_name") is None
+
+    # Restore the project
+    with session_factory() as session:
+        restore_project(session, project_id)
+        session.commit()
+
+    # After restore: project wins again
+    with session_factory() as session:
+        preview = preview_effective_config(session, folder_id, settings=settings)
+    assert preview.vocabulary_source == "project"
+    assert preview.corrections_source == "project"
+    assert preview.project_name == "Project arch"
+
+    # Submit under restored project: project config is back
+    with session_factory() as session:
+        run = submit_media_item(session, f"{folder_path}/b.wav", settings=settings)
+        session.commit()
+        run_id = run.run_id
+    with session_factory() as session:
+        snapshot = session.get(PipelineRun, run_id).domain_pack  # type: ignore[union-attr]
+    assert snapshot is not None
+    assert snapshot["vocabulary"] == PROJECT_VOCAB
+    assert _corr_ids(snapshot) == ["pj"]

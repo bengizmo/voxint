@@ -3,7 +3,7 @@
 
 {% block cb_breadcrumb %}projects /{% endblock %}
 {% block cb_summary %}
-{%- if projects %}{{ projects|length }} project{{ "s" if projects|length != 1 else "" }}{% else %}no projects yet{% endif -%}
+{%- if projects or archived_projects %}{{ projects|length }} project{{ "s" if projects|length != 1 else "" }}{% if archived_projects %}, {{ archived_projects|length }} archived{% endif %}{% else %}no projects yet{% endif -%}
 {% endblock %}
 {% block cb_actions %}
 <details class="spk-create-dd"{% if error %} open{% endif %} ontoggle="if(this.open)this.querySelector('input[type=text]').focus()">
@@ -23,7 +23,7 @@
 {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
 
 {% if projects %}
-<section class="oc-section" aria-label="All projects">
+<section class="oc-section" aria-label="Active projects">
   <h2 class="oc-section-title">ALL PROJECTS</h2>
   <ul class="lib-cards" aria-label="Projects">
     {% for project in projects %}
@@ -32,13 +32,40 @@
       {% if project.description %}<p class="oc-muted">{{ project.description }}</p>{% endif %}
       <p class="oc-muted">
         {{ project.folder_count }} folder{{ "" if project.folder_count == 1 else "s" }}
-        · added <span title="{{ project.created_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(project.created_at, now=now) }}</span>
+        &middot; added <span title="{{ project.created_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(project.created_at, now=now) }}</span>
       </p>
     </li>
     {% endfor %}
   </ul>
 </section>
-{% else %}
+{% elif not archived_projects %}
 <p class="oc-muted">No projects yet. Create one above, then assign folders to it.</p>
+{% else %}
+<p class="oc-muted">No active projects. Restore one below or create a new one.</p>
+{% endif %}
+
+{% if archived_projects %}
+<section class="oc-section" aria-label="Archived projects">
+  <details>
+    <summary class="oc-section-title" style="cursor:pointer">ARCHIVED PROJECTS ({{ archived_projects|length }})</summary>
+    <ul class="lib-cards" aria-label="Archived projects" style="margin-top:var(--space-3)">
+      {% for project in archived_projects %}
+      <li style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div class="media-title"><a href="/projects/{{ project.id }}">{{ project.name }}</a></div>
+          {% if project.description %}<p class="oc-muted">{{ project.description }}</p>{% endif %}
+          <p class="oc-muted">
+            {{ project.folder_count }} folder{{ "" if project.folder_count == 1 else "s" }}
+          </p>
+        </div>
+        <form method="post" action="/projects/{{ project.id }}/restore">
+          <input type="hidden" name="csrf_token" value="{{ csrf_restore }}">
+          <button type="submit" class="cb-btn cb-btn-secondary">Restore</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+  </details>
+</section>
 {% endif %}
 {% endblock %}

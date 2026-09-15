@@ -264,6 +264,18 @@
     ]
   ],
   [
+    "/projects/{project_id}/archive",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/projects/{project_id}/restore",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/explore",
     [
       "GET"
