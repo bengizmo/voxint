@@ -274,6 +274,18 @@
     ]
   ],
   [
+    "/projects/{project_id}/delete",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/projects/{project_id}/delete",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/projects/{project_id}/folders",
     [
       "POST"

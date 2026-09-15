@@ -161,6 +161,7 @@ CSRF_PROJECT_CORRECTIONS = "project-corrections"
 # with different blast radii: an archive token must not replay as a restore.
 CSRF_PROJECT_ARCHIVE = "project-archive"
 CSRF_PROJECT_RESTORE = "project-restore"
+CSRF_PROJECT_DELETE = "project-delete"
 # Media library ingest (issue #154, Console 2.0 P2b). Upload and URL fetch move
 # onto /media with their own action tokens, distinct from the legacy /submit and
 # /fetch forms' CSRF_SUBMIT/CSRF_FETCH so a token minted on one surface is not
