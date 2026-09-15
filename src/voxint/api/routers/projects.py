@@ -477,15 +477,13 @@ def set_project_corrections(
         return _reject(exc.message, exc.row)
     project.corrections = normalized
     rule_ids = {r["id"] for r in normalized}
-    orphans = (
-        session.query(LearnedCorrection)
-        .filter(
-            LearnedCorrection.project_id == project_id,
-            LearnedCorrection.status == "accepted",
-            LearnedCorrection.accepted_rule_id.not_in(rule_ids) if rule_ids else True,
-        )
-        .all()
-    )
+    filters = [
+        LearnedCorrection.project_id == project_id,
+        LearnedCorrection.status == "accepted",
+    ]
+    if rule_ids:
+        filters.append(LearnedCorrection.accepted_rule_id.not_in(rule_ids))
+    orphans = session.query(LearnedCorrection).filter(*filters).all()
     for orphan in orphans:
         session.delete(orphan)
     session.commit()

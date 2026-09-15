@@ -109,7 +109,7 @@ def _record_pair(
     else:
         lc_id = uuid.uuid4()
         session.execute(
-            pg_insert(LearnedCorrection.__table__)
+            pg_insert(LearnedCorrection.__table__)  # type: ignore[arg-type]
             .values(
                 id=lc_id,
                 project_id=project_id,
@@ -135,7 +135,7 @@ def _record_pair(
         suggested_count += 1
 
     session.execute(
-        pg_insert(LearnedCorrectionEvidence.__table__)
+        pg_insert(LearnedCorrectionEvidence.__table__)  # type: ignore[arg-type]
         .values(learned_correction_id=lc_id, segment_id=segment_id)
         .on_conflict_do_nothing()
     )

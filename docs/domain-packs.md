@@ -226,6 +226,26 @@ Editing a pack's `manifest.yaml` directly is still the way to ship corrections
 *inside a shareable pack*; the console editor is for a single deployment's own
 recurring fixes.
 
+### Learning rules from your edits (#476)
+
+On a project detail page, a **Learn from my edits** toggle tells Voxint to watch
+your transcript corrections in that project. When you fix the same word across
+three or more segments (for example, correcting "hvac" to "HVAC" each time), the
+project page shows a **Suggested from your edits** row with the pair and a count.
+Suggestions never apply on their own. Click **Accept** to turn a suggestion into
+an ordinary correction rule, or **Dismiss** to discard it.
+
+The toggle requires the project to own its corrections list (not inherit). If the
+project inherits, enable "Set" first. Accepted rules are case-sensitive and
+whole-word, with an auto-generated id. They appear in the corrections grid tagged
+"learned xN" (the number of segments that contributed) and freeze into
+`pipeline_runs.domain_pack.corrections` like any other rule.
+
+If you dismiss a suggestion, its evidence is deleted. The same pair can only
+resurface after three new segments carry the same edit. Turning the toggle off
+stops watching for new edits; accepted rules stay. Switching the project to
+inherit corrections also clears the toggle.
+
 ### How the rules apply (the corrector engine, #81)
 
 A pure, versioned engine (`CORRECTOR_VERSION`) turns a segment string plus a rule

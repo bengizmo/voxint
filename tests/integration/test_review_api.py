@@ -939,7 +939,8 @@ def _seed_run_with_project(
             path=audio_rel,
         )
     )
-    for index, text in enumerate(["the hvac system is running", "the hvac unit works", "hvac test here"]):
+    segments = ["the hvac system is running", "the hvac unit works", "hvac test here"]
+    for index, text in enumerate(segments):
         session.add(
             TranscriptSegment(
                 pipeline_run_id=run.id,
@@ -953,7 +954,9 @@ def _seed_run_with_project(
     return run.id, project.id
 
 
-def _correct(client: TestClient, run_id: uuid.UUID, seg_id: uuid.UUID, token: str, text: str) -> None:
+def _correct(
+    client: TestClient, run_id: uuid.UUID, seg_id: uuid.UUID, token: str, text: str
+) -> None:
     resp = client.post(
         f"/review/{run_id}/segments/{seg_id}/text",
         data={"token": token, "text": text},
@@ -1098,7 +1101,7 @@ def test_two_runs_same_project_share_suggestion(
     _correct(client, run_a, segs_a[0], token_a, "the HVAC system is running")
 
     with session_factory() as session:
-        project = session.get(Project, project_id)
+        session.get(Project, project_id)
         folder = session.query(MediaFolder).filter_by(project_id=project_id).one()
         media = MediaItem(
             source_path=f"incoming/{uuid.uuid4()}.wav", media_folder_id=folder.id

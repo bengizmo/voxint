@@ -252,6 +252,18 @@
     ]
   ],
   [
+    "/projects/{project_id}/learning",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/projects/{project_id}/suggestions/{suggestion_id}",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/explore",
     [
       "GET"
