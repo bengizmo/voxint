@@ -23,12 +23,15 @@ from sqlalchemy.orm import Session
 
 from voxint.adjudication.resolver import label_states
 from voxint.db.models import (
+    LearnedCorrection,
+    LearnedCorrectionEvidence,
     MediaFolder,
     MediaItem,
     PipelineRun,
     Project,
     RunStatus,
 )
+from voxint.domain_packs.learning import LEARN_THRESHOLD_SEGMENTS
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,16 @@ class AssignableFolder:
 
 
 @dataclass(frozen=True)
+class CorrectionSuggestion:
+    """A learned correction suggestion with its evidence count (#476)."""
+
+    id: uuid.UUID
+    match: str
+    replace: str
+    count: int
+
+
+@dataclass(frozen=True)
 class ProjectDetail:
     """Everything the project detail page renders."""
 
@@ -92,6 +105,9 @@ class ProjectDetail:
     folders: list[ProjectFolder]
     speakers: list[ProjectSpeaker]
     assignable: list[AssignableFolder]
+    learn_corrections: bool = False
+    suggestions: list[CorrectionSuggestion] | None = None
+    learned_counts: dict[str, int] | None = None
 
 
 def list_projects(session: Session) -> list[ProjectSummary]:
@@ -223,6 +239,62 @@ def project_detail(
         if project.corrections is not None
         else None
     )
+    suggestions: list[CorrectionSuggestion] | None = None
+    learned_counts: dict[str, int] | None = None
+
+    if corrections is not None:
+        evidence_count = func.count(LearnedCorrectionEvidence.segment_id).label("ev_count")
+        suggestion_rows = (
+            session.execute(
+                sa_select(
+                    LearnedCorrection.id,
+                    LearnedCorrection.match,
+                    LearnedCorrection.replace,
+                    evidence_count,
+                )
+                .outerjoin(
+                    LearnedCorrectionEvidence,
+                    LearnedCorrectionEvidence.learned_correction_id == LearnedCorrection.id,
+                )
+                .where(
+                    LearnedCorrection.project_id == project_id,
+                    LearnedCorrection.status == "suggested",
+                )
+                .group_by(LearnedCorrection.id)
+                .having(evidence_count >= LEARN_THRESHOLD_SEGMENTS)
+                .order_by(evidence_count.desc(), LearnedCorrection.match)
+            )
+            .all()
+        )
+        suggestions = [
+            CorrectionSuggestion(id=r.id, match=r.match, replace=r.replace, count=r.ev_count)
+            for r in suggestion_rows
+        ]
+
+        accepted_rows = (
+            session.execute(
+                sa_select(
+                    LearnedCorrection.accepted_rule_id,
+                    func.count(LearnedCorrectionEvidence.segment_id).label("ev_count"),
+                )
+                .outerjoin(
+                    LearnedCorrectionEvidence,
+                    LearnedCorrectionEvidence.learned_correction_id == LearnedCorrection.id,
+                )
+                .where(
+                    LearnedCorrection.project_id == project_id,
+                    LearnedCorrection.status == "accepted",
+                )
+                .group_by(LearnedCorrection.accepted_rule_id)
+            )
+            .all()
+        )
+        learned_counts = {
+            r.accepted_rule_id: r.ev_count
+            for r in accepted_rows
+            if r.accepted_rule_id is not None
+        }
+
     return ProjectDetail(
         id=project.id,
         name=project.name,
@@ -235,4 +307,7 @@ def project_detail(
         folders=_member_folders(session, project_id),
         speakers=_derived_speakers(session, project_id),
         assignable=_assignable_folders(session),
+        learn_corrections=project.learn_corrections,
+        suggestions=suggestions,
+        learned_counts=learned_counts,
     )

@@ -197,9 +197,9 @@ def accept_suggestion(
     current = list(project.corrections or [])
     current.append(new_rule)
     normalized = normalize_operator_corrections(current)
-    project.corrections = [r.to_mapping() for r in normalized]
+    project.corrections = normalized
     learned.status = "accepted"
-    learned.accepted_rule_id = normalized[-1].id
+    learned.accepted_rule_id = normalized[-1]["id"]
     session.flush()
     return project.corrections
 

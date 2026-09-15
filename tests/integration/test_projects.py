@@ -22,6 +22,7 @@ from voxint.api.app import create_app
 from voxint.api.csrf import (
     CSRF_PROJECT_ASSIGN,
     CSRF_PROJECT_CORRECTIONS,
+    CSRF_PROJECT_LEARNING,
     CSRF_PROJECT_RENAME,
     CSRF_PROJECT_UNLINK,
     CSRF_PROJECT_VOCAB,
@@ -32,6 +33,7 @@ from voxint.config import Settings
 from voxint.db.models import (
     AdjudicationDecision,
     DiarizationTurn,
+    LearnedCorrection,
     MediaFolder,
     MediaItem,
     PipelineRun,
@@ -870,3 +872,229 @@ def test_unlink_folder_requires_csrf(
         data={"csrf_token": "forged"},
     )
     assert resp.status_code == 403
+
+
+# ---- learned corrections (#476) ---------------------------------------------
+
+
+def _learning_token(client: TestClient) -> str:
+    return mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_LEARNING)
+
+
+def test_learning_toggle_on_off(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        project.corrections = []
+        session.commit()
+        pid = project.id
+    token = _learning_token(client)
+    resp = client.post(
+        f"/projects/{pid}/learning",
+        data={"enabled": "on", "csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        assert session.get(Project, pid).learn_corrections is True
+    resp = client.post(
+        f"/projects/{pid}/learning",
+        data={"enabled": "off", "csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        assert session.get(Project, pid).learn_corrections is False
+
+
+def test_learning_toggle_refused_while_inheriting(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        session.commit()
+        pid = project.id
+    token = _learning_token(client)
+    resp = client.post(
+        f"/projects/{pid}/learning",
+        data={"enabled": "on", "csrf_token": token},
+    )
+    assert resp.status_code == 422
+    assert "Set corrections for this project first" in resp.text
+
+
+def test_inherit_reset_clears_toggle(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        project.corrections = []
+        project.learn_corrections = True
+        session.commit()
+        pid = project.id
+    corrections_token = mint_csrf_token(
+        client.app.state.csrf_secret, CSRF_PROJECT_CORRECTIONS
+    )
+    client.post(
+        f"/projects/{pid}/corrections",
+        data={"mode": "inherit", "csrf_token": corrections_token},
+        follow_redirects=False,
+    )
+    with session_factory() as session:
+        p = session.get(Project, pid)
+        assert p.corrections is None
+        assert p.learn_corrections is False
+
+
+def test_accept_appends_validated_rule(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        project.corrections = []
+        session.commit()
+        lc = LearnedCorrection(
+            project_id=project.id,
+            match="hvac",
+            replace="HVAC",
+            status="suggested",
+        )
+        session.add(lc)
+        session.commit()
+        pid, lcid = project.id, lc.id
+    token = _learning_token(client)
+    resp = client.post(
+        f"/projects/{pid}/suggestions/{lcid}",
+        data={"decision": "accept", "csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        p = session.get(Project, pid)
+        assert len(p.corrections) == 1
+        assert p.corrections[0]["match"] == "hvac"
+        assert p.corrections[0]["replace"] == "HVAC"
+        assert p.corrections[0]["case_sensitive"] is True
+        assert p.corrections[0]["whole_word"] is True
+        lc = session.get(LearnedCorrection, lcid)
+        assert lc.status == "accepted"
+        assert lc.accepted_rule_id == p.corrections[0]["id"]
+
+
+def test_dismiss_deletes_row(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        project.corrections = []
+        session.commit()
+        lc = LearnedCorrection(
+            project_id=project.id,
+            match="hvac",
+            replace="HVAC",
+            status="suggested",
+        )
+        session.add(lc)
+        session.commit()
+        pid, lcid = project.id, lc.id
+    token = _learning_token(client)
+    resp = client.post(
+        f"/projects/{pid}/suggestions/{lcid}",
+        data={"decision": "dismiss", "csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        assert session.get(LearnedCorrection, lcid) is None
+
+
+def test_corrections_save_prunes_orphaned_accepted(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        project.corrections = [
+            {"id": "rule-1", "match": "hvac", "replace": "HVAC",
+             "case_sensitive": True, "whole_word": True}
+        ]
+        session.commit()
+        lc = LearnedCorrection(
+            project_id=project.id,
+            match="hvac",
+            replace="HVAC",
+            status="accepted",
+            accepted_rule_id="rule-1",
+        )
+        session.add(lc)
+        session.commit()
+        pid, lcid = project.id, lc.id
+    corrections_token = mint_csrf_token(
+        client.app.state.csrf_secret, CSRF_PROJECT_CORRECTIONS
+    )
+    resp = client.post(
+        f"/projects/{pid}/corrections",
+        data={
+            "mode": "set",
+            "rules": json.dumps([]),
+            "csrf_token": corrections_token,
+        },
+        headers={"accept": "application/json"},
+    )
+    assert resp.status_code == 200
+    with session_factory() as session:
+        assert session.get(LearnedCorrection, lcid) is None
+
+
+def test_learning_toggle_requires_csrf(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        project.corrections = []
+        session.commit()
+        pid = project.id
+    resp = client.post(
+        f"/projects/{pid}/learning",
+        data={"enabled": "on", "csrf_token": "forged"},
+    )
+    assert resp.status_code == 403
+
+
+def test_suggestion_requires_csrf(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        project.corrections = []
+        session.commit()
+        lc = LearnedCorrection(
+            project_id=project.id,
+            match="hvac",
+            replace="HVAC",
+            status="suggested",
+        )
+        session.add(lc)
+        session.commit()
+        pid, lcid = project.id, lc.id
+    resp = client.post(
+        f"/projects/{pid}/suggestions/{lcid}",
+        data={"decision": "accept", "csrf_token": "forged"},
+    )
+    assert resp.status_code == 403
+
+
+def test_detail_read_model_has_learning_fields(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        project.corrections = []
+        project.learn_corrections = True
+        session.commit()
+        pid = project.id
+    with session_factory() as session:
+        detail = project_detail(session, pid)
+        assert detail.learn_corrections is True
+        assert detail.suggestions == []
+        assert detail.learned_counts == {}
