@@ -53,10 +53,14 @@ def restore_project(session: Session, project_id: uuid.UUID) -> Project:
 
 
 def require_active_project(session: Session, project_id: uuid.UUID) -> Project:
-    """Return the project or raise ``ProjectNotFoundError`` / ``ProjectArchivedError``."""
-    project = session.execute(
-        select(Project).where(Project.id == project_id).with_for_update()
-    ).scalar_one_or_none()
+    """Return the project or raise ``ProjectNotFoundError`` / ``ProjectArchivedError``.
+
+    No FOR UPDATE: this is a guard, not a mutation. Routes that mutate the
+    project row hold their own transactional safety (begin_nested or simple
+    attribute write). Locking here would create a lock-order inversion with
+    observe_segment_edit, which locks evidence rows before the project row.
+    """
+    project = session.get(Project, project_id)
     if project is None:
         raise ProjectNotFoundError(f"no project {project_id}")
     if project.archived_at is not None:

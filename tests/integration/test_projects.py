@@ -1446,3 +1446,35 @@ def test_archived_detail_hides_controls(
     assert "unlink" in text
     # Restore available
     assert f'/projects/{pid}/restore' in text
+
+
+@pytest.mark.parametrize("decision", ["accept", "dismiss"])
+def test_suggestion_409_on_archived(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    decision: str,
+) -> None:
+    """Accept and dismiss refuse with 409 on an archived project."""
+    with session_factory() as session:
+        project = _make_project(session)
+        project.corrections = [{"id": "r1", "match": "foo", "replace": "bar"}]
+        project.learn_corrections = True
+        project.archived_at = datetime.now(UTC)
+        pid = project.id
+        suggestion = LearnedCorrection(
+            project_id=pid, match="baz", replace="qux", status="suggested"
+        )
+        session.add(suggestion)
+        session.flush()
+        sid = suggestion.id
+        session.commit()
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_LEARNING)
+    resp = client.post(
+        f"/projects/{pid}/suggestions/{sid}",
+        data={"csrf_token": token, "decision": decision},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 409
+    with session_factory() as session:
+        assert session.get(LearnedCorrection, sid) is not None
+        assert session.get(LearnedCorrection, sid).status == "suggested"

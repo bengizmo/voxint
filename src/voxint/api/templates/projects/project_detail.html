@@ -137,7 +137,7 @@
 {%- endmacro %}
 
 {% if detail.archived_at %}
-<p class="notice error" role="alert">This project is archived: its settings are read-only, and new recordings in its folders no longer use its vocabulary or corrections. Existing quotes can still be edited. Restore it to edit settings again.</p>
+<p class="notice error" role="alert">This project is archived: its settings are read-only, and new recordings in its folders no longer use its vocabulary or corrections. Existing quotes can still be edited. Unlinking a folder removes it from this project's views, and restoring the project does not relink it. Restore it to edit settings again.</p>
 {% endif %}
 {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
 
@@ -476,18 +476,19 @@
       {% endif %}
     {% if not detail.archived_at %}
     </div>
+    {% endif %}
 
     {% if detail.suggestions %}
     <div style="margin-top:var(--space-4)">
       <h3 class="oc-section-title" style="font-size:0.8125rem">SUGGESTED FROM YOUR EDITS</h3>
       <div class="grid-table pd-rules-grid" role="region" aria-label="Correction suggestions" tabindex="0"
-           style="grid-template-columns: 1fr auto 1fr auto auto;">
+           style="grid-template-columns: 1fr auto 1fr auto{% if not detail.archived_at %} auto{% endif %};">
         <div class="gt-header">
           <span>HEARD</span>
           <span></span>
           <span>REPLACE WITH</span>
           <span>SEEN IN</span>
-          <span></span>
+          {% if not detail.archived_at %}<span></span>{% endif %}
         </div>
         {% for s in detail.suggestions %}
         <div class="gt-row">
@@ -495,6 +496,7 @@
           <span class="pd-arrow">&rarr;</span>
           <span><code>{{ s.replace }}</code></span>
           <span>{{ s.count }} segments</span>
+          {% if not detail.archived_at %}
           <span style="display:flex;gap:var(--space-2)">
             <form method="post" action="/projects/{{ detail.id }}/suggestions/{{ s.id }}" style="display:inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_learning }}">
@@ -507,12 +509,14 @@
               <button type="submit" class="cb-btn cb-btn-sm cb-btn-secondary">Dismiss</button>
             </form>
           </span>
+          {% endif %}
         </div>
         {% endfor %}
       </div>
     </div>
     {% endif %}
 
+    {% if not detail.archived_at %}
     {% if detail.corrections is not none %}
     <form method="post" action="/projects/{{ detail.id }}/corrections" style="margin-top:var(--space-3)">
       <input type="hidden" name="csrf_token" value="{{ csrf_corrections }}">
