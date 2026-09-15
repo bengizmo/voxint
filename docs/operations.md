@@ -458,7 +458,7 @@ services:
   worker:
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q celery --concurrency=1
   worker-post:
-    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.37.0}
+    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.38.0}
     pull_policy: missing
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q post --concurrency=2
     restart: unless-stopped
@@ -840,7 +840,14 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   language whisper detected, its options limited to codes some run actually
   carries; #124). Each row carries a **Language** column showing the detected
   language, or a dash for a run not yet transcribed or one that predates the
-  feature. **`GET /runs/{id}`** shows the run detail, with the per-stage attempt
+  feature. A running row's **STATUS** chip shows the current pipeline stage and
+  an estimated percentage drawn from recent completed attempts of that stage (or
+  from a default duration until enough history exists); the chip reads "taking
+  longer" once elapsed time passes the estimate, and stays plain "Running" when
+  no estimate is possible (#475). A **TOOK** column shows each finished run's
+  processing time (summed across stage attempts, excluding queue wait and retry
+  gaps); running rows show time so far as of page load.
+  **`GET /runs/{id}`** shows the run detail, with the per-stage attempt
   ledger inside the collapsed **Technical details** section (the same data as
   `voxint status`), with
   transcript and audio links when present. A **Pipeline models** block renders
@@ -1103,6 +1110,14 @@ undiscovered until the next sweep. The sweep also short-circuits on the first
 broker failure so remaining files are deferred rather than paying repeated
 connect-timeout penalties. Like the other sweeps it needs `beat` running;
 a bare-host deployment without a beat process never ingests automatically.
+
+When a sweep successfully ingests files, the **Home feed** shows grouped pickup
+entries ("3 files picked up from watched folder interviews-2026"), one entry per
+folder per sweep batch (#478). The folder path is frozen at ingest time, so the
+entry survives folder reassignment or deletion. Pickup history begins after the
+upgrade that adds the marker columns (migration 0063); historical sweeps are not
+backfilled because sweep-vs-upload provenance cannot be distinguished
+retroactively for existing media.
 
 ### URL ingestion & egress security
 

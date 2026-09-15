@@ -438,6 +438,10 @@ model assets) voids it for the gate it feeds.
   RAM and kill the build (and any shell forked afterward). Two fixes, use both on
   a dirty host: point `TMPDIR` at a disk-backed path with room
   (`TMPDIR=~/build-tmp uv build`), and move the large git-ignored trees out of
-  the working directory for the build, then restore them. A fresh clone of the
-  tag never hits this, so building on a clean checkout (or a box that only holds
-  the release source) sidesteps it entirely.
+  the working directory for the build, then restore them. On a host where `/tmp`
+  is a small tmpfs (the Ubuntu 26.04 default is 50% of RAM), a persistent
+  systemd override is the cleaner fix: create
+  `/etc/systemd/system/tmp.mount.d/size.conf` setting `Options=…,size=28G,…`
+  then `systemctl daemon-reload`. A fresh clone of the tag never hits this, so
+  building on a clean checkout (or a box that only holds the release source)
+  sidesteps it entirely.
