@@ -1,6 +1,6 @@
 # #478 Watch-folder pickup feed marker
 
-Status: in-progress
+Status: done
 
 ## Goal
 
@@ -340,3 +340,16 @@ Spec deltas: none (no living spec declared)
 | `pickup_count` default 0 permits invalid state | Codex | Acceptable trade-off for dataclass simplicity. Tests assert non-zero for emitted rows. |
 | Suppress `run_started` for swept items | Kimi | Scope creep; re-submit caveat makes it imprecise. |
 | Reserve a pickup quota for feed fairness | Grok | Chronological ordering intentionally permits bursts. Over-engineering for this audience. |
+
+## Completion notes
+
+Closed 2026-09-15. PR #483 merged to main at `cf26d7d`.
+
+**Verified**: all 3 slices complete, all 7 acceptance scenarios covered by
+tests (68 tests across 5 files, all green). Sort-key determinism, template
+pluralization, contract tests for columns + partial index, migration up/down
+all confirmed. No rejected proposals reintroduced. No drift detected.
+
+**Spec sync**: skipped (no living spec declared).
+
+**Follow-ups**: none.
