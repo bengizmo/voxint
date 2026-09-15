@@ -678,6 +678,8 @@ def submit_media_item_if_new(
     sidecar: Sidecar | None = None,
     diarization_max_speakers: int | None = None,
     diarization_num_speakers: int | None = None,
+    picked_up_by_sweep_at: datetime | None = None,
+    picked_up_from_folder: str | None = None,
 ) -> SubmissionResult | None:
     """Queue a run for ``source_path`` ONLY if no MediaItem claims it yet.
 
@@ -743,6 +745,9 @@ def submit_media_item_if_new(
         diarization_max_speakers=max_hint,
         diarization_num_speakers=num_hint,
     )
+    if picked_up_by_sweep_at is not None:
+        media.picked_up_by_sweep_at = picked_up_by_sweep_at
+        media.picked_up_from_folder = picked_up_from_folder
     return SubmissionResult(run_id=run.id)
 
 

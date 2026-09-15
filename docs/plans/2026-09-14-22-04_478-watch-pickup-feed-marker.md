@@ -1,6 +1,6 @@
 # #478 Watch-folder pickup feed marker
 
-Status: draft
+Status: in-progress
 
 ## Goal
 

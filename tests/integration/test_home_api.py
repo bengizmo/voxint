@@ -365,3 +365,155 @@ def test_home_unresolved_voices_card_links_to_review_queue(
     assert 'href="/review?sort=unresolved" aria-label="Review voices without a name"' in body
     assert "across recordings waiting for review" in body
     assert "across reviewed recordings" not in body
+
+
+# --- Watch-folder pickup feed entries (#478) ------------------------------------
+
+
+def test_home_feed_shows_watch_pickup_entry(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    now = datetime.now(UTC)
+    with session_factory() as session:
+        m1 = MediaItem(
+            source_path="interviews/a.wav",
+            picked_up_by_sweep_at=now,
+            picked_up_from_folder="interviews",
+        )
+        m2 = MediaItem(
+            source_path="interviews/b.wav",
+            picked_up_by_sweep_at=now,
+            picked_up_from_folder="interviews",
+        )
+        session.add_all([m1, m2])
+        session.commit()
+
+    body = client.get("/").text
+    assert "2 files picked up from watched folder interviews" in body
+
+
+def test_home_feed_pickup_single_file_singular(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    now = datetime.now(UTC)
+    with session_factory() as session:
+        session.add(
+            MediaItem(
+                source_path="meetings/solo.wav",
+                picked_up_by_sweep_at=now,
+                picked_up_from_folder="meetings",
+            )
+        )
+        session.commit()
+
+    body = client.get("/").text
+    assert "1 file picked up from watched folder meetings" in body
+    assert "1 files" not in body
+
+
+def test_home_feed_pickup_multiple_folders_separate_entries(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    now = datetime.now(UTC)
+    with session_factory() as session:
+        session.add(
+            MediaItem(
+                source_path="interviews/a.wav",
+                picked_up_by_sweep_at=now,
+                picked_up_from_folder="interviews",
+            )
+        )
+        session.add(
+            MediaItem(
+                source_path="meetings/b.wav",
+                picked_up_by_sweep_at=now,
+                picked_up_from_folder="meetings",
+            )
+        )
+        session.commit()
+
+    body = client.get("/").text
+    assert "1 file picked up from watched folder interviews" in body
+    assert "1 file picked up from watched folder meetings" in body
+
+
+def test_home_feed_manual_upload_with_folder_no_pickup(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """A manual upload assigned to a watched folder must NOT produce a pickup entry."""
+    from voxint.db.models import MediaFolder
+
+    with session_factory() as session:
+        folder = MediaFolder(path="interviews", watch=True)
+        session.add(folder)
+        session.flush()
+        session.add(
+            MediaItem(
+                source_path="interviews/manual.wav",
+                media_folder_id=folder.id,
+                picked_up_by_sweep_at=None,
+                picked_up_from_folder=None,
+            )
+        )
+        session.commit()
+
+    body = client.get("/").text
+    assert "picked up from watched folder" not in body
+
+
+def test_home_feed_pickup_competes_with_runs_on_recency(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Watch-pickup entries compete with run/speaker entries for the feed limit."""
+    now = datetime.now(UTC)
+    old = now - timedelta(hours=2)
+    with session_factory() as session:
+        session.add(
+            MediaItem(
+                source_path="old-sweep/old.wav",
+                picked_up_by_sweep_at=old,
+                picked_up_from_folder="old-sweep",
+            )
+        )
+        for i in range(12):
+            media = MediaItem(source_path=f"incoming/{i}.wav")
+            session.add(media)
+            session.flush()
+            session.add(
+                PipelineRun(
+                    media_item_id=media.id,
+                    status=RunStatus.QUEUED.value,
+                    created_at=now - timedelta(seconds=i),
+                )
+            )
+        session.commit()
+
+    body = client.get("/").text
+    assert "picked up from watched folder old-sweep" not in body
+
+
+def test_home_feed_pickup_frozen_path_survives_folder_deletion(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Frozen picked_up_from_folder survives after the folder row is deleted."""
+    from voxint.db.models import MediaFolder
+
+    now = datetime.now(UTC)
+    with session_factory() as session:
+        folder = MediaFolder(path="ephemeral", watch=True)
+        session.add(folder)
+        session.flush()
+        session.add(
+            MediaItem(
+                source_path="ephemeral/a.wav",
+                media_folder_id=folder.id,
+                picked_up_by_sweep_at=now,
+                picked_up_from_folder="ephemeral",
+            )
+        )
+        session.commit()
+        session.delete(folder)
+        session.commit()
+
+    body = client.get("/").text
+    assert "1 file picked up from watched folder ephemeral" in body

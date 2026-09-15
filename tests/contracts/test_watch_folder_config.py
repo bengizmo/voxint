@@ -58,3 +58,23 @@ def test_watch_folder_not_tier_scaled() -> None:
 
     assert "watch_folder_sweep_seconds" not in TIER_SCALED_TIMING_FIELDS
     assert "watch_folder_settle_seconds" not in TIER_SCALED_TIMING_FIELDS
+
+
+# --- Watch-folder pickup marker columns (#478) ---------------------------------
+
+
+def test_media_item_has_pickup_marker_columns() -> None:
+    """The pickup marker columns exist on MediaItem (migration 0063)."""
+    from voxint.db.models import MediaItem
+
+    cols = {c.name for c in MediaItem.__table__.columns}
+    assert "picked_up_by_sweep_at" in cols
+    assert "picked_up_from_folder" in cols
+
+
+def test_media_item_has_pickup_partial_index() -> None:
+    """The partial index for the pickup feed query exists on media_items."""
+    from voxint.db.models import MediaItem
+
+    index_names = {idx.name for idx in MediaItem.__table__.indexes}
+    assert "ix_media_items_pickup" in index_names

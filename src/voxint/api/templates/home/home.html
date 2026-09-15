@@ -114,6 +114,8 @@
         Processing started: <a href="/runs/{{ item.run_id }}">{{ friendly_media_label(item.title, item.source_path) }}</a>
         {% elif item.kind == "speaker_enrolled" %}
         Speaker verified: <a href="/speakers">{{ item.title }}</a>
+        {% elif item.kind == "watch_pickup" %}
+        {{ item.pickup_count }} file{{ "s" if item.pickup_count != 1 else "" }} picked up from watched folder {{ item.title }}
         {% endif %}
       </div>
       <span class="recent-action">

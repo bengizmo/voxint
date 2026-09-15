@@ -45,6 +45,7 @@ from voxint.domain_packs.base import DomainPackError
 from voxint.domain_packs.registry import resolve_domain_pack_by_name
 from voxint.ingest.service import SubmissionResult, submit_media_item_if_new
 from voxint.ingest.sidecar import Sidecar, SidecarError, find_sidecar, read_sidecar
+from voxint.media.folders import deepest_ancestor
 from voxint.media.registration import watched_folder_paths
 
 logger = logging.getLogger(__name__)
@@ -151,6 +152,7 @@ def sweep_watch_folders(
         )
         media_root = settings.media_root.resolve()
         now = datetime.now(tz=UTC).timestamp()
+        sweep_ts = datetime.fromtimestamp(now, tz=UTC)
         settling = 0
         stat_errors = 0
         settled: list[str] = []
@@ -185,9 +187,15 @@ def sweep_watch_folders(
             if outcome is _SidecarHold.HELD:
                 sidecar_errors += 1
                 continue
+            folder_path = deepest_ancestor(rel, folders)
             try:
                 submitted = submit_media_item_if_new(
-                    session, rel, settings=settings, sidecar=outcome
+                    session,
+                    rel,
+                    settings=settings,
+                    sidecar=outcome,
+                    picked_up_by_sweep_at=sweep_ts,
+                    picked_up_from_folder=folder_path,
                 )
             except DomainPackError:
                 # A freeze-time domain-pack collision (issue #84) / unresolvable pack

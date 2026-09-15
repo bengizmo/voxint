@@ -144,5 +144,5 @@ def test_single_alembic_head() -> None:
     # 0058 = auto_enroll_evidence table for threshold calibration, issue #434.
     # 0059 = queue_paused column on app_settings, issue #419.
     # 0060 = synthdetect source_content_hash column, issue #146.
-    # 0062 = learned corrections, issue #476.
-    assert list(heads) == ["0062"]
+    # 0063 = watch-folder pickup marker, issue #478.
+    assert list(heads) == ["0063"]
