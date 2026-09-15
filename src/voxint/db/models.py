@@ -512,6 +512,11 @@ class MediaItem(Base):
             "size_bytes IS NULL OR size_bytes >= 0", name="media_items_size_nonneg_check"
         ),
         Index("ix_media_items_media_folder_id", "media_folder_id"),
+        Index(
+            "ix_media_items_pickup",
+            text("picked_up_by_sweep_at DESC"),
+            postgresql_where=text("picked_up_by_sweep_at IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -544,6 +549,8 @@ class MediaItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     trashed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    picked_up_by_sweep_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    picked_up_from_folder: Mapped[str | None] = mapped_column(Text)
 
     runs: Mapped[list["PipelineRun"]] = relationship(back_populates="media_item")
     source_metadata: Mapped["MediaSourceMetadata | None"] = relationship(

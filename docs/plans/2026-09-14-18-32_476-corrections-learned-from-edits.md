@@ -1,6 +1,6 @@
 # Plan: corrections learned from operator edits (#476)
 
-Status: in-progress
+Status: done
 
 ## Goal
 

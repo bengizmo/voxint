@@ -7,10 +7,11 @@ live in ``stats_query`` (shared with ``voxint stats``); this module carries only
 what is Home-specific — the recent-activity feed.
 
 The feed is derived entirely from existing tables (no event/outbox table; that
-is a P7 concern if toasts ship): three bounded newest-first slices — runs
-started, runs that reached a terminal outcome, speakers enrolled — merged and
-trimmed in Python. Each slice is capped at the feed limit, so the merge sees at
-most ``3 * limit`` rows regardless of table sizes.
+is a P7 concern if toasts ship): four bounded newest-first slices — runs
+started, runs that reached a terminal outcome, speakers enrolled,
+watch-folder pickups — merged and trimmed in Python. Each slice is capped at
+the feed limit, so the merge sees at most ``4 * limit`` rows regardless of
+table sizes.
 """
 
 import uuid
@@ -39,10 +40,11 @@ class ActivityItem:
     """One recent-activity row: what happened, when, and where to click.
 
     ``kind`` is one of ``run_started`` / ``run_completed`` / ``run_failed`` /
-    ``speaker_enrolled``. ``title`` follows the run-listing display precedence
-    (sidecar title over acquisition-metadata title, ``None`` otherwise — the
-    template falls back to a cleaned filename via ``friendly_media_label``);
-    for a speaker it is the display name and ``source_path`` is empty.
+    ``speaker_enrolled`` / ``watch_pickup``. ``title`` follows the run-listing
+    display precedence (sidecar title over acquisition-metadata title, ``None``
+    otherwise -- the template falls back to a cleaned filename via
+    ``friendly_media_label``); for a speaker it is the display name and
+    ``source_path`` is empty; for a watch pickup it is the frozen folder path.
     """
 
     at: datetime
@@ -53,6 +55,7 @@ class ActivityItem:
     speaker_id: uuid.UUID | None = None
     unresolved_count: int = 0
     error: str | None = None
+    pickup_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -162,20 +165,63 @@ def _speaker_rows(session: Session, *, limit: int) -> list[ActivityItem]:
     ]
 
 
+def _watch_pickup_rows(session: Session, *, limit: int) -> list[ActivityItem]:
+    """Grouped watch-folder pickup entries (#478).
+
+    Groups ``media_items`` by ``(picked_up_from_folder, picked_up_by_sweep_at)``
+    where the sweep marker is set. One ``ActivityItem`` per group with
+    ``kind="watch_pickup"`` and ``pickup_count`` holding the file count.
+
+    Trashed media keep their pickup entry (historical activity). The pickup
+    entry competes with its own ``run_started`` entries for the feed's display
+    limit -- accepted, not suppressed (see plan).
+    """
+    stmt = (
+        sa_select(
+            MediaItem.picked_up_from_folder.label("folder"),
+            MediaItem.picked_up_by_sweep_at.label("sweep_at"),
+            func.count().label("cnt"),
+        )
+        .where(MediaItem.picked_up_by_sweep_at.isnot(None))
+        .where(MediaItem.picked_up_from_folder.isnot(None))
+        .group_by(MediaItem.picked_up_from_folder, MediaItem.picked_up_by_sweep_at)
+        .order_by(
+            MediaItem.picked_up_by_sweep_at.desc(),
+            MediaItem.picked_up_from_folder.desc(),
+        )
+        .limit(limit)
+    )
+    return [
+        ActivityItem(
+            at=row.sweep_at.astimezone(UTC),
+            kind="watch_pickup",
+            title=row.folder,
+            source_path="",
+            pickup_count=row.cnt,
+        )
+        for row in session.execute(stmt)
+    ]
+
+
 def recent_activity(
     session: Session, *, limit: int = 10, gates: MatchingGates
 ) -> list[ActivityItem]:
-    """The newest ``limit`` activity items across the three source families.
+    """The newest ``limit`` activity items across the four source families.
 
     Deterministic under equal timestamps: ties order by kind then by the row's
-    own id, so two page loads over unchanged data render identically.
+    own id (or title for watch-pickup items), so two page loads over unchanged
+    data render identically.
     """
     merged = [
         *_run_rows(session, limit=limit, terminal=False, gates=gates),
         *_run_rows(session, limit=limit, terminal=True, gates=gates),
         *_speaker_rows(session, limit=limit),
+        *_watch_pickup_rows(session, limit=limit),
     ]
-    merged.sort(key=lambda i: (i.at, i.kind, str(i.run_id or i.speaker_id)), reverse=True)
+    merged.sort(
+        key=lambda i: (i.at, i.kind, str(i.run_id or i.speaker_id or i.title or "")),
+        reverse=True,
+    )
     return merged[:limit]
 
 

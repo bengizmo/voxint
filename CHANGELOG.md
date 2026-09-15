@@ -22,6 +22,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   time passes the estimate. It is a snapshot as of page load and stays plain
   "Running" when no estimate is possible.
 
+- **Home feed shows watched-folder pickup entries** (#478). When the watch sweep
+  ingests new files, the feed shows "N files picked up from watched folder X"
+  grouped by sweep batch. Pickup history begins after this upgrade (no backfill
+  of historical sweeps). Migration 0063.
+
 ## [0.37.0] - 2026-09-14
 
 ### Added

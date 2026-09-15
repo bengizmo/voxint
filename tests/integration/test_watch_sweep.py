@@ -340,6 +340,11 @@ def test_real_unique_conflict_at_submit_does_not_poison_the_batch(
     assert _media_paths(session_factory) == {f"{FOLDER}/a.wav", f"{FOLDER}/b.wav"}
     runs = _runs(session_factory)
     assert len(runs) == 1  # exactly one run minted — for b.wav, not the pre-claimed a.wav
+    # #478: the pre-claimed item must NOT get a pickup marker from the losing race.
+    items = _media_items(session_factory)
+    preclaimed = next(i for i in items if i.source_path == f"{FOLDER}/a.wav")
+    assert preclaimed.picked_up_by_sweep_at is None
+    assert preclaimed.picked_up_from_folder is None
 
 
 def test_missing_media_root_is_surfaced_not_a_silent_empty_sweep(
@@ -740,3 +745,128 @@ def test_batch_cap_does_not_count_held_sidecars(
     assert summary.sidecar_errors == 3
     assert summary.picked_up == 4
     assert summary.hit_file_cap is True
+
+
+# --- Watch-folder pickup marker (#478) ------------------------------------------
+
+
+def _media_items(factory: sessionmaker[Session]) -> list[MediaItem]:
+    with factory() as s:
+        return list(s.query(MediaItem).all())
+
+
+def test_sweep_sets_pickup_marker_on_ingested_files(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    _drop(media_root, "a.wav")
+    _drop(media_root, "b.wav")
+
+    sweep_watch_folders(session_factory, _settings(media_root))
+
+    items = _media_items(session_factory)
+    assert len(items) == 2
+    for item in items:
+        assert item.picked_up_by_sweep_at is not None
+        assert item.picked_up_from_folder == FOLDER
+
+
+def test_all_items_in_one_sweep_share_the_same_timestamp(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    _drop(media_root, "a.wav")
+    _drop(media_root, "b.wav")
+    _drop(media_root, "c.wav")
+
+    sweep_watch_folders(session_factory, _settings(media_root))
+
+    items = _media_items(session_factory)
+    timestamps = {item.picked_up_by_sweep_at for item in items}
+    assert len(timestamps) == 1
+
+
+def test_second_sweep_produces_a_different_timestamp(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    _drop(media_root, "a.wav")
+    sweep_watch_folders(session_factory, _settings(media_root))
+    ts1 = _media_items(session_factory)[0].picked_up_by_sweep_at
+
+    _drop(media_root, "b.wav")
+    sweep_watch_folders(session_factory, _settings(media_root))
+    items = _media_items(session_factory)
+    ts2 = next(i.picked_up_by_sweep_at for i in items if i.source_path.endswith("b.wav"))
+
+    assert ts1 != ts2
+
+
+def test_non_sweep_submission_leaves_marker_null(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    from voxint.ingest.service import submit_media_item_if_new
+
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    _drop(media_root, "manual.wav")
+
+    with session_factory() as s:
+        submit_media_item_if_new(s, f"{FOLDER}/manual.wav", settings=_settings(media_root))
+        s.commit()
+
+    items = _media_items(session_factory)
+    assert len(items) == 1
+    assert items[0].picked_up_by_sweep_at is None
+    assert items[0].picked_up_from_folder is None
+
+
+def test_race_loss_does_not_set_marker_on_existing_item(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    with session_factory() as s:
+        s.add(MediaItem(source_path=f"{FOLDER}/claimed.wav"))
+        s.commit()
+
+    _drop(media_root, "claimed.wav")
+    sweep_watch_folders(session_factory, _settings(media_root))
+
+    items = _media_items(session_factory)
+    assert len(items) == 1
+    assert items[0].picked_up_by_sweep_at is None
+    assert items[0].picked_up_from_folder is None
+
+
+def test_domain_pack_error_leaves_marker_null(
+    session_factory: sessionmaker[Session], media_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import voxint.ingest.watch as watch_mod
+    from voxint.domain_packs.base import DomainPackError
+
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    _drop(media_root, "bad.wav")
+
+    def _submit(session: object, rel: str, **kw: object) -> object:
+        raise DomainPackError("collision")
+
+    monkeypatch.setattr(watch_mod, "submit_media_item_if_new", _submit)
+
+    sweep_watch_folders(session_factory, _settings(media_root))
+
+    assert _media_items(session_factory) == []
+
+
+def test_multiple_folders_get_correct_folder_paths(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    (media_root / "meetings").mkdir()
+    _seed_settings_row(session_factory, folders=[FOLDER, "meetings"], enabled=True)
+    _drop(media_root, "a.wav")
+    _drop(media_root, "b.wav", folder="meetings")
+
+    sweep_watch_folders(session_factory, _settings(media_root))
+
+    items = _media_items(session_factory)
+    by_path = {i.source_path: i for i in items}
+    assert by_path[f"{FOLDER}/a.wav"].picked_up_from_folder == FOLDER
+    assert by_path["meetings/b.wav"].picked_up_from_folder == "meetings"
