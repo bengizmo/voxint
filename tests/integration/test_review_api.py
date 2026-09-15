@@ -939,7 +939,7 @@ def _seed_run_with_project(
             path=audio_rel,
         )
     )
-    segments = ["the hvac system is running", "the hvac unit works", "hvac test here"]
+    segments = ["the seer system is running", "the seer unit works", "seer test here"]
     for index, text in enumerate(segments):
         session.add(
             TranscriptSegment(
@@ -971,7 +971,7 @@ def test_learning_toggle_off_produces_no_rows(
         run_id, project_id = _seed_run_with_project(session, media_root, learn=False)
     segs = _segment_ids(session_factory, run_id)
     token = claim_token(client, run_id)
-    _correct(client, run_id, segs[0], token, "the HVAC system is running")
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
     with session_factory() as session:
         count = session.query(LearnedCorrection).filter_by(project_id=project_id).count()
         assert count == 0
@@ -999,7 +999,7 @@ def test_inheriting_project_produces_no_rows(
         )
     segs = _segment_ids(session_factory, run_id)
     token = claim_token(client, run_id)
-    _correct(client, run_id, segs[0], token, "the HVAC system is running")
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
     with session_factory() as session:
         count = session.query(LearnedCorrection).filter_by(project_id=project_id).count()
         assert count == 0
@@ -1012,11 +1012,11 @@ def test_first_edit_records_evidence(
         run_id, project_id = _seed_run_with_project(session, media_root)
     segs = _segment_ids(session_factory, run_id)
     token = claim_token(client, run_id)
-    _correct(client, run_id, segs[0], token, "the HVAC system is running")
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
     with session_factory() as session:
         lc = session.query(LearnedCorrection).filter_by(project_id=project_id).one()
-        assert lc.match == "hvac"
-        assert lc.replace == "HVAC"
+        assert lc.match == "seer"
+        assert lc.replace == "SEER"
         assert lc.status == "suggested"
         ev_count = session.query(LearnedCorrectionEvidence).filter_by(
             learned_correction_id=lc.id
@@ -1031,9 +1031,9 @@ def test_three_segments_make_suggestion(
         run_id, project_id = _seed_run_with_project(session, media_root)
     segs = _segment_ids(session_factory, run_id)
     token = claim_token(client, run_id)
-    _correct(client, run_id, segs[0], token, "the HVAC system is running")
-    _correct(client, run_id, segs[1], token, "the HVAC unit works")
-    _correct(client, run_id, segs[2], token, "HVAC test here")
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
+    _correct(client, run_id, segs[1], token, "the SEER unit works")
+    _correct(client, run_id, segs[2], token, "SEER test here")
     with session_factory() as session:
         lc = session.query(LearnedCorrection).filter_by(project_id=project_id).one()
         ev_count = session.query(LearnedCorrectionEvidence).filter_by(
@@ -1049,13 +1049,13 @@ def test_re_edit_retracts_old_pair(
         run_id, project_id = _seed_run_with_project(session, media_root)
     segs = _segment_ids(session_factory, run_id)
     token = claim_token(client, run_id)
-    _correct(client, run_id, segs[0], token, "the HVAC system is running")
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
     with session_factory() as session:
         assert session.query(LearnedCorrection).filter_by(project_id=project_id).count() == 1
-    _correct(client, run_id, segs[0], token, "the hvac system is working")
+    _correct(client, run_id, segs[0], token, "the seer system is working")
     with session_factory() as session:
         lcs = session.query(LearnedCorrection).filter_by(project_id=project_id).all()
-        old = [lc for lc in lcs if lc.match == "hvac" and lc.replace == "HVAC"]
+        old = [lc for lc in lcs if lc.match == "seer" and lc.replace == "SEER"]
         assert len(old) == 0
 
 
@@ -1066,7 +1066,7 @@ def test_revert_removes_evidence_and_prunes_orphan(
         run_id, project_id = _seed_run_with_project(session, media_root)
     segs = _segment_ids(session_factory, run_id)
     token = claim_token(client, run_id)
-    _correct(client, run_id, segs[0], token, "the HVAC system is running")
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
     with session_factory() as session:
         assert session.query(LearnedCorrection).filter_by(project_id=project_id).count() == 1
     _correct(client, run_id, segs[0], token, "")
@@ -1081,8 +1081,8 @@ def test_identical_replay_is_noop(
         run_id, project_id = _seed_run_with_project(session, media_root)
     segs = _segment_ids(session_factory, run_id)
     token = claim_token(client, run_id)
-    _correct(client, run_id, segs[0], token, "the HVAC system is running")
-    _correct(client, run_id, segs[0], token, "the HVAC system is running")
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
     with session_factory() as session:
         lc = session.query(LearnedCorrection).filter_by(project_id=project_id).one()
         ev_count = session.query(LearnedCorrectionEvidence).filter_by(
@@ -1098,7 +1098,7 @@ def test_two_runs_same_project_share_suggestion(
         run_a, project_id = _seed_run_with_project(session, media_root)
     segs_a = _segment_ids(session_factory, run_a)
     token_a = claim_token(client, run_a)
-    _correct(client, run_a, segs_a[0], token_a, "the HVAC system is running")
+    _correct(client, run_a, segs_a[0], token_a, "the SEER system is running")
 
     with session_factory() as session:
         session.get(Project, project_id)
@@ -1128,7 +1128,7 @@ def test_two_runs_same_project_share_suggestion(
                 segment_index=0,
                 start_seconds=0.0,
                 end_seconds=8.0,
-                raw_text="the hvac system is running",
+                raw_text="the seer system is running",
             )
         )
         session.commit()
@@ -1136,7 +1136,7 @@ def test_two_runs_same_project_share_suggestion(
 
     segs_b = _segment_ids(session_factory, run_b_id)
     token_b = claim_token(client, run_b_id)
-    _correct(client, run_b_id, segs_b[0], token_b, "the HVAC system is running")
+    _correct(client, run_b_id, segs_b[0], token_b, "the SEER system is running")
 
     with session_factory() as session:
         lc = session.query(LearnedCorrection).filter_by(project_id=project_id).one()

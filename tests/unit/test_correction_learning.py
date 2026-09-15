@@ -18,8 +18,8 @@ def _extract(base: str, edited: str, *, raw: str | None = None) -> tuple[Substit
 
 class TestSingleWord:
     def test_simple_replacement(self) -> None:
-        result = _extract("the hvac system", "the HVAC system")
-        assert result == (Substitution("hvac", "HVAC"),)
+        result = _extract("the seer system", "the SEER system")
+        assert result == (Substitution("seer", "SEER"),)
 
     def test_case_only_pair(self) -> None:
         result = _extract("it works", "IT works")
@@ -87,17 +87,17 @@ class TestRawGating:
 
     def test_pair_in_both_base_and_raw_kept(self) -> None:
         result = _extract(
-            "the hvac system here",
-            "the HVAC system here",
-            raw="the hvac system here",
+            "the seer system here",
+            "the SEER system here",
+            raw="the seer system here",
         )
-        assert result == (Substitution("hvac", "HVAC"),)
+        assert result == (Substitution("seer", "SEER"),)
 
 
 class TestRewriteCutoff:
     def test_one_word_segment_fully_replaced_is_learned(self) -> None:
-        result = _extract("hvac", "HVAC")
-        assert result == (Substitution("hvac", "HVAC"),)
+        result = _extract("seer", "SEER")
+        assert result == (Substitution("seer", "SEER"),)
 
     def test_cutoff_rejects_when_too_many_replaced(self) -> None:
         words = ["word"] * 10
@@ -138,25 +138,25 @@ class TestCaps:
 
 class TestDeterminism:
     def test_order_preserving(self) -> None:
-        base = "the hvac system and the ahu unit"
-        edited = "the HVAC system and the AHU unit"
+        base = "the seer system and the ahu unit"
+        edited = "the SEER system and the AHU unit"
         result = _extract(base, edited)
         assert result == (
-            Substitution("hvac", "HVAC"),
+            Substitution("seer", "SEER"),
             Substitution("ahu", "AHU"),
         )
 
     def test_deduplicated(self) -> None:
-        base = "hvac and hvac"
-        edited = "HVAC and HVAC"
+        base = "seer and seer"
+        edited = "SEER and SEER"
         result = _extract(base, edited)
-        assert result == (Substitution("hvac", "HVAC"),)
+        assert result == (Substitution("seer", "SEER"),)
 
 
 class TestWhitespace:
     def test_whitespace_normalized(self) -> None:
-        result = _extract("the  hvac  system", "the  HVAC  system")
-        assert result == (Substitution("hvac", "HVAC"),)
+        result = _extract("the  seer  system", "the  SEER  system")
+        assert result == (Substitution("seer", "SEER"),)
 
     def test_no_change_produces_nothing(self) -> None:
         result = _extract("hello world", "hello world")

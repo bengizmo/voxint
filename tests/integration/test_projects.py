@@ -956,8 +956,8 @@ def test_accept_appends_validated_rule(
         session.commit()
         lc = LearnedCorrection(
             project_id=project.id,
-            match="hvac",
-            replace="HVAC",
+            match="seer",
+            replace="SEER",
             status="suggested",
         )
         session.add(lc)
@@ -973,8 +973,8 @@ def test_accept_appends_validated_rule(
     with session_factory() as session:
         p = session.get(Project, pid)
         assert len(p.corrections) == 1
-        assert p.corrections[0]["match"] == "hvac"
-        assert p.corrections[0]["replace"] == "HVAC"
+        assert p.corrections[0]["match"] == "seer"
+        assert p.corrections[0]["replace"] == "SEER"
         assert p.corrections[0]["case_sensitive"] is True
         assert p.corrections[0]["whole_word"] is True
         lc = session.get(LearnedCorrection, lcid)
@@ -991,8 +991,8 @@ def test_dismiss_deletes_row(
         session.commit()
         lc = LearnedCorrection(
             project_id=project.id,
-            match="hvac",
-            replace="HVAC",
+            match="seer",
+            replace="SEER",
             status="suggested",
         )
         session.add(lc)
@@ -1015,14 +1015,14 @@ def test_corrections_save_prunes_orphaned_accepted(
     with session_factory() as session:
         project = _make_project(session)
         project.corrections = [
-            {"id": "rule-1", "match": "hvac", "replace": "HVAC",
+            {"id": "rule-1", "match": "seer", "replace": "SEER",
              "case_sensitive": True, "whole_word": True}
         ]
         session.commit()
         lc = LearnedCorrection(
             project_id=project.id,
-            match="hvac",
-            replace="HVAC",
+            match="seer",
+            replace="SEER",
             status="accepted",
             accepted_rule_id="rule-1",
         )
@@ -1070,8 +1070,8 @@ def test_suggestion_requires_csrf(
         session.commit()
         lc = LearnedCorrection(
             project_id=project.id,
-            match="hvac",
-            replace="HVAC",
+            match="seer",
+            replace="SEER",
             status="suggested",
         )
         session.add(lc)

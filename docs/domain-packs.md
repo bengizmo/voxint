@@ -230,7 +230,7 @@ recurring fixes.
 
 On a project detail page, a **Learn from my edits** toggle tells Voxint to watch
 your transcript corrections in that project. When you fix the same word across
-three or more segments (for example, correcting "hvac" to "HVAC" each time), the
+three or more segments (for example, correcting "seer" to "SEER" each time), the
 project page shows a **Suggested from your edits** row with the pair and a count.
 Suggestions never apply on their own. Click **Accept** to turn a suggestion into
 an ordinary correction rule, or **Dismiss** to discard it.

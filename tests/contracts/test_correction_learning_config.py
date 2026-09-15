@@ -39,9 +39,9 @@ class TestLearnedRuleShape:
         """A learned rule entering the corrections list must be case-sensitive
         and whole-word to avoid surprising substitutions."""
         rule = CorrectionRule(
-            id="learned-hvac",
-            match="hvac",
-            replace="HVAC",
+            id="learned-seer",
+            match="seer",
+            replace="SEER",
             case_sensitive=True,
             whole_word=True,
         )
@@ -52,13 +52,13 @@ class TestLearnedRuleShape:
     def test_docs_example_parses(self) -> None:
         """The typical learned pair from the docs parses cleanly."""
         mapping = {
-            "id": "hvac",
-            "match": "hvac",
-            "replace": "HVAC",
+            "id": "seer",
+            "match": "seer",
+            "replace": "SEER",
             "case_sensitive": True,
             "whole_word": True,
         }
         parsed = parse_corrections([mapping])
         assert len(parsed) == 1
-        assert parsed[0].match == "hvac"
-        assert parsed[0].replace == "HVAC"
+        assert parsed[0].match == "seer"
+        assert parsed[0].replace == "SEER"
