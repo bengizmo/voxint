@@ -294,17 +294,20 @@ def _reject_replacement_contains_match(rules: Sequence[CorrectionRule]) -> None:
 # --- single-rule matcher (reused by the #81 apply engine) --------------------
 
 
-def _is_word_char(ch: str) -> bool:
+def is_word_char(ch: str) -> bool:
     """Whether ``ch`` JOINS a word for whole-word boundary purposes.
 
     Alphanumerics, the intra-word punctuation (the ASCII and typographic
     apostrophes and the ASCII hyphen), and any
-    Unicode combining mark (category ``M*``) — so a decomposed grapheme like
+    Unicode combining mark (category ``M*``) -- so a decomposed grapheme like
     ``Zoë`` (``Z o e U+0308``) is never split between its base letter and its
     combining mark. This explicit predicate replaces Python's bare ``\\b``, which
     treats apostrophes, hyphens, and combining marks as boundaries.
     """
     return ch.isalnum() or ch in _INTRA_WORD or unicodedata.category(ch).startswith("M")
+
+
+_is_word_char = is_word_char
 
 
 def _boundary_ok(text: str, start: int, end: int, whole_word: bool) -> bool:
