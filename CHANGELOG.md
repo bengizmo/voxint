@@ -6,6 +6,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-09-15
+
 ### Added
 - **Corrections learned from operator edits** (#476). A per-project "Learn from
   my edits" toggle watches transcript text corrections and surfaces a suggestion
@@ -4272,7 +4274,8 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.37.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.38.0...HEAD
+[0.38.0]: https://github.com/bengizmo/voxint/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/bengizmo/voxint/compare/v0.36.1...v0.37.0
 [0.36.1]: https://github.com/bengizmo/voxint/compare/v0.36.0...v0.36.1
 [0.36.0]: https://github.com/bengizmo/voxint/compare/v0.35.0...v0.36.0
