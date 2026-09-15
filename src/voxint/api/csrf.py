@@ -203,6 +203,7 @@ CSRF_USERS = "users"
 CSRF_ACCOUNT_PASSWORD = "account-password"
 CSRF_QUEUE_PAUSE = "queue-pause"
 CSRF_QUEUE_RESUME = "queue-resume"
+CSRF_PROJECT_LEARNING = "project-learning"
 
 
 _CSRF_SECRET_FILENAME = ".csrf_secret"

@@ -23,9 +23,13 @@ from voxint.db.models import (
     ArtifactKind,
     AudioArtifact,
     DiarizationTurn,
+    LearnedCorrection,
+    LearnedCorrectionEvidence,
+    MediaFolder,
     MediaItem,
     MediaSourceMetadata,
     PipelineRun,
+    Project,
     RunStatus,
     Speaker,
     SpeakerAssignment,
@@ -899,3 +903,244 @@ def test_verify_returns_json_with_progress(
     body = resp.json()
     assert body["verified"] is True
     assert body["progress"]["verified"] == 1
+
+
+# --- learned corrections observation (#476) ----------------------------------
+
+
+def _seed_run_with_project(
+    session: Session, media_root: Path, *, learn: bool = True, own_corrections: bool = True
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """Seed a run whose media item is in a folder belonging to a project."""
+    project = Project(
+        name=f"project-{uuid.uuid4()}",
+        corrections=[] if own_corrections else None,
+        learn_corrections=learn,
+    )
+    session.add(project)
+    session.flush()
+    folder = MediaFolder(path=f"test/{uuid.uuid4()}", project_id=project.id)
+    session.add(folder)
+    session.flush()
+    media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav", media_folder_id=folder.id)
+    session.add(media)
+    session.flush()
+    run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
+    session.add(run)
+    session.flush()
+    audio_rel = f"artifacts/{run.id}/normalized.wav"
+    audio_abs = media_root / audio_rel
+    audio_abs.parent.mkdir(parents=True, exist_ok=True)
+    write_wav(audio_abs)
+    session.add(
+        AudioArtifact(
+            pipeline_run_id=run.id,
+            kind=ArtifactKind.PREPROCESSED_AUDIO.value,
+            path=audio_rel,
+        )
+    )
+    segments = ["the seer system is running", "the seer unit works", "seer test here"]
+    for index, text in enumerate(segments):
+        session.add(
+            TranscriptSegment(
+                pipeline_run_id=run.id,
+                segment_index=index,
+                start_seconds=float(index * 10),
+                end_seconds=float(index * 10 + 8),
+                raw_text=text,
+            )
+        )
+    session.commit()
+    return run.id, project.id
+
+
+def _correct(
+    client: TestClient, run_id: uuid.UUID, seg_id: uuid.UUID, token: str, text: str
+) -> None:
+    resp = client.post(
+        f"/review/{run_id}/segments/{seg_id}/text",
+        data={"token": token, "text": text},
+    )
+    assert resp.status_code == 200, f"correct got {resp.status_code}: {resp.text[:200]}"
+
+
+def test_learning_toggle_off_produces_no_rows(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        run_id, project_id = _seed_run_with_project(session, media_root, learn=False)
+    segs = _segment_ids(session_factory, run_id)
+    token = claim_token(client, run_id)
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
+    with session_factory() as session:
+        count = session.query(LearnedCorrection).filter_by(project_id=project_id).count()
+        assert count == 0
+
+
+def test_no_project_produces_no_rows(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    segs = _segment_ids(session_factory, run_id)
+    token = claim_token(client, run_id)
+    _correct(client, run_id, segs[0], token, "HELLO there")
+    with session_factory() as session:
+        count = session.query(LearnedCorrection).count()
+        assert count == 0
+
+
+def test_inheriting_project_produces_no_rows(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        run_id, project_id = _seed_run_with_project(
+            session, media_root, learn=True, own_corrections=False
+        )
+    segs = _segment_ids(session_factory, run_id)
+    token = claim_token(client, run_id)
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
+    with session_factory() as session:
+        count = session.query(LearnedCorrection).filter_by(project_id=project_id).count()
+        assert count == 0
+
+
+def test_first_edit_records_evidence(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        run_id, project_id = _seed_run_with_project(session, media_root)
+    segs = _segment_ids(session_factory, run_id)
+    token = claim_token(client, run_id)
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
+    with session_factory() as session:
+        lc = session.query(LearnedCorrection).filter_by(project_id=project_id).one()
+        assert lc.match == "seer"
+        assert lc.replace == "SEER"
+        assert lc.status == "suggested"
+        ev_count = session.query(LearnedCorrectionEvidence).filter_by(
+            learned_correction_id=lc.id
+        ).count()
+        assert ev_count == 1
+
+
+def test_three_segments_make_suggestion(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        run_id, project_id = _seed_run_with_project(session, media_root)
+    segs = _segment_ids(session_factory, run_id)
+    token = claim_token(client, run_id)
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
+    _correct(client, run_id, segs[1], token, "the SEER unit works")
+    _correct(client, run_id, segs[2], token, "SEER test here")
+    with session_factory() as session:
+        lc = session.query(LearnedCorrection).filter_by(project_id=project_id).one()
+        ev_count = session.query(LearnedCorrectionEvidence).filter_by(
+            learned_correction_id=lc.id
+        ).count()
+        assert ev_count == 3
+
+
+def test_re_edit_retracts_old_pair(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        run_id, project_id = _seed_run_with_project(session, media_root)
+    segs = _segment_ids(session_factory, run_id)
+    token = claim_token(client, run_id)
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
+    with session_factory() as session:
+        assert session.query(LearnedCorrection).filter_by(project_id=project_id).count() == 1
+    _correct(client, run_id, segs[0], token, "the seer system is working")
+    with session_factory() as session:
+        lcs = session.query(LearnedCorrection).filter_by(project_id=project_id).all()
+        old = [lc for lc in lcs if lc.match == "seer" and lc.replace == "SEER"]
+        assert len(old) == 0
+
+
+def test_revert_removes_evidence_and_prunes_orphan(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        run_id, project_id = _seed_run_with_project(session, media_root)
+    segs = _segment_ids(session_factory, run_id)
+    token = claim_token(client, run_id)
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
+    with session_factory() as session:
+        assert session.query(LearnedCorrection).filter_by(project_id=project_id).count() == 1
+    _correct(client, run_id, segs[0], token, "")
+    with session_factory() as session:
+        assert session.query(LearnedCorrection).filter_by(project_id=project_id).count() == 0
+
+
+def test_identical_replay_is_noop(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        run_id, project_id = _seed_run_with_project(session, media_root)
+    segs = _segment_ids(session_factory, run_id)
+    token = claim_token(client, run_id)
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
+    _correct(client, run_id, segs[0], token, "the SEER system is running")
+    with session_factory() as session:
+        lc = session.query(LearnedCorrection).filter_by(project_id=project_id).one()
+        ev_count = session.query(LearnedCorrectionEvidence).filter_by(
+            learned_correction_id=lc.id
+        ).count()
+        assert ev_count == 1
+
+
+def test_two_runs_same_project_share_suggestion(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        run_a, project_id = _seed_run_with_project(session, media_root)
+    segs_a = _segment_ids(session_factory, run_a)
+    token_a = claim_token(client, run_a)
+    _correct(client, run_a, segs_a[0], token_a, "the SEER system is running")
+
+    with session_factory() as session:
+        session.get(Project, project_id)
+        folder = session.query(MediaFolder).filter_by(project_id=project_id).one()
+        media = MediaItem(
+            source_path=f"incoming/{uuid.uuid4()}.wav", media_folder_id=folder.id
+        )
+        session.add(media)
+        session.flush()
+        run_b = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
+        session.add(run_b)
+        session.flush()
+        audio_rel = f"artifacts/{run_b.id}/normalized.wav"
+        audio_abs = media_root / audio_rel
+        audio_abs.parent.mkdir(parents=True, exist_ok=True)
+        write_wav(audio_abs)
+        session.add(
+            AudioArtifact(
+                pipeline_run_id=run_b.id,
+                kind=ArtifactKind.PREPROCESSED_AUDIO.value,
+                path=audio_rel,
+            )
+        )
+        session.add(
+            TranscriptSegment(
+                pipeline_run_id=run_b.id,
+                segment_index=0,
+                start_seconds=0.0,
+                end_seconds=8.0,
+                raw_text="the seer system is running",
+            )
+        )
+        session.commit()
+        run_b_id = run_b.id
+
+    segs_b = _segment_ids(session_factory, run_b_id)
+    token_b = claim_token(client, run_b_id)
+    _correct(client, run_b_id, segs_b[0], token_b, "the SEER system is running")
+
+    with session_factory() as session:
+        lc = session.query(LearnedCorrection).filter_by(project_id=project_id).one()
+        ev_count = session.query(LearnedCorrectionEvidence).filter_by(
+            learned_correction_id=lc.id
+        ).count()
+        assert ev_count == 2

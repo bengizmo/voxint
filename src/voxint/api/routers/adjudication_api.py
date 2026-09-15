@@ -59,6 +59,7 @@ from voxint.adjudication.annotations import (
     update_tag,
 )
 from voxint.adjudication.enrollment import EnrollmentError, enroll_new_speaker
+from voxint.adjudication.learned_corrections import observe_segment_edit
 from voxint.adjudication.ledger import (
     ConflictingReplayError,
     WordRangeError,
@@ -975,7 +976,13 @@ def correct_segment(
             status_code=409,
             detail="cannot correct a split segment; remove the split first",
         )
+    old_row = session.get(SegmentReviewState, segment.id)
+    old_corrected = old_row.corrected_text if old_row else None
     set_correction(session, segment=segment, text=text)
+    new_row = session.get(SegmentReviewState, segment.id)
+    new_corrected = new_row.corrected_text if new_row else None
+    if old_corrected != new_corrected:
+        observe_segment_edit(session, segment)
     return _segment_review_json(session, run_id, segment)
 
 

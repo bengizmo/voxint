@@ -28,6 +28,7 @@ export interface CorrectionsEditorProps {
   csrfToken: string;
   limits: Limits;
   inheriting?: boolean;
+  learnedCounts?: Record<string, number>;
 }
 
 interface Row extends CorrectionRuleProps {
@@ -60,7 +61,7 @@ function toRow(rule: CorrectionRuleProps, key: number): Row {
 }
 
 export function CorrectionsEditor(props: CorrectionsEditorProps) {
-  const { action, csrfToken, limits } = props;
+  const { action, csrfToken, limits, learnedCounts } = props;
   const nextKey = useRef(0);
   const makeKey = (): number => nextKey.current++;
   const [rows, setRows] = useState<Row[]>(() =>
@@ -242,6 +243,11 @@ export function CorrectionsEditor(props: CorrectionsEditorProps) {
                   />
                   Whole word only
                 </label>
+                {learnedCounts && row.id && learnedCounts[row.id] != null ? (
+                  <span className="pill muted text-sm mr-2">learned x{learnedCounts[row.id]}</span>
+                ) : learnedCounts ? (
+                  <span className="pill muted text-sm mr-2">manual</span>
+                ) : null}
                 <button
                   type="button"
                   className="text-sm mr-2"

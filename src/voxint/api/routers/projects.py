@@ -27,10 +27,15 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from voxint.adjudication.learned_corrections import (
+    accept_suggestion,
+    dismiss_suggestion,
+)
 from voxint.api.csrf import (
     CSRF_PROJECT_ASSIGN,
     CSRF_PROJECT_CORRECTIONS,
     CSRF_PROJECT_CREATE,
+    CSRF_PROJECT_LEARNING,
     CSRF_PROJECT_RENAME,
     CSRF_PROJECT_UNLINK,
     CSRF_PROJECT_VOCAB,
@@ -51,7 +56,7 @@ from voxint.api.routers.quotes import quote_to_dict
 from voxint.api.saved_quotes import list_quotes
 from voxint.api.setup_wizard import SetupValidationError, normalize_vocabulary
 from voxint.api.temporal_trends import get_temporal_trends
-from voxint.db.models import MediaFolder, Project
+from voxint.db.models import LearnedCorrection, MediaFolder, Project
 from voxint.domain_packs.corrections import (
     MAX_MATCH_CHARS,
     MAX_REPLACEMENT_CHARS,
@@ -156,6 +161,7 @@ def _detail_context(
         "action": f"/projects/{detail.id}/corrections",
         "csrfToken": corrections_token,
         "inheriting": detail.corrections is None,
+        "learnedCounts": detail.learned_counts or {},
         "limits": {
             "maxRules": MAX_RULES_PER_PACK,
             "maxMatchChars": MAX_MATCH_CHARS,
@@ -199,6 +205,7 @@ def _detail_context(
         "corrections_error": corrections_error,
         "error": error,
         "assigned": assigned,
+        "csrf_learning": mint_csrf_token(secret, CSRF_PROJECT_LEARNING),
         "quote_board_props": _quote_board_props(request, session, detail),
     }
 
@@ -455,6 +462,7 @@ def set_project_corrections(
         return _reject("That submission was not valid (unknown mode).", None)
     if mode == "inherit":
         project.corrections = None
+        project.learn_corrections = False
         session.commit()
         if wants_json:
             return JSONResponse({"ok": True, "corrections": None})
@@ -468,7 +476,105 @@ def set_project_corrections(
     except OperatorCorrectionError as exc:
         return _reject(exc.message, exc.row)
     project.corrections = normalized
+    rule_ids = {r["id"] for r in normalized}
+    filters = [
+        LearnedCorrection.project_id == project_id,
+        LearnedCorrection.status == "accepted",
+    ]
+    if rule_ids:
+        filters.append(LearnedCorrection.accepted_rule_id.not_in(rule_ids))
+    orphans = session.query(LearnedCorrection).filter(*filters).all()
+    for orphan in orphans:
+        session.delete(orphan)
     session.commit()
     if wants_json:
         return JSONResponse({"ok": True, "corrections": normalized})
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+@router.post("/projects/{project_id}/learning")
+def set_project_learning(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    project_id: uuid.UUID,
+    enabled: Annotated[str, Form()] = "off",
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Toggle the learn-from-edits feature for a project (#476)."""
+    _require_csrf(request, CSRF_PROJECT_LEARNING, csrf_token)
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"no project {project_id}")
+    want_on = enabled == "on"
+    if want_on and project.corrections is None:
+        detail = project_detail(session, project_id)
+        return templates.TemplateResponse(
+            request,
+            "projects/project_detail.html",
+            _detail_context(
+                request,
+                session,
+                detail,
+                corrections_error="Set corrections for this project first.",
+            ),
+            status_code=422,
+        )
+    project.learn_corrections = want_on
+    session.commit()
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+@router.post("/projects/{project_id}/suggestions/{suggestion_id}")
+def handle_suggestion(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    project_id: uuid.UUID,
+    suggestion_id: uuid.UUID,
+    decision: Annotated[str, Form()] = "",
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Accept or dismiss a learned correction suggestion (#476)."""
+    _require_csrf(request, CSRF_PROJECT_LEARNING, csrf_token)
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"no project {project_id}")
+    learned = session.get(LearnedCorrection, suggestion_id)
+    if learned is None or learned.project_id != project_id:
+        raise HTTPException(status_code=404, detail="no such suggestion")
+    if learned.status != "suggested":
+        raise HTTPException(status_code=409, detail="suggestion already handled")
+    if decision == "dismiss":
+        dismiss_suggestion(session, learned)
+        session.commit()
+        return RedirectResponse(f"/projects/{project_id}", status_code=303)
+    if decision == "accept":
+        if project.corrections is None:
+            detail = project_detail(session, project_id)
+            return templates.TemplateResponse(
+                request,
+                "projects/project_detail.html",
+                _detail_context(
+                    request,
+                    session,
+                    detail,
+                    corrections_error="Set corrections for this project first.",
+                ),
+                status_code=422,
+            )
+        try:
+            accept_suggestion(session, project, learned)
+        except OperatorCorrectionError as exc:
+            detail = project_detail(session, project_id)
+            return templates.TemplateResponse(
+                request,
+                "projects/project_detail.html",
+                _detail_context(
+                    request, session, detail, corrections_error=exc.message
+                ),
+                status_code=422,
+            )
+        session.commit()
+        return RedirectResponse(f"/projects/{project_id}", status_code=303)
+    raise HTTPException(status_code=400, detail="decision must be accept or dismiss")

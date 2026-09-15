@@ -392,8 +392,22 @@
   </section>
 
   <section class="oc-section">
-    <h2 class="oc-section-title">AUTO-CORRECT RULES</h2>
+    <div class="oc-section-header">
+      <h2 class="oc-section-title">AUTO-CORRECT RULES</h2>
+      <form method="post" action="/projects/{{ detail.id }}/learning" style="display:inline-flex;align-items:center;gap:var(--space-2)">
+        <input type="hidden" name="csrf_token" value="{{ csrf_learning }}">
+        <input type="hidden" name="enabled" value="{{ 'off' if detail.learn_corrections else 'on' }}">
+        <label class="oc-muted" style="font-size:0.8125rem;cursor:pointer">
+          <input type="checkbox" {{ 'checked' if detail.learn_corrections else '' }} {{ 'disabled' if detail.corrections is none else '' }} onchange="this.form.submit()" style="margin-right:0.25rem">
+          Learn from my edits
+        </label>
+        {% if detail.corrections is none %}<span class="oc-muted" style="font-size:0.75rem">(set corrections first)</span>{% endif %}
+      </form>
+    </div>
     <p class="oc-muted">fix a repeated mishearing once, it's fixed everywhere</p>
+    {% if detail.learn_corrections %}
+    <p class="oc-muted" style="font-size:0.8125rem">When on, Voxint watches your transcript edits in this project and suggests a rule once the same fix appears in 3 segments. Suggestions never apply until you accept them. Turning this off stops watching; accepted rules stay.</p>
+    {% endif %}
 
     {% if corrections_error %}<p class="notice error" role="alert">{{ corrections_error }}</p>{% endif %}
 
@@ -414,7 +428,7 @@
           <span><code>{{ rule.match }}</code></span>
           <span class="pd-arrow">→</span>
           <span><code>{{ rule.replace }}</code></span>
-          <span>manual</span>
+          <span>{% if detail.learned_counts and rule.id in detail.learned_counts %}learned x{{ detail.learned_counts[rule.id] }}{% else %}manual{% endif %}</span>
           <span></span>
         </div>
         {% endfor %}
@@ -425,6 +439,42 @@
       <p class="oc-muted">Inheriting from the folder pack or global corrections.</p>
       {% endif %}
     </div>
+
+    {% if detail.suggestions %}
+    <div style="margin-top:var(--space-4)">
+      <h3 class="oc-section-title" style="font-size:0.8125rem">SUGGESTED FROM YOUR EDITS</h3>
+      <div class="grid-table pd-rules-grid" role="region" aria-label="Correction suggestions" tabindex="0"
+           style="grid-template-columns: 1fr auto 1fr auto auto;">
+        <div class="gt-header">
+          <span>HEARD</span>
+          <span></span>
+          <span>REPLACE WITH</span>
+          <span>SEEN IN</span>
+          <span></span>
+        </div>
+        {% for s in detail.suggestions %}
+        <div class="gt-row">
+          <span><code>{{ s.match }}</code></span>
+          <span class="pd-arrow">→</span>
+          <span><code>{{ s.replace }}</code></span>
+          <span>{{ s.count }} segments</span>
+          <span style="display:flex;gap:var(--space-2)">
+            <form method="post" action="/projects/{{ detail.id }}/suggestions/{{ s.id }}" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_learning }}">
+              <input type="hidden" name="decision" value="accept">
+              <button type="submit" class="cb-btn cb-btn-sm">Accept</button>
+            </form>
+            <form method="post" action="/projects/{{ detail.id }}/suggestions/{{ s.id }}" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_learning }}">
+              <input type="hidden" name="decision" value="dismiss">
+              <button type="submit" class="cb-btn cb-btn-sm cb-btn-secondary">Dismiss</button>
+            </form>
+          </span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
 
     {% if detail.corrections is not none %}
     <form method="post" action="/projects/{{ detail.id }}/corrections" style="margin-top:var(--space-3)">

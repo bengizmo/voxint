@@ -245,6 +245,11 @@ editor. For the full rules, the shareable-pack form of the same feature, and how
 corrections compose with LLM enhancement, see
 [domain-packs.md → Corrections](../domain-packs.md#corrections-deterministic-literal-substitutions).
 
+If you find yourself making the same text correction over and over in the review
+console, the **Learn from my edits** toggle on a project page can surface those
+recurring fixes as suggestions you accept with one click. See
+[domain-packs.md → Learning rules from your edits](../domain-packs.md#learning-rules-from-your-edits-476).
+
 ### Glossary *(optional)*
 
 List the proper nouns your recordings use (people, places, organizations,

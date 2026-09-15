@@ -374,6 +374,14 @@
     true
   ],
   [
+    "/projects/{project_id}/learning",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/projects/{project_id}/quotes/csv",
     [
       "GET"
@@ -383,6 +391,14 @@
   ],
   [
     "/projects/{project_id}/rename",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/projects/{project_id}/suggestions/{suggestion_id}",
     [
       "POST"
     ],

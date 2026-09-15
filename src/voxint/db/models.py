@@ -379,7 +379,71 @@ class Project(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    learn_corrections: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("false"), default=False
+    )
+
     folders: Mapped[list["MediaFolder"]] = relationship(back_populates="project")
+    learned_corrections: Mapped[list["LearnedCorrection"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class LearnedCorrection(Base):
+    __tablename__ = "learned_corrections"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('suggested', 'accepted')",
+            name="learned_corrections_status_check",
+        ),
+        CheckConstraint(
+            "(status = 'accepted') = (accepted_rule_id IS NOT NULL)",
+            name="learned_corrections_accepted_rule_id_check",
+        ),
+        UniqueConstraint(
+            "project_id", "match", "replace",
+            name="learned_corrections_project_match_replace_key",
+        ),
+        Index("ix_learned_corrections_project_id", "project_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE")
+    )
+    match: Mapped[str] = mapped_column(Text)
+    replace: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default="suggested")
+    accepted_rule_id: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    project: Mapped["Project"] = relationship(back_populates="learned_corrections")
+    evidence: Mapped[list["LearnedCorrectionEvidence"]] = relationship(
+        back_populates="learned_correction", cascade="all, delete-orphan"
+    )
+
+
+class LearnedCorrectionEvidence(Base):
+    __tablename__ = "learned_correction_evidence"
+    __table_args__ = (
+        Index("ix_learned_correction_evidence_segment_id", "segment_id"),
+    )
+
+    learned_correction_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("learned_corrections.id", ondelete="CASCADE"), primary_key=True
+    )
+    segment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("transcript_segments.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    learned_correction: Mapped["LearnedCorrection"] = relationship(
+        back_populates="evidence"
+    )
 
 
 class MediaFolder(Base):

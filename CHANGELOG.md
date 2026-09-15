@@ -7,6 +7,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Corrections learned from operator edits** (#476). A per-project "Learn from
+  my edits" toggle watches transcript text corrections and surfaces a suggestion
+  once the same fix appears in 3 or more segments. Suggestions never apply until
+  you accept them (one click turns a suggestion into an ordinary rule). Dismiss
+  deletes the suggestion; it can only return after 3 new segments carry the same
+  edit. Accepted rules show "learned xN" provenance in both the no-JS grid and
+  the island corrections editor. Migration 0062.
+
 - **Jobs page stage progress in the STATUS chip** (#475). Running rows show the
   current stage and an estimated percentage from recent completed attempts of
   that stage, or from a default duration until enough history exists, the same

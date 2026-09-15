@@ -137,4 +137,12 @@ commits = [
     # commit; the historical commit is allowlisted because published
     # history is never rewritten.
     "1c903b0f2972c2437bb4d4be1dac50424d1cca16",
+    # #476 learned-corrections branch: four commits used "hvac"/"HVAC" as
+    # test fixture data before scrubbing to "seer"/"SEER". The worktree is
+    # clean; the historical commits are allowlisted because published
+    # history is never rewritten.
+    "cd0088b0cf049d84f32ccdf4469d9ffbe6127248",
+    "4f6040f63d374a575767c7c0f689902173de832c",
+    "52ec056815cc7796765fe1d7c486c361f2b3d070",
+    "f253b00be52b71e97e42871637735f0a6ffd18c9",
 ]
