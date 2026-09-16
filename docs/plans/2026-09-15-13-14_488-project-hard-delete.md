@@ -1,6 +1,6 @@
 # Plan: #488 Project hard delete
 
-Status: in-progress
+Status: done
 
 ## Context
 
