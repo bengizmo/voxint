@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, apiFetch } from "../lib/api-client";
 import { makeNonce } from "../lib/nonce";
+import { SpeakerCombobox } from "./SpeakerCombobox";
 import {
   coverage,
   headline,
@@ -20,6 +21,7 @@ export interface LabelsResult {
   segments: Segment[];
   progress: { verified: number; total: number };
   undo?: UndoPayload;
+  speakers?: { id: string; displayName: string }[];
 }
 
 export type UndoPayload =
@@ -57,19 +59,7 @@ function RulingRow({
   onEnroll: Enroll;
   mode: "needs-you" | "change";
 }) {
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
   const confirmable = isConfirmable(state);
-  const addPerson = () => {
-    const trimmed = name.trim();
-    if (!trimmed || busy) return;
-    void onEnroll(state.label, trimmed).then((ok) => {
-      if (ok) {
-        setName("");
-        setAdding(false);
-      }
-    });
-  };
   const placeholder =
     mode === "change"
       ? "Reassign to…"
@@ -92,26 +82,15 @@ function RulingRow({
         </button>
       )}
       <div className="card-actions my-1">
-        <select
-          className="text-sm"
-          value=""
+        <SpeakerCombobox
+          speakers={speakers}
+          mode="command"
+          label={`${state.label}: choose who this is`}
+          placeholder={placeholder}
           disabled={busy}
-          aria-label={`${state.label}: choose who this is`}
-          onChange={(event) => {
-            const value = event.currentTarget.value;
-            if (value === "__new") setAdding(true);
-            else if (value) onDecide(state.label, "assign", value);
-            event.currentTarget.blur();
-          }}
-        >
-          <option value="">{placeholder}</option>
-          {speakers.map((speaker) => (
-            <option key={speaker.id} value={speaker.id}>
-              {speaker.displayName}
-            </option>
-          ))}
-          <option value="__new">Add a new person…</option>
-        </select>
+          onSelect={(id) => onDecide(state.label, "assign", id)}
+          onCreate={(name) => onEnroll(state.label, name)}
+        />
         <button
           type="button"
           className="text-sm secondary"
@@ -131,42 +110,6 @@ function RulingRow({
           Can't tell
         </button>
       </div>
-      {adding && (
-        <div className="ruling-add flex items-center my-1">
-          <input
-            type="text"
-            value={name}
-            onChange={(event) => setName(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") addPerson();
-            }}
-            placeholder="new person's name"
-            maxLength={120}
-            className="text-sm mr-2"
-            aria-label={`Name the new person for ${state.label}`}
-            autoFocus
-          />
-          <button
-            type="button"
-            className="text-sm mr-2"
-            disabled={busy || !name.trim()}
-            onClick={addPerson}
-          >
-            Add person
-          </button>
-          <button
-            type="button"
-            className="text-sm secondary"
-            disabled={busy}
-            onClick={() => {
-              setName("");
-              setAdding(false);
-            }}
-          >
-            Cancel
-          </button>
-        </div>
-      )}
     </>
   );
 }
@@ -485,36 +428,26 @@ function MergePanel({
           ))}
         </fieldset>
         <div className="flex items-center my-1">
-          <label className="text-sm mr-2">
-            Who are they?{" "}
-            <select
-              value={target}
-              onChange={(e) => {
-                setTarget(e.target.value);
-                setPreview(null);
-              }}
-              className="text-sm"
-              disabled={busy || mergeBusy}
-            >
-              <option value="">choose</option>
-              <option value="new">Add a new person…</option>
-              {speakers.map((sp) => (
-                <option key={sp.id} value={sp.id}>
-                  {sp.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
-          {target === "new" && (
-            <input
-              type="text"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder="new person's name"
-              maxLength={120}
-              className="text-sm mr-2"
-            />
-          )}
+          <span className="text-sm mr-2">Who are they?</span>
+          <SpeakerCombobox
+            speakers={speakers}
+            mode="controlled"
+            value={target === "new" ? "" : target}
+            label="Merge target speaker"
+            placeholder={target === "new" ? newName : "choose"}
+            disabled={busy || mergeBusy}
+            onSelect={(id) => {
+              setTarget(id);
+              setNewName("");
+              setPreview(null);
+            }}
+            onCreate={async (name) => {
+              setTarget("new");
+              setNewName(name);
+              setPreview(null);
+              return true;
+            }}
+          />
         </div>
         <div className="my-1">
           <button

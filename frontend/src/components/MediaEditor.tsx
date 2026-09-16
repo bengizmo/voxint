@@ -31,6 +31,7 @@ import {
   REVIEW_KEY,
   SAVE_EDIT_LABEL,
 } from "./keymap";
+import { SpeakerCombobox } from "./SpeakerCombobox";
 import { type LabelsResult, SpeakerRail } from "./SpeakerRail";
 import { UndoToast } from "./UndoToast";
 import {
@@ -83,7 +84,7 @@ export function MediaEditor({
   initialProgress,
   peaksUrl,
   turns,
-  speakers,
+  speakers: initialSpeakers,
   outline,
   annotations: initialAnnotations = [],
   annotationTags: initialAnnotationTags = [],
@@ -105,6 +106,7 @@ export function MediaEditor({
   const [tagCsrf, setTagCsrf] = useState(initialTagCsrf);
   const [clipCsrf, setClipCsrf] = useState(initialClipCsrf);
   const [claimLost, setClaimLost] = useState(false);
+  const [speakers, setSpeakers] = useState(initialSpeakers);
   const [error, setError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [walkMode, setWalkMode] = useState(
@@ -301,6 +303,21 @@ export function MediaEditor({
       setProgress(result.progress);
       setLabelStates(result.labels);
       setUndoInfo(result.undo ?? null);
+      if (result.speakers) {
+        setSpeakers((prev) => {
+          const incoming = result.speakers!;
+          const incomingIds = new Set(incoming.map((s) => s.id));
+          const kept = prev
+            .filter((s) => incomingIds.has(s.id))
+            .map((s) => {
+              const fresh = incoming.find((i) => i.id === s.id);
+              return fresh ? { ...s, displayName: fresh.displayName } : s;
+            });
+          const keptIds = new Set(kept.map((s) => s.id));
+          const added = incoming.filter((s) => !keptIds.has(s.id));
+          return [...kept, ...added];
+        });
+      }
       void reloadAnnotationsRef.current?.();
     },
     [setSegments, setProgress],
@@ -1024,7 +1041,7 @@ export function MediaEditor({
                   </button>
                 </div>
                 {!isSplitParent && (
-                  <label className="tp-reassign text-sm my-1 block">
+                  <div className="tp-reassign text-sm my-1">
                     Assign speaker
                     {speakers.length > 0 && (
                       <>
@@ -1034,34 +1051,17 @@ export function MediaEditor({
                       </>
                     )}
                     :{" "}
-                    <select
-                      className="text-sm"
-                      value=""
+                    <SpeakerCombobox
+                      speakers={speakers}
+                      mode="command"
+                      label="Assign a speaker to this whole segment"
+                      placeholder="Assign speaker…"
                       disabled={busy}
-                      aria-label="Assign a speaker to this whole segment"
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        e.currentTarget.blur();
-                        if (val === "") return;
-                        void reassignSegment(
-                          val === "__inherit__" ? null : val,
-                        );
-                      }}
-                    >
-                      <option value="">Assign speaker…</option>
-                      {speakers.map((sp, i) => (
-                        <option key={sp.id} value={sp.id}>
-                          {i < ASSIGN_DIGIT_MAX
-                            ? `${i + ASSIGN_DIGIT_MIN}. `
-                            : ""}
-                          {sp.displayName}
-                        </option>
-                      ))}
-                      <option value="__inherit__">
-                        Reset to detected speaker
-                      </option>
-                    </select>
-                  </label>
+                      digitPrefixes
+                      onSelect={(id) => void reassignSegment(id)}
+                      onInherit={() => void reassignSegment(null)}
+                    />
+                  </div>
                 )}
                 {confirmDiscard && (
                   <p role="alert" className="text-sm">
