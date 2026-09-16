@@ -6,6 +6,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-09-15
+
 ### Added
 - **Project hard delete** (#488). Permanently delete an archived project from a
   confirmation page that shows what will be destroyed (learned corrections,
