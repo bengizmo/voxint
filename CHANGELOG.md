@@ -53,6 +53,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   ruling) and confirmable candidates ("Possibly Jane Doe" links to Jane Doe).
   Unidentified and excluded labels remain plain text.
 
+- **Walk-mode speaker identity** (#512). The walk/editing segment header now
+  shows the current speaker's display name in bold with a palette-colored left
+  border, matching the transcript row accents. Raw diarization label appears as
+  a secondary badge when it differs from the display name. The aria-live cursor
+  announcement uses the same fallback chain as the visible UI.
+
 - **Viewer-role template wiring.** When multi-user mode is on, viewer accounts
   now see a clean read-only console: upload buttons, claim forms,
   edit/delete/archive actions, inline editors, and bulk action bars are hidden

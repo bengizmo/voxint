@@ -20,6 +20,7 @@ export const REVIEW_KEY = {
   resetSpeaker: "0",
   annotate: "h",
   walkMode: "w",
+  download: "d",
   help: "?",
 } as const;
 
@@ -91,6 +92,7 @@ export const REVIEW_SHORTCUTS: readonly ReviewShortcut[] = [
   },
   { keys: REVIEW_KEY.resetSpeaker, desc: "Reset this segment to its detected speaker" },
   { keys: REVIEW_KEY.annotate, desc: "Highlight the selected transcript text" },
+  { keys: REVIEW_KEY.download, desc: "Open the download menu" },
   { keys: REVIEW_KEY.help, desc: "Show this list of shortcuts" },
 ];
 

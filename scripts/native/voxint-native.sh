@@ -642,6 +642,7 @@ build_frontend() {
   say "  npm ci && npm run build in $fe"
   ( cd "$fe" && npm ci >&2 && npm run build >&2 ) || fail "frontend build failed"
   stage_frontend_dist
+  git -C "$REPO_ROOT" rev-parse HEAD > "$VOXINT_NATIVE_HOME/.setup-head-stamp" 2>/dev/null || true
   say "  islands staged -> $app"
 }
 
@@ -1034,11 +1035,34 @@ require_cluster_binary_major_match() {
     || fail "Postgres major mismatch: the managed cluster at $NATIVE_PGDATA is v$cmaj but the binaries at $NATIVE_PG_BINDIR are v$bmaj -- the server would refuse to start against it. To run your existing data, point the launcher back at the matching major: install it if needed (brew install postgresql@$cmaj) and set VOXINT_NATIVE_PG_BINDIR=\"\$(brew --prefix postgresql@$cmaj)/bin\", then retry. To UPGRADE your existing data to v$bmaj instead, run: $0 upgrade-db. (See: $0 doctor.)"
 }
 
+check_asset_freshness() {
+  local head_stamp="$VOXINT_NATIVE_HOME/.setup-head-stamp"
+
+  if [ -f "$head_stamp" ]; then
+    local stamped current
+    stamped=$(cat "$head_stamp" 2>/dev/null) || stamped=""
+    current=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null) || current=""
+    if [ -n "$stamped" ] && [ -n "$current" ] && [ "$stamped" != "$current" ]; then
+      say "  code has changed since last setup (${stamped%"${stamped#????????}"}..${current%"${current#????????}"}) -- run: $0 setup"
+    fi
+  fi
+
+  local src_manifest staged_manifest
+  src_manifest="$(frontend_dir)/dist/.vite/manifest.json"
+  staged_manifest="$(app_manifest_path)"
+  if [ -f "$src_manifest" ] && [ -f "$staged_manifest" ]; then
+    if ! cmp -s "$src_manifest" "$staged_manifest"; then
+      say "  frontend bundles differ from staged copy -- run: $0 setup"
+    fi
+  fi
+}
+
 cmd_up() {
   require_macos
   load_state
   local media_root svc managed=0 metal_up_rc=0
   [ -x "$(core_venv)/bin/voxint" ] || fail "core venv missing -- run: $0 setup"
+  check_asset_freshness
   managed_cluster && managed=1
   # An interrupted upgrade can leave a set-aside cluster but no live one at
   # $NATIVE_PGDATA; without this, `up` would silently fall through to the
