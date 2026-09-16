@@ -16,7 +16,7 @@ import {
   setStoredRate,
   type PlaybackCapability,
 } from "../lib/playback";
-import { fetchPeaks, type PeaksPayload, type Turn } from "../lib/peaks";
+import { fetchPeaks, type PeaksPayload, type TimeRange, type Turn } from "../lib/peaks";
 import { type AnnotationLineSpan } from "../lib/annotations";
 import { SpeakerCombobox } from "./SpeakerCombobox";
 import { resolveJumpIndex } from "../lib/jump";
@@ -526,6 +526,8 @@ export const TranscriptPlayer = forwardRef<
   // Follow-along: keep the active line in view as playback advances. Starts on;
   // any manual scroll turns it off; the single "Resume following" control turns
   // it back on. No always-on checkbox, no status dot.
+  const [waveSelection, setWaveSelection] = useState<TimeRange | null>(null);
+  useEffect(() => { setWaveSelection(null); }, [peaksUrl, mediaUrl]);
   const [following, setFollowing] = useState<boolean>(true);
   const activeLineRef = useRef<HTMLParagraphElement | null>(null);
   const cursorLineRef = useRef<HTMLParagraphElement | null>(null);
@@ -711,6 +713,13 @@ export const TranscriptPlayer = forwardRef<
   // the list (selection is a reading act), and additionally play it only when
   // seeking is trusted — the strip itself never touches the audio element, so
   // the fail-closed gate stays structural.
+  const handlePlaySelection = useCallback(
+    (start: number, end: number) => {
+      const audio = audioRef.current;
+      if (audio && seek) playTurn(audio, start, end);
+    },
+    [seek],
+  );
   const onRegionActivate = (index: number) => {
     const seg = segments[index];
     if (!seg) return;
@@ -794,6 +803,9 @@ export const TranscriptPlayer = forwardRef<
             turns={turns ?? []}
             segments={segments}
             activeIndex={activeIndex}
+            selection={waveSelection}
+            onSelectionChange={setWaveSelection}
+            onPlaySelection={handlePlaySelection}
             cursorIndex={cursorIndex}
             seekEnabled={seek}
             currentTime={playheadTime}

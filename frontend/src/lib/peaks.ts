@@ -20,6 +20,12 @@ export interface Turn {
   overlap: boolean;
 }
 
+// A time range on the waveform strip (seconds). Invariant: 0 <= start < end.
+export interface TimeRange {
+  start: number;
+  end: number;
+}
+
 export interface PeaksPayload {
   version: number;
   // Authoritative time→x axis for the strip (measured from the WAV itself);

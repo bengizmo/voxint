@@ -6,6 +6,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Waveform drag-to-select (#502).** Click-and-drag on the waveform strip to
+  select a time range. The selected region is highlighted with an accent-colored
+  overlay, and a "Play selection" button appears below the strip for bounded
+  playback. Single click still seeks as before. Escape or clicking outside the
+  strip clears the selection. Selection coordinates are available to the parent
+  component for future export integration.
+
 
 ## [0.40.0] - 2026-09-16
 
