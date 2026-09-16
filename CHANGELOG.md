@@ -19,6 +19,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   read-only notice carry `role="status"`, fallback transcript table has a
   visually hidden caption, and the island mount div is a labelled region.
 
+### Changed
+- **Command palette enabled by default.** `CONSOLE_PALETTE_ENABLED` now defaults
+  to on; the palette no longer requires an opt-in environment variable.
+
 ### Added
 - **Viewer-role template wiring.** When multi-user mode is on, viewer accounts
   now see a clean read-only console: upload buttons, claim forms,
