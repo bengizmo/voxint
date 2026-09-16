@@ -40,8 +40,15 @@ def test_console_area_flags_default_off() -> None:
 def test_shell_context_requires_flag_and_route() -> None:
     """An area's links render only when its flag is on AND its routes exist —
     an early flag flip must never advertise a dead /projects link (review)."""
-    on = Settings(database_url="postgresql+psycopg://x/x", console_projects_enabled=True, console_palette_enabled=False)
-    off = Settings(database_url="postgresql+psycopg://x/x", console_palette_enabled=False)
+    on = Settings(
+        database_url="postgresql+psycopg://x/x",
+        console_projects_enabled=True,
+        console_palette_enabled=False,
+    )
+    off = Settings(
+        database_url="postgresql+psycopg://x/x",
+        console_palette_enabled=False,
+    )
     assert _shell_template_context(
         _request_with(on, projects_routed=True, media_routed=True)
     ) == {
