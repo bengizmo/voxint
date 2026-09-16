@@ -19,9 +19,10 @@ import type { Segment } from "./TranscriptPlayer";
 // NEVER touches the audio element, so the fail-closed seek gate (issue #55)
 // stays structural: the only seek path is the caller's gated playTurn.
 //
-// aria-hidden by design: every action here (select / play a segment) exists in
-// the accessible list with real buttons; exposing 2000 canvas regions to AT
-// would be noise, not access. The data-* attributes are for the E2E lane.
+// aria-hidden by design: click-to-play has an accessible equivalent in the
+// transcript list. Drag-to-select is pointer-only (accepted gap: the strip
+// is enhancement, not a primary workflow). The data-* attributes are for the
+// E2E lane.
 
 interface WaveformStripProps {
   peaks: PeaksPayload;
@@ -95,6 +96,7 @@ export function WaveformStrip({
     isDragging: boolean;
   } | null>(null);
   const [draftRange, setDraftRange] = useState<TimeRange | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const probesRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState<number>(0);
@@ -273,6 +275,7 @@ export function WaveformStrip({
   const clearDrag = useCallback(() => {
     dragRef.current = null;
     setDraftRange(null);
+    setIsDragging(false);
   }, []);
 
   const rangeAtClientX = useCallback(
@@ -289,7 +292,9 @@ export function WaveformStrip({
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
-      if (event.button !== 0 || dragRef.current) return;
+      if (event.button !== 0) return;
+      if (dragRef.current && dragRef.current.pointerId !== event.pointerId) return;
+      if (dragRef.current) clearDrag();
       const canvas = canvasRef.current;
       if (!canvas || width <= 0) return;
       const rect = canvas.getBoundingClientRect();
@@ -307,7 +312,7 @@ export function WaveformStrip({
         // Synthetic events in test harnesses have no active pointer.
       }
     },
-    [peaks.duration, width],
+    [peaks.duration, width, clearDrag],
   );
 
   const handlePointerMove = useCallback(
@@ -316,6 +321,7 @@ export function WaveformStrip({
       if (!drag || drag.pointerId !== event.pointerId) return;
       if (!drag.isDragging && isDragDistance(drag.anchorClientX, event.clientX)) {
         drag.isDragging = true;
+        setIsDragging(true);
         setGapHint(null);
       }
       if (drag.isDragging) {
@@ -375,16 +381,17 @@ export function WaveformStrip({
   );
 
   useEffect(() => {
-    if (!selection && !draftRange) return;
+    if (!selection && !isDragging) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.defaultPrevented) {
-        if (dragRef.current) clearDrag();
-        if (selection) onSelectionChange(null);
-      }
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, [contenteditable]")) return;
+      if (isDragging) clearDrag();
+      if (selection) onSelectionChange(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selection, draftRange, onSelectionChange, clearDrag]);
+  }, [selection, isDragging, onSelectionChange, clearDrag]);
 
   useEffect(() => {
     if (!selection) return;
@@ -401,8 +408,8 @@ export function WaveformStrip({
     return () => document.removeEventListener("pointerdown", onDown);
   }, [selection, onSelectionChange]);
 
-  const rangeToRender = draftRange ?? selection;
-  const isDraggingNow = draftRange !== null;
+  const rangeToRender = isDragging ? draftRange : selection;
+  const isDraggingNow = isDragging;
 
   // currentTime is -1 until the first timeupdate; >= 0 shows the playhead even
   // while segment 0 (start = 0s) plays. Still hidden when seeking is untrusted.
