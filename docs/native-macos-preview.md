@@ -42,7 +42,9 @@ scripts/native/voxint-native.sh setup
 
 # 2. Bring the whole preview up under launchd (core + models). This provisions
 #    the role/db/extension, runs `alembic upgrade head` BEFORE the app starts,
-#    then opens the console in your browser.
+#    checks frontend asset freshness against the current git HEAD (advisory, not
+#    blocking), starts services, verifies the worker connects to the broker
+#    (15s timeout), then opens the console in your browser.
 scripts/native/voxint-native.sh up
 
 # 3. Check readiness (supervision state, /healthz, datastore reachability, and
@@ -311,8 +313,14 @@ can rotate on demand with `scripts/native/voxint-native.sh rotate-logs`.
 - **Submissions fail.** The model services are not up. `status` shows the
   delegated model state; `scripts/metal/voxint-metal.sh doctor` diagnoses them.
 - **A service keeps flapping.** `status` reports each `launchd` job's liveness:
-  `running`, or `restarting (last exit N)` when it is crash-looping (the non-zero
-  exit is the clue). Check that job's log under `logs/` for the failing command.
+  `running`, `restarting (last exit N)` when it is crash-looping (the non-zero
+  exit is the clue), or `stopped (clean exit)` when the job exited with code 0
+  and launchd's `KeepAlive` policy chose not to restart it. Check that job's log
+  under `logs/` for the failing command.
+- **`up` warns "worker did not reach ready within 15s".** The worker process
+  started but did not print celery's ready marker within the timeout. Check
+  `logs worker -f` for connection errors (wrong broker URL, Postgres down). `up`
+  continues but returns non-zero, so a chained `up && submit` will not proceed.
 - **Audio playback or the waveform strip is dead, or a "the processed audio file
   could not be opened" banner appears.** This was a native-only bug fixed in
   **0.19.0**: the media-serving gate probed the open file descriptor through
