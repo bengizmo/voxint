@@ -202,7 +202,7 @@ export function SpeakerCombobox({
   };
 
   // [M1] Digit prefixes use unfiltered roster index; hidden when filtering.
-  const rowLabel = (row: Speaker | SpecialRow, _idx: number): string => {
+  const rowLabel = (row: Speaker | SpecialRow): string => {
     if (row === "inherit") return "↺ Reset to detected speaker";
     if (row === "create") return `Create "${trimmed}"`;
     if (digitPrefixes && !trimmed) {
@@ -283,7 +283,7 @@ export function SpeakerCombobox({
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => void commitRow(row)}
                 >
-                  {rowLabel(row, i)}
+                  {rowLabel(row)}
                 </div>
               );
             })}
