@@ -758,6 +758,37 @@ export function MediaEditor({
     annotateHotkey,
   ]);
 
+  // Download shortcut: separate from the writable-gated handler so it works
+  // for read-only visitors too.
+  useEffect(() => {
+    const onExportKey = (event: KeyboardEvent) => {
+      if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (helpOpenRef.current) return;
+      const el = event.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        el?.isContentEditable
+      )
+        return;
+      if (event.key.toLowerCase() !== REVIEW_KEY.download) return;
+      event.preventDefault();
+      const menu = document.getElementById("export-menu");
+      if (!menu) return;
+      const details = menu.querySelector("details");
+      if (details) {
+        details.open = !details.open;
+        const summary = details.querySelector("summary");
+        if (summary) summary.focus({ preventScroll: true });
+      }
+      menu.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    };
+    window.addEventListener("keydown", onExportKey);
+    return () => window.removeEventListener("keydown", onExportKey);
+  }, []);
+
   const done = progress.total > 0 && remaining === 0;
 
   return (
