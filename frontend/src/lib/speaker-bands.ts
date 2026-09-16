@@ -108,6 +108,7 @@ export function partition(states: LabelStateShape[]): RailPartition {
 export interface Headline {
   title: string;
   detail: string;
+  linkSpeakerId: string | null;
 }
 
 function voiceName(name: string | null): string {
@@ -119,41 +120,54 @@ export function headline(state: LabelStateShape): Headline {
     return {
       title: `Possibly ${voiceName(state.candidateSpeakerName)}`,
       detail: state.bandReason ?? "Not strong enough to confirm without your check.",
+      linkSpeakerId: state.candidateSpeakerId,
     };
   }
   if (isConfirmable(state) && state.resolution === "auto_enroll") {
     return {
       title: `Possibly ${voiceName(state.candidateSpeakerName)}`,
       detail: `Saved as ${voiceName(state.speakerName)} for now. Confirm if this is ${voiceName(state.candidateSpeakerName)}.`,
+      linkSpeakerId: state.candidateSpeakerId,
     };
   }
   if (isAmbiguous(state)) {
     return {
       title: "Similar voices found",
       detail: "Two known speakers sound close to this voice. Listen, then choose.",
+      linkSpeakerId: null,
     };
   }
   if (state.resolution === "grounded_cosine") {
-    return { title: `Shown as ${voiceName(state.speakerName)}`, detail: "Matched by voice." };
+    return {
+      title: `Shown as ${voiceName(state.speakerName)}`,
+      detail: "Matched by voice.",
+      linkSpeakerId: state.speakerId,
+    };
   }
   if (state.resolution === "auto_enroll") {
     return {
       title: `Saved as ${voiceName(state.speakerName)}`,
       detail: "Saved automatically so Voxint can recognise this voice later. Name them on the Speakers page.",
+      linkSpeakerId: state.speakerId,
     };
   }
   if (state.resolution === "human_assign") {
-    return { title: voiceName(state.speakerName), detail: "Your ruling." };
+    return {
+      title: voiceName(state.speakerName),
+      detail: "Your ruling.",
+      linkSpeakerId: state.speakerId,
+    };
   }
   if (state.resolution === "human_exclude") {
-    return { title: "Left out", detail: "Your ruling: not a person." };
+    return { title: "Left out", detail: "Your ruling: not a person.", linkSpeakerId: null };
   }
   if (state.resolution === "human_unknown") {
-    return { title: "Could not tell", detail: "Your ruling." };
+    return { title: "Could not tell", detail: "Your ruling.", linkSpeakerId: null };
   }
   return {
     title: "Who is this?",
     detail: state.bandReason ?? "Not enough evidence to suggest a speaker.",
+    linkSpeakerId: null,
   };
 }
 

@@ -24,6 +24,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   to on; the palette no longer requires an opt-in environment variable.
 
 ### Added
+- **Speaker profile links from editor rail** (#498). Identified speaker names
+  in the editor's speaker rail sidebar are now clickable links to the speaker's
+  profile page. Covers all resolved states (voice match, auto-enroll, operator
+  ruling) and confirmable candidates ("Possibly Jane Doe" links to Jane Doe).
+  Unidentified and excluded labels remain plain text.
+
 - **Viewer-role template wiring.** When multi-user mode is on, viewer accounts
   now see a clean read-only console: upload buttons, claim forms,
   edit/delete/archive actions, inline editors, and bulk action bars are hidden

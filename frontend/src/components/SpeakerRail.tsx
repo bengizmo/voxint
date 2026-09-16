@@ -207,7 +207,13 @@ function SpeakerCard({
             : "needs you"}
         </span>
       </h3>
-      <p className="rail-title">{copy.title}</p>
+      <p className="rail-title">
+        {copy.linkSpeakerId ? (
+          <a href={`/speakers/${copy.linkSpeakerId}`}>{copy.title}</a>
+        ) : (
+          copy.title
+        )}
+      </p>
       <p className="muted text-sm">{copy.detail}</p>
       <div className="flex items-center">
         <p className="muted text-sm">
@@ -290,7 +296,13 @@ function ResolvedRow({
           {pill}
         </span>
       </h3>
-      <span className="rail-title">{copy.title}</span>
+      <span className="rail-title">
+        {copy.linkSpeakerId ? (
+          <a href={`/speakers/${copy.linkSpeakerId}`}>{copy.title}</a>
+        ) : (
+          copy.title
+        )}
+      </span>
       <span className="muted text-sm">
         {copy.detail}{" "}
         {state.resolution === "auto_enroll" && !isConfirmable(state) && (
