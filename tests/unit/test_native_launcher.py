@@ -256,10 +256,14 @@ def test_validate_rejects_control_char_in_old_pg_bindir(
         ("\tstate = waiting\n\tlast exit code = 1\n", "restarting (last exit 1)"),
         # killed by signal (older macOS spells it 'last exit status')
         ("\tstate = not running\n\tlast exit status = 15\n", "restarting (last exit 15)"),
+        # clean exit: KeepAlive/SuccessfulExit=false will NOT restart (#509)
+        ("\tstate = not running\n\tlast exit code = 0\n", "stopped (clean exit)"),
+        # waiting with exit 0 is also a clean-exit stop
+        ("\tstate = waiting\n\tlast exit code = 0\n", "stopped (clean exit)"),
         # loaded but the state/exit fields are absent -> never bare-healthy
         ("\tactive count = 0\n\tpath = /x\n", "state unknown"),
-        # non-numeric exit, not running -> unparsable -> state unknown
-        ("\tstate = not running\n\tlast exit code = (never exited)\n", "state unknown"),
+        # non-numeric exit, state known -> "not running" (state is parsable)
+        ("\tstate = not running\n\tlast exit code = (never exited)\n", "not running"),
     ],
 )
 def test_launchd_job_state_classifies(
@@ -268,6 +272,64 @@ def test_launchd_job_state_classifies(
     proc = run_lib(tmp_path, f"launchd_job_state {shlex.quote(block)}")
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == expected
+
+
+# --------------------------------------------------------------------------- #
+# #509 — worker readiness poll. wait_for_worker scans the worker log for
+# celery's ready marker past a given byte offset. sleep is stubbed out so
+# the poll loop runs instantly.
+# --------------------------------------------------------------------------- #
+def _wait_for_worker_script(offset: int) -> str:
+    """Shell snippet that stubs sleep and captures wait_for_worker's exit code.
+
+    Uses an ``if`` guard so ``set -e`` (active after sourcing the launcher)
+    does not abort on a non-zero return before the exit code is captured.
+    """
+    return (
+        f"sleep() {{ :; }}\n"
+        f"if wait_for_worker {offset}; then echo 0; else echo 1; fi"
+    )
+
+
+def test_wait_for_worker_finds_ready_marker(tmp_path: Path) -> None:
+    """Ready marker in new content (past the offset) returns 0."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    log = logs / "worker.log"
+    old_content = "[INFO] mingle: searching for neighbors\n"
+    log.write_text(old_content)
+    offset = len(old_content.encode())
+    with log.open("a") as f:
+        f.write("[INFO] celery@testhost ready.\n")
+    proc = run_lib(tmp_path, _wait_for_worker_script(offset))
+    assert proc.stdout.strip() == "0", proc.stderr
+
+
+def test_wait_for_worker_ignores_stale_marker(tmp_path: Path) -> None:
+    """Ready marker BEFORE the offset is stale and must not match."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    log = logs / "worker.log"
+    content = "[INFO] celery@testhost ready.\n[INFO] something else\n"
+    log.write_text(content)
+    offset = len(content.encode())
+    proc = run_lib(tmp_path, _wait_for_worker_script(offset))
+    assert proc.stdout.strip() == "1", proc.stderr
+
+
+def test_wait_for_worker_no_log_file(tmp_path: Path) -> None:
+    """Missing log file returns 1 (timeout)."""
+    proc = run_lib(tmp_path, _wait_for_worker_script(0))
+    assert proc.stdout.strip() == "1", proc.stderr
+
+
+def test_wait_for_worker_no_marker(tmp_path: Path) -> None:
+    """Log exists but has no ready marker returns 1 (timeout)."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "worker.log").write_text("[INFO] some other log line\n")
+    proc = run_lib(tmp_path, _wait_for_worker_script(0))
+    assert proc.stdout.strip() == "1", proc.stderr
 
 
 # --------------------------------------------------------------------------- #
