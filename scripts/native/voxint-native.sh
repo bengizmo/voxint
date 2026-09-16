@@ -1060,7 +1060,7 @@ check_asset_freshness() {
 cmd_up() {
   require_macos
   load_state
-  local media_root svc managed=0 metal_up_rc=0
+  local media_root svc managed=0 metal_up_rc=0 worker_ready_rc=0 worker_log_offset=0
   [ -x "$(core_venv)/bin/voxint" ] || fail "core venv missing -- run: $0 setup"
   check_asset_freshness
   managed_cluster && managed=1
@@ -1103,10 +1103,32 @@ cmd_up() {
   say "  database at head"
 
   step "Starting core services under launchd"
-  for svc in $NATIVE_SERVICES; do
-    bootstrap_service "$svc" "$media_root"
-  done
+  bootstrap_service api "$media_root"
+  # Capture the worker log size just before its bootstrap so wait_for_worker
+  # scans only new content. Capturing here (after api, before worker) rather
+  # than before the whole loop narrows the window where a crash-looping old
+  # worker could emit a stale ready marker. A residual race exists if the
+  # daily rotation job (installed by a prior `up`) fires during the 15s poll;
+  # inline rotation is already serialized after the poll.
+  if [ -f "$(service_log worker)" ]; then
+    worker_log_offset=$(wc -c < "$(service_log worker)")
+  fi
+  bootstrap_service worker "$media_root"
+  bootstrap_service beat "$media_root"
 
+  step "Verifying worker readiness"
+  wait_for_worker "$worker_log_offset" || worker_ready_rc=$?
+  if [ "$worker_ready_rc" -eq 0 ]; then
+    say "  worker connected to broker"
+  else
+    say "  worker did not reach ready within 15s"
+    say "  check: $0 logs worker -f"
+    say "  submissions will remain queued until the worker is consuming"
+  fi
+
+  # Log rotation AFTER the readiness check: cmd_rotate_logs (called by
+  # install_logrotate) can truncate oversized logs, and the readiness poll
+  # must scan the current log content first.
   step "Log rotation"
   install_logrotate
 
@@ -1129,6 +1151,7 @@ cmd_up() {
     wait_for_api
     open "http://$NATIVE_API_HOST:$NATIVE_API_PORT" >/dev/null 2>&1 || true
   fi
+  [ "$worker_ready_rc" -ne 0 ] && return "$worker_ready_rc"
   return "$metal_up_rc"
 }
 
@@ -1142,6 +1165,29 @@ wait_for_api() {
     sleep 0.5
   done
   return 0
+}
+
+wait_for_worker() {
+  # Poll the worker log for celery's ready marker, proving the worker connected
+  # to the broker and is consuming tasks. $1 = byte offset of the log BEFORE
+  # the worker was bootstrapped; only content past that offset is scanned, so a
+  # stale ready line from a prior spawn cannot match.
+  # Returns 0 on match, 1 on timeout (~15s: 30 x 0.5s).
+  # NOTE: uses `grep ... >/dev/null` instead of `grep -q` because -q exits
+  # early, causing SIGPIPE on the upstream `tail` under `set -o pipefail`.
+  local start_offset=${1:-0} log i
+  log=$(service_log worker)
+  i=0
+  while [ "$i" -lt 30 ]; do
+    if [ -f "$log" ] \
+        && tail -c "+$((start_offset + 1))" "$log" 2>/dev/null \
+           | grep 'celery@.* ready\.' >/dev/null 2>&1; then
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 0.5
+  done
+  return 1
 }
 
 cmd_down() {
@@ -1197,6 +1243,10 @@ launchd_job_state() {
     printf 'running'
   elif [ -n "$exit_code" ] && [ "$exit_code" != 0 ]; then
     printf 'restarting (last exit %s)' "$exit_code"
+  elif [ -n "$state" ] && [ "$exit_code" = 0 ]; then
+    printf 'stopped (clean exit)'
+  elif [ -n "$state" ]; then
+    printf 'not running'
   else
     printf 'state unknown'
   fi
