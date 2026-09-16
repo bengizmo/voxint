@@ -2446,3 +2446,101 @@ def test_doctor_identity_tolerates_noncanonical_home(tmp_path: Path) -> None:
     proc = run_lib(tmp_path, "cmd_doctor", extra_env=env)
     assert "[PASS] the postmaster on :5432 is the managed cluster" in proc.stderr
     assert "NOT the managed cluster" not in proc.stderr
+
+
+# --------------------------------------------------------------------------- #
+# Asset freshness warnings are advisory, including under set -e.
+# --------------------------------------------------------------------------- #
+def _run_asset_freshness(tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    proc = run_lib(
+        tmp_path,
+        f"REPO_ROOT={shlex.quote(str(tmp_path))}\n"
+        "set -e\n"
+        "check_asset_freshness\n"
+        "printf '%s\\n' \"$?\"\n"
+        "printf '%s\\n' continued\n",
+        extra_env={
+            "VOXINT_NATIVE_FRONTEND_DIR": str(tmp_path / "frontend"),
+            "VOXINT_NATIVE_APP_ASSETS_DIR": str(tmp_path / "assets"),
+        },
+    )
+    # A standalone call keeps errexit active; $? also checks the function's status.
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "0\ncontinued\n"
+    return proc
+
+
+@pytest.mark.parametrize("stamp", ["missing", "matching", "different", "empty"])
+def test_check_asset_freshness_head_stamp(tmp_path: Path, stamp: str) -> None:
+    def git(*args: str) -> str:
+        return subprocess.run(
+            [
+                "git", "-C", str(tmp_path),
+                "-c", "user.name=Native Launcher Test",
+                "-c", "user.email=native-launcher@example.invalid",
+                "-c", "commit.gpgsign=false",
+                "-c", "core.hooksPath=/dev/null",
+                *args,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    git("init")
+    git("commit", "--allow-empty", "-m", "initial")
+    stamped = git("rev-parse", "HEAD")
+    if stamp != "missing":
+        (tmp_path / ".setup-head-stamp").write_text(
+            "" if stamp == "empty" else f"{stamped}\n"
+        )
+    if stamp == "different":
+        git("commit", "--allow-empty", "-m", "changed")
+    current = git("rev-parse", "HEAD")
+
+    proc = _run_asset_freshness(tmp_path)
+    if stamp == "different":
+        assert proc.stderr == (
+            f"  code has changed since last setup ({stamped[:8]}..{current[:8]})"
+            " -- run: bash setup\n"
+        )
+    else:
+        assert proc.stderr == ""
+
+
+def test_check_asset_freshness_failed_head_lookup(tmp_path: Path) -> None:
+    # No Git repository: rev-parse fails, but the advisory must stay silent.
+    (tmp_path / ".setup-head-stamp").write_text("a" * 40 + "\n")
+    proc = _run_asset_freshness(tmp_path)
+    assert proc.stderr == ""
+
+
+@pytest.mark.parametrize(
+    ("source", "staged"),
+    [
+        ('{"bundle": "current"}\n', '{"bundle": "current"}\n'),
+        ('{"bundle": "current"}\n', '{"bundle": "old"}\n'),
+        ('{"bundle": "current"}\n', None),
+        (None, '{"bundle": "current"}\n'),
+        (None, None),
+    ],
+    ids=["matching", "different", "source-only", "staged-only", "both-missing"],
+)
+def test_check_asset_freshness_manifests(
+    tmp_path: Path, source: str | None, staged: str | None
+) -> None:
+    for path, contents in (
+        (tmp_path / "frontend" / "dist" / ".vite" / "manifest.json", source),
+        (tmp_path / "assets" / ".vite" / "manifest.json", staged),
+    ):
+        if contents is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(contents)
+
+    proc = _run_asset_freshness(tmp_path)
+    if source is not None and staged is not None and source != staged:
+        assert proc.stderr == (
+            "  frontend bundles differ from staged copy -- run: bash setup\n"
+        )
+    else:
+        assert proc.stderr == ""

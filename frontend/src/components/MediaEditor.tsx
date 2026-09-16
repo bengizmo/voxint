@@ -310,6 +310,10 @@ export function MediaEditor({
     cursor >= 0 && cursor < segments.length ? segments[cursor] : null;
   const focusParentId = current?.sourceSegmentId ?? null;
   const isSplitParent = siblingCount(segments, focusParentId) > 1;
+  const speakerDisplayName =
+    current?.speaker?.trim() || current?.label?.trim() || "Unknown speaker";
+  const rawLabel = current?.label?.trim() ?? "";
+  const showRawLabel = rawLabel !== "" && rawLabel !== speakerDisplayName;
 
   useEffect(() => {
     setEditText(current?.text ?? "");
@@ -754,6 +758,37 @@ export function MediaEditor({
     annotateHotkey,
   ]);
 
+  // Download shortcut: separate from the writable-gated handler so it works
+  // for read-only visitors too.
+  useEffect(() => {
+    const onExportKey = (event: KeyboardEvent) => {
+      if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (helpOpenRef.current) return;
+      const el = event.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        el?.isContentEditable
+      )
+        return;
+      if (event.key.toLowerCase() !== REVIEW_KEY.download) return;
+      event.preventDefault();
+      const menu = document.getElementById("export-menu");
+      if (!menu) return;
+      const details = menu.querySelector("details");
+      if (details) {
+        details.open = !details.open;
+        const summary = details.querySelector("summary");
+        if (summary) summary.focus({ preventScroll: true });
+      }
+      menu.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    };
+    window.addEventListener("keydown", onExportKey);
+    return () => window.removeEventListener("keydown", onExportKey);
+  }, []);
+
   const done = progress.total > 0 && remaining === 0;
 
   return (
@@ -799,7 +834,7 @@ export function MediaEditor({
           aria-atomic="true"
         >
           {writable && current
-            ? `Cursor on segment at ${current.start.toFixed(1)} seconds, speaker ${current.speaker}${current.verified ? ", verified" : ""}${current.corrected ? ", edited" : ""}`
+            ? `Cursor on segment at ${current.start.toFixed(1)} seconds, speaker ${speakerDisplayName}${current.verified ? ", verified" : ""}${current.corrected ? ", edited" : ""}`
             : ""}
         </p>
 
@@ -891,18 +926,28 @@ export function MediaEditor({
           <div className="lib-main">
             {writable && current && current.segmentId !== null && (
               <div className="me-segment-actions">
-                <p className="muted text-sm">
-                  {walkMode ? "Walk" : "Editing"} segment at{" "}
-                  {current.start.toFixed(2)}s
+                <p className="me-segment-heading muted text-sm">
+                  <span
+                    className={`me-speaker-identity${current.paletteIndex != null ? ` spk-${current.paletteIndex}` : ""}`}
+                  >
+                    <strong>{speakerDisplayName}</strong>
+                    {showRawLabel && (
+                      <span className="spk-badge">{rawLabel}</span>
+                    )}
+                  </span>
+                  <span>
+                    {walkMode ? "Walk" : "Editing"} segment at{" "}
+                    {current.start.toFixed(2)}s
+                  </span>
                   {current.confidence != null &&
                     current.confidence < lowConfidenceThreshold && (
-                      <span className="tp-uncertain-chip ml-2">uncertain</span>
+                      <span className="tp-uncertain-chip">uncertain</span>
                     )}
                   {current.verified && (
-                    <span className="spk-badge ml-2">verified</span>
+                    <span className="spk-badge">verified</span>
                   )}
                   {current.corrected && (
-                    <span className="spk-badge ml-2">edited</span>
+                    <span className="spk-badge">edited</span>
                   )}
                   {current.corrections?.status === "shown" && (
                     <button
@@ -910,14 +955,14 @@ export function MediaEditor({
                       onClick={() => setProvOpen((on) => !on)}
                       aria-expanded={provOpen}
                       aria-controls="editor-provenance-body"
-                      className="tp-corrected-chip ml-2"
+                      className="tp-corrected-chip"
                     >
                       corrected by domain pack (
                       {current.corrections.entries.length}) {provOpen ? "▾" : "▸"}
                     </button>
                   )}
                   {current.corrections?.status === "unavailable" && (
-                    <span className="muted text-sm ml-2" role="note">
+                    <span className="muted text-sm" role="note">
                       correction provenance unavailable
                       {current.corrections.recordedVersion != null
                         ? ` (recorded by corrector v${current.corrections.recordedVersion}; this console reads a different version)`
