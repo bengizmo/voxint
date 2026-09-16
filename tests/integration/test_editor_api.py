@@ -201,9 +201,10 @@ def test_editor_island_includes_annotation_props(
     )
     assert resp.status_code == 200
 
-    # Extract the island props JSON from data-props attribute.
+    # Extract the EDITOR island's props (not the palette island's).
     text = resp.text
-    start = text.find("data-props='") + len("data-props='")
+    anchor = text.find('data-island="media-editor"')
+    start = text.find("data-props='", anchor) + len("data-props='")
     end = text.find("'", start)
     props = json.loads(text[start:end])
 
@@ -230,7 +231,8 @@ def test_editor_island_no_csrf_without_claim(
     assert resp.status_code == 200
 
     text = resp.text
-    start = text.find("data-props='") + len("data-props='")
+    anchor = text.find('data-island="media-editor"')
+    start = text.find("data-props='", anchor) + len("data-props='")
     end = text.find("'", start)
     props = json.loads(text[start:end])
 
@@ -256,7 +258,8 @@ def test_editor_island_includes_label_states(
     assert resp.status_code == 200
 
     text = resp.text
-    start = text.find("data-props='") + len("data-props='")
+    anchor = text.find('data-island="media-editor"')
+    start = text.find("data-props='", anchor) + len("data-props='")
     end = text.find("'", start)
     props = json.loads(text[start:end])
 
@@ -291,7 +294,8 @@ def test_editor_label_states_carry_rail_partition_keys(
     assert resp.status_code == 200
 
     text = resp.text
-    start = text.find("data-props='") + len("data-props='")
+    anchor = text.find('data-island="media-editor"')
+    start = text.find("data-props='", anchor) + len("data-props='")
     end = text.find("'", start)
     props = json.loads(text[start:end])
 
