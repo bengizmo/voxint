@@ -750,6 +750,12 @@
     .spk-2{--spk-accent:var(--spk-2)} .spk-3{--spk-accent:var(--spk-3)}
     .spk-4{--spk-accent:var(--spk-4)} .spk-5{--spk-accent:var(--spk-5)}
     .spk-6{--spk-accent:var(--spk-6)} .spk-7{--spk-accent:var(--spk-7)}
+    .me-segment-heading { display: flex; flex-wrap: wrap; align-items: baseline;
+                          gap: .35rem .65rem; }
+    .me-speaker-identity { display: inline-flex; align-items: baseline; gap: .35rem;
+                           border-left: 3px solid var(--spk-accent, var(--line));
+                           padding-left: .5rem; color: var(--ink);
+                           overflow-wrap: anywhere; }
     /* Low-confidence triage (issue #53). A NON-background treatment: the active
        playing line already owns the background tint and the left border carries
        the speaker accent, so uncertainty reads as a dashed amber underline plus

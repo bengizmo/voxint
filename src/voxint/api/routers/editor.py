@@ -36,6 +36,7 @@ from voxint.api.csrf import (
 )
 from voxint.api.editor_query import media_detail
 from voxint.api.languages import language_label
+from voxint.api.palette import PaletteCommand, palette_actions
 from voxint.api.playback import playback_capability
 from voxint.api.presentation import friendly_media_label
 from voxint.api.routers.deps import (
@@ -254,6 +255,9 @@ def media_detail_page(
             "restart_impact": ri,
             "active_nav": "media",
             "tutorial": tutorial,
+            "palette_actions": palette_actions(
+                PaletteCommand("Download transcript", "#export-menu", "action", "d"),
+            ),
         },
     )
 
