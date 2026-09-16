@@ -4,6 +4,8 @@
  * All functions are side-effect-free and tested with vitest.
  */
 
+import { type RecentPage } from "./recent-pages";
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -45,7 +47,7 @@ export type PassageState =
 
 export interface Row {
   id: string;
-  type: "command" | "entity" | "passage";
+  type: "command" | "entity" | "passage" | "recent";
   label: string;
   sublabel: string | null;
   href: string;
@@ -121,16 +123,31 @@ export function filterCommands(
 // ---------------------------------------------------------------------------
 
 /**
- * Build a flat indexed row list from the three result groups. Each row gets
- * a stable `id` for `aria-activedescendant`.
+ * Build a flat indexed row list from the result groups. Each row gets
+ * a stable `id` for `aria-activedescendant`. When `recentPages` is
+ * non-empty, a "Recent" group is prepended before commands.
  */
 export function buildRows(
   commands: readonly PaletteCommand[],
   entities: readonly EntityItem[],
   passages: readonly PassageItem[],
+  recentPages?: readonly RecentPage[],
 ): RowGroup[] {
   const groups: RowGroup[] = [];
   let idx = 0;
+
+  if (recentPages && recentPages.length > 0) {
+    groups.push({
+      label: "Recent",
+      rows: recentPages.map((p) => ({
+        id: `palette-opt-${idx++}`,
+        type: "recent" as const,
+        label: p.label,
+        sublabel: null,
+        href: p.href,
+      })),
+    });
+  }
 
   if (commands.length > 0) {
     groups.push({

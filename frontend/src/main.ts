@@ -4,6 +4,9 @@
 // base.html.
 
 import { isPaletteChord } from "./lib/palette";
+import { recordPage } from "./lib/recent-pages";
+
+recordPage(document.title, window.location.pathname);
 
 type MountFn = (el: HTMLElement, opts?: { open?: boolean }) => void;
 type Loader = () => Promise<{ mount: MountFn }>;
