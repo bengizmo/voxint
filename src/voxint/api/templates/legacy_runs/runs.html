@@ -12,15 +12,17 @@
 {%- endif -%}
 {% endblock %}
 {% block cb_actions %}
+{% if shell.can_write %}
 {% if shell.media_enabled %}
 <a class="cb-btn cb-btn-primary" href="/media">+ Add media</a>
 {% else %}
 <a class="cb-btn cb-btn-primary" href="#add-media">+ Add media</a>
 {% endif %}
+{% endif %}
 {% endblock %}
 
 {% block body %}
-{% if not shell.media_enabled %}
+{% if not shell.media_enabled and shell.can_write %}
 <section id="add-media" class="oc-section">
   <h2 class="oc-section-title">ADD MEDIA</h2>
   <form method="post" action="/submit" enctype="multipart/form-data" class="upload">

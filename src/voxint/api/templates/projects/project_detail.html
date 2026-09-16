@@ -6,6 +6,7 @@
 {% block cb_summary %}{{ chip("archived" if detail.archived_at else "active") }}{% endblock %}
 {% block cb_actions %}
 {% if not detail.archived_at %}
+{% if shell.can_write %}
 <details class="cb-overflow">
   <summary class="cb-btn cb-btn-secondary">Rename</summary>
   <form class="cb-overflow-menu" style="padding: var(--space-3); display: flex; gap: var(--space-2); align-items: center;"
@@ -15,6 +16,7 @@
     <button type="submit" class="cb-btn cb-btn-primary">Save</button>
   </form>
 </details>
+{% endif %}
 <details class="cb-overflow">
   <summary class="cb-btn cb-btn-secondary" aria-label="More actions">&hellip;</summary>
   <div class="cb-overflow-menu">
@@ -387,8 +389,10 @@
       <span class="vocab-chip">{{ term }}</span>
       {% endfor %}
       {% if not detail.archived_at %}
+      {% if shell.can_write %}
       <span class="vocab-chip vocab-chip-add" tabindex="0" role="button"
             onclick="this.closest('section').querySelector('details.pd-edit-toggle').open=true">+ add term</span>
+      {% endif %}
       {% endif %}
     </div>
     {% elif detail.vocabulary is not none %}
@@ -399,6 +403,7 @@
 
     {% if not detail.archived_at %}
     {% if vocabulary_error %}<p class="notice error" role="alert">{{ vocabulary_error }}</p>{% endif %}
+    {% if shell.can_write %}
     <details class="pd-edit-toggle">
       <summary>Edit vocabulary</summary>
       <form method="post" action="/projects/{{ detail.id }}/vocabulary" class="pd-vocab-form">
@@ -418,6 +423,7 @@
         </div>
       </form>
     </details>
+    {% endif %}
 
     <p class="oc-muted pd-helper">Applies to the next run — finished transcripts don't change.</p>
     {% else %}
@@ -445,7 +451,7 @@
     <p class="oc-muted" style="font-size:0.8125rem">When on, Voxint watches your transcript edits in this project and suggests a rule once the same fix appears in 3 segments. Suggestions never apply until you accept them. Turning this off stops watching; accepted rules stay.</p>
     {% endif %}
 
-    {% if not detail.archived_at %}
+    {% if not detail.archived_at and shell.can_write %}
     {% if corrections_error %}<p class="notice error" role="alert">{{ corrections_error }}</p>{% endif %}
 
     <div data-island="corrections-editor" data-props='{{ corrections_props|tojson }}'>
@@ -476,7 +482,7 @@
       {% else %}
       <p class="oc-muted">Inheriting from the folder pack or global corrections.</p>
       {% endif %}
-    {% if not detail.archived_at %}
+    {% if not detail.archived_at and shell.can_write %}
     </div>
     {% endif %}
 
@@ -519,7 +525,7 @@
     {% endif %}
 
     {% if not detail.archived_at %}
-    {% if detail.corrections is not none %}
+    {% if detail.corrections is not none and shell.can_write %}
     <form method="post" action="/projects/{{ detail.id }}/corrections" style="margin-top:var(--space-3)">
       <input type="hidden" name="csrf_token" value="{{ csrf_corrections }}">
       <input type="hidden" name="mode" value="inherit">
@@ -534,7 +540,7 @@
   <section class="oc-section">
     <div class="oc-section-header">
       <h2 class="oc-section-title">MEDIA FOLDERS</h2>
-      {% if not detail.archived_at and detail.assignable %}<a href="#" class="oc-section-link" onclick="this.closest('section').querySelector('details.pd-edit-toggle').open=true; return false;">+ link folder</a>{% endif %}
+      {% if not detail.archived_at and detail.assignable and shell.can_write %}<a href="#" class="oc-section-link" onclick="this.closest('section').querySelector('details.pd-edit-toggle').open=true; return false;">+ link folder</a>{% endif %}
     </div>
     {% if detail.folders %}
     <ul class="pd-sidebar-list">
@@ -544,11 +550,13 @@
           <svg class="pd-folder-icon" width="16" height="16" viewBox="0 0 16 16" fill="var(--ink-2)" aria-hidden="true"><path d="M1.5 2A1.5 1.5 0 000 3.5v9A1.5 1.5 0 001.5 14h13a1.5 1.5 0 001.5-1.5V5a1.5 1.5 0 00-1.5-1.5H7.71L6.85 2.64A1.5 1.5 0 005.57 2H1.5z"/></svg>
           <strong>{{ folder.path }}</strong>
           <span class="oc-muted">{{ folder.media_count }} item{{ "" if folder.media_count == 1 else "s" }}</span>
+          {% if shell.can_write %}
           <form class="inline" method="post"
                 action="/projects/{{ detail.id }}/folders/{{ folder.id }}/unlink">
             <input type="hidden" name="csrf_token" value="{{ csrf_unlink }}">
             <button type="submit" class="link-btn">unlink</button>
           </form>
+          {% endif %}
         </div>
         {% if folder.domain_pack %}
         <span class="oc-muted pd-pack-note">{{ folder.domain_pack }} pack{% if not detail.archived_at and detail.has_own_config %} &middot; {{ own_fields }} superseded by this project{% endif %}</span>
@@ -561,7 +569,7 @@
     {% endif %}
 
     {% if not detail.archived_at %}
-    {% if detail.assignable %}
+    {% if detail.assignable and shell.can_write %}
     <details class="pd-edit-toggle">
       <summary>Assign a folder</summary>
       <form method="post" action="/projects/{{ detail.id }}/folders" class="pd-assign-form">
@@ -577,7 +585,7 @@
         <button type="submit" class="primary">Assign folder</button>
       </form>
     </details>
-    {% else %}
+    {% elif not detail.assignable %}
     <p class="oc-muted">Every registered folder is already assigned to a project. Register more in <a href="/settings">Settings</a>.</p>
     {% endif %}
     {% endif %}
@@ -586,7 +594,9 @@
   <section class="oc-section">
     <div class="oc-section-header">
       <h2 class="oc-section-title">PROJECT SPEAKERS</h2>
+      {% if shell.can_write %}
       <a href="/speakers" class="oc-section-link">+ add speaker</a>
+      {% endif %}
     </div>
     {% if detail.speakers %}
     <ul class="pd-sidebar-list">

@@ -14,7 +14,7 @@
   <h2>{{ tutorial.title }}</h2>
   <p>{{ tutorial.body }}</p>
   <div class="tutorial-actions">
-    {% if tutorial.claim_run_id %}
+    {% if tutorial.claim_run_id and shell.can_write %}
     {# REVIEW step (and later steps with no live claim): claim the tutorial run
        via the editor endpoint. The editor claim returns JSON, so the form must
        target the editor claim path (not the retired legacy claim). #}
@@ -29,10 +29,12 @@
     {# EXPORT step: open the plaintext transcript in a new tab (the claim token is
        never placed in its URL), then finish the tutorial via an explicit POST. #}
     <a href="{{ tutorial.export_href }}" target="_blank" rel="noopener">Export transcript ↗</a>
+    {% if shell.can_write %}
     <form method="post" action="/settings/tutorial/complete" class="inline">
       <input type="hidden" name="csrf_token" value="{{ tutorial.csrf_settings }}">
       <button type="submit">Finish tutorial →</button>
     </form>
+    {% endif %}
     {% endif %}
     {% if tutorial.next_href %}
     <a href="{{ tutorial.next_href }}">{{ tutorial.next_label }}</a>

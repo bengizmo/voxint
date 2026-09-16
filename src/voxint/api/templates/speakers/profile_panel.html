@@ -22,7 +22,7 @@
       <div class="profile-col">
         <div class="profile-col-label">{{ col_label.get(field, field|upper) }}</div>
         <div class="profile-col-value">
-          {% if archived %}
+          {% if archived or not shell.can_write %}
             {% if row %}
               {% if field == "link" and (row.value.startswith("https://") or row.value.startswith("http://")) %}
               <a href="{{ row.value }}" target="_blank" rel="noreferrer noopener">{{ row.value }}</a>

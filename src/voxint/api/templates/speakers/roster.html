@@ -27,6 +27,7 @@
     · last seen {{ entry.last_seen_at.strftime("%Y-%m-%d") if entry.last_seen_at else "never" }}
   </p>
 
+  {% if shell.can_write %}
   <div class="roster-actions card-actions">
     <form class="inline" method="post"
           action="/speakers/{{ entry.speaker.id }}/rename"
@@ -67,6 +68,7 @@
       <button type="submit">Archive</button>
     </form>
   </div>
+  {% endif %}
 
   {% set research = research_by_speaker.get(entry.speaker.id) %}
   {% if research %}{% include "speakers/research.html" %}{% endif %}
@@ -86,6 +88,7 @@
       {% if last_in_space %}
       <span class="muted">last one — removing it makes this speaker unmatchable in {{ e.embedding_space }}</span>
       {% endif %}
+      {% if shell.can_write %}
       <form class="inline" method="post"
             action="/speakers/{{ entry.speaker.id }}/embeddings/{{ e.id }}/delete"
             hx-post="/speakers/{{ entry.speaker.id }}/embeddings/{{ e.id }}/delete"
@@ -94,6 +97,7 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_embedding_delete }}">
         <button type="submit" class="danger">Remove</button>
       </form>
+      {% endif %}
     </div>
     {% endfor %}
   </details>
@@ -115,6 +119,7 @@
     {% else %}
     <span class="muted">archived
       {% if entry.speaker.deleted_at %}{{ entry.speaker.deleted_at.strftime("%Y-%m-%d") }}{% endif %}</span>
+    {% if shell.can_write %}
     <form class="inline" method="post"
           action="/speakers/{{ entry.speaker.id }}/restore"
           hx-post="/speakers/{{ entry.speaker.id }}/restore"
@@ -122,6 +127,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_restore }}">
       <button type="submit">Restore</button>
     </form>
+    {% endif %}
     {% endif %}
   </div>
   {% endfor %}
