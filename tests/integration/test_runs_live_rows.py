@@ -16,6 +16,13 @@ from voxint.api.routers.legacy_runs import RUNS_LIVE_ROWS_MAX
 from voxint.db.models import PipelineRun, RunStatus, StageRun
 
 
+def _row(body: str, run_id: uuid.UUID) -> str:
+    """The rendered row for ``run_id``: its opening tag through to the next row or the end."""
+    start = body.rindex("<div ", 0, body.index(f'id="run-row-{run_id}"'))
+    end = body.find('<div class="gt-row', start + 1)
+    return body[start:] if end == -1 else body[start:end]
+
+
 def test_running_stage_and_elapsed(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
@@ -40,7 +47,10 @@ def test_running_stage_and_elapsed(
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-store"
     assert 'hx-trigger="every 5s"' in body
-    assert 'hx-swap-oob="true"' in body
+    poller = body[: body.index('<div class="gt-row')]
+    assert 'id="runs-live"' in poller
+    assert "hx-swap-oob" not in poller
+    assert 'hx-swap-oob="true"' in _row(body, run_id)
     assert "pill running" in body
     assert "Transcrib" in body
     assert "Processing so far, as of last refresh" in body
@@ -55,9 +65,12 @@ def test_mixed_completion(client: TestClient, session_factory: sessionmaker[Sess
     body = client.get(f"/runs/live-rows?ids={done},{live}").text
     assert f'hx-get="/runs/live-rows?ids={live}"' in body
     assert body.count('hx-swap-oob="true"') == 2
-    assert body.count("is-just-finished") == 1
-    assert "needs review" in body.lower()
-    assert 'href="/review"' in body
+    done_row, live_row = _row(body, done), _row(body, live)
+    assert "is-just-finished" in done_row
+    assert "needs review" in done_row.lower()
+    assert 'href="/review"' in done_row
+    assert "is-just-finished" not in live_row
+    assert "pill running" in live_row
 
 
 @pytest.mark.parametrize(
@@ -116,8 +129,8 @@ def test_missing_archived_and_duplicate_ids(
         live = _make_run(session, status=RunStatus.QUEUED)
     missing = uuid.uuid4()
     body = client.get(f"/runs/live-rows?ids={archived},{missing},{live},{live}").text
-    assert str(archived) not in body
-    assert str(missing) not in body
+    assert f'id="run-row-{archived}"' not in body
+    assert f'id="run-row-{missing}"' not in body
     assert body.count(f'id="run-row-{live}"') == 1
     assert f'hx-get="/runs/live-rows?ids={live}"' in body
 

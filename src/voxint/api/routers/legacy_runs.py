@@ -218,21 +218,27 @@ tail_router = APIRouter(dependencies=[Depends(require_onboarded)])
 
 
 RUNS_LIVE_ROWS_MAX = 100
-_LIVE_STATUSES = (RunStatus.QUEUED, RunStatus.RUNNING)
-_FINISHED_STATUSES = (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED)
+_LIVE_STATUSES = frozenset({RunStatus.QUEUED.value, RunStatus.RUNNING.value})
+_FINISHED_STATUSES = frozenset(
+    {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
+)
 
 
 def _run_ids_with_status(
-    items: Sequence[RunListItem], statuses: Sequence[RunStatus]
+    items: Sequence[RunListItem], statuses: frozenset[str]
 ) -> list[uuid.UUID]:
     """Select ids in page order for polling or terminal highlighting."""
     return [item.run_id for item in items if item.status in statuses]
 
 
 def _poll_seconds(items: Sequence[RunListItem], live_ids: Sequence[uuid.UUID]) -> int:
+    """5s while any polled run is running; 15s when only queued runs are polled."""
+    tracked = set(live_ids)
     return (
         5
-        if any(item.status == RunStatus.RUNNING and item.run_id in live_ids for item in items)
+        if any(
+            item.status == RunStatus.RUNNING.value and item.run_id in tracked for item in items
+        )
         else 15
     )
 
@@ -938,6 +944,9 @@ def runs_live_rows(
             archived=False,
             gates=gates_from_settings(settings),
         ).items
+    # The dashboard read model only feeds the stage chip, so a queued-only or
+    # all-terminal tick skips it (the strip polls it on its own schedule).
+    if any(item.status == RunStatus.RUNNING.value for item in items):
         snapshot = collect_resource_status_or_empty(settings)
         degraded = degraded_stages(
             ((service.name, service.up) for service in snapshot.services),
