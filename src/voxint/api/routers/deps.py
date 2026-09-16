@@ -366,6 +366,18 @@ def require_speakers_enabled(request: Request) -> None:
         raise HTTPException(status_code=404, detail="not found")
 
 
+def require_palette_enabled(request: Request) -> None:
+    """Area gate for the command palette search routes (#162).
+
+    Same shape as :func:`require_media_enabled`: the ``/palette`` routes are
+    always registered so the route inventory is stable, and access 404s until
+    ``console_palette_enabled`` is on.
+    """
+    settings: Settings = request.app.state.settings
+    if not settings.console_palette_enabled:
+        raise HTTPException(status_code=404, detail="not found")
+
+
 def require_users_enabled(request: Request) -> None:
     """Area gate for the user management sub-page (#362).
 

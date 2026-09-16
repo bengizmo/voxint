@@ -6,15 +6,25 @@ Auth via OperatorDep (same as all console routes).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from markupsafe import Markup
 
 from voxint.api.meaning_query import search_passages
 from voxint.api.palette_query import search_entities
-from voxint.api.routers.deps import OperatorDep, SessionDep, get_session_factory
+from voxint.api.routers.deps import (
+    OperatorDep,
+    SessionDep,
+    get_session_factory,
+    require_onboarded,
+    require_palette_enabled,
+)
 
-router = APIRouter(prefix="/palette", tags=["palette"])
+router = APIRouter(
+    prefix="/palette",
+    tags=["palette"],
+    dependencies=[Depends(require_onboarded), Depends(require_palette_enabled)],
+)
 
 
 @router.get("/entities")

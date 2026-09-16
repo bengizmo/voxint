@@ -326,6 +326,22 @@
     true
   ],
   [
+    "/palette/entities",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/palette/passages",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/projects",
     [
       "GET"

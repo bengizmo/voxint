@@ -568,10 +568,10 @@ def _register_routes(app: FastAPI) -> None:
     # route is retained in legacy_runs but redirects here for continuity.
     console.include_router(explore_router)
 
-    # ---- Command palette search (#162): entity search JSON endpoint.
-    # Gated on the palette flag so the routes stay dark until the flag is on.
-    if app.state.settings.console_palette_enabled:
-        console.include_router(palette_router)
+    # ---- Command palette search (#162): entity + passage search JSON
+    # endpoints. Always registered (stable route inventory); the router's
+    # require_palette_enabled gate 404s until the flag is on.
+    console.include_router(palette_router)
 
     # ---- Quote board (issue #338, Phase 6): save/manage/export KWIC evidence.
     console.include_router(quotes_router)

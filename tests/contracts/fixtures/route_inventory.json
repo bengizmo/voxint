@@ -244,6 +244,18 @@
     ]
   ],
   [
+    "/palette/entities",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/palette/passages",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/projects",
     [
       "GET"
