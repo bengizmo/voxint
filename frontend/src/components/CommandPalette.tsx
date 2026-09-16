@@ -1,9 +1,8 @@
 /**
  * Command palette island (#162): unified search + command palette.
  *
- * Slice 1: commands group (navigation destinations + per-page actions).
- * Slice 2: entity search (media, speakers, projects).
- * Slice 3 will add semantic transcript passages.
+ * Three result groups: commands (navigation + per-page actions), entity
+ * search (media, speakers, projects), and semantic transcript passages.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -22,7 +21,6 @@ import {
   filterCommands,
   isPaletteChord,
   moveActive,
-  normalizeQuery,
   rowAt,
   totalRows,
 } from "../lib/palette";
@@ -100,6 +98,7 @@ export function CommandPalette({
       return;
     }
 
+    setEntities([]);
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       apiFetch(`/palette/entities?q=${encodeURIComponent(trimmed)}`, {
@@ -154,8 +153,8 @@ export function CommandPalette({
             }
           },
         )
-        .catch(() => {
-          // AbortError or network failure -- silently degrade.
+        .catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
           setPassagesState("idle");
         });
     }, 150);
@@ -174,24 +173,32 @@ export function CommandPalette({
     const onKeyDown = (event: KeyboardEvent) => {
       if (isPaletteChord(event)) {
         event.preventDefault();
-        setOpen((prev) => {
-          if (prev) {
-            closePalette();
-            return false;
-          }
-          return true;
-        });
+        if (open) {
+          closePalette();
+        } else {
+          setOpen(true);
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closePalette]);
+  }, [open, closePalette]);
 
   // ---------------------------------------------------------------------------
   // Keyboard navigation inside the dialog
   // ---------------------------------------------------------------------------
 
   const onInputKeyDown = (event: React.KeyboardEvent) => {
+    // Let the chord toggle the palette closed from inside the input.
+    if (isPaletteChord(event.nativeEvent)) {
+      event.preventDefault();
+      closePalette();
+      return;
+    }
+
+    // During IME composition, don't intercept navigation keys.
+    if (event.nativeEvent.isComposing) return;
+
     // Stop propagation so editor shortcuts do not fire while the palette
     // input is focused (React 19 delegates at the portal container).
     event.stopPropagation();
@@ -260,6 +267,7 @@ export function CommandPalette({
       className="cb-search"
       aria-haspopup="dialog"
       aria-expanded={open}
+      aria-label="Search and commands"
       onClick={() => setOpen(true)}
     >
       <svg
@@ -294,6 +302,13 @@ export function CommandPalette({
             aria-modal="true"
             aria-label="Search and commands"
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              // Shield all dialog descendants from page-level shortcuts.
+              // Escape and Tab are handled by useModalDialog's capture listener.
+              if (e.key !== "Escape" && e.key !== "Tab") {
+                e.stopPropagation();
+              }
+            }}
           >
             {/* Search input */}
             <div className="palette-input-wrap">
@@ -322,6 +337,7 @@ export function CommandPalette({
                 type="text"
                 placeholder="Search or jump to..."
                 role="combobox"
+                aria-autocomplete="list"
                 aria-expanded={count > 0}
                 aria-controls="palette-listbox"
                 aria-activedescendant={
@@ -332,7 +348,7 @@ export function CommandPalette({
                 autoComplete="off"
                 spellCheck={false}
                 value={query}
-                onChange={(e) => setQuery(normalizeQuery(e.target.value))}
+                onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={onInputKeyDown}
               />
             </div>

@@ -232,7 +232,8 @@ export function moveActive(
 // ---------------------------------------------------------------------------
 
 /**
- * Normalize and trim a query string. Collapses internal whitespace.
+ * Normalize a query for filtering/API calls. Trims and collapses whitespace.
+ * NOT for controlled input value -- use only at filter/fetch time.
  */
 export function normalizeQuery(raw: string): string {
   return raw.trim().replace(/\s+/g, " ");
