@@ -281,9 +281,12 @@ def test_retained_floor(session_factory: sessionmaker[Session]) -> None:
 
 def test_record_speaker_identified_one_row(session_factory: sessionmaker[Session]) -> None:
     did = uuid.uuid4()
+    sid = uuid.uuid4()
     with session_factory() as session:
         rid = _seed_completed_run(session)
-        record_speaker_identified(session, run_id=rid, decision_id=did, speaker_name="Alice")
+        record_speaker_identified(
+            session, run_id=rid, decision_id=did, speaker_name="Alice", speaker_id=sid
+        )
         session.commit()
     with session_factory() as session:
         rows = _events(session, rid)
@@ -291,17 +294,22 @@ def test_record_speaker_identified_one_row(session_factory: sessionmaker[Session
         assert rows[0].kind == ActivityKind.SPEAKER_IDENTIFIED.value
         assert rows[0].occurrence_key == f"decision:{did}:identified"
         assert rows[0].title == "Alice"
-        assert rows[0].href == f"/runs/{rid}"
+        assert rows[0].href == f"/speakers/{sid}"
 
 
 def test_record_speaker_identified_idempotent_replay(
     session_factory: sessionmaker[Session],
 ) -> None:
     did = uuid.uuid4()
+    sid = uuid.uuid4()
     with session_factory() as session:
         rid = _seed_completed_run(session)
-        record_speaker_identified(session, run_id=rid, decision_id=did, speaker_name="Alice")
-        record_speaker_identified(session, run_id=rid, decision_id=did, speaker_name="Alice")
+        record_speaker_identified(
+            session, run_id=rid, decision_id=did, speaker_name="Alice", speaker_id=sid
+        )
+        record_speaker_identified(
+            session, run_id=rid, decision_id=did, speaker_name="Alice", speaker_id=sid
+        )
         session.commit()
     with session_factory() as session:
         assert len(_events(session, rid)) == 1  # same decision id => one row
@@ -311,11 +319,14 @@ def test_record_speaker_identified_rolls_back_with_caller(
     session_factory: sessionmaker[Session],
 ) -> None:
     did = uuid.uuid4()
+    sid = uuid.uuid4()
     with session_factory() as session:
         rid = _seed_completed_run(session)
         session.commit()
     with session_factory() as session:
-        record_speaker_identified(session, run_id=rid, decision_id=did, speaker_name="Alice")
+        record_speaker_identified(
+            session, run_id=rid, decision_id=did, speaker_name="Alice", speaker_id=sid
+        )
         session.rollback()  # the announcing tx aborted => the event must be gone
     with session_factory() as session:
         assert _events(session, rid) == []
@@ -325,10 +336,11 @@ def test_record_speaker_identified_clamps_long_name(
     session_factory: sessionmaker[Session],
 ) -> None:
     did = uuid.uuid4()
+    sid = uuid.uuid4()
     with session_factory() as session:
         rid = _seed_completed_run(session)
         record_speaker_identified(
-            session, run_id=rid, decision_id=did, speaker_name="A" * 900
+            session, run_id=rid, decision_id=did, speaker_name="A" * 900, speaker_id=sid
         )
         session.commit()  # a 900-char name must not trip the 500 CHECK
     with session_factory() as session:

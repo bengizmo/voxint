@@ -5,7 +5,9 @@
 {% block cb_breadcrumb %}home{% endblock %}
 {% block cb_summary %}{{ date_summary }} · everything running locally{% endblock %}
 {% block cb_actions %}
+{% if shell.can_write %}
 <a class="cb-btn cb-btn-primary" href="{% if shell.media_enabled %}/media{% else %}/runs#add-media{% endif %}">+ Add media</a>
+{% endif %}
 {% endblock %}
 
 {% block body %}
@@ -45,9 +47,11 @@
 <section class="oc-section" aria-label="Start something">
   <h2 class="oc-section-title">START SOMETHING</h2>
   <div class="start-actions">
+    {% if shell.can_write %}
     <a class="start-btn" href="{% if shell.media_enabled %}/media{% else %}/runs#add-media{% endif %}">Upload a recording</a>
     <a class="start-btn" href="/settings#folders">Watch a folder</a>
-    {% if shell.projects_enabled %}<a class="start-btn" href="/projects">New project</a>{% endif %}
+    {% endif %}
+    {% if shell.projects_enabled and shell.can_write %}<a class="start-btn" href="/projects">New project</a>{% endif %}
     <a class="start-btn" href="/speakers">Review speakers</a>
   </div>
 </section>
@@ -94,6 +98,7 @@
     {# Grouped failures carry a .count and .item; single items are ActivityItem directly. #}
     {% set is_group = entry.count is defined and entry.count > 1 %}
     {% set item = entry.item if is_group else entry %}
+    {% set editor_url = "/media/" ~ item.media_item_id ~ "/editor?run=" ~ item.run_id if item.media_item_id else "/runs/" ~ item.run_id %}
     <div class="recent-row">
       <span class="recent-time" title="{{ item.at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_clock_time(item.at, now=now) }}</span>
       <div class="recent-body">
@@ -102,18 +107,18 @@
         {{ entry.count }} runs failed: {{ nerr.label if nerr else "unknown error" }}
         {% if nerr and nerr.hint %}<br><span class="oc-muted text-sm">{{ nerr.hint }}</span>{% endif %}
         {% elif item.kind == "run_completed" %}
-        Processing finished: <a href="/runs/{{ item.run_id }}">{{ friendly_media_label(item.title, item.source_path) }}</a>{% if item.unresolved_count %} {{ needs_review_chip(item.unresolved_count) }}{% endif %}
+        Processing finished: <a href="{{ editor_url }}">{{ friendly_media_label(item.title, item.source_path) }}</a>{% if item.unresolved_count %} {{ needs_review_chip(item.unresolved_count) }}{% endif %}
         {% elif item.kind == "run_failed" %}
         {% set nerr = normalize_error(item.error) %}
-        Processing failed: <a href="/runs/{{ item.run_id }}">{{ friendly_media_label(item.title, item.source_path) }}</a>
+        Processing failed: <a href="{{ editor_url }}">{{ friendly_media_label(item.title, item.source_path) }}</a>
         {% if nerr %}<br><span class="oc-muted text-sm">{{ nerr.label }}.{% if nerr.hint %} {{ nerr.hint }}{% endif %}</span>{% endif %}
         {% if nerr and nerr.raw != nerr.label %}
         <details class="text-sm"><summary>Details</summary><pre class="error-raw">{{ nerr.raw }}</pre></details>
         {% endif %}
         {% elif item.kind == "run_started" %}
-        Processing started: <a href="/runs/{{ item.run_id }}">{{ friendly_media_label(item.title, item.source_path) }}</a>
+        Processing started: <a href="{{ editor_url }}">{{ friendly_media_label(item.title, item.source_path) }}</a>
         {% elif item.kind == "speaker_enrolled" %}
-        Speaker verified: <a href="/speakers">{{ item.title }}</a>
+        Speaker verified: <a href="/speakers/{{ item.speaker_id }}">{{ item.title }}</a>
         {% elif item.kind == "watch_pickup" %}
         {{ item.pickup_count }} file{{ "s" if item.pickup_count != 1 else "" }} picked up from watched folder {{ item.title }}
         {% endif %}
@@ -121,12 +126,10 @@
       <span class="recent-action">
         {% if is_group %}
         <a href="/runs?view=failed">View all →</a>
-        {% elif item.kind == "run_completed" %}
-        <a href="/review">Review →</a>
         {% elif item.run_id %}
-        <a href="/runs/{{ item.run_id }}">Open →</a>
+        <a href="{{ editor_url }}">Open →</a>
         {% elif item.speaker_id %}
-        <a href="/speakers">Open →</a>
+        <a href="/speakers/{{ item.speaker_id }}">Open →</a>
         {% endif %}
       </span>
     </div>

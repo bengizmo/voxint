@@ -53,6 +53,7 @@ class ActivityItem:
     source_path: str
     run_id: uuid.UUID | None = None
     speaker_id: uuid.UUID | None = None
+    media_item_id: uuid.UUID | None = None
     unresolved_count: int = 0
     error: str | None = None
     pickup_count: int = 0
@@ -98,6 +99,7 @@ def _run_rows(
     )
     columns = [
         PipelineRun.id,
+        PipelineRun.media_item_id,
         PipelineRun.status,
         PipelineRun.sidecar,
         PipelineRun.error,
@@ -140,6 +142,7 @@ def _run_rows(
                 title=title_from_snapshot(row.sidecar) or row.source_title,
                 source_path=row.source_path,
                 run_id=row.id,
+                media_item_id=row.media_item_id,
                 unresolved_count=row.unresolved_count if terminal else 0,
                 error=row.error if terminal else None,
             )
