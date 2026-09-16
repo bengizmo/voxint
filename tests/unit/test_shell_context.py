@@ -40,8 +40,15 @@ def test_console_area_flags_default_off() -> None:
 def test_shell_context_requires_flag_and_route() -> None:
     """An area's links render only when its flag is on AND its routes exist —
     an early flag flip must never advertise a dead /projects link (review)."""
-    on = Settings(database_url="postgresql+psycopg://x/x", console_projects_enabled=True)
-    off = Settings(database_url="postgresql+psycopg://x/x")
+    on = Settings(
+        database_url="postgresql+psycopg://x/x",
+        console_projects_enabled=True,
+        console_palette_enabled=False,
+    )
+    off = Settings(
+        database_url="postgresql+psycopg://x/x",
+        console_palette_enabled=False,
+    )
     assert _shell_template_context(
         _request_with(on, projects_routed=True, media_routed=True)
     ) == {
@@ -54,6 +61,8 @@ def test_shell_context_requires_flag_and_route() -> None:
             "current_user": None,
             "csrf_logout_token": "",
             "can_write": False,
+            "palette_enabled": False,
+            "palette_destinations": [],
         }
     }
     # Flag on, no /projects route registered yet (today's reality): stays dark.
@@ -69,6 +78,8 @@ def test_shell_context_requires_flag_and_route() -> None:
             "current_user": None,
             "csrf_logout_token": "",
             "can_write": False,
+            "palette_enabled": False,
+            "palette_destinations": [],
         }
     }
     # A stale app with no stamp at all fails closed too.
@@ -82,6 +93,8 @@ def test_shell_context_requires_flag_and_route() -> None:
             "current_user": None,
             "csrf_logout_token": "",
             "can_write": False,
+            "palette_enabled": False,
+            "palette_destinations": [],
         }
     }
     assert _shell_template_context(
@@ -96,6 +109,8 @@ def test_shell_context_requires_flag_and_route() -> None:
             "current_user": None,
             "csrf_logout_token": "",
             "can_write": False,
+            "palette_enabled": False,
+            "palette_destinations": [],
         }
     }
 

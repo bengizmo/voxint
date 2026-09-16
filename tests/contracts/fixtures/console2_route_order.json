@@ -318,6 +318,18 @@
     ]
   ],
   [
+    "/palette/entities",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/palette/passages",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/quotes",
     [
       "POST"

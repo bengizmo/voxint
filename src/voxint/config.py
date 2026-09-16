@@ -597,6 +597,12 @@ class Settings(BaseSettings):
     # flag is rollout control, and this slice ships with it off (no version bump).
     console_activity_enabled: bool = False
 
+    # The command palette + global search (Console 2.0 P8, #162). Dark-ship:
+    # off by default; the shell renders the palette pill trigger and registers
+    # the /palette/ routes only when this is on. The island loads lazily on
+    # first interaction (click or Ctrl/Cmd+K).
+    console_palette_enabled: bool = True
+
     # Transcript semantic-search embedding spine (#121). The additive embedding
     # producer reads finished transcript text and writes local vectors — no LLM,
     # no egress, no external cost — so unlike the LLM-coupled capabilities above
