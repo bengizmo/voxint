@@ -830,6 +830,14 @@
     true
   ],
   [
+    "/runs/live-rows",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/runs/progress-strip",
     [
       "GET"

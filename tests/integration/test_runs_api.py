@@ -528,7 +528,7 @@ def test_running_status_chip_shows_stage_progress(
     assert 'class="pill running"' in response.text
     assert (
         'title="Estimated from a default stage duration, there is not enough '
-        'history yet; as of page load"'
+        'history yet; as of last refresh"'
         in response.text
     )
 
@@ -574,7 +574,7 @@ def test_running_status_chip_uses_learned_stage_average(
     assert cell.startswith("Transcribing ~")
     assert 25 <= _percent(cell) <= 27
     assert (
-        'title="Estimated from recent completed attempts of this stage; as of page load"'
+        'title="Estimated from recent completed attempts of this stage; as of last refresh"'
         in body
     )
 
@@ -1416,3 +1416,38 @@ def test_runs_add_media_section_holds_upload_when_url_fetch_disabled(
     assert 'action="/submit"' in section
     assert 'action="/fetch"' not in section
     assert "URL ingestion is disabled." in section
+
+
+def test_list_runs_explicit_ids(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        first = make_run(session, status=RunStatus.RUNNING)
+        second = make_run(session, status=RunStatus.COMPLETED)
+        make_run(session, status=RunStatus.QUEUED)
+        page = list_runs(
+            session,
+            run_ids=[first, second],
+            status=None,
+            review=None,
+            cursor=None,
+            page_size=10,
+            gates=_GATES,
+        )
+        assert {item.run_id for item in page.items} == {first, second}
+        assert not list_runs(
+            session, run_ids=[], status=None, review=None, cursor=None, page_size=10, gates=_GATES
+        ).items
+        run = session.get(PipelineRun, second)
+        assert run is not None
+        run.archived_at = datetime.now(UTC)
+        session.commit()
+        page = list_runs(
+            session,
+            run_ids=[first, second],
+            archived=True,
+            status=None,
+            review=None,
+            cursor=None,
+            page_size=10,
+            gates=_GATES,
+        )
+        assert [item.run_id for item in page.items] == [second]

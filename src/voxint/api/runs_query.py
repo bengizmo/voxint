@@ -16,6 +16,7 @@ never drop or duplicate a row (``id`` breaks the tie).
 import base64
 import enum
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -473,12 +474,15 @@ def list_runs(
     filters: SearchFilters | None = None,
     archived: bool = False,
     gates: MatchingGates,
+    run_ids: Sequence[uuid.UUID] | None = None,
 ) -> RunsPage:
     """One bounded, newest-first keyset page of runs matching the filters.
 
     ``archived`` selects the soft-archive view (issue #5): ``False`` (default)
     hides archived runs entirely; ``True`` shows ONLY archived runs. Applied as a
     plain predicate before the keyset clause so pagination walks the chosen set.
+    ``run_ids`` narrows that set; None is unrestricted, an empty sequence
+    matches nothing.
     """
     claim_live = and_(
         PipelineRun.review_claim_expires_at.isnot(None),
@@ -684,6 +688,9 @@ def list_runs(
                 filters.created_to + timedelta(days=1), datetime.min.time(), tzinfo=UTC
             )
         )
+
+    if run_ids is not None:
+        stmt = stmt.where(PipelineRun.id.in_(run_ids))
 
     if cursor is not None:
         stmt = stmt.where(

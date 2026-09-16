@@ -1,0 +1,13 @@
+{#- Hidden poller for the live run rows (#496).
+
+   Rendered once by runs.html when the page has queued or running rows, and
+   re-rendered by every /runs/live-rows response. Without live ids it carries
+   no hx-get/hx-trigger, so replacing the previous poller with it stops the
+   polling; with them it keeps polling at the adaptive interval.
+-#}
+{% macro poller(live_ids, poll_seconds) -%}
+<div id="runs-live" hidden{% if live_ids %}
+     hx-get="/runs/live-rows?ids={{ live_ids|join(',') }}"
+     hx-trigger="every {{ poll_seconds }}s"
+     hx-swap="outerHTML"{% endif %}></div>
+{%- endmacro %}

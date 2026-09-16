@@ -984,6 +984,13 @@
     .gt-row.is-selected > * { background: rgba(79,192,181,.04); }
     .gt-row.is-needs-human > * { background: rgba(227,179,65,.04); }
     .gt-row.is-machine-active > * { background: rgba(107,167,221,.04); }
+    /* Live-row completion flash (#496): a row that finished between polls is
+       swapped in with this class so the eye catches the change. The row is
+       display: contents, so the fade runs on its cells; reduced motion shows no
+       flash rather than a tint that would never clear. */
+    @keyframes gt-row-finished { from { background: var(--accent-soft); } to { background: transparent; } }
+    .gt-row.is-just-finished > * { animation: gt-row-finished 2.5s ease-out; }
+    @media (prefers-reduced-motion: reduce) { .gt-row.is-just-finished > * { animation: none; } }
 
     /* Runs page: collapsible filter and aux-jobs disclosures (#381). */
     details.runs-filters { margin: .6rem 0; }
