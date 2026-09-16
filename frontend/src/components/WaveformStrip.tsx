@@ -301,7 +301,11 @@ export function WaveformStrip({
         anchorTime: relX * peaks.duration,
         isDragging: false,
       };
-      canvas.setPointerCapture(event.pointerId);
+      try {
+        canvas.setPointerCapture(event.pointerId);
+      } catch {
+        // Synthetic events in test harnesses have no active pointer.
+      }
     },
     [peaks.duration, width],
   );
