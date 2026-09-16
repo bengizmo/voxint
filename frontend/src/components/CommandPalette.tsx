@@ -24,6 +24,7 @@ import {
   rowAt,
   totalRows,
 } from "../lib/palette";
+import { getRecentPages } from "../lib/recent-pages";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -60,8 +61,13 @@ export function CommandPalette({
   // Filter commands by query.
   const filtered = filterCommands(allCommands, query);
 
+  // Show recent pages only when the query is empty.
+  const recentPages = query.trim() === ""
+    ? getRecentPages().filter((p) => p.href !== window.location.pathname)
+    : undefined;
+
   // Build row groups.
-  const groups: RowGroup[] = buildRows(filtered, entities, passages);
+  const groups: RowGroup[] = buildRows(filtered, entities, passages, recentPages);
   const count = totalRows(groups);
 
   // ---------------------------------------------------------------------------

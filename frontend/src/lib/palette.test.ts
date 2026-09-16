@@ -145,6 +145,30 @@ describe("buildRows", () => {
     expect(buildRows([], [], [])).toHaveLength(0);
   });
 
+  it("prepends a Recent group when recentPages is provided", () => {
+    const recent = [
+      { label: "Settings", href: "/settings" },
+      { label: "Speakers", href: "/speakers" },
+    ];
+    const groups = buildRows(cmds, [], [], recent);
+    expect(groups[0].label).toBe("Recent");
+    expect(groups[0].rows).toHaveLength(2);
+    expect(groups[0].rows[0].type).toBe("recent");
+    expect(groups[1].label).toBe("Commands");
+  });
+
+  it("assigns sequential ids across recent and command groups", () => {
+    const recent = [{ label: "Settings", href: "/settings" }];
+    const groups = buildRows(cmds, [], [], recent);
+    expect(groups[0].rows[0].id).toBe("palette-opt-0");
+    expect(groups[1].rows[0].id).toBe("palette-opt-1");
+  });
+
+  it("omits Recent group when recentPages is empty", () => {
+    const groups = buildRows(cmds, [], [], []);
+    expect(groups[0].label).toBe("Commands");
+  });
+
   it("totalRows counts across groups", () => {
     const groups = buildRows(cmds, [], []);
     expect(totalRows(groups)).toBe(2);
