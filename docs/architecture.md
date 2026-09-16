@@ -933,15 +933,16 @@ subsystem and adds no page routing.
   diarization-turn and transcript-segment labels, so even a transcript-only
   label (a segment whose label has no turn) gets a color. Both the transcript
   route and `_workbench_context` derive the palette from that same universe, so a
-  label's color agrees across the transcript page, the JS-off fallback, and the
-  workbench label cards. The
+  label's color agrees across the transcript page, the JS-off fallback, the
+  workbench label cards, and the walk/editing segment header. The
   color is rendered identically on every surface as a `spk-N` class → a CSS
   left-border accent (light/dark variants in `base.html`), and it is
   **supplemental only**: the speaker's display name (`<strong>` prefix on each
-  transcript row) is the primary, non-color identity cue (accessibility: never
-  color alone). The raw diarization label (`.spk-badge`) is shown on the
-  workbench and label cards but not on the editor transcript rows, where it
-  duplicated the display name.
+  transcript row and in the segment header's `.me-speaker-identity` group) is
+  the primary, non-color identity cue (accessibility: never color alone). The
+  raw diarization label (`.spk-badge`) is shown on the workbench, label cards,
+  and the segment header (when it differs from the display name) but not on the
+  editor transcript rows, where it duplicated the display name.
 
 ## Worker orchestration (P3)
 
