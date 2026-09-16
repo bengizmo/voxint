@@ -794,6 +794,15 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   `record_decision`, `apply_merge`, and `enroll_new_speaker` so the immutable
   ledger carries per-user attribution. See
   [operations.md](operations.md#multi-user-authentication) for setup.
+  The template layer enforces a second gate via `shell.can_write`, a boolean
+  in the shell context processor (`deps._shell_template_context`): `True` for
+  admin and reviewer, `False` for viewer and unauthenticated. Templates wrap
+  mutation controls (upload, claim, edit, delete, archive buttons and forms) in
+  `{% if shell.can_write %}` so viewers see a clean read-only console without
+  controls that would 403 on click. The editor island derives its own read-only
+  state from the claim token (viewers cannot obtain one). OOB htmx fragment
+  renders in `speakers.py` inject `shell` manually because they bypass the
+  normal template context.
   Startup refuses to bind off-loopback with the default password.
 - **Response headers**: one shared middleware seam (`_apply_security_headers`)
   stamps a deliberately minimal set on every response, and re-applies it on an

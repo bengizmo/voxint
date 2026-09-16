@@ -20,7 +20,7 @@ starting point, not a verified record.</p>
 </p>
 {% elif assets.source_problem %}
 <p class="muted">{{ assets.source_problem }}</p>
-{% else %}
+{% elif shell.can_write %}
 <form class="inline" method="post" action="/runs/{{ assets.run_id }}/assets/generate"
       hx-post="/runs/{{ assets.run_id }}/assets/generate"
       hx-target="#run-assets-{{ assets.run_id }}" hx-swap="outerHTML">
@@ -50,6 +50,7 @@ starting point, not a verified record.</p>
     {% if entry.job.started_at %}· started {{ entry.job.started_at.strftime("%Y-%m-%d %H:%M") }}
     {% else %}· queued {{ entry.job.created_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}
   </p>
+  {% if shell.can_write %}
   <form class="inline" method="post"
         action="/runs/{{ assets.run_id }}/assets/{{ entry.job.id }}/cancel"
         hx-post="/runs/{{ assets.run_id }}/assets/{{ entry.job.id }}/cancel"
@@ -57,6 +58,7 @@ starting point, not a verified record.</p>
     <input type="hidden" name="csrf_token" value="{{ csrf_assets_cancel }}">
     <button type="submit">Cancel</button>
   </form>
+  {% endif %}
   {% endif %}
 
   {% if entry.asset %}
@@ -104,7 +106,7 @@ starting point, not a verified record.</p>
   <p class="muted">Not generated yet.</p>
   {% endif %}
 
-  {% if assets.gates_open and not entry.job_active and not assets.source_problem %}
+  {% if assets.gates_open and not entry.job_active and not assets.source_problem and shell.can_write %}
   <form class="inline" method="post" action="/runs/{{ assets.run_id }}/assets/generate"
         hx-post="/runs/{{ assets.run_id }}/assets/generate"
         hx-target="#run-assets-{{ assets.run_id }}" hx-swap="outerHTML">

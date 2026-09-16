@@ -63,6 +63,7 @@ from voxint.db.models import (
     ResearchJob,
     ResearchJobStatus,
     Speaker,
+    UserRole,
 )
 from voxint.enrichment.queries import (
     CandidateState,
@@ -104,6 +105,14 @@ from voxint.speakers.roster import (
 from voxint.speakers.tiers import evidence_for, tier_for
 
 logger = logging.getLogger(__name__)
+
+
+def _oob_shell(request: Request) -> dict[str, Any]:
+    """Minimal ``shell`` dict for OOB fragment renders that bypass the normal
+    template context. Only ``can_write`` is needed by the gated templates."""
+    cu = getattr(request.state, "current_user", None)
+    return {"can_write": cu is not None and cu.role != UserRole.VIEWER.value}
+
 
 router = APIRouter(dependencies=[Depends(require_onboarded)])
 
@@ -665,15 +674,19 @@ def decide_profile_candidate(
         # 303 re-renders the whole page.
         if not request.headers.get("HX-Request"):
             return RedirectResponse(f"/speakers/{speaker.id}", status_code=303)
+        shell = _oob_shell(request)
         research_html = templates.env.get_template("speakers/research.html").render(
             research=_research_state(
                 session, request.app.state.settings, speaker, include_aliases=True
             ),
             research_qs=_research_qs(request),
+            shell=shell,
             **_research_csrf(request),
         )
         panel_html = templates.env.get_template("speakers/profile_panel.html").render(
-            _profile_panel_context(request, session, speaker), profile_oob=True
+            _profile_panel_context(request, session, speaker),
+            profile_oob=True,
+            shell=shell,
         )
         return HTMLResponse(research_html + panel_html)
     return _research_response(request, session, speaker)

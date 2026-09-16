@@ -1779,9 +1779,13 @@ rejected. Passwords are hashed with Argon2id.
 Admins and reviewers can claim runs, make decisions, enroll speakers, and
 export transcripts. Viewers can browse transcripts, results, and exports, but
 cannot submit media, adjudicate, correct, annotate, or change settings. This is
-enforced server-side for console and API mutation routes. Migration 0057 adds
-the `viewer` value to the database role constraint. The Settings page
-(`/settings`) and plugin mutation routes
+enforced at two layers: a server-side write guard (403 on any POST/PUT/PATCH/DELETE
+from a viewer), and template-level gating that hides mutation controls (upload
+buttons, claim forms, edit/delete/archive actions, inline editors) so viewers see
+a clean read-only console without buttons that would fail on click. The editor
+island also derives read-only state from the claim token, which viewers cannot
+obtain. Migration 0057 adds the `viewer` value to the database role constraint.
+The Settings page (`/settings`) and plugin mutation routes
 (synthdetect settings toggle, manual scoring trigger) are restricted to
 admins.
 

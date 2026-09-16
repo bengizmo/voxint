@@ -622,7 +622,11 @@ def decide(
         and speaker_id != prior_speaker_id  # effective attribution actually changed
     ):
         record_speaker_identified(
-            session, run_id=run_id, decision_id=row.id, speaker_name=speaker.display_name
+            session,
+            run_id=run_id,
+            decision_id=row.id,
+            speaker_name=speaker.display_name,
+            speaker_id=speaker.id,
         )
     return _labels_response(request, session, run)
 
@@ -899,7 +903,11 @@ def relabel_segment(
         and speaker is not None
     ):
         record_speaker_identified(
-            session, run_id=run_id, decision_id=row.id, speaker_name=speaker.display_name
+            session,
+            run_id=run_id,
+            decision_id=row.id,
+            speaker_name=speaker.display_name,
+            speaker_id=speaker.id,
         )
     return _run_reconcile_response(session, run_id)
 
@@ -1144,6 +1152,7 @@ def enroll(
                 run_id=run_id,
                 decision_id=enrollment.decision_id,
                 speaker_name=enrolled.display_name,
+                speaker_id=enrolled.id,
             )
     undo = None
     if not is_replay:

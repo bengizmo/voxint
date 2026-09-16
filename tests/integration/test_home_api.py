@@ -271,7 +271,7 @@ def test_home_activity_feed_lists_runs_and_speakers(
     assert "Processing finished" in body
     assert "Processing failed" in body
     assert "Speaker verified" in body
-    assert re.search(r'href="/speakers">(Alice|Bob)</a>', body)
+    assert re.search(r'href="/speakers/[^"]+?">(Alice|Bob)</a>', body)
     # Newest first: the seeded speakers (enrolled last) render before the
     # 3-day-old failed run's entry.
     assert body.index("Speaker verified") < body.index("Processing failed")

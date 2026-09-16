@@ -22,10 +22,10 @@
    split; it is NOT nested inside .lib-two-col (that double-nesting caused
    the rail to collapse at desktop widths, see #370). #}
 
-<div class="editor-meta">
+<div class="editor-meta" aria-label="Media metadata">
   <div class="card">
-    <h3>Media</h3>
-    <dl class="oc-meta-list">
+    <h2>Media</h2>
+    <dl class="oc-meta-list" aria-label="File details">
       <dt>File</dt>
       <dd title="{{ detail.media.source_path }}">{{ media_label }}</dd>
       {% if detail.media.duration_seconds is not none %}
@@ -41,12 +41,12 @@
 
   {% if detail.chooser %}
   <div class="card">
-    <h3>{% if selected_run %}Run{% else %}Runs{% endif %}</h3>
+    <h2>{% if selected_run %}Run{% else %}Runs{% endif %}</h2>
     {% if selected_run %}
-    <dl class="oc-meta-list">
+    <dl class="oc-meta-list" aria-label="Run details">
       <dt>Status</dt>
       <dd>
-        <span class="chip {{ selected_run.status }}">{{ selected_run.status }}</span>
+        <span class="chip {{ selected_run.status }}" role="status">{{ selected_run.status }}</span>
         {% if selected_run.current_stage %}
           <span class="muted text-sm">{{ selected_run.current_stage }}</span>
         {% endif %}
@@ -110,7 +110,7 @@
     <details class="mt-2">
       <summary class="text-sm muted">Other runs ({{ other_runs }})</summary>
     {% endif %}
-      <ul class="run-chooser">
+      <ul class="run-chooser" aria-label="Available runs">
         {% for entry in detail.chooser %}
         {% if not selected_run or entry.id != selected_run.id %}
         <li>
@@ -134,13 +134,14 @@
 {% if selected_run and island_props %}
   {# Media editor island (#157). The server-rendered table inside is the
      JS-off / hydration-failure fallback. #}
-  <div data-island="media-editor" data-props='{{ island_props|tojson }}'>
+  <div data-island="media-editor" data-props='{{ island_props|tojson }}' role="region" aria-label="Transcript editor">
     <div class="card" id="transcript-document">
       {% if not token %}
-      <p class="notice">Read-only view. Claim this run to edit.</p>
+      <p class="notice" role="status">Read-only view. Claim this run to edit.</p>
       {% endif %}
 
       <table class="grid-table transcript-table">
+        <caption class="visually-hidden">Transcript</caption>
         <thead>
           <tr>
             <th>Time</th>

@@ -12,6 +12,7 @@
   <a href="/speakers?sort={{ sort }}&view={{ value }}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
   {% endfor %}
 </nav>
+{% if shell.can_write %}
 <details class="spk-create-dd" ontoggle="if(this.open)this.querySelector('input[type=text]').focus()">
   <summary class="cb-btn cb-btn-primary">+ New speaker</summary>
   <form class="spk-create-form" method="post" action="/speakers?{{ "sort=" ~ sort ~ "&view=" ~ view }}"
@@ -23,6 +24,7 @@
     <button type="submit" class="cb-btn cb-btn-primary">Add</button>
   </form>
 </details>
+{% endif %}
 {% endblock %}
 
 {% block body %}

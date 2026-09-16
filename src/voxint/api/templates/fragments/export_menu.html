@@ -11,7 +11,7 @@
 {% set stem = "voxint-" ~ run.id.hex[:8] %}
 {% set read_variant = "&text=" ~ text_variant.value if text_variant else "" %}
 <div class="export-menu" id="export-menu" tabindex="-1">
-  <details>
+  <details aria-label="Download transcript">
     <summary class="btn-download">Download transcript</summary>
     <div class="export-dropdown">
       <p class="muted text-sm">
@@ -21,7 +21,7 @@
       <p class="my-1">
         <a href="/runs/{{ run.id }}/transcript?read=1&amp;timestamps=false{{ read_variant }}">Read on screen</a>
       </p>
-      <ul class="export-format-list">
+      <ul class="export-format-list" aria-label="Export formats">
         <li>
           <a href="/review/{{ run.id }}/export.txt?text=corrected&amp;timestamps=false" download="{{ stem }}.txt">
             Reading copy <code>.txt</code>
@@ -72,7 +72,7 @@
         </li>
       </ul>
       {% for tr in translations or [] %}
-      <details class="export-translated">
+      <details class="export-translated" aria-label="Translated: {{ tr.label }}">
         <summary class="text-sm">Translated: {{ tr.label }}</summary>
         <ul class="export-format-list">
           <li>
@@ -103,7 +103,7 @@
         </ul>
       </details>
       {% endfor %}
-      <details class="export-variants">
+      <details class="export-variants" aria-label="Other text variants">
         <summary class="text-sm">Other text variants</summary>
         <p class="muted text-sm">
           <strong>Reviewed</strong> is the text as you approved it.

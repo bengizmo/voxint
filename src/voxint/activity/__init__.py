@@ -100,7 +100,7 @@ def resolve_run_completed_snapshot(session: Session, run_id: uuid.UUID) -> tuple
     if title is None and run.media_item.source_metadata is not None:
         title = run.media_item.source_metadata.title
     label = friendly_media_label(title, run.media_item.source_path)
-    return (label, f"/runs/{run_id}")
+    return (label, f"/media/{run.media_item_id}/editor?run={run_id}")
 
 
 def record_run_completed(session: Session, run_id: uuid.UUID) -> None:
@@ -122,6 +122,7 @@ def record_speaker_identified(
     run_id: uuid.UUID,
     decision_id: uuid.UUID,
     speaker_name: str,
+    speaker_id: uuid.UUID,
 ) -> None:
     """Emit one speaker-identification event (caller's tx).
 
@@ -138,7 +139,7 @@ def record_speaker_identified(
         occurrence_key=f"decision:{decision_id}:identified",
         pipeline_run_id=run_id,
         title=speaker_name,
-        href=f"/runs/{run_id}",
+        href=f"/speakers/{speaker_id}",
     )
 
 
