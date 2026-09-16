@@ -6,6 +6,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+
+## [0.40.0] - 2026-09-16
+
 ### Fixed
 - **Home feed links point to the editor.** "Processing finished", "started", and
   "failed" entries on the home page now link to `/media/{id}/editor` instead of
@@ -24,6 +27,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   to on; the palette no longer requires an opt-in environment variable.
 
 ### Added
+- **Command palette and global search** (#162). Ctrl/Cmd+K (or click the search
+  pill in the command bar) opens a palette that searches commands (sidebar
+  destinations and per-page actions), entities (media recordings, speakers,
+  projects by name), and transcript passages (semantic + lexical, linking into
+  the editor at the matched timestamp). The island loads lazily on first
+  interaction. Enabled by default.
+
 - **Jobs page live rows** (#496). Queued and running jobs refresh their status,
   stage progress, and processing time automatically. Finished rows briefly
   highlight, then stop polling. Pages without live rows make no row refresh
@@ -48,12 +58,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [0.39.0] - 2026-09-15
 
 ### Added
-- **Command palette and global search** (#162). Ctrl/Cmd+K (or click the search
-  pill in the command bar) opens a palette that searches commands (sidebar
-  destinations and per-page actions), entities (media recordings, speakers,
-  projects by name), and transcript passages (semantic + lexical, linking into
-  the editor at the matched timestamp). The island loads lazily on first
-  interaction. Dark-shipped behind `CONSOLE_PALETTE_ENABLED`.
 - **Project hard delete** (#488). Permanently delete an archived project from a
   confirmation page that shows what will be destroyed (learned corrections,
   saved quotes, analysis artifacts) and what will survive (folders become
@@ -4336,7 +4340,9 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.38.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.40.0...HEAD
+[0.40.0]: https://github.com/bengizmo/voxint/compare/v0.39.0...v0.40.0
+[0.39.0]: https://github.com/bengizmo/voxint/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/bengizmo/voxint/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/bengizmo/voxint/compare/v0.36.1...v0.37.0
 [0.36.1]: https://github.com/bengizmo/voxint/compare/v0.36.0...v0.36.1

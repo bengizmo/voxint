@@ -65,11 +65,11 @@ a product bug):
 
 1. `browser_navigate http://admin:e2epass@127.0.0.1:8099/` then
    `browser_navigate http://127.0.0.1:8099/runs`.
-2. Open the seeded run's workbench (`/runs/<RUN_ID>`), click **Review** →
-   `/review/<RUN_ID>`, click **Claim for review** (the token lands in the URL as
-   `?token=…`), then follow **Review transcript →** to
-   `/review/<RUN_ID>/transcript?token=…`. The `review-stepper` island mounts
-   here (`[data-island="review-stepper"]`).
+2. Open the seeded run's workbench (`/runs/<RUN_ID>`), click **Review** — it
+   auto-claims the run and lands directly on the media editor page at
+   `/media/<MEDIA_ID>/editor?run=<RUN_ID>&token=…`. The `MediaEditor` island
+   handles the transcript walk, verify/edit/skip/replay controls, speaker rail,
+   waveform strip, and provenance all in one page.
 
 First assert the seeded confidence signal renders: exactly **two**
 `.tp-uncertain-chip` (segments 1 and 3, confidence 0.42 / 0.31 < the 0.6
@@ -101,8 +101,8 @@ touch the network:
 - **click-to-edit:** click a transcript line
   (`p.tp-line:has-text("<line text>")`) → the edit textarea
   (`aria-label="Corrected transcript text for this segment"`) loads that
-  segment's text and "Reviewing segment at X.XXs" updates. Verified lines are
-  re-reachable this way.
+  segment's text and "Cursor on segment at X.X seconds, speaker SN" updates.
+  Verified lines are re-reachable this way.
 - **discard warning (warn-then-advance):** with a segment loaded, type into the
   textarea (makes it dirty), press **Escape** to blur (the keymap is suppressed
   while the textarea has focus), then press `v` → the `p[role="alert"]` "You have
@@ -140,23 +140,9 @@ tests stay green without this, so assert it in the browser:
   domain pack (1)" is present in the current-segment header. It is **not** the
   `.spk-badge` "edited" chip (that one appears only after an operator save) — the two
   are different affordances. Click the chip → its `aria-expanded` flips to `true` and
-  the `#review-provenance-body` list shows the rule `everyone → everybody`.
+  the `#editor-provenance-body` list shows the rule `everyone → everybody`.
 - **Marker absent on an untouched segment.** Move to segment 2 (high-confidence, no
   correction): **no** `.tp-corrected-chip` in the header.
-- **Raw one action away.** On segment 0, click **"▸ Original (raw) transcript"** →
-  `#review-raw-body` reveals a readOnly textarea whose value is the raw
-  `Good morning everyone, thanks for joining.` (the corrected `everybody` is in the
-  edit box; raw still says `everyone`). Click **"Reset edit to raw"** → the edit
-  textarea's value becomes the raw text, and **no** `/text` or `/verify` request
-  fires (reset populates the box only; nothing persists until Save). Click **"Copy
-  raw text"** → the polite status line reports success or the honest
-  clipboard-unavailable fallback (headless Chromium may lack clipboard permission;
-  either message is acceptable — assert one of them renders, never a false success).
-- **Reconciliation panel.** In the review header, the **"Correction rules — 1 of 2
-  applied, 1 never fired"** toggle is present; expand it → the
-  `#review-reconciliation-body` list shows `everyone → everybody` with an "applied ·
-  1 segment" badge and `quarterly synergies → Q3 results` with a "never fired" badge,
-  plus the `vocabulary` remediation note.
 - **Operator edit supersedes provenance.** With segment 0 focused, type a genuine
   correction into the edit box and save (`ControlOrMeta+Enter`) → one `POST …/text`
   (200), and the `.tp-corrected-chip` marker is now **gone** from the header (the
@@ -165,7 +151,7 @@ tests stay green without this, so assert it in the browser:
 
 Note: `aria-current` on `p.tp-line` tracks the audio **playback** highlight, not
 the review cursor — assert the review cursor via the edit box's value and the
-"Reviewing segment at …" line, not `aria-current` (which stays put when the
+"Cursor on segment at …" line, not `aria-current` (which stays put when the
 headless browser cannot play the audio element).
 
 ### Waveform strip (#57)
@@ -181,7 +167,7 @@ regions. Assert:
 - **Region click → selection (+ seek):** via `browser_evaluate`, compute the
   midpoint x of segment 2's span
   (`(2.5 * 5.0 / duration) * canvas.getBoundingClientRect().width`) and
-  dispatch a click there → "Reviewing segment at 10.00s" appears, the
+  dispatch a click there → "Cursor on segment at 10.0 seconds, speaker S0" appears, the
   container's `data-cursor-index` is `2`, and (instrumented as for `p` above)
   the audio element's `currentTime` lands inside `[10, 15)`. **No** `/verify`
   or `/text` request fires — a region click is selection + playback, never a
@@ -226,9 +212,9 @@ the rail mounts as `[aria-label="Speaker rail"]`. Assert, in order:
   disclosure "Why no match?". Open S1's "Why this match?": the text carries the
   raw numbers (0.65 / 0.12 / 0.80) and no percent sign.
 - **Hear this voice.** Instrument `play()` as for `p`, click S1's button → one
-  `play()` call at `currentTime` 10 (S1's first line), the walk line reads
-  "Cursor on segment at 10.0 seconds, speaker S1", and **no** `/labels/` or
-  `/segments/` request fires.
+  `play()` call at `currentTime` 10 (S1's first line), the `[aria-live="polite"]`
+  line reads "Cursor on segment at 10.0 seconds, speaker S1", and **no** `/labels/`
+  or `/segments/` request fires.
 - **Confirm.** Click S1's Confirm → exactly one `POST …/labels/S1/decision`
   (200); S1 moves to `Your rulings`, the summary drops to "4 voices need you…",
   and the transcript lines for S1 now read "Blair Roster:". Repeat on S5 (the
