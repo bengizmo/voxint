@@ -14,7 +14,10 @@ import { useModalDialog } from "../lib/dialog";
 import {
   type EntityItem,
   type PaletteCommand,
+  type PassageItem,
+  type PassageState,
   type RowGroup,
+  PASSAGE_STATE_COPY,
   buildRows,
   filterCommands,
   isPaletteChord,
@@ -47,6 +50,8 @@ export function CommandPalette({
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [entities, setEntities] = useState<EntityItem[]>([]);
+  const [passages, setPassages] = useState<PassageItem[]>([]);
+  const [passagesState, setPassagesState] = useState<PassageState>("idle");
 
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -57,22 +62,27 @@ export function CommandPalette({
   // Filter commands by query.
   const filtered = filterCommands(allCommands, query);
 
-  // Build row groups. Slice 3 will add passages here.
-  const groups: RowGroup[] = buildRows(filtered, entities, []);
+  // Build row groups.
+  const groups: RowGroup[] = buildRows(filtered, entities, passages);
   const count = totalRows(groups);
 
   // ---------------------------------------------------------------------------
   // Modal dialog lifecycle
   // ---------------------------------------------------------------------------
 
+  // Shared close handler: reset all state.
+  const closePalette = useCallback(() => {
+    setOpen(false);
+    setQuery("");
+    setActiveIndex(0);
+    setEntities([]);
+    setPassages([]);
+    setPassagesState("idle");
+  }, []);
+
   useModalDialog({
     open,
-    onClose: useCallback(() => {
-      setOpen(false);
-      setQuery("");
-      setActiveIndex(0);
-      setEntities([]);
-    }, []),
+    onClose: closePalette,
     panelRef,
     initialFocusRef: inputRef,
     inertSelector: ".app-shell",
@@ -115,6 +125,48 @@ export function CommandPalette({
   }, [open, query]);
 
   // ---------------------------------------------------------------------------
+  // Passage search (debounced fetch, independent of entity fetch)
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!open) return;
+    const trimmed = query.trim();
+    if (trimmed.length < 2) {
+      setPassages([]);
+      setPassagesState("idle");
+      return;
+    }
+
+    setPassagesState("loading");
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      apiFetch(`/palette/passages?q=${encodeURIComponent(trimmed)}`, {
+        signal: controller.signal,
+      })
+        .then((res) => res.json())
+        .then(
+          (data: { state: string; items: PassageItem[] }) => {
+            setPassagesState(data.state as PassageState);
+            if (data.state === "ok") {
+              setPassages(data.items);
+            } else {
+              setPassages([]);
+            }
+          },
+        )
+        .catch(() => {
+          // AbortError or network failure -- silently degrade.
+          setPassagesState("idle");
+        });
+    }, 150);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [open, query]);
+
+  // ---------------------------------------------------------------------------
   // Global Ctrl/Cmd+K toggle
   // ---------------------------------------------------------------------------
 
@@ -124,18 +176,16 @@ export function CommandPalette({
         event.preventDefault();
         setOpen((prev) => {
           if (prev) {
-            // Closing: reset state.
-            setQuery("");
-            setActiveIndex(0);
-            setEntities([]);
+            closePalette();
+            return false;
           }
-          return !prev;
+          return true;
         });
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [closePalette]);
 
   // ---------------------------------------------------------------------------
   // Keyboard navigation inside the dialog
@@ -159,10 +209,7 @@ export function CommandPalette({
         event.preventDefault();
         const row = rowAt(groups, activeIndex);
         if (row) {
-          setOpen(false);
-          setQuery("");
-          setActiveIndex(0);
-          setEntities([]);
+          closePalette();
           window.location.assign(row.href);
         }
         break;
@@ -197,10 +244,7 @@ export function CommandPalette({
 
   const onBackdropClick = (e: React.MouseEvent) => {
     if (e.target === e.currentTarget && backdropDownRef.current) {
-      setOpen(false);
-      setQuery("");
-      setActiveIndex(0);
-      setEntities([]);
+      closePalette();
     }
     backdropDownRef.current = false;
   };
@@ -322,10 +366,7 @@ export function CommandPalette({
                         }
                       }}
                       onClick={() => {
-                        setOpen(false);
-                        setQuery("");
-                        setActiveIndex(0);
-                        setEntities([]);
+                        closePalette();
                         window.location.assign(row.href);
                       }}
                     >
@@ -339,8 +380,25 @@ export function CommandPalette({
                   ))}
                 </div>
               ))}
-              {count === 0 && query.trim() && (
+              {count === 0 && query.trim() && passagesState !== "loading" && (
                 <div className="palette-empty">No results</div>
+              )}
+              {/* Passage state notices */}
+              {PASSAGE_STATE_COPY[passagesState] && (
+                <div className="palette-status">
+                  {PASSAGE_STATE_COPY[passagesState]}
+                </div>
+              )}
+              {/* "See all in Explore" link when passages are showing */}
+              {passages.length > 0 && query.trim() && (
+                <div className="palette-status">
+                  <a
+                    href={`/explore?q=${encodeURIComponent(query.trim())}`}
+                    style={{ color: "var(--accent)" }}
+                  >
+                    See all results in Explore
+                  </a>
+                </div>
               )}
             </div>
           </div>
