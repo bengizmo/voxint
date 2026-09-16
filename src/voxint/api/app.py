@@ -73,6 +73,7 @@ from voxint.api.routers.legacy_runs import (
     tail_router as runs_tail_router,
 )
 from voxint.api.routers.media import router as media_router
+from voxint.api.routers.palette import router as palette_router
 from voxint.api.routers.projects import router as projects_router
 from voxint.api.routers.quotes import router as quotes_router
 from voxint.api.routers.settings import _settings_context, _settings_page_template, setup_router
@@ -566,6 +567,11 @@ def _register_routes(app: FastAPI) -> None:
     # term stats, and word cloud across the transcript corpus. The /search
     # route is retained in legacy_runs but redirects here for continuity.
     console.include_router(explore_router)
+
+    # ---- Command palette search (#162): entity search JSON endpoint.
+    # Gated on the palette flag so the routes stay dark until the flag is on.
+    if app.state.settings.console_palette_enabled:
+        console.include_router(palette_router)
 
     # ---- Quote board (issue #338, Phase 6): save/manage/export KWIC evidence.
     console.include_router(quotes_router)

@@ -2,14 +2,17 @@
  * Command palette island (#162): unified search + command palette.
  *
  * Slice 1: commands group (navigation destinations + per-page actions).
- * Slice 2 will add entity search; Slice 3, semantic transcript passages.
+ * Slice 2: entity search (media, speakers, projects).
+ * Slice 3 will add semantic transcript passages.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { apiFetch } from "../lib/api-client";
 import { useModalDialog } from "../lib/dialog";
 import {
+  type EntityItem,
   type PaletteCommand,
   type RowGroup,
   buildRows,
@@ -43,6 +46,7 @@ export function CommandPalette({
   const [open, setOpen] = useState(initialOpen);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  const [entities, setEntities] = useState<EntityItem[]>([]);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -53,8 +57,8 @@ export function CommandPalette({
   // Filter commands by query.
   const filtered = filterCommands(allCommands, query);
 
-  // Build row groups. Slices 2-3 will pass entity/passage arrays here.
-  const groups: RowGroup[] = buildRows(filtered, [], []);
+  // Build row groups. Slice 3 will add passages here.
+  const groups: RowGroup[] = buildRows(filtered, entities, []);
   const count = totalRows(groups);
 
   // ---------------------------------------------------------------------------
@@ -67,11 +71,48 @@ export function CommandPalette({
       setOpen(false);
       setQuery("");
       setActiveIndex(0);
+      setEntities([]);
     }, []),
     panelRef,
     initialFocusRef: inputRef,
     inertSelector: ".app-shell",
   });
+
+  // ---------------------------------------------------------------------------
+  // Entity search (debounced fetch)
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!open) return;
+    const trimmed = query.trim();
+    if (trimmed.length < 2) {
+      setEntities([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      apiFetch(`/palette/entities?q=${encodeURIComponent(trimmed)}`, {
+        signal: controller.signal,
+      })
+        .then((res) => res.json())
+        .then((data: { state: string; items: EntityItem[] }) => {
+          if (data.state === "ok") {
+            setEntities(data.items);
+          } else {
+            setEntities([]);
+          }
+        })
+        .catch(() => {
+          // AbortError or network failure -- silently degrade.
+        });
+    }, 150);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [open, query]);
 
   // ---------------------------------------------------------------------------
   // Global Ctrl/Cmd+K toggle
@@ -86,6 +127,7 @@ export function CommandPalette({
             // Closing: reset state.
             setQuery("");
             setActiveIndex(0);
+            setEntities([]);
           }
           return !prev;
         });
@@ -120,6 +162,7 @@ export function CommandPalette({
           setOpen(false);
           setQuery("");
           setActiveIndex(0);
+          setEntities([]);
           window.location.assign(row.href);
         }
         break;
@@ -157,6 +200,7 @@ export function CommandPalette({
       setOpen(false);
       setQuery("");
       setActiveIndex(0);
+      setEntities([]);
     }
     backdropDownRef.current = false;
   };
@@ -281,6 +325,7 @@ export function CommandPalette({
                         setOpen(false);
                         setQuery("");
                         setActiveIndex(0);
+                        setEntities([]);
                         window.location.assign(row.href);
                       }}
                     >
