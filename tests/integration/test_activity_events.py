@@ -74,7 +74,8 @@ def test_completed_emits_one_row(session_factory: sessionmaker[Session]) -> None
         row = rows[0]
         assert row.kind == ActivityKind.RUN_COMPLETED.value
         assert row.occurrence_key == f"run:{rid}:completed"
-        assert row.href == f"/runs/{rid}"
+        run = session.get_one(PipelineRun, rid)
+        assert row.href == f"/media/{run.media_item_id}/editor?run={rid}"
         # friendly_media_label falls back to the cleaned filename.
         assert row.title == "recording.wav"
 
