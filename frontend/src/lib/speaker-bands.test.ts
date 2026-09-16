@@ -175,10 +175,12 @@ describe("headline", () => {
     expect(headline(make({ ...confirmable, bandReason: "Needs review." }))).toEqual({
       title: "Possibly Ada",
       detail: "Needs review.",
+      linkSpeakerId: "known-1",
     });
     expect(headline(make(confirmable))).toEqual({
       title: "Possibly Ada",
       detail: "Not strong enough to confirm without your check.",
+      linkSpeakerId: "known-1",
     });
   });
 
@@ -187,6 +189,7 @@ describe("headline", () => {
       headline(
         make({
           resolution: "auto_enroll",
+          speakerId: "spk-auto",
           speakerName: "Voice 2",
           candidatePromptAllowed: true,
           candidateSpeakerId: "known-1",
@@ -196,11 +199,15 @@ describe("headline", () => {
     ).toEqual({
       title: "Possibly Ada",
       detail: "Saved as Voice 2 for now. Confirm if this is Ada.",
+      linkSpeakerId: "known-1",
     });
-    expect(headline(make({ resolution: "auto_enroll", speakerName: "Voice 2" }))).toEqual({
+    expect(
+      headline(make({ resolution: "auto_enroll", speakerId: "spk-auto", speakerName: "Voice 2" })),
+    ).toEqual({
       title: "Saved as Voice 2",
       detail:
         "Saved automatically so Voxint can recognise this voice later. Name them on the Speakers page.",
+      linkSpeakerId: "spk-auto",
     });
   });
 
@@ -208,24 +215,34 @@ describe("headline", () => {
     expect(headline(make({ band: "review" }))).toEqual({
       title: "Similar voices found",
       detail: "Two known speakers sound close to this voice. Listen, then choose.",
+      linkSpeakerId: null,
     });
     expect(
-      headline(make({ resolution: "grounded_cosine", speakerName: "Grace" })),
-    ).toEqual({ title: "Shown as Grace", detail: "Matched by voice." });
+      headline(make({ resolution: "grounded_cosine", speakerId: "spk-grace", speakerName: "Grace" })),
+    ).toEqual({
+      title: "Shown as Grace",
+      detail: "Matched by voice.",
+      linkSpeakerId: "spk-grace",
+    });
   });
 
   it("describes every human ruling", () => {
-    expect(headline(make({ resolution: "human_assign", speakerName: "Lin" }))).toEqual({
+    expect(
+      headline(make({ resolution: "human_assign", speakerId: "spk-lin", speakerName: "Lin" })),
+    ).toEqual({
       title: "Lin",
       detail: "Your ruling.",
+      linkSpeakerId: "spk-lin",
     });
     expect(headline(make({ resolution: "human_exclude" }))).toEqual({
       title: "Left out",
       detail: "Your ruling: not a person.",
+      linkSpeakerId: null,
     });
     expect(headline(make({ resolution: "human_unknown" }))).toEqual({
       title: "Could not tell",
       detail: "Your ruling.",
+      linkSpeakerId: null,
     });
   });
 
@@ -233,10 +250,12 @@ describe("headline", () => {
     expect(headline(make({ bandReason: "No eligible speech." }))).toEqual({
       title: "Who is this?",
       detail: "No eligible speech.",
+      linkSpeakerId: null,
     });
     expect(headline(make())).toEqual({
       title: "Who is this?",
       detail: "Not enough evidence to suggest a speaker.",
+      linkSpeakerId: null,
     });
     expect(
       headline(
