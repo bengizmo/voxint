@@ -6,6 +6,30 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **Home feed links point to the editor.** "Processing finished", "started", and
+  "failed" entries on the home page now link to `/media/{id}/editor` instead of
+  the legacy `/runs/{id}` detail page. "Speaker verified" links to the speaker's
+  profile page instead of the roster list. Activity outbox emissions updated
+  going forward; old notification rows keep their original URLs.
+
+- **Editor detail page accessibility.** Added ARIA landmarks, labels, and roles
+  to the editor detail template and export menu (previously zero `aria-*`
+  attributes). Heading hierarchy corrected (`h3` to `h2`), status chip and
+  read-only notice carry `role="status"`, fallback transcript table has a
+  visually hidden caption, and the island mount div is a labelled region.
+
+### Added
+- **Viewer-role template wiring.** When multi-user mode is on, viewer accounts
+  now see a clean read-only console: upload buttons, claim forms,
+  edit/delete/archive actions, inline editors, and bulk action bars are hidden
+  rather than shown and failing with 403. The server-side write guard (merged
+  earlier) remains the security boundary; this is the UX layer. Covers home,
+  media library, projects, legacy run detail (including assets, translation, and
+  operator notes, which show a read-only fallback), speakers (overview, roster,
+  profile, research), and the tutorial banner. OOB htmx renders inject the shell
+  context for fragment re-renders.
+
 ## [0.39.0] - 2026-09-15
 
 ### Added
