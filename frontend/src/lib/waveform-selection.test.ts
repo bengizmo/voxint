@@ -41,9 +41,11 @@ describe("normalizeRange", () => {
     expect(normalizeRange(2, -Infinity, 10)).toBeNull();
   });
 
-  it("returns null for zero or negative duration", () => {
+  it("returns null for zero, negative, or non-finite duration", () => {
     expect(normalizeRange(2, 5, 0)).toBeNull();
     expect(normalizeRange(2, 5, -1)).toBeNull();
+    expect(normalizeRange(2, 5, NaN)).toBeNull();
+    expect(normalizeRange(2, 5, Infinity)).toBeNull();
   });
 
   it("handles very small ranges", () => {

@@ -540,6 +540,7 @@ export const TranscriptPlayer = forwardRef<
   // any manual scroll turns it off; the single "Resume following" control turns
   // it back on. No always-on checkbox, no status dot.
   const [waveSelection, setWaveSelection] = useState<TimeRange | null>(null);
+  useEffect(() => { setWaveSelection(null); }, [peaksUrl, mediaUrl]);
   const [following, setFollowing] = useState<boolean>(true);
   const activeLineRef = useRef<HTMLParagraphElement | null>(null);
   const cursorLineRef = useRef<HTMLParagraphElement | null>(null);

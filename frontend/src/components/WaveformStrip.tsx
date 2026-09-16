@@ -332,7 +332,7 @@ export function WaveformStrip({
       clearDrag();
       if (drag.isDragging) {
         const range = rangeAtClientX(drag.anchorTime, event.clientX);
-        if (range && range.end > range.start) onSelectionChange(range);
+        if (range) onSelectionChange(range);
         return;
       }
       onSelectionChange(null);
@@ -375,20 +375,21 @@ export function WaveformStrip({
   );
 
   useEffect(() => {
-    if (!selection) return;
+    if (!selection && !draftRange) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !e.defaultPrevented) {
-        e.preventDefault();
-        onSelectionChange(null);
+        if (dragRef.current) clearDrag();
+        if (selection) onSelectionChange(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selection, onSelectionChange]);
+  }, [selection, draftRange, onSelectionChange, clearDrag]);
 
   useEffect(() => {
     if (!selection) return;
     const onDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
       if (
         wrapperRef.current &&
         !wrapperRef.current.contains(e.target as Node)
@@ -401,7 +402,7 @@ export function WaveformStrip({
   }, [selection, onSelectionChange]);
 
   const rangeToRender = draftRange ?? selection;
-  const isDraggingNow = dragRef.current?.isDragging ?? false;
+  const isDraggingNow = draftRange !== null;
 
   // currentTime is -1 until the first timeupdate; >= 0 shows the playhead even
   // while segment 0 (start = 0s) plays. Still hidden when seeking is untrusted.
@@ -421,7 +422,7 @@ export function WaveformStrip({
         style={{ height: STRIP_HEIGHT }}
         title={
           seekEnabled
-            ? "Who spoke when — click to play that part"
+            ? "Who spoke when — click to play, drag to select a range"
             : "Who spoke when — seeking is unavailable, so clicking only shows the segment in the list"
         }
       >

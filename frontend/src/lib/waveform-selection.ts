@@ -9,7 +9,7 @@ export function normalizeRange(
   t2: number,
   duration: number,
 ): TimeRange | null {
-  if (!Number.isFinite(t1) || !Number.isFinite(t2) || duration <= 0) return null;
+  if (!Number.isFinite(t1) || !Number.isFinite(t2) || !Number.isFinite(duration) || duration <= 0) return null;
   const clamp = (t: number) => Math.max(0, Math.min(duration, t));
   const start = clamp(Math.min(t1, t2));
   const end = clamp(Math.max(t1, t2));
