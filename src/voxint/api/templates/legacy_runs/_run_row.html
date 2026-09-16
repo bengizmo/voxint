@@ -1,0 +1,61 @@
+{% from "fragments/_chips.html" import chip, needs_review_chip %}
+{% macro run_row(it, progress, now, csrf_requeue, oob=false, just_finished=false) %}
+  <div class="gt-row{% if it.status == 'running' %} is-machine-active{% elif it.unresolved_count > 0 and it.status == 'completed' %} is-needs-human{% endif %}{% if just_finished %} is-just-finished{% endif %}" id="run-row-{{ it.run_id }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+    <span>
+      <a href="/runs/{{ it.run_id }}" class="media-title" style="color:var(--ink);text-decoration:none"
+         title="{{ it.source_path }}">{{ friendly_media_label(it.title, it.source_path) }}</a>
+      {% if it.folder_path %}<br><span class="oc-muted" style="font-size:var(--t-sm)">{{ it.folder_path }}</span>{% endif %}
+      <br><span class="run-id-secondary oc-muted" style="font-size:var(--t-sm)"><code>{{ it.run_id.hex[:8] }}</code></span>
+    </span>
+    <span>
+      {% if it.status == "running" and progress %}
+      <span class="pill running" title="{% if progress.using_heuristic %}Estimated from a default stage duration, there is not enough history yet; as of last refresh{% else %}Estimated from recent completed attempts of this stage; as of last refresh{% endif %}">{{ humanize_stage_progress(progress.stage) }}{% if progress.overrun %} &middot; taking longer{% else %} ~{{ progress.percent }}%{% endif %}</span>
+      {% else %}
+      <span class="pill {{ it.status }}">{{ humanize_status(it.status) }}</span>
+      {% endif %}
+      {% if it.archived %}<span class="pill skipped">archived</span>{% endif %}
+    </span>
+    <span>
+      {% if it.status == "completed" %}
+        {% if it.label_count == 0 %}<span class="pill muted">no speakers</span>
+        {% elif it.unresolved_count > 0 %}{{ needs_review_chip(it.unresolved_count) }}
+        {% else %}{{ chip("reviewed") }}{% endif %}
+      {% elif it.status == "failed" and it.error %}
+      <span class="oc-muted" style="font-size:var(--t-sm)">{{ humanize_error(it.error) or "—" }}</span>
+      {% else %}<span class="oc-muted">—</span>{% endif %}
+      {% if it.claim_live %}<span class="pill grounded">claimed{% if it.claimed_by %} · {{ it.claimed_by }}{% endif %}</span>{% endif %}
+    </span>
+    <span>{% if it.language %}{{ language_label(it.language) }}{% else %}<span class="oc-muted">—</span>{% endif %}</span>
+    <span>
+      {% if it.status in ("completed", "failed") and it.elapsed_seconds is not none %}
+      <span title="Processing time across every stage attempt; queue wait and retry gaps are excluded">{{ format_compact_duration(it.elapsed_seconds|int) }}</span>
+      {% elif it.status == "running" and it.elapsed_seconds is not none %}
+      <span class="oc-muted" title="Processing so far, as of last refresh">{{ format_compact_duration(it.elapsed_seconds|int) }}</span>
+      {% else %}<span class="oc-muted">—</span>{% endif %}
+    </span>
+    <span><span title="{{ it.created_at.strftime("%Y-%m-%d %H:%M UTC") }}">{{ format_age(it.created_at, now=now) }}</span></span>
+    <span class="gt-action">
+      {% if it.status == "completed" and it.unresolved_count > 0 %}
+      <a href="/review">Review →</a>
+      {% elif it.status == "failed" and not it.archived %}
+      <form method="post" action="/runs/{{ it.run_id }}/requeue" style="display:inline">
+        <input type="hidden" name="revision" value="{{ it.revision }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_requeue }}">
+        <button type="submit" class="cb-btn cb-btn-secondary" style="font-size:var(--t-sm)">Retry</button>
+      </form>
+      {% elif it.status == "failed" %}
+      <a href="/runs/{{ it.run_id }}">View →</a>
+      {% else %}
+      <a href="/runs/{{ it.run_id }}">View →</a>
+      {% endif %}
+    </span>
+  </div>
+  {% if it.snippet %}
+  <div class="gt-row">
+    <span class="oc-muted" style="grid-column: 1 / -1; padding: 0 var(--space-3) var(--space-2);">
+      ⏱ {{ "%d:%02d" | format(it.snippet.start_seconds // 60, it.snippet.start_seconds % 60) }}
+      — {{ it.snippet.html }}
+    </span>
+  </div>
+  {% endif %}
+{% endmacro %}

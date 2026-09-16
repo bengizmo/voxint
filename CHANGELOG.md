@@ -24,6 +24,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   to on; the palette no longer requires an opt-in environment variable.
 
 ### Added
+- **Jobs page live rows** (#496). Queued and running jobs refresh their status,
+  stage progress, and processing time automatically. Finished rows briefly
+  highlight, then stop polling. Pages without live rows make no row refresh
+  requests.
+
 - **Speaker profile links from editor rail** (#498). Identified speaker names
   in the editor's speaker rail sidebar are now clickable links to the speaker's
   profile page. Covers all resolved states (voice match, auto-enroll, operator

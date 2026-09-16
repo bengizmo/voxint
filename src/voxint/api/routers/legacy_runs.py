@@ -17,7 +17,7 @@ import contextlib
 import json
 import logging
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, BinaryIO
@@ -61,6 +61,7 @@ from voxint.api.csrf import (
 from voxint.api.languages import LANGUAGE_NAMES, language_label
 from voxint.api.model_provenance import select_run_model_identity
 from voxint.api.pipeline_dashboard_query import (
+    PipelineDashboardState,
     RunStageProgress,
     degraded_stages,
     estimate_run_stage_progress,
@@ -90,6 +91,7 @@ from voxint.api.runs_query import (
     InvalidCursorError,
     LifecycleView,
     ReviewFilter,
+    RunListItem,
     group_failed_runs,
     list_runs,
     parse_review_filter,
@@ -213,6 +215,32 @@ core_router = APIRouter(dependencies=[Depends(require_onboarded)])
 actions_router = APIRouter(dependencies=[Depends(require_onboarded)])
 dashboards_router = APIRouter(dependencies=[Depends(require_onboarded)])
 tail_router = APIRouter(dependencies=[Depends(require_onboarded)])
+
+
+RUNS_LIVE_ROWS_MAX = 100
+_LIVE_STATUSES = frozenset({RunStatus.QUEUED.value, RunStatus.RUNNING.value})
+_FINISHED_STATUSES = frozenset(
+    {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
+)
+
+
+def _run_ids_with_status(
+    items: Sequence[RunListItem], statuses: frozenset[str]
+) -> list[uuid.UUID]:
+    """Select ids in page order for polling or terminal highlighting."""
+    return [item.run_id for item in items if item.status in statuses]
+
+
+def _poll_seconds(items: Sequence[RunListItem], live_ids: Sequence[uuid.UUID]) -> int:
+    """5s while any polled run is running; 15s when only queued runs are polled."""
+    tracked = set(live_ids)
+    return (
+        5
+        if any(
+            item.status == RunStatus.RUNNING.value and item.run_id in tracked for item in items
+        )
+        else 15
+    )
 
 
 _MEDIA_CHUNK_BYTES = 256 * 1024
@@ -613,6 +641,29 @@ def _stream_file(fh: BinaryIO, start: int, length: int) -> Iterator[bytes]:
             yield chunk
 
 
+def _stage_progress_for(
+    items: Sequence[RunListItem], dashboard: PipelineDashboardState | None, now: datetime
+) -> dict[uuid.UUID, RunStageProgress]:
+    """Estimate current stages identically for the page and live-row fragment."""
+    stage_progress: dict[uuid.UUID, RunStageProgress] = {}
+    if dashboard is not None:
+        progress_by_stage = {stage.stage: stage for stage in dashboard.stages}
+        for item in items:
+            if item.status != RunStatus.RUNNING.value or item.current_stage is None:
+                continue
+            stage_state = progress_by_stage.get(item.current_stage)
+            progress = estimate_run_stage_progress(
+                item.current_stage,
+                item.stage_started_at,
+                stage_state.avg_seconds if stage_state is not None else None,
+                now,
+                using_heuristic=(stage_state.using_heuristic if stage_state is not None else False),
+            )
+            if progress is not None:
+                stage_progress[item.run_id] = progress
+    return stage_progress
+
+
 @core_router.get("/runs")
 def runs(
     request: Request,
@@ -703,27 +754,11 @@ def runs(
         if not show_archived
         else None
     )
-    stage_progress: dict[uuid.UUID, RunStageProgress] = {}
-    if dashboard is not None:
-        progress_by_stage = {stage.stage: stage for stage in dashboard.stages}
-        for item in page.items:
-            if (
-                item.status != RunStatus.RUNNING.value
-                or item.current_stage is None
-            ):
-                continue
-            stage_state = progress_by_stage.get(item.current_stage)
-            progress = estimate_run_stage_progress(
-                item.current_stage,
-                item.stage_started_at,
-                stage_state.avg_seconds if stage_state is not None else None,
-                _now,
-                using_heuristic=(
-                    stage_state.using_heuristic if stage_state is not None else False
-                ),
-            )
-            if progress is not None:
-                stage_progress[item.run_id] = progress
+    stage_progress = _stage_progress_for(page.items, dashboard, _now)
+    live_ids = (
+        _run_ids_with_status(page.items, _LIVE_STATUSES)[:RUNS_LIVE_ROWS_MAX]
+        if grouped_items is None and not show_archived else []
+    )
     return templates.TemplateResponse(
         request,
         "legacy_runs/runs.html",
@@ -732,6 +767,8 @@ def runs(
             "page": page,
             "dashboard": dashboard,
             "stage_progress": stage_progress,
+            "live_ids": live_ids,
+            "poll_seconds": _poll_seconds(page.items, live_ids),
             "grouped_items": grouped_items,
             "active_view": active_view,
             "view_tabs": tuple(
@@ -857,6 +894,81 @@ def runs_progress_strip(
         request,
         "legacy_runs/_progress_strip.html",
         {"request": request, "dashboard": dashboard},
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@core_router.get("/runs/live-rows")
+def runs_live_rows(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    ids: str | None = None,
+) -> Response:
+    """htmx-polled live rows fragment (#496).
+
+    ``ids`` is the comma-separated set of run ids the page is tracking. The
+    response is the re-rendered poller (still polling only while some of them
+    are queued or running) followed by one out-of-band row per run that still
+    exists, so a run that finished since the last tick is rendered once more in
+    its terminal form and then dropped from the tracked set.
+    """
+    run_ids: list[uuid.UUID] = []
+    if ids:
+        raw_ids = ids.split(",")
+        if len(raw_ids) > RUNS_LIVE_ROWS_MAX:
+            raise HTTPException(status_code=400, detail="too many run ids")
+        try:
+            for raw in raw_ids:
+                parsed = uuid.UUID(raw)
+                if str(parsed) != raw:
+                    raise ValueError("non-canonical UUID")
+                if parsed not in run_ids:
+                    run_ids.append(parsed)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid run id") from exc
+    now = datetime.now(UTC)
+    items: list[RunListItem] = []
+    dashboard = None
+    if run_ids:
+        settings: Settings = request.app.state.settings
+        items = list_runs(
+            session,
+            run_ids=run_ids,
+            status=None,
+            review=None,
+            lifecycle=None,
+            cursor=None,
+            page_size=len(run_ids),
+            archived=False,
+            gates=gates_from_settings(settings),
+        ).items
+    # The dashboard read model only feeds the stage chip, so a queued-only or
+    # all-terminal tick skips it (the strip polls it on its own schedule).
+    if any(item.status == RunStatus.RUNNING.value for item in items):
+        snapshot = collect_resource_status_or_empty(settings)
+        degraded = degraded_stages(
+            ((service.name, service.up) for service in snapshot.services),
+            llm_enabled=settings.llm_enabled,
+        )
+        dashboard = pipeline_dashboard_state(
+            session, now, settings.compute_tier, is_queue_paused(session), degraded=degraded
+        )
+    live_ids = _run_ids_with_status(items, _LIVE_STATUSES)
+    response = templates.TemplateResponse(
+        request,
+        "legacy_runs/_live_rows.html",
+        {
+            "request": request,
+            "items": items,
+            "stage_progress": _stage_progress_for(items, dashboard, now),
+            "live_ids": live_ids,
+            "poll_seconds": _poll_seconds(items, live_ids),
+            "now": now,
+            "csrf_requeue": mint_csrf_token(request.app.state.csrf_secret, CSRF_REQUEUE),
+            "finished_ids": _run_ids_with_status(items, _FINISHED_STATUSES),
+        },
     )
     response.headers["Cache-Control"] = "no-store"
     return response

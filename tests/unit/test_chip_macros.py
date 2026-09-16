@@ -39,7 +39,7 @@ def test_call_sites_use_the_macro() -> None:
     from tests.contracts.conftest import REPO_ROOT
 
     tpl = REPO_ROOT / "src" / "voxint" / "api" / "templates"
-    for rel in ("home/home.html", "media/media.html", "legacy_runs/runs.html"):
+    for rel in ("home/home.html", "media/media.html", "legacy_runs/_run_row.html"):
         text = (tpl / rel).read_text()
         assert "needs_review_chip(" in text, f"{rel} no longer uses needs_review_chip"
         assert "need you</span>" not in text, f"{rel} regrew an inline needs-you span"

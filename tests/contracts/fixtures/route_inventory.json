@@ -622,6 +622,12 @@
     ]
   ],
   [
+    "/runs/live-rows",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/runs/progress-strip",
     [
       "GET"

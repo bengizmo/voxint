@@ -326,3 +326,43 @@ class TestProgressStrip:
         assert "Acquire" in body
         assert "Transcribe" in body
         assert "Finalize" in body
+
+
+@pytest.mark.parametrize("status,interval", [(RunStatus.RUNNING, 5), (RunStatus.QUEUED, 15)])
+def test_live_poller_tracks_only_live_rows(
+    client: TestClient, session_factory: sessionmaker[Session], status: RunStatus, interval: int
+) -> None:
+    with session_factory() as session:
+        live = _make_run(session, status=status)
+        done = _make_run(session)
+    body = client.get("/runs").text
+    assert f'hx-get="/runs/live-rows?ids={live}"' in body
+    assert f'hx-trigger="every {interval}s"' in body
+    for run_id in (live, done):
+        assert body.count(f'id="run-row-{run_id}"') == 1
+    assert "hx-swap-oob=" not in body
+
+
+@pytest.mark.parametrize("suffix", ["", "?view=failed", "?archived=1"])
+def test_terminal_pages_have_no_row_poller(
+    client: TestClient, session_factory: sessionmaker[Session], suffix: str
+) -> None:
+    with session_factory() as session:
+        _make_run(session)
+        _make_run(session, status=RunStatus.FAILED)
+    body = client.get(f"/runs{suffix}").text
+    assert 'id="runs-live"' not in body
+    assert "/runs/live-rows" not in body
+
+
+def test_live_search_snippet_renders_once(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    from tests.integration.test_runs_api import make_run
+
+    with session_factory() as session:
+        run_id = make_run(session, status=RunStatus.RUNNING, segments=[(None, "quartz", None)])
+    body = client.get("/runs?q=quartz").text
+    assert body.count("<mark>quartz</mark>") == 1
+    assert body.count(f'id="run-row-{run_id}"') == 1
+    assert f'hx-get="/runs/live-rows?ids={run_id}"' in body
