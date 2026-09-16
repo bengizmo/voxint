@@ -54,6 +54,8 @@ def test_shell_context_requires_flag_and_route() -> None:
             "current_user": None,
             "csrf_logout_token": "",
             "can_write": False,
+            "palette_enabled": False,
+            "palette_destinations": [],
         }
     }
     # Flag on, no /projects route registered yet (today's reality): stays dark.
@@ -69,6 +71,8 @@ def test_shell_context_requires_flag_and_route() -> None:
             "current_user": None,
             "csrf_logout_token": "",
             "can_write": False,
+            "palette_enabled": False,
+            "palette_destinations": [],
         }
     }
     # A stale app with no stamp at all fails closed too.
@@ -82,6 +86,8 @@ def test_shell_context_requires_flag_and_route() -> None:
             "current_user": None,
             "csrf_logout_token": "",
             "can_write": False,
+            "palette_enabled": False,
+            "palette_destinations": [],
         }
     }
     assert _shell_template_context(
@@ -96,6 +102,8 @@ def test_shell_context_requires_flag_and_route() -> None:
             "current_user": None,
             "csrf_logout_token": "",
             "can_write": False,
+            "palette_enabled": False,
+            "palette_destinations": [],
         }
     }
 

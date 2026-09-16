@@ -281,6 +281,43 @@
     .command-bar .cb-search kbd { font-family: var(--font-mono);
               font-size: .625rem; padding: 1px 4px; border-radius: 3px;
               background: var(--kbd-overlay); color: var(--ink-2); }
+    /* Command palette overlay (#162). z-index 1050: above KeymapHelp (1000),
+       below toasts (1100). */
+    .palette-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.45);
+              display: flex; align-items: flex-start; justify-content: center;
+              z-index: 1050; padding: min(20vh, 8rem) 1rem 1rem; }
+    .palette-panel { background: var(--surface); border: 1px solid var(--line);
+              border-radius: var(--r-md); width: 100%; max-width: 32rem;
+              box-shadow: 0 8px 32px rgba(0,0,0,.25);
+              display: flex; flex-direction: column; max-height: min(24rem, 60vh); }
+    .palette-input-wrap { display: flex; align-items: center; gap: var(--space-2);
+              padding: .625rem .75rem; border-bottom: 1px solid var(--line); }
+    .palette-input-wrap svg { flex-shrink: 0; color: var(--ink-3); }
+    .palette-input { flex: 1; background: none; border: none; outline: none;
+              font: inherit; font-size: var(--t-sm); color: var(--ink);
+              min-width: 0; }
+    .palette-input::placeholder { color: var(--ink-3); }
+    .palette-results { overflow-y: auto; padding: var(--space-1) 0; }
+    .palette-group-label { font-size: var(--t-xs); font-weight: 600;
+              color: var(--ink-3); padding: var(--space-2) .75rem var(--space-1);
+              text-transform: uppercase; letter-spacing: .04em; }
+    .palette-option { display: flex; flex-direction: column; gap: 1px;
+              padding: .375rem .75rem; cursor: pointer;
+              font-size: var(--t-sm); color: var(--ink);
+              border-radius: var(--r-sm); margin: 0 var(--space-1); }
+    .palette-option[aria-selected="true"] { background: var(--surface-2); }
+    .palette-option-label { font-weight: 500; }
+    .palette-option-hint { font-size: var(--t-xs); color: var(--ink-3); }
+    .palette-empty { padding: .75rem; font-size: var(--t-sm); color: var(--ink-3);
+              text-align: center; }
+    .palette-status { padding: .5rem .75rem; font-size: var(--t-xs);
+              color: var(--ink-3); }
+    @media (max-width: 50rem) {
+      /* On narrow viewports hide label + kbd but keep a minimal icon pill */
+      .cb-search .cb-search-label, .cb-search kbd { display: none; }
+      .cb-search { min-width: unset; padding: 3px 8px; }
+    }
+
     /* Narrow viewport: rail → mobile nav disclosure (#207). On narrow screens,
        the rail hides behind a hamburger in the command bar; its disclosure
        stacks horizontally (icon row) above the main content. The search
@@ -307,7 +344,6 @@
       .icon-rail .rail-tip { display: block; }
     }
     @media (max-width: 50rem) {
-      .cb-search { display: none; }
       .command-bar { flex-wrap: wrap; box-sizing: border-box; height: auto;
               min-height: 40px;
               padding-top: var(--space-1); padding-bottom: var(--space-1); }
@@ -1630,11 +1666,19 @@
         <span class="cb-breadcrumb">{% block cb_breadcrumb %}{{ active_nav or '???' }}{% endblock %}</span>
         <span class="cb-summary">{% block cb_summary %}{% endblock %}</span>
         <div class="cb-spacer"></div>
-        {# #162: the decorative search affordance is removed until search
-           exists — a visible "Search everything ⌘K" that does nothing is a
-           broken promise. The block stays as the seam the real command
-           palette will fill; the .cb-search CSS is kept for it too. #}
-        {% block cb_search %}{% endblock %}
+        {% block cb_search %}
+        {% if shell.palette_enabled %}
+        <div data-island="command-palette" data-island-lazy
+             data-props='{{ {"destinations": shell.palette_destinations, "actions": palette_actions|default([])}|tojson }}'>
+          <button type="button" class="cb-search" data-palette-trigger
+                  aria-haspopup="dialog" aria-expanded="false">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><circle cx="6.5" cy="6.5" r="4"/><line x1="10" y1="10" x2="14" y2="14" stroke-linecap="round"/></svg>
+            <span class="cb-search-label">Search</span>
+            <kbd>Ctrl K</kbd>
+          </button>
+        </div>
+        {% endif %}
+        {% endblock %}
         {% block cb_actions %}{% endblock %}
         {% endblock %}
       </header>

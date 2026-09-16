@@ -42,6 +42,7 @@ from voxint.api.auth import (
 )
 from voxint.api.csrf import CSRF_LOGOUT, CSRF_PLUGIN, mint_csrf_token, verify_csrf_token
 from voxint.api.languages import language_label
+from voxint.api.palette import palette_destinations
 from voxint.api.presentation import (
     confidence_band,
     folder_label,
@@ -446,6 +447,19 @@ def _shell_template_context(request: Request) -> dict[str, Any]:
                 mint_csrf_token(request.app.state.csrf_secret, CSRF_LOGOUT)
                 if settings.voxint_multi_user
                 else ""
+            ),
+            # Command palette (#162) dark-ships behind console_palette_enabled.
+            # The palette_destinations list mirrors the rail; per-page actions
+            # are passed by individual handlers as `palette_actions`.
+            "palette_enabled": settings.console_palette_enabled,
+            "palette_destinations": (
+                palette_destinations(
+                    settings,
+                    request.app.state,
+                    getattr(request.state, "current_user", None),
+                )
+                if settings.console_palette_enabled
+                else []
             ),
         }
     }

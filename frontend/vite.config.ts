@@ -30,6 +30,7 @@ export default defineConfig({
         "quote-board": "src/entries/quote-board.tsx",
         "temporal-trends": "src/entries/temporal-trends.tsx",
         "speaker-timeline": "src/entries/speaker-timeline.tsx",
+        "command-palette": "src/entries/command-palette.tsx",
       },
     },
   },

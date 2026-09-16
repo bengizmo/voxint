@@ -340,6 +340,7 @@ _LIVE_ISLANDS = [
     "quote-board",
     "temporal-trends",
     "speaker-timeline",
+    "command-palette",
 ]
 
 
