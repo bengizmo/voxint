@@ -318,6 +318,33 @@
       .cb-search { min-width: unset; padding: 3px 8px; }
     }
 
+    /* Speaker combobox (#513). Inline searchable dropdown for speaker
+       assignment — replaces native <select> in the review editor. */
+    .speaker-combobox { display: inline-block; position: relative; }
+    .speaker-combobox-trigger { background: var(--surface); border: 1px solid var(--line);
+              border-radius: var(--r-sm); padding: .25rem .5rem; cursor: pointer;
+              color: var(--ink); font: inherit; text-align: left;
+              min-width: 8rem; }
+    .speaker-combobox-trigger:hover { border-color: var(--ink-3); }
+    .speaker-combobox-trigger:disabled { opacity: .5; cursor: not-allowed; }
+    .speaker-combobox-input { background: var(--surface); border: 1px solid var(--accent);
+              border-radius: var(--r-sm); padding: .25rem .5rem; font: inherit;
+              color: var(--ink); outline: none; min-width: 8rem; width: 100%; }
+    .speaker-combobox-input::placeholder { color: var(--ink-3); }
+    .speaker-combobox-list { position: absolute; top: 100%; left: 0; right: 0;
+              z-index: 100; background: var(--surface); border: 1px solid var(--line);
+              border-radius: var(--r-sm); margin-top: 2px;
+              box-shadow: var(--shadow-1);
+              max-height: 14rem; overflow-y: auto; padding: var(--space-1) 0; }
+    .speaker-combobox-option { padding: .3rem .625rem; cursor: pointer;
+              font-size: var(--t-sm); color: var(--ink);
+              border-radius: var(--r-sm); margin: 0 var(--space-1); }
+    .speaker-combobox-option[aria-selected="true"] { background: var(--surface-2); }
+    .speaker-combobox-option.selected { font-weight: 600; }
+    .speaker-combobox-option.create-option { color: var(--accent); font-style: italic; }
+    .speaker-combobox-empty { padding: .5rem .625rem; font-size: var(--t-sm);
+              color: var(--ink-3); text-align: center; }
+
     /* Narrow viewport: rail → mobile nav disclosure (#207). On narrow screens,
        the rail hides behind a hamburger in the command bar; its disclosure
        stacks horizontally (icon row) above the main content. The search

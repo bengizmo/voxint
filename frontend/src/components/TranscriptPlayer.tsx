@@ -18,6 +18,7 @@ import {
 } from "../lib/playback";
 import { fetchPeaks, type PeaksPayload, type TimeRange, type Turn } from "../lib/peaks";
 import { type AnnotationLineSpan } from "../lib/annotations";
+import { SpeakerCombobox } from "./SpeakerCombobox";
 import { resolveJumpIndex } from "../lib/jump";
 import { CapabilityBanner, SpeedControl } from "./PlaybackControls";
 import { WaveformStrip } from "./WaveformStrip";
@@ -100,7 +101,7 @@ export interface Segment {
   wordEnd: number | null;
   // The child's OWN active word-range override speaker id (issue #59 slice 3), or
   // null when the child merely inherits the segment's whole-segment/label speaker.
-  // The reassign picker binds its <select> to this, so the control shows a
+  // The reassign picker binds to this, so the control shows a
   // child-scoped assignment only when one truly exists (never an inherited speaker
   // mislabeled as a child ruling), and "inherit" is selected exactly when null.
   wordRangeSpeakerId: string | null;
@@ -210,7 +211,7 @@ export interface TranscriptPlayerProps {
   // Per-child reassign (issue #59 slice 3). Present only on the claim-gated review
   // surface. When onReassign is set, a split parent's derived child lines (those
   // carrying wordStart/wordEnd — the ONLY lines the backend ranges) render a
-  // speaker <select>: choosing a roster speaker assigns just that child's word
+  // speaker picker: choosing a roster speaker assigns just that child's word
   // range, choosing "inherit" resets it to follow the label. The player raises the
   // choice; ReviewStepper POSTs /relabel — the player never touches the DB.
   // reassignSpeakers is the ACTIVE roster; reassignBusy disables the picker while a
@@ -397,7 +398,7 @@ const TranscriptRow = memo(function TranscriptRow({
               title={
                 wi === 0
                   ? "Cannot split before the first word"
-                  : `Split before “${w.word.trim()}”`
+                  : `Split before "${w.word.trim()}"`
               }
               className="tp-split-word px-0.5 rounded hover:bg-splitword/30 disabled:opacity-60 disabled:cursor-default"
             >
@@ -434,36 +435,22 @@ const TranscriptRow = memo(function TranscriptRow({
         reassignSpeakers != null &&
         seg.wordStart != null &&
         seg.wordEnd != null && (
-          <label
+          <span
             className="tp-reassign ml-2 text-xs opacity-80"
-            // Keep the whole control — label text included — off the line's
-            // seek handler, not just the <select>.
             onClick={(e) => e.stopPropagation()}
           >
             {" · "}speaker:{" "}
-            <select
-              // Bound to the child's OWN range-override id: "" (inherit) is
-              // selected exactly when the child has no child-scoped ruling,
-              // so an inherited speaker is never shown as a child assignment.
-              // Server truth, so a failed write (no reconcile) re-imposes the
-              // prior value on the next render rather than leaving the picked
-              // option showing. WRITE is by id regardless.
+            <SpeakerCombobox
+              speakers={reassignSpeakers}
+              mode="controlled"
               value={seg.wordRangeSpeakerId ?? ""}
+              label={`Reassign speaker for "${seg.text}"`}
+              placeholder="↺ inherit"
               disabled={reassignBusy}
-              aria-label={`Reassign speaker for “${seg.text}”`}
-              onChange={(e) => {
-                e.stopPropagation();
-                onReassign(seg, e.target.value === "" ? null : e.target.value);
-              }}
-            >
-              <option value="">↺ inherit (follow the segment)</option>
-              {reassignSpeakers.map((sp) => (
-                <option key={sp.id} value={sp.id}>
-                  {sp.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
+              onSelect={(id) => onReassign(seg, id)}
+              onInherit={() => onReassign(seg, null)}
+            />
+          </span>
         )}
     </p>
   );
@@ -843,7 +830,7 @@ export const TranscriptPlayer = forwardRef<
             // Keyed by parent + word-range (falling back to start time) so a
             // whole-run reconcile after a split/reassign re-associates each line
             // with its own DOM node — a split parent's children share a start
-            // time, so a start-only key could otherwise remount the wrong <select>
+            // time, so a start-only key could otherwise remount the wrong picker
             // and drop its focus. Index keeps unsplit lines with equal starts
             // distinct.
             <TranscriptRow
