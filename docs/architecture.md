@@ -900,6 +900,13 @@ subsystem and adds no page routing.
   via `readProps()` and call voxint's own routes through the shared
   `api-client.ts` `apiFetch`, whose `ApiError` mirrors FastAPI's `{detail}`
   shape, the seam #54/#55 consume for capability-aware responses.
+- **Command palette (issue #162).** `Ctrl/Cmd+K` opens a global search island
+  (`palette.ts`) that queries commands (sidebar destinations, per-page actions),
+  entities (media, speakers, projects by name), and transcript passages
+  (semantic + lexical). The island loads lazily on first interaction. A "Recent"
+  section (localStorage, capped at five) shows recently opened recordings when
+  the query is empty. The palette is enabled by default
+  (`CONSOLE_PALETTE_ENABLED`).
 - **Per-turn playback + fail-closed seek gating (issues #49/#55).** The
   `media-editor` island owns the audio player, transcript, walk cursor, and
   speaker rail. Per-line playback calls `TranscriptPlayer.playSegment()`.
@@ -943,6 +950,19 @@ subsystem and adds no page routing.
   raw diarization label (`.spk-badge`) is shown on the workbench, label cards,
   and the segment header (when it differs from the display name) but not on the
   editor transcript rows, where it duplicated the display name.
+- **Waveform drag-to-select (issue #502).** The `WaveformStrip` supports
+  click-to-seek (existing) and click-and-drag range selection: the selected
+  region renders as a theme-aware accent overlay, and a "Play selection" control
+  appears for bounded playback. Pointer Events with `setPointerCapture` handle
+  mouse, touch, and pen; a 5px distance threshold distinguishes click from drag.
+  Selection state is controlled by the parent; transient drag state is local.
+- **Searchable speaker combobox (issue #513).** All four speaker-assignment
+  dropdowns use a shared `SpeakerCombobox` component: type-ahead filtering,
+  arrow-key navigation, ARIA `combobox` role, and an inline "Create [name]"
+  option. Digit-key direct-assign (1-9) is preserved. The speaker roster
+  refreshes live on roster-affecting endpoints (enroll, merge, undo) via an
+  optional `speakers` snapshot in `_labels_response`. Shared `rankItems` /
+  `moveActive` helpers are extracted into `combobox.ts` from the palette.
 
 ## Worker orchestration (P3)
 

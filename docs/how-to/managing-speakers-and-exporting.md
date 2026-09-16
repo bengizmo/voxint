@@ -106,9 +106,10 @@ that speaker on future recordings until you enroll a new sample.
 
 Speakers get onto the roster from the **speaker rail**, while you are reviewing
 a recording. When Voxint has separated the voices, it shows them as labels like
-`SPEAKER_00`. On the label for a voice you recognise, open the speaker picker and
-choose **Add a new person…**. Enter their name and press **Add person**. That
-creates a roster speaker from the voice.
+`SPEAKER_00`. On the label for a voice you recognise, open the speaker picker,
+type the name you want, and choose **Create "[name]"** to add them on the fly.
+That creates a roster speaker from the voice. You can also type to filter
+existing speakers by name and select one with the arrow keys and Enter.
 
 ![The speaker rail showing a voice card with a known-person picker, the Add a
 new person choice, and the Not a person and Can't tell actions.](../images/review-workbench.png)
