@@ -1737,11 +1737,13 @@
       </div>
     </div>
   </div>
-  {# Activity indicator + toasts (Console 2.0 P7, #162). The whole feature lives
-     in this one flag-gated block, so a dark-shipped install (the default) ships
-     zero extra bytes. The badge target and toast links use canonical Runs URLs.
-     The poller is a plain progressive-enhancement IIFE (the theme/sidebar convention), NOT an
-     island: a JSON poll + a toast queue needs no React. #}
+  {# Activity indicator + toasts (Console 2.0 P7, #162; SSE transport, #499).
+     The whole feature lives in this one flag-gated block, so a dark-shipped
+     install (the default) ships zero extra bytes. Toast rendering and badge
+     updates are plain progressive-enhancement JS (not an island). The transport
+     is SSE (EventSource) with a one-shot JSON bootstrap on page load; if SSE
+     fails for ~60 seconds the client gives up and relies on the next navigation
+     to re-bootstrap. #}
   {% if shell.activity_enabled %}
   <div class="toast-region" data-toast-region aria-live="polite" aria-atomic="false"></div>
   <style>
@@ -1778,11 +1780,11 @@
   (function () {
     var region = document.querySelector("[data-toast-region]");
     var CURSOR_KEY = "voxint-activity-cursor";
-    var ENDPOINT = "/activity/events";
-    var POLL_MS = 15000;
-    var MAX_TOASTS = 3;        /* beyond this per drain, coalesce into one */
-    var DRAIN_CAP = 200;       /* hard stop so a stale-low cursor can't loop */
+    var BOOTSTRAP_ENDPOINT = "/activity/events";
+    var STREAM_ENDPOINT = "/activity/stream";
+    var MAX_TOASTS = 3;
     var TOAST_MS = 8000;
+    var MAX_ERRORS = 20;
     var reduceMotion = false;
     try { reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) {}
 
@@ -1791,9 +1793,6 @@
         var v = localStorage.getItem(CURSOR_KEY);
         if (v === null) { return null; }
         var n = parseInt(v, 10);
-        /* Reject a corrupt value ("NaN", "-1", "10abc") instead of sending it as
-           ?since= (a negative floods the backlog; NaN 422s forever): clear it so
-           the next poll bootstraps cleanly. */
         if (!isFinite(n) || n < 0 || String(n) !== v) {
           try { localStorage.removeItem(CURSOR_KEY); } catch (e) {}
           return null;
@@ -1811,8 +1810,6 @@
       } else { badge.textContent = ""; badge.hidden = true; }
     }
 
-    /* Only a relative single-slash path is a safe toast link (never a
-       protocol-relative //host or an absolute URL from a frozen snapshot). */
     function safeHref(href) {
       if (typeof href !== "string" || href.charAt(0) !== "/" || href.charAt(1) === "/") { return null; }
       return href;
@@ -1828,7 +1825,6 @@
       region.appendChild(el);
       window.setTimeout(function () { if (el.parentNode) { el.parentNode.removeChild(el); } }, TOAST_MS);
     }
-    /* Per-kind copy. The frozen title goes in via textContent, never innerHTML. */
     function toastMessage(kind, title) {
       if (kind === "speaker_identified") { return "Speaker identified: " + title + "."; }
       return "Transcription finished: " + title + ". Review speakers.";
@@ -1846,8 +1842,6 @@
       }
       show(el);
     }
-    /* One summary toast for a burst. A homogeneous batch gets kind-specific copy;
-       a mixed batch gets neutral copy. Always links to the Runs page. */
     function coalescedMessage(events) {
       var n = events.length, allRun = true, allSpk = true;
       for (var i = 0; i < n; i++) {
@@ -1873,75 +1867,103 @@
       for (var i = 0; i < events.length; i++) { renderToast(events[i]); }
     }
 
-    function fetchJson(url, cb) {
-      try {
-        fetch(url, { headers: { "Accept": "application/json" }, credentials: "same-origin" })
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (d) { cb(d); })
-          .catch(function () { cb(null); });
-      } catch (e) { cb(null); }
+    /* --- SSE transport (#499) --- */
+
+    var source = null;
+    var errorCount = 0;
+    var giveUpAt = 0;
+
+    function openStream(cursor) {
+      if (source) { source.close(); }
+      var url = STREAM_ENDPOINT;
+      if (typeof cursor === "number") { url += "?since=" + encodeURIComponent(cursor); }
+      source = new EventSource(url);
+      errorCount = 0;
+      giveUpAt = 0;
+
+      source.addEventListener("init", function (e) {
+        errorCount = 0; giveUpAt = 0;
+        try {
+          var data = JSON.parse(e.data);
+          if (typeof data.next_cursor === "number") { writeCursor(data.next_cursor); }
+          if (typeof data.badge === "number") { updateBadge(data.badge); }
+        } catch (err) { /* ignore */ }
+      });
+
+      source.addEventListener("reset", function (e) {
+        errorCount = 0; giveUpAt = 0;
+        try {
+          var data = JSON.parse(e.data);
+          if (typeof data.next_cursor === "number") { writeCursor(data.next_cursor); }
+          if (typeof data.badge === "number") { updateBadge(data.badge); }
+        } catch (err) { /* ignore */ }
+      });
+
+      source.addEventListener("activity", function (e) {
+        errorCount = 0; giveUpAt = 0;
+        try {
+          var data = JSON.parse(e.data);
+          if (data.events && data.events.length > 0) {
+            flush(data.events);
+          }
+          if (typeof data.next_cursor === "number") { writeCursor(data.next_cursor); }
+          if (typeof data.badge === "number") { updateBadge(data.badge); }
+        } catch (err) { /* malformed frame; wait for the next */ }
+      });
+
+      source.addEventListener("badge", function (e) {
+        errorCount = 0; giveUpAt = 0;
+        try {
+          var data = JSON.parse(e.data);
+          if (typeof data.badge === "number") { updateBadge(data.badge); }
+        } catch (err) { /* ignore */ }
+      });
+
+      source.onerror = function () {
+        var now = Date.now();
+        if (!giveUpAt) { giveUpAt = now + 60000; }
+        errorCount++;
+        if (errorCount >= MAX_ERRORS || now >= giveUpAt) {
+          source.close();
+          source = null;
+        }
+      };
     }
 
-    /* Single-flight: a drain can span several fetches and outlast one interval,
-       so re-entrancy would double-toast and race the cursor. One poll runs at a
-       time; the next is scheduled only once the current settles (recursive
-       setTimeout, not setInterval). */
-    var inFlight = false;
-    function scheduleNext() { window.setTimeout(poll, POLL_MS); }
-
-    function poll() {
-      if (inFlight) { return; }
-      inFlight = true;
+    /* Bootstrap: one JSON fetch to baseline the cursor (no stale toasts),
+       then open the SSE stream. If bootstrap fails, open the stream anyway
+       and let it self-baseline via its own init logic. */
+    function bootstrap() {
       var cursor = readCursor();
-      if (cursor === null) {
-        /* Bootstrap: baseline at the high-water mark, no backlog toasts. */
-        fetchJson(ENDPOINT, function (data) {
-          if (data) { writeCursor(data.next_cursor); updateBadge(data.badge); }
-          inFlight = false;
-          scheduleNext();
-        });
+      if (cursor !== null) {
+        openStream(cursor);
         return;
       }
-      var collected = [];
-      /* Persist the cursor only AFTER a successful flush: if the tab dies
-         mid-drain the cursor stays put and the next session re-toasts (a
-         duplicate is honest; a silent miss is not). */
-      function done(finalCursor) {
-        flush(collected);
-        if (typeof finalCursor === "number") { writeCursor(finalCursor); }
-        inFlight = false;
-        scheduleNext();
-      }
-      function step(from) {
-        fetchJson(ENDPOINT + "?since=" + encodeURIComponent(from), function (data) {
-          if (!data) { inFlight = false; scheduleNext(); return; }  // transient: retry, cursor kept
-          updateBadge(data.badge);
-          var hw = typeof data.high_water === "number" ? data.high_water : from;
-          var floor = typeof data.floor === "number" ? data.floor : 0;
-          /* Cursor outside the retained range — above it (a DB reset lowered
-             max(id)) or below the retention floor (events pruned while the tab
-             was closed): resync to high_water, never replay the retained
-             backlog as new. */
-          if (from > hw || (floor > 0 && from < floor - 1)) {
-            collected = [];
-            done(hw);
-            return;
-          }
-          for (var i = 0; i < data.events.length; i++) { collected.push(data.events[i]); }
-          if (data.has_more) {
-            /* A long-closed tab: show one coalesced toast and jump to the head so
-               later polls do not re-toast the untoasted remainder. */
-            if (collected.length >= DRAIN_CAP) { done(hw); return; }
-            step(data.next_cursor);
-            return;
-          }
-          done(data.next_cursor);
-        });
-      }
-      step(cursor);
+      try {
+        fetch(BOOTSTRAP_ENDPOINT, { headers: { "Accept": "application/json" }, credentials: "same-origin" })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (data) {
+            if (data) {
+              writeCursor(data.next_cursor);
+              updateBadge(data.badge);
+              openStream(data.next_cursor);
+            } else {
+              openStream(null);
+            }
+          })
+          .catch(function () { openStream(null); });
+      } catch (e) { openStream(null); }
     }
 
-    poll();
+    /* Page lifecycle: close on hide, reopen on bfcache restore. */
+    window.addEventListener("pagehide", function () {
+      if (source) { source.close(); source = null; }
+    });
+    window.addEventListener("pageshow", function (e) {
+      if (e.persisted && !source) { bootstrap(); }
+    });
+
+    bootstrap();
   })();
   </script>
   {% endif %}
