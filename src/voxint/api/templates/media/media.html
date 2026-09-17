@@ -139,15 +139,16 @@
 </p>
 {% endif %}
 
-<div id="upload-panel" class="add-media-panel" hidden>
+<div id="upload-panel" class="add-media-panel" data-upload-panel hidden>
   <form method="post" action="/media/submit" enctype="multipart/form-data">
     <input type="hidden" name="submission_id" value="{{ submission_id }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_media_submit }}">
-    <label class="dropzone" data-dropzone>Drop a file here, or choose one
+    <label class="dropzone" data-dropzone><span data-dropzone-label>Drop a file here, or choose one</span>
       <input type="file" name="file" required>
     </label>
     {{ folder_picker("submit-folder") }}
-    <button type="submit" class="primary">Submit for transcription</button>
+    <div id="upload-queue" hidden></div>
+    <button type="submit" class="primary" data-upload-submit>Submit for transcription</button>
   </form>
 </div>
 
@@ -403,16 +404,250 @@
     var children = document.querySelectorAll('[data-parent="' + folderId + '"]');
     for (var c of children) { c.hidden = expanded; }
   }
-  for (var zone of document.querySelectorAll('[data-dropzone]')) {
+  document.querySelectorAll('[data-dropzone]').forEach(function (zone) {
     var input = zone.querySelector('input[type=file]');
-    if (!input) continue;
-    zone.addEventListener('dragover', function (e) { e.preventDefault(); zone.classList.add('is-drag'); });
+    if (!input) return;
+    zone.addEventListener('dragover', function (e) {
+      e.preventDefault();
+      if (!input.disabled) zone.classList.add('is-drag');
+    });
     zone.addEventListener('dragleave', function () { zone.classList.remove('is-drag'); });
     zone.addEventListener('drop', function (e) {
       e.preventDefault(); zone.classList.remove('is-drag');
-      if (e.dataTransfer && e.dataTransfer.files.length) { input.files = e.dataTransfer.files; }
+      if (!input.disabled && e.dataTransfer && e.dataTransfer.files.length) {
+        input.files = e.dataTransfer.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
     });
-  }
+  });
+
+  var uploadPanel = document.querySelector('[data-upload-panel]');
+  if (uploadPanel) (function () {
+    var uploadForm = uploadPanel.querySelector('form');
+    var fileInput = uploadForm.querySelector('input[type=file]');
+    var folderInput = uploadForm.querySelector('[name=media_folder_id]');
+    var submitButton = uploadForm.querySelector('[data-upload-submit]');
+    var container = uploadPanel.querySelector('#upload-queue');
+    var queue = [];
+    var uploading = false;
+    var stopping = false;
+    var renderScheduled = false;
+
+    function uuidv4() {
+      if (window.crypto.randomUUID) return window.crypto.randomUUID();
+      var bytes = window.crypto.getRandomValues(new Uint8Array(16));
+      bytes[6] = (bytes[6] & 15) | 64;
+      bytes[8] = (bytes[8] & 63) | 128;
+      var hex = Array.from(bytes, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+      return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' +
+        hex.slice(16, 20) + '-' + hex.slice(20);
+    }
+
+    function formatSize(bytes) {
+      var units = ['bytes', 'KB', 'MB', 'GB'];
+      var unit = 0;
+      while (bytes >= 1024 && unit < units.length - 1) { bytes /= 1024; unit++; }
+      return bytes.toFixed(1) + ' ' + units[unit];
+    }
+
+    fileInput.multiple = true;
+    fileInput.required = false;
+    uploadForm.querySelector('[data-dropzone-label]').textContent = 'Drop files here, or choose them';
+    var list = document.createElement('ul');
+    list.className = 'upload-queue';
+    container.appendChild(list);
+    var summary = document.createElement('p');
+    summary.className = 'upload-summary';
+    summary.setAttribute('role', 'status');
+    container.appendChild(summary);
+    var stopButton = document.createElement('button');
+    stopButton.type = 'button';
+    stopButton.textContent = 'Stop after current file';
+    stopButton.hidden = true;
+    uploadForm.appendChild(stopButton);
+    stopButton.addEventListener('click', function () {
+      stopping = true;
+      stopButton.disabled = true;
+      summary.textContent = 'Stopping after the current file…';
+    });
+
+    function renderQueue() {
+      container.hidden = queue.length === 0;
+      queue.forEach(function (entry) {
+        if (!entry.row) {
+          entry.row = document.createElement('li');
+          var name = document.createElement('span');
+          name.className = 'upload-name';
+          name.textContent = entry.file.name;
+          var size = document.createElement('span');
+          size.className = 'upload-size';
+          size.textContent = formatSize(entry.file.size);
+          entry.progress = document.createElement('progress');
+          entry.progress.max = 100;
+          entry.progress.setAttribute('aria-label', 'Upload progress for ' + entry.file.name);
+          entry.message = document.createElement('span');
+          entry.message.className = 'upload-status';
+          entry.button = document.createElement('button');
+          entry.button.type = 'button';
+          entry.button.className = 'upload-action';
+          entry.button.addEventListener('click', function () {
+            if (uploading) return;
+            if (entry.status === 'failed') {
+              entry.status = 'pending';
+              entry.percent = 0;
+              startBatch([entry]);
+            } else if (entry.status === 'pending') {
+              queue.splice(queue.indexOf(entry), 1);
+              entry.row.remove();
+              summary.textContent = '';
+              renderQueue();
+            }
+          });
+          [name, size, entry.progress, entry.message, entry.button].forEach(function (el) {
+            entry.row.appendChild(el);
+          });
+          list.appendChild(entry.row);
+        }
+        var state = entry.status === 'queued' ? 'done' : entry.status;
+        if (state === 'finalizing') state = 'uploading';
+        entry.row.className = 'upload-row is-' + state;
+        entry.progress.value = entry.percent || 0;
+        entry.message.textContent = entry.status === 'uploading' ? 'Uploading (' + (entry.percent || 0) + '%)' :
+          entry.status === 'finalizing' ? 'Finalizing…' : entry.status === 'queued' ? 'Queued' :
+          entry.status === 'failed' ? entry.error : 'Pending';
+        entry.button.hidden = entry.status !== 'pending' && entry.status !== 'failed';
+        entry.button.disabled = uploading;
+        entry.button.textContent = entry.status === 'failed' ? 'Retry' : 'Remove';
+        entry.button.setAttribute('aria-label', entry.button.textContent + ' ' + entry.file.name);
+      });
+      var pending = queue.filter(function (entry) { return entry.status === 'pending'; }).length;
+      submitButton.textContent = pending ? 'Upload ' + pending + ' file' + (pending === 1 ? '' : 's') :
+        'Submit for transcription';
+      submitButton.disabled = uploading || pending === 0;
+    }
+
+    function scheduleRender() {
+      if (renderScheduled) return;
+      renderScheduled = true;
+      window.setTimeout(function () { renderScheduled = false; renderQueue(); }, 100);
+    }
+
+    fileInput.addEventListener('change', function () {
+      if (uploading) return;
+      Array.from(fileInput.files).forEach(function (file) {
+        queue.push({ file: file, id: uuidv4(), status: 'pending', percent: 0 });
+      });
+      fileInput.value = '';
+      summary.textContent = '';
+      renderQueue();
+    });
+
+    function beforeUnload(e) { e.preventDefault(); e.returnValue = ''; }
+
+    function startBatch(batch) {
+      if (uploading || !batch.length) return;
+      var csrfToken = uploadForm.querySelector('[name=csrf_token]').value;
+      var folderId = folderInput.value;
+      var index = 0;
+      var queued = 0;
+      var failed = 0;
+      var forbidden = false;
+      uploading = true;
+      stopping = false;
+      fileInput.disabled = true;
+      folderInput.disabled = true;
+      stopButton.hidden = false;
+      stopButton.disabled = false;
+      summary.textContent = '';
+      window.addEventListener('beforeunload', beforeUnload);
+      renderQueue();
+
+      function finish() {
+        uploading = false;
+        fileInput.disabled = false;
+        folderInput.disabled = false;
+        stopButton.hidden = true;
+        var hasPending = queue.some(function (e) { return e.status === 'pending' || e.status === 'failed'; });
+        if (!hasPending) window.removeEventListener('beforeunload', beforeUnload);
+        summary.textContent = queued + ' of ' + batch.length + ' queued for transcription' +
+          (failed ? ' (' + failed + ' failed)' : '') +
+          (forbidden ? '. Uploads stopped: authorization failed. Reload before retrying.' :
+            stopping ? '. Stopped; remaining files are pending.' : '');
+        if (queued > 0) summary.textContent += ' Reload the page to see them in the library.';
+        renderQueue();
+      }
+
+      function next() {
+        if (stopping || index === batch.length) { finish(); return; }
+        var entry = batch[index++];
+        entry.status = 'uploading';
+        entry.percent = 0;
+        renderQueue();
+        var xhr = new XMLHttpRequest();
+        var data = new FormData();
+        data.append('file', entry.file);
+        data.append('submission_id', entry.id);
+        data.append('csrf_token', csrfToken);
+        data.append('media_folder_id', folderId);
+        xhr.open('POST', uploadForm.action);
+        xhr.setRequestHeader('Accept', 'application/json');
+        xhr.timeout = 5 * 60 * 1000;
+        xhr.upload.onprogress = function (e) {
+          if (e.lengthComputable) {
+            entry.percent = Math.min(100, Math.floor(e.loaded / e.total * 100));
+            if (e.loaded >= e.total) entry.status = 'finalizing';
+            scheduleRender();
+          }
+        };
+        xhr.upload.onload = function () {
+          entry.percent = 100;
+          entry.status = 'finalizing';
+          scheduleRender();
+        };
+        xhr.onload = function () {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            entry.status = 'queued';
+            entry.percent = 100;
+            queued++;
+          } else {
+            entry.status = 'failed';
+            entry.error = 'Upload failed (HTTP ' + xhr.status + ')';
+            try {
+              var response = JSON.parse(xhr.responseText);
+              if (response.detail) entry.error = typeof response.detail === 'string' ?
+                response.detail : JSON.stringify(response.detail);
+            } catch (err) { /* Non-JSON errors retain the HTTP status. */ }
+            failed++;
+            if (xhr.status === 401 || xhr.status === 403) { forbidden = true; stopping = true; }
+          }
+          renderQueue();
+          next();
+        };
+        xhr.onerror = function () {
+          entry.status = 'failed';
+          entry.error = 'Upload failed (network error)';
+          failed++;
+          renderQueue();
+          next();
+        };
+        xhr.ontimeout = function () {
+          entry.status = 'failed';
+          entry.error = 'Upload timed out';
+          failed++;
+          renderQueue();
+          next();
+        };
+        xhr.send(data);
+      }
+      next();
+    }
+
+    uploadForm.addEventListener('submit', function (e) {
+      e.preventDefault();
+      startBatch(queue.filter(function (entry) { return entry.status === 'pending'; }));
+    });
+    renderQueue();
+  })();
 
   var form = document.getElementById('bulk-form');
   if (!form) return;
