@@ -6,8 +6,9 @@ import {
   useState,
 } from "react";
 
-import type { PeaksPayload, Turn } from "../lib/peaks";
+import type { PeaksPayload, TimeRange, Turn } from "../lib/peaks";
 import { segmentAtTime } from "../lib/peaks";
+import { formatTime, isDragDistance, normalizeRange } from "../lib/waveform-selection";
 import type { Segment } from "./TranscriptPlayer";
 
 // Who-spoke-when waveform strip (issue #57). One DPR-aware canvas: mirrored
@@ -18,9 +19,10 @@ import type { Segment } from "./TranscriptPlayer";
 // NEVER touches the audio element, so the fail-closed seek gate (issue #55)
 // stays structural: the only seek path is the caller's gated playTurn.
 //
-// aria-hidden by design: every action here (select / play a segment) exists in
-// the accessible list with real buttons; exposing 2000 canvas regions to AT
-// would be noise, not access. The data-* attributes are for the E2E lane.
+// aria-hidden by design: click-to-play has an accessible equivalent in the
+// transcript list. Drag-to-select is pointer-only (accepted gap: the strip
+// is enhancement, not a primary workflow). The data-* attributes are for the
+// E2E lane.
 
 interface WaveformStripProps {
   peaks: PeaksPayload;
@@ -35,6 +37,9 @@ interface WaveformStripProps {
   // a playback affordance would over-promise on an unreliable timeline.
   currentTime: number;
   onRegionActivate: (index: number) => void;
+  selection: TimeRange | null;
+  onSelectionChange: (range: TimeRange | null) => void;
+  onPlaySelection?: (start: number, end: number) => void;
 }
 
 const STRIP_HEIGHT = 72;
@@ -79,7 +84,19 @@ export function WaveformStrip({
   seekEnabled,
   currentTime,
   onRegionActivate,
+  selection,
+  onSelectionChange,
+  onPlaySelection,
 }: WaveformStripProps) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    anchorClientX: number;
+    anchorTime: number;
+    isDragging: boolean;
+  } | null>(null);
+  const [draftRange, setDraftRange] = useState<TimeRange | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const probesRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState<number>(0);
@@ -89,7 +106,7 @@ export function WaveformStrip({
   const [themeEpoch, setThemeEpoch] = useState<number>(0);
   // Left position (%) of the "no transcript here" note after a click that lands
   // on no segment; null hides it. Cleared by the next valid click, replaced by
-  // the next gap click (see onClick). No timer / toast framework — the note is
+  // the next gap click (see handlePointerUp). No timer / toast framework — the note is
   // strip-local and purely presentational, so it never touches the seek gate.
   const [gapHint, setGapHint] = useState<number | null>(null);
 
@@ -255,11 +272,80 @@ export function WaveformStrip({
     ctx.globalAlpha = 1;
   }, [peaks, turns, segments, activeIndex, cursorIndex, width, themeEpoch]);
 
-  const onClick = useCallback(
-    (event: React.MouseEvent<HTMLCanvasElement>) => {
+  const clearDrag = useCallback(() => {
+    dragRef.current = null;
+    setDraftRange(null);
+    setIsDragging(false);
+  }, []);
+
+  const rangeAtClientX = useCallback(
+    (anchorTime: number, clientX: number): TimeRange | null => {
+      const canvas = canvasRef.current;
+      if (!canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0) return null;
+      const time = ((clientX - rect.left) / rect.width) * peaks.duration;
+      return normalizeRange(anchorTime, time, peaks.duration);
+    },
+    [peaks.duration],
+  );
+
+  const handlePointerDown = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      if (event.button !== 0) return;
+      if (dragRef.current && dragRef.current.pointerId !== event.pointerId) return;
+      if (dragRef.current) clearDrag();
       const canvas = canvasRef.current;
       if (!canvas || width <= 0) return;
       const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const relX = (event.clientX - rect.left) / rect.width;
+      dragRef.current = {
+        pointerId: event.pointerId,
+        anchorClientX: event.clientX,
+        anchorTime: relX * peaks.duration,
+        isDragging: false,
+      };
+      try {
+        canvas.setPointerCapture(event.pointerId);
+      } catch {
+        // Synthetic events in test harnesses have no active pointer.
+      }
+    },
+    [peaks.duration, width, clearDrag],
+  );
+
+  const handlePointerMove = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      if (!drag.isDragging && isDragDistance(drag.anchorClientX, event.clientX)) {
+        drag.isDragging = true;
+        setIsDragging(true);
+        setGapHint(null);
+      }
+      if (drag.isDragging) {
+        setDraftRange(rangeAtClientX(drag.anchorTime, event.clientX));
+      }
+    },
+    [rangeAtClientX],
+  );
+
+  const handlePointerUp = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      clearDrag();
+      if (drag.isDragging) {
+        const range = rangeAtClientX(drag.anchorTime, event.clientX);
+        if (range) onSelectionChange(range);
+        return;
+      }
+      onSelectionChange(null);
+      const canvas = canvasRef.current;
+      if (!canvas || width <= 0) return;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0) return;
       const relX = (event.clientX - rect.left) / rect.width;
       const index = segmentAtTime(segments, relX * peaks.duration);
       if (index >= 0) {
@@ -275,8 +361,55 @@ export function WaveformStrip({
       // snapping to a nearby segment, no audio — the seek gate is untouched.
       setGapHint(Math.min(Math.max(relX * 100, 0), 100));
     },
-    [segments, peaks.duration, width, onRegionActivate],
+    [
+      clearDrag,
+      rangeAtClientX,
+      onSelectionChange,
+      segments,
+      peaks.duration,
+      width,
+      onRegionActivate,
+    ],
   );
+
+  const handlePointerCancel = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      if (dragRef.current?.pointerId !== event.pointerId) return;
+      clearDrag();
+    },
+    [clearDrag],
+  );
+
+  useEffect(() => {
+    if (!selection && !isDragging) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, [contenteditable]")) return;
+      if (isDragging) clearDrag();
+      if (selection) onSelectionChange(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selection, isDragging, onSelectionChange, clearDrag]);
+
+  useEffect(() => {
+    if (!selection) return;
+    const onDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      if (
+        wrapperRef.current &&
+        !wrapperRef.current.contains(e.target as Node)
+      ) {
+        onSelectionChange(null);
+      }
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [selection, onSelectionChange]);
+
+  const rangeToRender = isDragging ? draftRange : selection;
+  const isDraggingNow = isDragging;
 
   // currentTime is -1 until the first timeupdate; >= 0 shows the playhead even
   // while segment 0 (start = 0s) plays. Still hidden when seeking is untrusted.
@@ -286,55 +419,111 @@ export function WaveformStrip({
       : null;
 
   return (
-    <div
-      aria-hidden="true"
-      data-testid="waveform-strip"
-      data-active-index={activeIndex}
-      data-cursor-index={cursorIndex ?? -1}
-      className="relative w-full my-2 rounded border border-line/40 overflow-hidden"
-      style={{ height: STRIP_HEIGHT }}
-      title={
-        seekEnabled
-          ? "Who spoke when — click to play that part"
-          : "Who spoke when — seeking is unavailable, so clicking only shows the segment in the list"
-      }
-    >
-      {/* Palette probes: resolve the stylesheet's current --spk-accent values
+    <div ref={wrapperRef}>
+      <div
+        aria-hidden="true"
+        data-testid="waveform-strip"
+        data-active-index={activeIndex}
+        data-cursor-index={cursorIndex ?? -1}
+        className="relative w-full my-2 rounded border border-line/40 overflow-hidden"
+        style={{ height: STRIP_HEIGHT }}
+        title={
+          seekEnabled
+            ? "Who spoke when — click to play, drag to select a range"
+            : "Who spoke when — seeking is unavailable, so clicking only shows the segment in the list"
+        }
+      >
+        {/* Palette probes: resolve the stylesheet's current --spk-accent values
           (light/dark) without duplicating them in JS. */}
-      <div ref={probesRef} className="hidden">
-        {Array.from({ length: PALETTE_SIZE }, (_, i) => (
-          <span key={i} className={`spk-${i}`} />
-        ))}
-      </div>
-      <canvas
-        ref={canvasRef}
-        onClick={onClick}
-        className="block w-full h-full"
-        style={{ cursor: "pointer" }}
-      />
-      {playheadPct != null && (
-        <div
-          data-testid="waveform-playhead"
-          className="absolute top-0 bottom-0 w-[1.5px] bg-current pointer-events-none"
-          style={{ left: `${playheadPct}%` }}
+        <div ref={probesRef} className="hidden">
+          {Array.from({ length: PALETTE_SIZE }, (_, i) => (
+            <span key={i} className={`spk-${i}`} />
+          ))}
+        </div>
+        <canvas
+          ref={canvasRef}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
+          onLostPointerCapture={handlePointerCancel}
+          className="block w-full h-full"
+          style={{
+            cursor: "pointer",
+            touchAction: "pan-y pinch-zoom",
+            userSelect: "none",
+          }}
         />
-      )}
-      {gapHint != null && (
-        <>
-          {/* Marker at the click, so the centered note (below) still reads
-              which point had no transcript without risking edge clipping. */}
+        {rangeToRender && (
           <div
-            className="absolute top-0 bottom-0 w-px bg-line pointer-events-none"
-            style={{ left: `${gapHint}%` }}
+            className="absolute top-0 bottom-0 pointer-events-none"
+            style={{
+              left: `${(rangeToRender.start / peaks.duration) * 100}%`,
+              width: `${((rangeToRender.end - rangeToRender.start) / peaks.duration) * 100}%`,
+              background: "var(--accent, #6366f1)",
+              opacity: isDraggingNow ? 0.2 : 0.25,
+              borderLeft: "1.5px solid var(--accent, #6366f1)",
+              borderRight: "1.5px solid var(--accent, #6366f1)",
+            }}
           />
+        )}
+        {playheadPct != null && (
           <div
-            data-testid="waveform-gap-hint"
-            className="absolute left-1/2 top-1 -translate-x-1/2 px-1.5 py-0.5 rounded border border-line text-[11px] leading-none whitespace-nowrap pointer-events-none"
-            style={{ background: "var(--surface)", color: "var(--ink-2)" }}
+            data-testid="waveform-playhead"
+            className="absolute top-0 bottom-0 w-[1.5px] bg-current pointer-events-none"
+            style={{ left: `${playheadPct}%` }}
+          />
+        )}
+        {gapHint != null && (
+          <>
+            {/* Marker at the click, so the centered note (below) still reads
+              which point had no transcript without risking edge clipping. */}
+            <div
+              className="absolute top-0 bottom-0 w-px bg-line pointer-events-none"
+              style={{ left: `${gapHint}%` }}
+            />
+            <div
+              data-testid="waveform-gap-hint"
+              className="absolute left-1/2 top-1 -translate-x-1/2 px-1.5 py-0.5 rounded border border-line text-[11px] leading-none whitespace-nowrap pointer-events-none"
+              style={{ background: "var(--surface)", color: "var(--ink-2)" }}
+            >
+              No transcript text at this point
+            </div>
+          </>
+        )}
+      </div>
+      {selection && !isDraggingNow && (
+        <div
+          className="flex items-center gap-2 mt-1 text-sm"
+          style={{ color: "var(--ink-2)" }}
+        >
+          <span>
+            {formatTime(selection.start)} – {formatTime(selection.end)}
+          </span>
+          {onPlaySelection && (
+            <button
+              type="button"
+              className="px-2 py-0.5 rounded border border-line text-xs"
+              style={{ background: "var(--surface)" }}
+              onClick={() => onPlaySelection(selection.start, selection.end)}
+              disabled={!seekEnabled}
+              title={
+                seekEnabled ? "Play selected range" : "Seeking is unavailable"
+              }
+            >
+              ▶ Play selection
+            </button>
+          )}
+          <button
+            type="button"
+            className="px-2 py-0.5 rounded border border-line text-xs"
+            style={{ background: "var(--surface)" }}
+            onClick={() => onSelectionChange(null)}
+            title="Clear selection"
           >
-            No transcript text at this point
-          </div>
-        </>
+            ✕ Clear
+          </button>
+        </div>
       )}
     </div>
   );

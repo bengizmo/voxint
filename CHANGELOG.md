@@ -13,6 +13,53 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   section with a ready-to-paste medium configuration.
 
 
+## [0.41.0] - 2026-09-16
+
+### Added
+- **"Recent" section in command palette** (#501). The palette now shows up to
+  five recently opened recordings below the search results, persisted in
+  localStorage. Recent items appear when the palette opens with an empty query
+  and clear with a dedicated button.
+
+- **Walk-mode speaker identity** (#512). The walk/editing segment header now
+  shows the current speaker's display name in bold with a palette-colored left
+  border, matching the transcript row accents. Raw diarization label appears as
+  a secondary badge when it differs from the display name. The aria-live cursor
+  announcement uses the same fallback chain as the visible UI.
+
+- **Stale-asset detection on native startup** (#510). `up` now checks whether
+  the built frontend assets match the current git HEAD and Vite manifest before
+  starting services. Two advisory signals (never blocking): a git HEAD stamp
+  comparison and a manifest byte comparison, catching partial setups.
+
+- **Export keyboard shortcut** (#500). Pressing `d` toggles the download
+  transcript disclosure, scrolls to it, and focuses the summary. Shown in the
+  `?` shortcuts modal and discoverable via the command palette. Works for
+  read-only visitors.
+
+- **Searchable speaker combobox** (#513). All four speaker-assignment dropdowns
+  in the editor now use a shared combobox with type-ahead filtering, keyboard
+  navigation, ARIA combobox semantics, and an inline "Create [name]" option for
+  on-the-fly speaker creation. Digit-key direct-assign (1-9) preserved. The
+  speaker roster refreshes live on enroll, merge, and undo without a page reload.
+
+- **Waveform drag-to-select** (#502). Click and drag on the waveform strip to
+  select a time range, shown as a theme-aware accent overlay. A "Play selection"
+  button appears for bounded playback; "Clear" and a time-range display accompany
+  it. Single click preserves existing seek behavior and clears any prior
+  selection. Pointer Events with `setPointerCapture` for cross-input support.
+
+- **Worker readiness verification** (#509). `up` now polls the worker log for
+  celery's ready marker (15s timeout) before declaring the stack ready. On
+  timeout, warns but continues startup and returns non-zero so `up && submit`
+  does not proceed against a half-up stack.
+
+### Changed
+- **Improved launchd state reporting** (#509). `status` now reports
+  "stopped (clean exit)" for exit-0 jobs instead of the opaque "state unknown",
+  making KeepAlive gaps immediately visible.
+
+
 ## [0.40.0] - 2026-09-16
 
 ### Fixed
@@ -50,12 +97,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   profile page. Covers all resolved states (voice match, auto-enroll, operator
   ruling) and confirmable candidates ("Possibly Jane Doe" links to Jane Doe).
   Unidentified and excluded labels remain plain text.
-
-- **Walk-mode speaker identity** (#512). The walk/editing segment header now
-  shows the current speaker's display name in bold with a palette-colored left
-  border, matching the transcript row accents. Raw diarization label appears as
-  a secondary badge when it differs from the display name. The aria-live cursor
-  announcement uses the same fallback chain as the visible UI.
 
 - **Viewer-role template wiring.** When multi-user mode is on, viewer accounts
   now see a clean read-only console: upload buttons, claim forms,

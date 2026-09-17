@@ -4,7 +4,10 @@
  * All functions are side-effect-free and tested with vitest.
  */
 
+import { rankItems } from "./combobox";
 import { type RecentPage } from "./recent-pages";
+
+export { moveActive } from "./combobox";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -93,29 +96,7 @@ export function filterCommands(
   query: string,
   cap = 6,
 ): PaletteCommand[] {
-  const q = query.toLowerCase().trim();
-  if (!q) return commands.slice(0, cap);
-
-  const prefix: PaletteCommand[] = [];
-  const wordPrefix: PaletteCommand[] = [];
-  const substring: PaletteCommand[] = [];
-
-  for (const cmd of commands) {
-    const lower = cmd.label.toLowerCase();
-    if (lower.startsWith(q)) {
-      prefix.push(cmd);
-    } else if (
-      lower
-        .split(/\s+/)
-        .some((w) => w.startsWith(q))
-    ) {
-      wordPrefix.push(cmd);
-    } else if (lower.includes(q)) {
-      substring.push(cmd);
-    }
-  }
-
-  return [...prefix, ...wordPrefix, ...substring].slice(0, cap);
+  return rankItems(commands, query, (c) => c.label, cap);
 }
 
 // ---------------------------------------------------------------------------
@@ -215,33 +196,6 @@ export function rowAt(
     offset += group.rows.length;
   }
   return undefined;
-}
-
-// ---------------------------------------------------------------------------
-// Keyboard navigation
-// ---------------------------------------------------------------------------
-
-/**
- * Move the active index for ArrowUp/Down/Home/End. Clamped, no wrap.
- */
-export function moveActive(
-  index: number,
-  key: string,
-  count: number,
-): number {
-  if (count === 0) return -1;
-  switch (key) {
-    case "ArrowDown":
-      return Math.min(index + 1, count - 1);
-    case "ArrowUp":
-      return Math.max(index - 1, 0);
-    case "Home":
-      return 0;
-    case "End":
-      return count - 1;
-    default:
-      return index;
-  }
 }
 
 // ---------------------------------------------------------------------------

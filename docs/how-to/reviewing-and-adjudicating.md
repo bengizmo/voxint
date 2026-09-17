@@ -143,7 +143,7 @@ Use the actions on the card:
 | Action | What it does |
 |---|---|
 | **Confirm Jordan** | Records your ruling that this voice is the suggested known person. It does not add a voice sample. |
-| **Someone else…** or **Known person…** | This voice is a different person from your roster: pick them from the list. Choose **Add a new person…** at the end of the list to type a name, then press **Add person**; that adds them to your roster and keeps this voice as their sample. **Cancel** closes the name box. |
+| **Someone else…** or **Known person…** | This voice is a different person from your roster: a searchable speaker picker opens where you can type to filter by name, use arrow keys to navigate, and press Enter to select. Type a name that does not exist yet and choose **Create "[name]"** to add them to your roster on the fly; that keeps this voice as their sample. Press **Escape** to close the picker. |
 | **Not a person** | This "voice" is background noise, music, a TV, or someone you do not want in the results. Leaves it out. |
 | **Can't tell** | You genuinely cannot tell who this is. An honest ruling that settles the voice; you can change it later. |
 
@@ -290,6 +290,13 @@ stays honest). If you click a spot with no transcript there, whether a silent
 gap or speech that was never transcribed, the strip says so instead of doing
 nothing. A marker tracks playback and shows where your review cursor is.
 
+You can also **click and drag** across the strip to select a time range. The
+selected region gets an accent-colored overlay, and a **Play selection** button
+appears below the strip for bounded playback (audio plays the selected range and
+stops). A time display shows the start, end, and duration. Click **Clear** or
+press **Escape** to dismiss the selection. A plain click (no drag) still seeks
+as before and clears any prior selection.
+
 ### Split a segment at a word
 
 Sometimes one transcript segment actually contains **two speakers**: the
@@ -309,12 +316,15 @@ more, in this release.
 ### Reassign a segment (or half of one) to another speaker
 
 Each line has a **speaker picker** so you can hand it to the right person
-without leaving the transcript:
+without leaving the transcript. The picker is a searchable combobox: type to
+filter by name, use arrow keys to navigate, and press Enter to select. If you
+need a new speaker, type their name and choose **Create "[name]"** to add them
+to the roster on the fly.
 
-- **A whole segment:** with a line focused, pick a speaker from the **Assign
-  speaker** menu, or press a number key **1–9** to assign it to the 1st–9th
-  speaker on your roster. Press **0** to reset the line to its **detected**
-  speaker (undo your override).
+- **A whole segment:** with a line focused, open the **Assign speaker** picker,
+  or press a number key **1–9** to assign it to the 1st–9th speaker on your
+  roster. Press **0** to reset the line to its **detected** speaker (undo your
+  override).
 - **Half of a split segment:** after you split a segment, **each part gets its
   own picker**. Choose the speaker for each half independently, or pick
   **inherit** to send it back to following its label.
@@ -344,6 +354,7 @@ player.](../images/keyboard-shortcuts.png)
 | **j** / **k** | Go to and play the next / previous line |
 | **1**–**9** | Assign this line to the 1st–9th speaker on your roster |
 | **0** | Reset this line to its detected speaker |
+| **d** | Toggle the download transcript panel and focus it |
 | **?** | Show the cheat-sheet |
 | **Ctrl/⌘+Enter** | Save an edit (while typing in the edit box) |
 

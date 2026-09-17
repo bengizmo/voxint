@@ -200,6 +200,7 @@ from voxint.export.manifest import (
     build_quote_manifest,
 )
 from voxint.speakers.matching import gates_from_settings
+from voxint.speakers.roster import active_speakers
 from voxint.speakers.roster import is_active as roster_is_active
 
 logger = logging.getLogger(__name__)
@@ -375,6 +376,7 @@ def _labels_response(
     run: PipelineRun,
     *,
     undo: dict[str, str] | None = None,
+    include_speakers: bool = False,
 ) -> Response:
     """Return updated label states and segments for the editor island."""
     settings: Settings = request.app.state.settings
@@ -387,6 +389,11 @@ def _labels_response(
     }
     if undo is not None:
         payload["undo"] = undo
+    if include_speakers:
+        payload["speakers"] = [
+            {"id": str(sp.id), "displayName": sp.display_name}
+            for sp in active_speakers(session)
+        ]
     return JSONResponse(payload)
 
 
@@ -778,7 +785,9 @@ def merge_apply(
                 datetime.now(UTC) + timedelta(seconds=settings.UNDO_GRACE_SECONDS)
             ).isoformat(),
         }
-    return _labels_response(request, session, run, undo=undo)
+    return _labels_response(
+        request, session, run, undo=undo, include_speakers=True,
+    )
 
 
 @router.post("/review/{run_id}/segments/{segment_id}/relabel")
@@ -1163,7 +1172,9 @@ def enroll(
                 datetime.now(UTC) + timedelta(seconds=settings.UNDO_GRACE_SECONDS)
             ).isoformat(),
         }
-    return _labels_response(request, session, run, undo=undo)
+    return _labels_response(
+        request, session, run, undo=undo, include_speakers=True,
+    )
 
 
 # Transcript downloads: one attributed read shaped by a pure formatter (see
@@ -2484,7 +2495,7 @@ def undo_enroll(
     except UndoError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     session.commit()
-    return _labels_response(request, session, run)
+    return _labels_response(request, session, run, include_speakers=True)
 
 
 @router.post("/review/{run_id}/undo/merge")
@@ -2524,7 +2535,7 @@ def undo_merge_action(
     except UndoError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     session.commit()
-    return _labels_response(request, session, run)
+    return _labels_response(request, session, run, include_speakers=True)
 
 
 # --- Legacy review page redirects (issue #158) ---
