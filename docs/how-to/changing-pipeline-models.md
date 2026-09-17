@@ -182,6 +182,35 @@ double-run problem it is meant to prevent.
 
 ---
 
+## Transcription on CPU
+
+The shipped large-v2 is slow on CPU by design: it is a 1.5B-parameter model.
+If you need faster transcription on a CPU-only Docker install, medium trades
+accuracy for speed. Its accuracy has not been measured in Voxint, so you need to
+judge whether its results are good enough for your recordings.
+
+Set these three keys in your `.env` file:
+
+```dotenv
+WHISPER_MODEL=Systran/faster-whisper-medium
+WHISPER_REVISION=08e178d48790749d25932bbc082711ddcfdfbc4f
+WHISPER_ALLOW_DOWNLOAD=1
+```
+
+Restart the transcription service to apply the change:
+
+```bash
+docker compose -f compose.yaml -f compose.cpu.yaml up -d whisper
+```
+
+The download is roughly 1.5 GB, so the first start is slow while it downloads.
+
+To go back to the validated large-v2, remove `WHISPER_MODEL`,
+`WHISPER_REVISION`, and `WHISPER_ALLOW_DOWNLOAD` from `.env`, then run the same
+restart command again.
+
+---
+
 ## A note for Apple Silicon (Metal) installs
 
 The native macOS path runs the model services directly on your Mac rather than in

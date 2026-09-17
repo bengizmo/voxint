@@ -33,7 +33,7 @@ from app.schemas import (
     Word,
 )
 from app.transcription import DecodeError
-from app.whisper_startup import apply_whisper_startup
+from app.whisper_startup import apply_whisper_startup, should_advise_cpu_model
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -52,11 +52,20 @@ MAX_PENDING_REQUESTS = int(os.getenv("MAX_PENDING_REQUESTS", "8"))
 # overrides are in os.environ before the model libraries load.
 _startup = apply_whisper_startup()
 
+_device = os.getenv("DEVICE", "cuda")
+if should_advise_cpu_model(_device, _startup.model_name):
+    logger.info(
+        "Transcription model %s is running on CPU. A smaller model is "
+        "faster at the cost of unmeasured accuracy; see "
+        "docs/how-to/changing-pipeline-models.md",
+        _startup.model_name,
+    )
+
 # Fail-closed engine selection via WHISPER_ENGINE (default ct2-legacy); an
 # unknown engine raises here at import rather than degrading silently.
 transcriber = create_transcriber(
     model_name=_startup.model_name,
-    device=os.getenv("DEVICE", "cuda"),
+    device=_device,
     compute_type=os.getenv("COMPUTE_TYPE", "int8"),
     batch_size=int(os.getenv("BATCH_SIZE", "16")),
 )

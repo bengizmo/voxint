@@ -765,9 +765,26 @@ cmd_logs() {
 # Doctor
 # ---------------------------------------------------------------------------
 doctor_report() {
-  # $1 = PASS/FAIL/SKIP, $2 = message
+  # $1 = PASS/FAIL/SKIP/INFO, $2 = message
   printf '  [%s] %s\n' "$1" "$2" >&2
   [ "$1" = "FAIL" ] && DOCTOR_RC=1
+  return 0
+}
+
+doctor_whisper_cpu_advisory() {
+  # Best-effort advice: unavailable health data or Python must not fail doctor.
+  local health python
+  health=$(curl -fsS -m 3 "http://127.0.0.1:$1/healthz" 2>/dev/null) || return 0
+  python=$(metal_python 2>/dev/null) || return 0
+  # Model spellings must match DEFAULT_MODELS in whisper_startup.py.
+  if "$python" -c '
+import json, sys
+health = json.loads(sys.argv[1])
+sys.exit(0 if health.get("device") == "cpu" and health.get("model") in
+         ("large-v2", "Systran/faster-whisper-large-v2") else 1)
+' "$health" >/dev/null 2>&1; then
+    doctor_report INFO "large-v2 on CPU is slow; a smaller model is faster (see docs/how-to/changing-pipeline-models.md). The native path is currently pinned to large-v2; the alternate-model mechanism applies to Docker installs."
+  fi
   return 0
 }
 
@@ -832,6 +849,9 @@ cmd_doctor() {
     port=$(service_port "$svc")
     if curl -fsS -m 3 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
       doctor_report PASS "$svc responding on :$port"
+      if [ "$svc" = "whisper" ]; then
+        doctor_whisper_cpu_advisory "$port"
+      fi
     elif port_in_use "$port"; then
       doctor_report FAIL ":$port is occupied by something that is not $svc /healthz -- a leftover cpu-tier container stack? (docker ps)"
     else
