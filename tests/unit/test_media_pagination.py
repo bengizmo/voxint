@@ -29,20 +29,22 @@ def test_cursor_roundtrip(sort: str, value: str) -> None:
     assert MediaCursor.decode(cursor.encode()) == cursor
 
 
+_FIXED_ID = "00000000-0000-4000-8000-000000000001"
+
 @pytest.mark.parametrize(
     "raw",
     [
         "",
         "added|value",
-        "unknown|value|2026-09-17T00:00:00+00:00|" + str(uuid.uuid4()),
-        "added|value|2026-09-17T00:00:00|" + str(uuid.uuid4()),
-        "added|value|bad-date|" + str(uuid.uuid4()),
+        f"unknown|value|2026-09-17T00:00:00+00:00|{_FIXED_ID}",
+        f"added|value|2026-09-17T00:00:00|{_FIXED_ID}",
+        f"added|value|bad-date|{_FIXED_ID}",
         "added|value|2026-09-17T00:00:00+00:00|bad-id",
-        "duration|notanumber|2026-09-17T00:00:00+00:00|" + str(uuid.uuid4()),
-        "duration|inf|2026-09-17T00:00:00+00:00|" + str(uuid.uuid4()),
-        "duration|nan|2026-09-17T00:00:00+00:00|" + str(uuid.uuid4()),
-        "size|1.5|2026-09-17T00:00:00+00:00|" + str(uuid.uuid4()),
-        "size|notanumber|2026-09-17T00:00:00+00:00|" + str(uuid.uuid4()),
+        f"duration|notanumber|2026-09-17T00:00:00+00:00|{_FIXED_ID}",
+        f"duration|inf|2026-09-17T00:00:00+00:00|{_FIXED_ID}",
+        f"duration|nan|2026-09-17T00:00:00+00:00|{_FIXED_ID}",
+        f"size|1.5|2026-09-17T00:00:00+00:00|{_FIXED_ID}",
+        f"size|notanumber|2026-09-17T00:00:00+00:00|{_FIXED_ID}",
     ],
 )
 def test_invalid_cursor_fields(raw: str) -> None:
