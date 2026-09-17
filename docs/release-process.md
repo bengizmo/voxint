@@ -255,15 +255,21 @@ That lane is an optional sub-lane: unconfigured it skips, configured-but-broken
 it fails (see [`testing.md`](testing.md#gate-semantics)).
 
 Gate E also covers a **browser runtime acceptance lane** for the review-console
-islands (#53/#58), the one lane that is not a `tests/e2e/` pytest module
-(Playwright is a Claude-Code capability, and the durable check is post-hoc). Run
-it via the `voxint-e2e-review` skill over `tools/e2e_browser_lifecycle.py`: it
-builds + serves a working-tree instance, drives the verify-and-advance loop
-(verify/edit/skip/replay, click-to-edit, the discard warning, keymap
-suppression) with immediate DOM + network assertions, and reconciles
-`segment_review_states` fail-closed. Run it before tagging a release that touches
-the review console or the island build path (`frontend/`, `src/voxint/api/`),
-serially on maintainer hardware (issue #23).
+islands, the one lane that is not a `tests/e2e/` pytest module (Playwright is a
+Claude-Code capability, and the durable check is post-hoc). Run it via the
+`voxint-e2e-review` skill over `tools/e2e_browser_lifecycle.py`: it builds +
+serves a working-tree instance, drives the editor interactions with immediate DOM
++ network assertions, and reconciles `segment_review_states` and
+`label_rulings` fail-closed. The lane covers: verify/edit/skip/replay,
+click-to-edit, the discard warning, keymap suppression on focused form controls,
+the keyboard-shortcuts modal (open/dismiss/suppress), domain-pack correction
+provenance (chip presence, body, operator-edit supersede), the waveform strip
+(peaks fetch, region click, cursor sync), the searchable speaker combobox
+(type-ahead, Create option, enrollment error path), the speaker rail
+(partition, confirm, rulings, finish line), and the export shortcut. Run it
+before tagging a release that touches the review console or the island build
+path (`frontend/`, `src/voxint/api/`), serially on maintainer hardware
+(issue #23).
 
 Gate E's carry-over is **pipeline-aware**, not services-only: it exercises the
 whole submit→persist chain, the real-LLM enrichment chain, and the browser
