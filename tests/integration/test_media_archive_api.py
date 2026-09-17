@@ -29,7 +29,7 @@ from voxint.api.csrf import (
     CSRF_MEDIA_UNARCHIVE,
     mint_csrf_token,
 )
-from voxint.api.media_query import MEDIA_LIBRARY_LIMIT
+from voxint.api.routers.media import MEDIA_BULK_LIMIT
 from voxint.config import Settings
 from voxint.db.models import MediaItem, PipelineRun, RunStatus
 
@@ -485,14 +485,14 @@ def test_archive_prevalidation(
 
 
 def test_archive_over_cap_rejected(client: TestClient) -> None:
-    too_many = [str(uuid.uuid4()) for _ in range(MEDIA_LIBRARY_LIMIT + 1)]
+    too_many = [str(uuid.uuid4()) for _ in range(MEDIA_BULK_LIMIT + 1)]
     resp = client.post(
         "/media/archive",
         data=_data(CSRF_MEDIA_ARCHIVE, media_id=too_many),
         follow_redirects=False,
     )
     assert resp.status_code == 400
-    assert f"at most {MEDIA_LIBRARY_LIMIT}" in resp.text
+    assert f"at most {MEDIA_BULK_LIMIT}" in resp.text
 
 
 def test_archive_count_mismatch_rejects_with_zero_writes(

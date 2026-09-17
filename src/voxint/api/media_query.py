@@ -2,27 +2,30 @@
 
 Same shape as :mod:`voxint.api.home_query` and :mod:`voxint.api.stats_query`:
 a frozen dataclass plus a function that takes a :class:`~sqlalchemy.orm.Session`
-and issues one bounded ``SELECT``, no HTTP and no side effects.
+and issues a bounded page query plus a filtered count, no HTTP or side effects.
 
 The library lists every media item with its folder membership and the status of
 its latest run. "Latest run per file" is resolved in a single window-function
 subquery (``row_number() over (partition by media_item)``), not a per-row query,
-so the page cost is one round trip regardless of how many files there are.
+so fetching a page and its count takes two queries regardless of library size.
 Archived runs are excluded, matching the run listing and the Home feed, so a
 file whose only runs were archived reads as "not processed yet".
 """
 
 from __future__ import annotations
 
+import base64
 import math
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final, TypeGuard
+from urllib.parse import urlencode
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select, Subquery
 
 from voxint.adjudication.resolver import review_needed_label_count
 from voxint.db.models import (
@@ -33,6 +36,60 @@ from voxint.db.models import (
     Project,
 )
 from voxint.speakers.matching import MatchingGates
+
+
+class InvalidMediaCursorError(ValueError):
+    """A media pagination token cannot be decoded."""
+
+
+@dataclass(frozen=True)
+class MediaCursor:
+    sort_key: str
+    sort_value: str
+    created_at: datetime
+    item_id: uuid.UUID
+
+    def encode(self) -> str:
+        raw = f"{self.sort_key}|{self.sort_value}|{self.created_at.isoformat()}|{self.item_id}"
+        return base64.urlsafe_b64encode(raw.encode()).decode()
+
+    @classmethod
+    def decode(cls, token: str) -> MediaCursor:
+        try:
+            raw = base64.urlsafe_b64decode(token.encode()).decode()
+            # Split from the right: timestamp and UUID never contain "|", but
+            # the sort_value (a title under name sort) can.
+            head, sep1, raw_id = raw.rpartition("|")
+            if not sep1:
+                raise InvalidMediaCursorError(f"wrong field count in cursor {token!r}")
+            head, sep2, raw_ts = head.rpartition("|")
+            if not sep2:
+                raise InvalidMediaCursorError(f"wrong field count in cursor {token!r}")
+            sort_key, sep3, sort_value = head.partition("|")
+            if not sep3:
+                raise InvalidMediaCursorError(f"wrong field count in cursor {token!r}")
+            if sort_key not in _SORT_KEYS:
+                raise InvalidMediaCursorError(f"unknown sort key in cursor {token!r}")
+            if sort_key in ("duration", "size") and sort_value != "__null__":
+                try:
+                    parsed_num = float(sort_value) if sort_key == "duration" else int(sort_value)
+                except ValueError as exc:
+                    raise InvalidMediaCursorError(
+                        f"bad numeric value in cursor {token!r}"
+                    ) from exc
+                if sort_key == "duration" and not math.isfinite(parsed_num):
+                    raise InvalidMediaCursorError(
+                        f"non-finite duration in cursor {token!r}"
+                    )
+            created_at = datetime.fromisoformat(raw_ts)
+            if created_at.tzinfo is None:
+                raise InvalidMediaCursorError(f"cursor timestamp not tz-aware: {token!r}")
+            parsed_id = uuid.UUID(raw_id)
+        except Exception as exc:
+            if isinstance(exc, InvalidMediaCursorError):
+                raise
+            raise InvalidMediaCursorError(f"unparseable cursor {token!r}") from exc
+        return cls(sort_key, sort_value, created_at, parsed_id)
 
 
 @dataclass(frozen=True)
@@ -97,6 +154,13 @@ class MediaSummary:
     folder_count: int
     file_count: int
     total_hours: str
+
+
+@dataclass(frozen=True)
+class MediaPage:
+    items: list[MediaLibraryRow]
+    next_cursor: MediaCursor | None
+    total_count: int
 
 
 def group_by_folder(
@@ -216,10 +280,11 @@ def folder_options(session: Session) -> list[FolderOption]:
 # ends with (created_at desc, id desc) as a stable, deterministic tiebreak, so
 # two loads over unchanged data render identically. NULLS LAST keeps files with
 # no duration/size (still-acquiring, uploads) from crowding the top.
+name_key = func.lower(func.coalesce(MediaSourceMetadata.title, MediaItem.source_path))
 _SORTS: Final[dict[str, tuple[Any, ...]]] = {
     "added": (MediaItem.created_at.desc(), MediaItem.id.desc()),
     "name": (
-        func.lower(func.coalesce(MediaSourceMetadata.title, MediaItem.source_path)),
+        name_key,
         MediaItem.created_at.desc(),
         MediaItem.id.desc(),
     ),
@@ -234,6 +299,7 @@ _SORTS: Final[dict[str, tuple[Any, ...]]] = {
         MediaItem.id.desc(),
     ),
 }
+_SORT_KEYS: Final[frozenset[str]] = frozenset(_SORTS)
 DEFAULT_SORT: Final[str] = "added"
 SORT_LABELS: Final[tuple[tuple[str, str], ...]] = (
     ("added", "Newest"),
@@ -243,22 +309,15 @@ SORT_LABELS: Final[tuple[tuple[str, str], ...]] = (
 )
 
 # Status filter keys — the allowlist. The WHERE clause is built in
-# media_library() because "needs_review" and "reviewed" depend on
+# _media_base_stmt() because "needs_review" and "reviewed" depend on
 # review_needed_label_count (a correlated subquery), not just run status.
-_STATUS_FILTER_KEYS: Final[frozenset[str]] = frozenset(
-    {"needs_review", "failed", "reviewed"}
-)
+_STATUS_FILTER_KEYS: Final[frozenset[str]] = frozenset({"needs_review", "failed", "reviewed"})
 STATUS_LABELS: Final[tuple[tuple[str, str], ...]] = (
     ("", "All"),
     ("needs_review", "Needs review"),
     ("failed", "Failed"),
     ("reviewed", "Reviewed"),
 )
-
-# The listing is bounded (the read doctrine's "no unbounded SELECT"). The target
-# audience is a single operator with a modest library, so a flat cap is honest
-# and needs no config knob; the page says so when it truncates.
-MEDIA_LIBRARY_LIMIT: Final[int] = 500
 
 
 def sort_is_known(sort: str | None) -> TypeGuard[str]:
@@ -274,38 +333,21 @@ def _escape_like(term: str) -> str:
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def media_library(
-    session: Session,
+def _media_base_stmt(
     *,
     sort: str = DEFAULT_SORT,
-    limit: int = MEDIA_LIBRARY_LIMIT,
     archived: bool = False,
     trashed: bool = False,
     search: str | None = None,
     status: str | None = None,
     gates: MatchingGates,
-) -> list[MediaLibraryRow]:
-    """The media library rows, newest-first by default.
-
-    ``sort`` is coerced to :data:`DEFAULT_SORT` when not in the allowlist. At most
-    ``limit`` rows are returned; the caller surfaces truncation.
-
-    ``archived`` picks the run view. Default (``False``): each visible media item and
-    its latest NON-archived run, matching the run listing and Home feed. Archived
-    view (``True``): only items whose most-recent ARCHIVED run exists (inner join).
-    ``trashed`` switches the item filter from active, non-purged rows to trashed,
-    non-purged rows; callers keep it mutually exclusive with ``archived``.
-
-    ``search`` applies a case-insensitive substring match over the display name
-    (source title or source path) and the settings-folder name. ``status`` filters
-    to items whose latest run is in the given status group (``needs_review``,
-    ``failed``, or ``reviewed``); unknown values are ignored.
-    """
+) -> tuple[Select[Any], Subquery, tuple[Any, ...]]:
+    """Build the filtered library query without ordering or pagination."""
     order_by = _SORTS.get(sort, _SORTS[DEFAULT_SORT])
 
     # Latest run per media item within the chosen view (non-archived by default,
     # archived-only in the archived view), picked with a window rather than a
-    # correlated per-row subquery so the whole page is one round trip.
+    # correlated per-row subquery for each item.
     run_view = (
         PipelineRun.archived_at.is_not(None) if archived else PipelineRun.archived_at.is_(None)
     )
@@ -340,6 +382,7 @@ def media_library(
         MediaFolder.path.label("folder_path"),
         Project.id.label("project_id"),
         Project.name.label("project_name"),
+        name_key.label("name_key"),
         latest.c.run_id,
         latest.c.status,
         latest.c.run_created_at,
@@ -404,9 +447,71 @@ def media_library(
             # completed AND no unresolved labels left.
             stmt = stmt.where(latest.c.status == "completed", unresolved == 0)
 
-    stmt = stmt.order_by(*order_by).limit(limit)
+    return stmt, latest, order_by
+
+
+def media_library(
+    session: Session,
+    *,
+    sort: str = DEFAULT_SORT,
+    limit: int,
+    archived: bool = False,
+    trashed: bool = False,
+    search: str | None = None,
+    status: str | None = None,
+    gates: MatchingGates,
+    cursor: MediaCursor | None = None,
+) -> MediaPage:
+    """Return a bounded keyset page and the count of all matching media items.
+
+    Unknown sorts fall back to newest first. A cursor for another sort is
+    ignored. Archived views require an archived run; trashed views include
+    only non-purged trashed items. Counts use the same filters as the page.
+    """
+    if limit < 1:
+        raise ValueError("media page limit must be positive")
+    sort = sort if sort in _SORT_KEYS else DEFAULT_SORT
+    stmt, _latest, order_by = _media_base_stmt(
+        sort=sort,
+        archived=archived,
+        trashed=trashed,
+        search=search,
+        status=status,
+        gates=gates,
+    )
+    if cursor is not None and cursor.sort_key == sort:
+        older = or_(
+            MediaItem.created_at < cursor.created_at,
+            and_(MediaItem.created_at == cursor.created_at, MediaItem.id < cursor.item_id),
+        )
+        if sort == "added":
+            stmt = stmt.where(older)
+        elif sort == "name":
+            stmt = stmt.where(
+                or_(
+                    name_key > cursor.sort_value,
+                    and_(name_key == cursor.sort_value, older),
+                )
+            )
+        else:
+            col = MediaItem.duration_seconds if sort == "duration" else MediaItem.size_bytes
+            if cursor.sort_value == "__null__":
+                stmt = stmt.where(col.is_(None), older)
+            else:
+                cursor_val = (
+                    float(cursor.sort_value) if sort == "duration" else int(cursor.sort_value)
+                )
+                stmt = stmt.where(
+                    or_(
+                        col < cursor_val,
+                        and_(col == cursor_val, older),
+                        col.is_(None),
+                    )
+                )
+    stmt = stmt.order_by(*order_by).limit(limit + 1)
 
     rows: list[MediaLibraryRow] = []
+    name_keys: list[str] = []
     for row in session.execute(stmt):
         rows.append(
             MediaLibraryRow(
@@ -420,8 +525,6 @@ def media_library(
                 project_name=row.project_name,
                 duration_seconds=row.duration_seconds,
                 size_bytes=row.size_bytes,
-                # TIMESTAMPTZ comes back in the session timezone; normalize so
-                # the template's "... UTC" title labels are always true.
                 added_at=row.created_at.astimezone(UTC),
                 latest_run_id=row.run_id,
                 latest_run_status=row.status,
@@ -432,4 +535,82 @@ def media_library(
                 unresolved_count=row.unresolved_count,
             )
         )
-    return rows
+        name_keys.append(row.name_key)
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    name_keys = name_keys[:limit]
+    next_cursor = None
+    if has_more:
+        last = rows[-1]
+        if sort == "added":
+            sort_value = last.added_at.isoformat()
+        elif sort == "name":
+            sort_value = name_keys[-1]
+        elif sort == "duration":
+            sort_value = (
+                str(last.duration_seconds) if last.duration_seconds is not None else "__null__"
+            )
+        else:
+            sort_value = str(last.size_bytes) if last.size_bytes is not None else "__null__"
+        next_cursor = MediaCursor(sort, sort_value, last.added_at, last.id)
+    total_count = media_library_count(
+        session,
+        sort=sort,
+        archived=archived,
+        trashed=trashed,
+        search=search,
+        status=status,
+        gates=gates,
+    )
+    return MediaPage(items=rows, next_cursor=next_cursor, total_count=total_count)
+
+
+def media_library_count(
+    session: Session,
+    *,
+    sort: str = DEFAULT_SORT,
+    archived: bool = False,
+    trashed: bool = False,
+    search: str | None = None,
+    status: str | None = None,
+    gates: MatchingGates,
+) -> int:
+    """Count the filtered library independently of page size and cursor."""
+    stmt, _latest, _order_by = _media_base_stmt(
+        sort=sort,
+        archived=archived,
+        trashed=trashed,
+        search=search,
+        status=status,
+        gates=gates,
+    )
+    count_stmt = sa_select(func.count()).select_from(stmt.subquery())
+    return session.execute(count_stmt).scalar_one()
+
+
+def media_url(
+    *,
+    sort: str = DEFAULT_SORT,
+    view: str = "table",
+    archived: bool = False,
+    trashed: bool = False,
+    search: str = "",
+    status: str = "",
+    cursor: MediaCursor | None = None,
+    open_folder: str = "",
+) -> str:
+    """Build a library URL preserving filters and an optional page cursor."""
+    params: dict[str, str] = {"sort": sort, "view": view}
+    if archived:
+        params["archived"] = "1"
+    if trashed:
+        params["trashed"] = "1"
+    if search:
+        params["q"] = search
+    if status:
+        params["status"] = status
+    if open_folder:
+        params["open"] = open_folder
+    if cursor is not None:
+        params["cursor"] = cursor.encode()
+    return f"/media?{urlencode(params)}"

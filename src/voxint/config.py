@@ -140,6 +140,7 @@ class Settings(BaseSettings):
     review_low_confidence_threshold: Ratio = Field(default=0.6)
     # Bounded page size for the /runs execution-history browser (keyset paged).
     runs_page_size: int = Field(default=50, ge=1, le=500)
+    media_page_size: int = Field(default=50, ge=1, le=500)
     # Hard ceiling on a browser upload (POST /submit), enforced authoritatively
     # while streaming — an oversized Content-Length is rejected early, but the
     # stream copy stops and unlinks its temp the moment it crosses this bound, so
