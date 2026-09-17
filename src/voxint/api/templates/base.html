@@ -1871,6 +1871,7 @@
 
     var source = null;
     var errorCount = 0;
+    var giveUpAt = 0;
 
     function openStream(cursor) {
       if (source) { source.close(); }
@@ -1878,9 +1879,28 @@
       if (typeof cursor === "number") { url += "?since=" + encodeURIComponent(cursor); }
       source = new EventSource(url);
       errorCount = 0;
+      giveUpAt = 0;
+
+      source.addEventListener("init", function (e) {
+        errorCount = 0; giveUpAt = 0;
+        try {
+          var data = JSON.parse(e.data);
+          if (typeof data.next_cursor === "number") { writeCursor(data.next_cursor); }
+          if (typeof data.badge === "number") { updateBadge(data.badge); }
+        } catch (err) { /* ignore */ }
+      });
+
+      source.addEventListener("reset", function (e) {
+        errorCount = 0; giveUpAt = 0;
+        try {
+          var data = JSON.parse(e.data);
+          if (typeof data.next_cursor === "number") { writeCursor(data.next_cursor); }
+          if (typeof data.badge === "number") { updateBadge(data.badge); }
+        } catch (err) { /* ignore */ }
+      });
 
       source.addEventListener("activity", function (e) {
-        errorCount = 0;
+        errorCount = 0; giveUpAt = 0;
         try {
           var data = JSON.parse(e.data);
           if (data.events && data.events.length > 0) {
@@ -1892,7 +1912,7 @@
       });
 
       source.addEventListener("badge", function (e) {
-        errorCount = 0;
+        errorCount = 0; giveUpAt = 0;
         try {
           var data = JSON.parse(e.data);
           if (typeof data.badge === "number") { updateBadge(data.badge); }
@@ -1900,8 +1920,10 @@
       });
 
       source.onerror = function () {
+        var now = Date.now();
+        if (!giveUpAt) { giveUpAt = now + 60000; }
         errorCount++;
-        if (errorCount >= MAX_ERRORS) {
+        if (errorCount >= MAX_ERRORS || now >= giveUpAt) {
           source.close();
           source = null;
         }

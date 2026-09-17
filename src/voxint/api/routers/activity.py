@@ -1,15 +1,10 @@
-"""Console activity polling and SSE endpoints (issues #162 and #499).
+"""Console activity endpoints: JSON bootstrap + SSE stream (issues #162, #499).
 
-The browser's activity indicator polls this every few seconds for new
-``activity_events`` rows (completion toasts) and the live-jobs badge count. A
-read-only JSON endpoint keyed on the monotonic ``id`` cursor:
-
-* ``?since=<id>`` returns the rows with a larger id, oldest first, capped at one
-  page; ``next_cursor`` is the last id returned and ``has_more`` is true when the
-  page filled, so the client drains ascending pages without skipping a row.
-* No ``since`` is the **bootstrap** call: a fresh browser (or one whose stored
-  cursor fell outside the retained range) gets no events and the current
-  high-water mark, so it baselines without toasting the retained backlog.
+The browser baselines once via ``GET /activity/events`` (JSON, no ``?since=``),
+then opens ``GET /activity/stream?since=<cursor>`` (SSE) for live delivery.
+Both read from the monotonic ``activity_events`` outbox. The SSE stream polls
+the DB every 2 seconds, emits ``activity`` / ``badge`` / ``init`` / ``reset``
+events, and sends keepalive comments for proxy liveness.
 
 Dark-shipped behind ``console_activity_enabled``: operator auth runs first (the
 ``require_onboarded`` router dependency + ``OperatorDep``), then a disabled
@@ -77,6 +72,8 @@ def _read_snapshot(factory: sessionmaker[Session], cursor: int | None) -> dict[s
         }
 
 
+# The router-level require_onboarded SessionDep stays open (idle) for the
+# stream's lifetime. Stream reads use short-lived sessions via _read_snapshot.
 @router.get("/activity/stream", name="activity_stream")
 async def activity_stream(
     request: Request,
@@ -102,36 +99,57 @@ async def activity_stream(
         nonlocal cursor
         last_badge: int | None = None
         poll_cycles = 0
-        try:
-            yield "retry: 3000\n\n"
-            while True:
-                if await request.is_disconnected():
-                    break
-                snapshot = await run_in_threadpool(_read_snapshot, factory, cursor)
-                if cursor is None:
-                    # Baseline once so later polls can see newly arriving events.
-                    cursor = snapshot["next_cursor"]
-                if snapshot["events"]:
-                    yield (
-                        f"event: activity\nid: {snapshot['next_cursor']}\n"
-                        f"data: {json_mod.dumps(snapshot)}\n\n"
-                    )
-                    cursor = snapshot["next_cursor"]
-                    last_badge = snapshot["badge"]
-                    if snapshot["has_more"]:
-                        continue
-                elif snapshot["badge"] != last_badge:
-                    yield f"event: badge\ndata: {json_mod.dumps({'badge': snapshot['badge']})}\n\n"
-                    last_badge = snapshot["badge"]
 
+        yield "retry: 3000\n\n"
+        while True:
+            if await request.is_disconnected():
+                break
+            snapshot = await run_in_threadpool(_read_snapshot, factory, cursor)
+
+            if cursor is None:
+                cursor = snapshot["next_cursor"]
+                init = {"next_cursor": cursor, "badge": snapshot["badge"]}
+                yield (
+                    f"event: init\nid: {cursor}\n"
+                    f"data: {json_mod.dumps(init)}\n\n"
+                )
+                last_badge = snapshot["badge"]
                 await asyncio.sleep(2)
                 poll_cycles += 1
-                if poll_cycles == 10:
-                    yield ": keepalive\n\n"
-                    poll_cycles = 0
-        finally:
-            # Each snapshot already closed its session; no stream resources remain.
-            pass
+                continue
+
+            hw = snapshot["high_water"]
+            floor = snapshot["floor"]
+            if cursor > hw or (floor > 0 and cursor < floor - 1):
+                cursor = hw
+                rst = {"next_cursor": cursor, "badge": snapshot["badge"]}
+                yield (
+                    f"event: reset\nid: {cursor}\n"
+                    f"data: {json_mod.dumps(rst)}\n\n"
+                )
+                last_badge = snapshot["badge"]
+                await asyncio.sleep(2)
+                poll_cycles += 1
+                continue
+
+            if snapshot["events"]:
+                yield (
+                    f"event: activity\nid: {snapshot['next_cursor']}\n"
+                    f"data: {json_mod.dumps(snapshot)}\n\n"
+                )
+                cursor = snapshot["next_cursor"]
+                last_badge = snapshot["badge"]
+                if snapshot["has_more"]:
+                    continue
+            elif snapshot["badge"] != last_badge:
+                yield f"event: badge\ndata: {json_mod.dumps({'badge': snapshot['badge']})}\n\n"
+                last_badge = snapshot["badge"]
+
+            await asyncio.sleep(2)
+            poll_cycles += 1
+            if poll_cycles == 10:
+                yield ": keepalive\n\n"
+                poll_cycles = 0
 
     return StreamingResponse(
         stream(),
