@@ -576,6 +576,74 @@ def test_logrotate_plist_is_a_daily_oneshot(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # CLI surface
 # --------------------------------------------------------------------------- #
+class TestDoctorCpuAdvisory:
+    @pytest.mark.parametrize(
+        ("health", "advisory"),
+        [
+            ('{"device": "cpu", "model": "large-v2"}', True),
+            ('{"device": "cpu", "model": "Systran/faster-whisper-large-v2"}', True),
+            ('{"device": "cuda", "model": "large-v2"}', False),
+            ('{"device": "cpu", "model": "small"}', False),
+            ("malformed JSON", False),
+            ("", False),
+            ('{"model": "large-v2"}', False),
+            ('{"device": "cpu"}', False),
+            ("null", False),
+            ("[]", False),
+        ],
+    )
+    @pytest.mark.parametrize("initial_rc", [0, 1])
+    def test_health_response(
+        self, tmp_path: Path, health: str, advisory: bool, initial_rc: int
+    ) -> None:
+        proc = run_lib(
+            tmp_path,
+            f"""
+curl() {{ printf '%s' "$TEST_HEALTH"; }}
+DOCTOR_RC={initial_rc}
+doctor_whisper_cpu_advisory 8022
+printf '%s' "$DOCTOR_RC"
+""",
+            extra_env={"TEST_HEALTH": health},
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout == str(initial_rc)
+        if advisory:
+            assert proc.stderr == (
+                "  [INFO] large-v2 on CPU is slow; a smaller model is faster "
+                "(see docs/how-to/changing-pipeline-models.md). The native path "
+                "is currently pinned to large-v2; the alternate-model mechanism "
+                "applies to Docker installs.\n"
+            )
+        else:
+            assert proc.stderr == ""
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            'curl() { printf "curl failed\\n" >&2; return 7; }',
+            'metal_python() { printf "lookup failed\\n" >&2; return 1; }',
+            'metal_python() { printf "%s/missing-python" "$VOXINT_METAL_HOME"; }',
+        ],
+    )
+    def test_unavailable_dependencies(self, tmp_path: Path, failure: str) -> None:
+        proc = run_lib(
+            tmp_path,
+            """
+curl() { printf '%s' '{"device":"cpu","model":"large-v2"}'; }
+"""
+            + failure
+            + """
+DOCTOR_RC=0
+doctor_whisper_cpu_advisory 8022
+printf '%s' "$DOCTOR_RC"
+""",
+        )
+        assert proc.returncode == 0
+        assert proc.stdout == "0"
+        assert proc.stderr == ""
+
+
 def test_no_args_prints_usage_and_fails(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["VOXINT_METAL_HOME"] = str(tmp_path)

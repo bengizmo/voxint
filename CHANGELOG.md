@@ -6,6 +6,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **CPU model recommendation (#522).** When whisper runs large-v2 on CPU, the
+  service startup log and native doctor now advise that a smaller model is
+  faster and point to the model guide. The guide gains a "Transcription on CPU"
+  section with a ready-to-paste medium configuration.
+
 
 ## [0.41.0] - 2026-09-16
 

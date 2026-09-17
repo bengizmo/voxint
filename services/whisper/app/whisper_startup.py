@@ -35,6 +35,12 @@ logger = logging.getLogger(__name__)
 # faster-whisper accepts for it. Either resolves to the baked, offline snapshot.
 DEFAULT_MODELS = frozenset({"large-v2", "Systran/faster-whisper-large-v2"})
 
+
+def should_advise_cpu_model(device: str, model_name: str) -> bool:
+    """True when the operator is running a validated default on CPU."""
+    return device == "cpu" and model_name in DEFAULT_MODELS
+
+
 # Alternate weights download into a SEPARATE writable cache, never over the baked
 # large-v2 download root (/app/.cache/whisper) — a volume there would shadow the
 # baked model and retain stale contents across image upgrades.

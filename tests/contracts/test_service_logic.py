@@ -1060,6 +1060,24 @@ class TestWhisperEngineRegistry:
         assert callable(transcriber._backend.transcribe_raw)  # type: ignore[attr-defined]
 
 
+class TestCpuModelAdvisoryCondition:
+    def test_cpu_with_default_model_triggers_advisory(self) -> None:
+        assert whisper_startup.should_advise_cpu_model("cpu", "large-v2") is True
+
+    def test_cpu_with_systran_spelling_triggers_advisory(self) -> None:
+        assert whisper_startup.should_advise_cpu_model(
+            "cpu", "Systran/faster-whisper-large-v2",
+        ) is True
+
+    def test_cuda_with_default_model_no_advisory(self) -> None:
+        assert whisper_startup.should_advise_cpu_model("cuda", "large-v2") is False
+
+    def test_cpu_with_alternate_model_no_advisory(self) -> None:
+        assert whisper_startup.should_advise_cpu_model(
+            "cpu", "Systran/faster-whisper-medium",
+        ) is False
+
+
 class TestWhisperStartupResolution:
     """The fail-closed whisper model-selection truth table (configurable models
     A2). The validated large-v2 default keeps the baked, offline path untouched;
