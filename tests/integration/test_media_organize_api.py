@@ -27,7 +27,7 @@ from voxint.api.csrf import (
     CSRF_MEDIA_FOLDERS,
     mint_csrf_token,
 )
-from voxint.api.media_query import MEDIA_LIBRARY_LIMIT
+from voxint.api.routers.media import MEDIA_BULK_LIMIT
 from voxint.config import Settings
 from voxint.db.models import MediaFolder, MediaItem
 
@@ -220,14 +220,14 @@ def test_assign_stale_target_folder_rejected_zero_writes(
 
 
 def test_assign_over_cap_rejected(client: TestClient) -> None:
-    too_many = [str(uuid.uuid4()) for _ in range(MEDIA_LIBRARY_LIMIT + 1)]
+    too_many = [str(uuid.uuid4()) for _ in range(MEDIA_BULK_LIMIT + 1)]
     resp = client.post(
         "/media/assign",
         data=_data(CSRF_MEDIA_ASSIGN, media_id=too_many, media_folder_id=""),
         follow_redirects=False,
     )
     assert resp.status_code == 400
-    assert f"at most {MEDIA_LIBRARY_LIMIT}" in resp.text
+    assert f"at most {MEDIA_BULK_LIMIT}" in resp.text
 
 
 def test_assign_requires_csrf_before_any_write(
