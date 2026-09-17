@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from voxint.config import DEFAULT_LLM_BASE_URL, Settings
+from voxint.config import Settings, llm_endpoint_explicitly_set
 from voxint.db.models import AppSettings, PipelineRun
 
 if TYPE_CHECKING:
@@ -39,17 +39,13 @@ def resolve_effective_llm_api_key(row: AppSettings | None, settings: Settings) -
     return stored or settings.llm_api_key.strip()
 
 
-def resolve_effective_llm_endpoint(
-    row: AppSettings | None, settings: Settings
-) -> tuple[str, str]:
+def resolve_effective_llm_endpoint(row: AppSettings | None, settings: Settings) -> tuple[str, str]:
     """Effective ``(base_url, model)``: a non-blank row value wins, else the env
     default. Non-secret — the shared source for the wizard, the per-run preference
     snapshot (:func:`voxint.pipeline.stages.context.resolve_run_preferences`), and
     the enrichment paths, so they can never disagree on the effective endpoint.
     """
-    base_url = (
-        row.llm_base_url if row is not None and row.llm_base_url else settings.llm_base_url
-    )
+    base_url = row.llm_base_url if row is not None and row.llm_base_url else settings.llm_base_url
     model = row.llm_model if row is not None and row.llm_model else settings.llm_model
     return base_url, model
 
@@ -76,9 +72,7 @@ def llm_endpoint_form_fields(
     return base_value, settings.llm_base_url, model_value, settings.llm_model
 
 
-def str_flag_form_field(
-    row: AppSettings | None, settings: Settings, name: str
-) -> tuple[str, str]:
+def str_flag_form_field(row: AppSettings | None, settings: Settings, name: str) -> tuple[str, str]:
     """``(value, default)`` for a tri-state STRING settings field (issue #76).
 
     ``value`` is the ROW override, or ``""`` when the column is ``NULL``/blank — so
@@ -186,9 +180,7 @@ def _resolve_str_flag(row: AppSettings | None, settings: Settings, name: str) ->
     return env_value
 
 
-def resolve_effective_enrichment_names_enabled(
-    row: AppSettings | None, settings: Settings
-) -> bool:
+def resolve_effective_enrichment_names_enabled(row: AppSettings | None, settings: Settings) -> bool:
     return _resolve_bool_flag(row, settings, "enrichment_names_enabled")
 
 
@@ -210,9 +202,7 @@ def resolve_effective_enrichment_run_assets_autogenerate(
     return _resolve_bool_flag(row, settings, "enrichment_run_assets_autogenerate")
 
 
-def resolve_effective_semantic_index_enabled(
-    row: AppSettings | None, settings: Settings
-) -> bool:
+def resolve_effective_semantic_index_enabled(row: AppSettings | None, settings: Settings) -> bool:
     """Effective enablement of the transcript semantic-search spine (#121).
 
     Independent of ``llm_enabled`` and every other capability — the embedding
@@ -268,15 +258,11 @@ def synthdetect_flags_ok(*, enabled: bool, autogenerate: bool) -> str | None:
     return None
 
 
-def resolve_effective_synthdetect_enabled(
-    row: AppSettings | None, settings: Settings
-) -> bool:
+def resolve_effective_synthdetect_enabled(row: AppSettings | None, settings: Settings) -> bool:
     return _resolve_bool_flag(row, settings, "synthdetect_enabled")
 
 
-def resolve_effective_synthdetect_autogenerate(
-    row: AppSettings | None, settings: Settings
-) -> bool:
+def resolve_effective_synthdetect_autogenerate(row: AppSettings | None, settings: Settings) -> bool:
     return _resolve_bool_flag(row, settings, "synthdetect_autogenerate")
 
 
@@ -301,9 +287,7 @@ def resolve_effective_translation_target_language(
     return None
 
 
-def resolve_effective_translation_autogenerate(
-    row: AppSettings | None, settings: Settings
-) -> bool:
+def resolve_effective_translation_autogenerate(row: AppSettings | None, settings: Settings) -> bool:
     """Effective enablement of the post-finalize auto-translate step (#133).
 
     Only meaningful when a target language resolves and an LLM path is open;
@@ -412,7 +396,7 @@ def byo_llm_configured(row: AppSettings | None, settings: Settings) -> bool:
         return False
     if resolve_effective_llm_api_key(row, settings):
         return True
-    return base_url != DEFAULT_LLM_BASE_URL
+    return llm_endpoint_explicitly_set(base_url)
 
 
 def build_bundled_llm_client(settings: Settings) -> "HttpLLMClient":
@@ -436,18 +420,14 @@ def build_bundled_llm_client(settings: Settings) -> "HttpLLMClient":
     )
 
 
-def resolve_effective_watch_folder_enabled(
-    row: AppSettings | None, settings: Settings
-) -> bool:
+def resolve_effective_watch_folder_enabled(row: AppSettings | None, settings: Settings) -> bool:
     """Effective watch-folder ingest gate (issue #60): the runtime override on the
     row wins when non-NULL, else the installation default ``settings.watch_folder_enabled``.
     """
     return _resolve_bool_flag(row, settings, "watch_folder_enabled")
 
 
-def resolve_effective_source_authority_domains(
-    row: AppSettings | None, settings: Settings
-) -> str:
+def resolve_effective_source_authority_domains(row: AppSettings | None, settings: Settings) -> str:
     return _resolve_str_flag(row, settings, "source_authority_domains")
 
 
@@ -647,9 +627,7 @@ def is_queue_paused(session: Session) -> bool:
     return bool(row and row.queue_paused)
 
 
-def set_queue_paused(
-    session: Session, paused: bool, *, llm_enabled_default: bool
-) -> None:
+def set_queue_paused(session: Session, paused: bool, *, llm_enabled_default: bool) -> None:
     """Toggle the global pipeline dispatch pause flag. Caller commits."""
     row = get_or_create(session, llm_enabled_default=llm_enabled_default)
     row.queue_paused = paused

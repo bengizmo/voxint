@@ -16,7 +16,7 @@ import pytest
 from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder, FakeLLM
 from voxint.app_settings import resolve_effective_llm_api_key
 from voxint.clients.llm import HttpLLMClient
-from voxint.config import Settings
+from voxint.config import DEFAULT_LLM_BASE_URL, Settings
 from voxint.db.models import AppSettings
 from voxint.domain_packs.base import DomainPack, dedup_order_preserving
 from voxint.pipeline.stages.context import (
@@ -129,12 +129,8 @@ def test_apply_v1_snapshot_live_unions_glossary_default() -> None:
     a glossary edited AFTER submit still reaches the run. This is the invariant the
     version-2 freeze must not disturb (config_resolution_version defaults to 1)."""
     base = make_base_ctx(vocabulary=("Pack",))
-    prefs = resolve_run_preferences(
-        AppSettings(id=1, vocabulary=["Edited-Later"]), make_settings()
-    )
-    ctx = apply_run_preferences(
-        base, make_settings(), prefs, base.domain_pack, llm_api_key=""
-    )
+    prefs = resolve_run_preferences(AppSettings(id=1, vocabulary=["Edited-Later"]), make_settings())
+    ctx = apply_run_preferences(base, make_settings(), prefs, base.domain_pack, llm_api_key="")
     assert ctx.vocabulary == ("Pack", "Edited-Later")
 
 
@@ -143,9 +139,7 @@ def test_apply_v2_snapshot_uses_frozen_vocab_without_live_union() -> None:
     so the worker must NOT re-union the live glossary — a later settings edit can
     never leak into a deterministically-frozen run."""
     base = make_base_ctx(vocabulary=("Frozen-A", "Frozen-B"))
-    prefs = resolve_run_preferences(
-        AppSettings(id=1, vocabulary=["Edited-Later"]), make_settings()
-    )
+    prefs = resolve_run_preferences(AppSettings(id=1, vocabulary=["Edited-Later"]), make_settings())
     ctx = apply_run_preferences(
         base,
         make_settings(),
@@ -163,9 +157,7 @@ def test_apply_unrecognized_version_falls_through_to_live_union() -> None:
     """An unknown future version is treated as the live-union path, never silently
     reinterpreted as a freeze it may not be (only version 2 is a freeze)."""
     base = make_base_ctx(vocabulary=("Pack",))
-    prefs = resolve_run_preferences(
-        AppSettings(id=1, vocabulary=["User"]), make_settings()
-    )
+    prefs = resolve_run_preferences(AppSettings(id=1, vocabulary=["User"]), make_settings())
     ctx = apply_run_preferences(
         base,
         make_settings(),
@@ -199,12 +191,8 @@ def test_v2_freeze_is_byte_identical_to_v1_live_union_global_baseline() -> None:
     # dedup(app) because resolve_run_preferences pre-dedups the glossary, and apply
     # unions it onto the raw pack vocabulary.
     base = make_base_ctx(vocabulary=pack_vocab)
-    prefs = resolve_run_preferences(
-        AppSettings(id=1, vocabulary=raw_app_vocab), make_settings()
-    )
-    v1 = apply_run_preferences(
-        base, make_settings(), prefs, base.domain_pack, llm_api_key=""
-    )
+    prefs = resolve_run_preferences(AppSettings(id=1, vocabulary=raw_app_vocab), make_settings())
+    v1 = apply_run_preferences(base, make_settings(), prefs, base.domain_pack, llm_api_key="")
 
     # The v2 path: the freeze already resolved the effective list, so the decoded
     # pack carries frozen_effective and apply must NOT re-union the live glossary.
@@ -249,20 +237,32 @@ def test_apply_enables_llm_when_prefs_enabled_and_key_present() -> None:
 
 def test_apply_disables_llm_without_key_and_warns(caplog: pytest.LogCaptureFixture) -> None:
     base = make_base_ctx()
-    prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), make_settings())
+    settings = make_settings(llm_base_url=DEFAULT_LLM_BASE_URL)
+    prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), settings)
     with caplog.at_level(logging.WARNING):
-        ctx = apply_run_preferences(base, make_settings(), prefs, base.domain_pack, llm_api_key="")
+        ctx = apply_run_preferences(base, settings, prefs, base.domain_pack, llm_api_key="")
     assert ctx.llm is None
     assert any("no API key is configured" in r.message for r in caplog.records)
 
 
-def test_apply_no_row_enabled_without_key_disables_llm() -> None:
-    # No app_settings row + env LLM enabled but no key → honest no-op (llm=None),
-    # not an unusable client. (The one intentional refinement over the pre-wizard
-    # path, which used to construct an enabled-but-keyless client.) The effective
-    # key the worker would resolve from (no row, empty env) is "".
+def test_apply_builds_client_for_keyless_byo() -> None:
+    # Issue #505: a deliberately configured BYO endpoint (non-default URL) with
+    # no API key builds the client with an empty key (the client omits
+    # Authorization). No warning is emitted.
     base = make_base_ctx()
-    settings = make_settings(llm_enabled=True, llm_api_key="")
+    settings = make_settings(llm_base_url="http://localhost:8080/v1")
+    prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), settings)
+    ctx = apply_run_preferences(base, settings, prefs, base.domain_pack, llm_api_key="")
+    assert ctx.llm is not None
+    assert isinstance(ctx.llm, HttpLLMClient)
+    assert not ctx.llm_bundled
+
+
+def test_apply_no_row_enabled_without_key_disables_llm() -> None:
+    # No app_settings row + env LLM enabled but no key + default URL → honest
+    # no-op (llm=None). A non-default URL would allow keyless (#505).
+    base = make_base_ctx()
+    settings = make_settings(llm_enabled=True, llm_api_key="", llm_base_url=DEFAULT_LLM_BASE_URL)
     prefs = resolve_run_preferences(None, settings)
     key = resolve_effective_llm_api_key(None, settings)
     ctx = apply_run_preferences(base, settings, prefs, base.domain_pack, llm_api_key=key)
@@ -295,12 +295,10 @@ def test_apply_disables_llm_when_budget_exceeds_lease(
 def test_apply_disables_llm_when_key_is_whitespace(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    # A whitespace-only key must read as absent so enhancement degrades to llm=None
-    # rather than building a client with an unusable key. The stripping now lives in
-    # resolve_effective_llm_api_key (the single precedence source); this exercises the
-    # resolver → apply path end to end so the guarantee cannot silently regress.
+    # A whitespace-only key must read as absent. With the default URL the gate
+    # degrades to llm=None; a non-default URL would allow keyless (#505).
     base = make_base_ctx()
-    settings = make_settings(llm_api_key="   ")
+    settings = make_settings(llm_api_key="   ", llm_base_url=DEFAULT_LLM_BASE_URL)
     prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), settings)
     key = resolve_effective_llm_api_key(AppSettings(id=1, llm_api_key="   "), settings)
     assert key == ""

@@ -28,7 +28,7 @@ from voxint.clients.base import ASRClient, DiarizerClient, EmbedderClient, LLMCl
 from voxint.clients.diarize import HttpDiarizerClient
 from voxint.clients.embed import HttpEmbedderClient
 from voxint.clients.llm import HttpLLMClient
-from voxint.config import Settings, llm_budget_fits_stage_lease
+from voxint.config import Settings, llm_budget_fits_stage_lease, llm_endpoint_explicitly_set
 from voxint.db.models import AppSettings, ArtifactKind, AudioArtifact, Stage
 from voxint.domain_packs.base import DomainPack, dedup_order_preserving, load_default
 from voxint.domain_packs.registry import default_domain_pack
@@ -54,8 +54,7 @@ def parse_config_resolution_version(pack_snapshot: dict[str, Any] | None) -> int
         return version
     except (TypeError, ValueError, OverflowError):
         logger.warning(
-            "malformed config_resolution_version %r; falling back to "
-            "live-union config resolution",
+            "malformed config_resolution_version %r; falling back to live-union config resolution",
             raw,
         )
         return 1
@@ -210,9 +209,7 @@ class RunPreferences:
 _dedup_order_preserving = dedup_order_preserving
 
 
-def resolve_run_preferences(
-    row: AppSettings | None, settings: Settings
-) -> RunPreferences:
+def resolve_run_preferences(row: AppSettings | None, settings: Settings) -> RunPreferences:
     """Layer the ``app_settings`` row over env defaults (pure — no I/O, no pack).
 
     A NULL/absent row field falls back to the env default, so with no row at all
@@ -321,9 +318,11 @@ def apply_run_preferences(
     # wizard's own check (setup_wizard.validate_llm_enable), so the two never
     # disagree on whether a key is set.
     key_present = bool(llm_api_key)
-    # The bundled endpoint needs no key (issue #67), so it satisfies the key
-    # precondition on its own; the BYO path still requires a key.
-    key_ok = key_present or bundled
+    # The bundled endpoint needs no key (issue #67), and a deliberately
+    # configured BYO endpoint (non-default base URL) is allowed keyless too
+    # (issue #505) — the client omits Authorization when the key is empty.
+    byo_keyless = llm_endpoint_explicitly_set(prefs.llm_base_url)
+    key_ok = key_present or bundled or byo_keyless
     llm: LLMClient | None = None
     if prefs.llm_enabled and key_ok and budget_ok:
         try:
@@ -353,12 +352,14 @@ def apply_run_preferences(
             )
             llm = None
     elif prefs.llm_enabled and not key_ok:
-        # Only reachable on the BYO path (bundled makes key_ok True); the bundled
-        # endpoint never emits this no-key warning.
+        # Reachable only when the default base URL is in use with no key and no
+        # bundle — a deliberately configured BYO endpoint (non-default URL)
+        # makes key_ok True via byo_keyless (#505).
         logger.warning(
-            "LLM enhancement is enabled but no API key is configured (neither a "
-            "UI-stored key nor env LLM_API_KEY); proceeding with enhancement "
-            "disabled for this run."
+            "LLM enhancement is enabled but no API key is configured and the "
+            "endpoint is the unconfigured default; proceeding with enhancement "
+            "disabled for this run.  Set LLM_API_KEY, point LLM_BASE_URL at a "
+            "keyless endpoint, or enable the bundled model."
         )
     elif prefs.llm_enabled and not budget_ok:
         logger.warning(
