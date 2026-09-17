@@ -32,6 +32,14 @@
     true
   ],
   [
+    "/activity/stream",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/annotations/tags",
     [
       "GET"

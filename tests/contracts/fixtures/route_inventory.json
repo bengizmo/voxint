@@ -24,6 +24,12 @@
     ]
   ],
   [
+    "/activity/stream",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/annotations/tags",
     [
       "GET"

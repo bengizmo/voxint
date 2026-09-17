@@ -154,6 +154,7 @@ def test_shell_chrome_absent_when_off(
     assert "data-toast-region" not in home
     assert "data-activity-badge" not in home
     assert "/activity/events" not in home
+    assert "/activity/stream" not in home
 
 
 def test_shell_chrome_present_when_activity_on(
@@ -164,11 +165,84 @@ def test_shell_chrome_present_when_activity_on(
     assert "data-toast-region" in home
     assert "data-activity-badge" in home
     assert "/activity/events" in home
+    assert "/activity/stream" in home
 
 
 
 def test_activity_flag_defaults_off() -> None:
     assert Settings(_env_file=None).console_activity_enabled is False
+
+# ---------- SSE stream endpoint (issue #499) ----------
+
+
+def test_stream_unauthenticated_is_401(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _client(session_factory, tmp_path, activity_enabled=True, authenticated=False)
+    assert client.get("/activity/stream").status_code == 401
+
+
+def test_stream_flag_off_returns_404(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _client(session_factory, tmp_path, activity_enabled=False)
+    assert client.get("/activity/stream").status_code == 404
+
+
+def test_stream_invalid_last_event_id(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _client(session_factory, tmp_path, activity_enabled=True)
+    assert client.get(
+        "/activity/stream", headers={"Last-Event-ID": "not-a-number"}
+    ).status_code == 422
+
+
+def test_stream_negative_last_event_id(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _client(session_factory, tmp_path, activity_enabled=True)
+    assert client.get(
+        "/activity/stream", headers={"Last-Event-ID": "-1"}
+    ).status_code == 422
+
+
+def test_read_snapshot_bootstrap(session_factory: sessionmaker[Session], tmp_path: Path) -> None:
+    from voxint.api.routers.activity import _read_snapshot
+
+    _client(session_factory, tmp_path, activity_enabled=True)
+    rid = _seed_run(session_factory, status=RunStatus.COMPLETED)
+    _seed_events(session_factory, rid, 3)
+    snap = _read_snapshot(session_factory, None)
+    assert snap["events"] == []
+    assert snap["next_cursor"] == snap["high_water"]
+    assert snap["has_more"] is False
+
+
+def test_read_snapshot_since(session_factory: sessionmaker[Session], tmp_path: Path) -> None:
+    from voxint.api.routers.activity import _read_snapshot
+
+    _client(session_factory, tmp_path, activity_enabled=True)
+    rid = _seed_run(session_factory, status=RunStatus.COMPLETED)
+    _seed_events(session_factory, rid, 3)
+    snap = _read_snapshot(session_factory, 0)
+    assert len(snap["events"]) == 3
+    assert snap["events"][0]["kind"] == "run_completed"
+    assert snap["next_cursor"] == snap["events"][-1]["id"]
+
+
+def test_read_snapshot_badge_counts_active_runs(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    from voxint.api.routers.activity import _read_snapshot
+
+    _client(session_factory, tmp_path, activity_enabled=True)
+    _seed_run(session_factory, status=RunStatus.QUEUED)
+    _seed_run(session_factory, status=RunStatus.RUNNING)
+    _seed_run(session_factory, status=RunStatus.COMPLETED)
+    snap = _read_snapshot(session_factory, None)
+    assert snap["badge"] == 2
+
 
 def test_speaker_identified_event_round_trips(
     session_factory: sessionmaker[Session], tmp_path: Path
