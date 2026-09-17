@@ -20,7 +20,7 @@ from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
 from voxint.api.csrf import CSRF_SETTINGS, CSRF_SETUP, mint_csrf_token
 from voxint.app_settings import get_app_settings, get_or_create
-from voxint.config import Settings
+from voxint.config import DEFAULT_LLM_BASE_URL, Settings
 from voxint.db.models import AppSettings
 
 CREDS = ("reviewer", "s3cret")
@@ -404,17 +404,18 @@ def test_setup_validation_rerender_preserves_blank_endpoints(
     # A blank-endpoint submission that fails the enable guard (no key anywhere)
     # re-renders with the inputs still BLANK — the env default is the placeholder,
     # never echoed into `value` (which would falsely show inherited state as
-    # pinned). The DB row endpoint columns stay NULL.
+    # pinned). The DB row endpoint columns stay NULL. Uses DEFAULT_LLM_BASE_URL
+    # so the keyless BYO bypass (#505) does not fire.
     client = make_client(
         session_factory, media_root,
-        llm_api_key="", llm_base_url=ENV_BASE, llm_model=ENV_MODEL,
+        llm_api_key="", llm_base_url=DEFAULT_LLM_BASE_URL, llm_model=ENV_MODEL,
     )
     resp = client.post("/setup/llm", data=_setup_form(enabled="true"))
     assert resp.status_code == 200  # enable failed → re-render
     body = resp.text
-    assert f'value="{ENV_BASE}"' not in body
+    assert f'value="{DEFAULT_LLM_BASE_URL}"' not in body
     assert f'value="{ENV_MODEL}"' not in body
-    assert f'placeholder="{ENV_BASE}"' in body
+    assert f'placeholder="{DEFAULT_LLM_BASE_URL}"' in body
     assert f'placeholder="{ENV_MODEL}"' in body
     row = _row(session_factory)
     assert row is not None

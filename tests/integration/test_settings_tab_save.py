@@ -19,7 +19,7 @@ from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
 from voxint.api.csrf import CSRF_SETTINGS, CSRF_SETUP, mint_csrf_token
 from voxint.app_settings import get_app_settings, get_or_create
-from voxint.config import Settings
+from voxint.config import DEFAULT_LLM_BASE_URL, Settings
 from voxint.db.models import AppSettings
 
 CREDS = ("reviewer", "s3cret")
@@ -323,13 +323,15 @@ class TestAiTabSave:
         self, session_factory: sessionmaker[Session], media_root: Path
     ) -> None:
         """LLM enable with no effective key saves key/model but forces
-        llm_enabled off (partial save); siblings persist (#403/#405)."""
+        llm_enabled off (partial save); siblings persist (#403/#405).
+        Uses DEFAULT_LLM_BASE_URL so the keyless BYO bypass (#505) does
+        not fire."""
         client, _ = make_client(
             session_factory, media_root, seed_llm_enabled=False
         )
         _seed_cols(
             session_factory,
-            llm_base_url="https://original.example.org/v1",
+            llm_base_url=None,
             llm_api_key=None,
             vocabulary=["old-term"],
         )
@@ -337,7 +339,7 @@ class TestAiTabSave:
             rendered=["semantic_index_enabled", "semantic_index_autogenerate",
                       "translation_autogenerate"],
             enabled="true",
-            llm_base_url="https://replacement.example.org/v1",
+            llm_base_url=DEFAULT_LLM_BASE_URL,
             llm_model="replacement-model",
             llm_api_key="",
             translation_target_language="inherit",
@@ -347,8 +349,9 @@ class TestAiTabSave:
         resp = client.post("/settings/ai", data=data, follow_redirects=False)
         assert resp.status_code == 422
         after = _snapshot(session_factory)
-        # LLM partially saved: key/model written, enable forced off.
-        assert after["llm_base_url"] == "https://replacement.example.org/v1"
+        # LLM partially saved: URL echoes env default so collapses to NULL,
+        # model written, enable forced off.
+        assert after["llm_base_url"] is None
         assert after["llm_model"] == "replacement-model"
         assert after["llm_enabled"] is False
         # Glossary sibling persisted.
