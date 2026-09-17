@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -22,6 +23,7 @@ import { SpeakerCombobox } from "./SpeakerCombobox";
 import { resolveJumpIndex } from "../lib/jump";
 import { CapabilityBanner, SpeedControl } from "./PlaybackControls";
 import { WaveformStrip } from "./WaveformStrip";
+import { useProgressiveRender } from "../lib/progressive-render";
 
 // Deterministic domain-pack correction provenance (issue #83). Mirrors the
 // server's `resolve_segment_provenance` shapes EXACTLY — the keys are pinned by
@@ -538,6 +540,28 @@ export const TranscriptPlayer = forwardRef<
   // the flash clears).
   const [jumpIndex, setJumpIndex] = useState<number>(-1);
 
+  // Progressive rendering (issue #495): gate which segments are mounted in the
+  // DOM. The full array stays in memory; only the rendered prefix grows as the
+  // user scrolls or jumps.
+  const { renderedEnd, sentinelRef, ensureRendered, showAll } =
+    useProgressiveRender({ totalCount: segments.length, minIndex: cursorIndex ?? undefined });
+
+  // Deferred scroll target: set when ensureRendered expands the window for a
+  // jump. The useLayoutEffect fires after React commits the new rows, so the
+  // target element exists in the DOM when we query it.
+  const [pendingScrollTarget, setPendingScrollTarget] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (pendingScrollTarget == null) return;
+    const el = listRef.current?.querySelector<HTMLElement>(
+      `[data-seg-index="${pendingScrollTarget}"]`,
+    );
+    if (el) {
+      scrollGuardUntil.current = performance.now() + SCROLL_GUARD_MS;
+      el.scrollIntoView({ block: "nearest" });
+    }
+    setPendingScrollTarget(null);
+  }, [pendingScrollTarget]);
+
   // Scroll the active line into view WITHOUT moving DOM focus (accessibility)
   // and WITHOUT smooth scrolling. If the line is already fully visible we do
   // nothing AND do not arm the guard — otherwise the guard would needlessly
@@ -621,10 +645,17 @@ export const TranscriptPlayer = forwardRef<
   }, []);
 
   // Keep the active line visible as playback advances. activeIndex changes only
-  // at segment boundaries, so this is cheap.
+  // at segment boundaries, so this is cheap. When following, ensure the active
+  // segment is rendered (progressive rendering may not have reached it yet).
   useEffect(() => {
-    if (following && activeIndex >= 0) scrollActiveIntoView();
-  }, [following, activeIndex, scrollActiveIntoView]);
+    if (!following || activeIndex < 0) return;
+    if (activeIndex >= renderedEnd) {
+      ensureRendered(activeIndex);
+      setPendingScrollTarget(activeIndex);
+    } else {
+      scrollActiveIntoView();
+    }
+  }, [following, activeIndex, renderedEnd, ensureRendered, scrollActiveIntoView]);
 
   // Keep the element's rate in sync with the (persisted) control.
   useEffect(() => {
@@ -659,12 +690,8 @@ export const TranscriptPlayer = forwardRef<
     if (jumpToSeconds == null || !Number.isFinite(jumpToSeconds)) return;
     const idx = resolveJumpIndex(segments, jumpToSeconds);
     if (idx < 0) return;
-    const el = listRef.current?.querySelector<HTMLElement>(
-      `[data-seg-index="${idx}"]`,
-    );
-    if (!el) return;
-    scrollGuardUntil.current = performance.now() + SCROLL_GUARD_MS;
-    el.scrollIntoView({ block: "center" });
+    ensureRendered(idx);
+    setPendingScrollTarget(idx);
     setJumpIndex(idx);
     const timer = window.setTimeout(() => setJumpIndex(-1), 2000);
     return () => {
@@ -724,13 +751,8 @@ export const TranscriptPlayer = forwardRef<
     const seg = segments[index];
     if (!seg) return;
     onSegmentSelect?.(index);
-    const el = listRef.current?.querySelector<HTMLElement>(
-      `[data-seg-index="${index}"]`,
-    );
-    if (el) {
-      scrollGuardUntil.current = performance.now() + SCROLL_GUARD_MS;
-      el.scrollIntoView({ block: "nearest" });
-    }
+    ensureRendered(index);
+    setPendingScrollTarget(index);
     play(seg);
   };
   const onRateChange = (next: number) => {
@@ -751,15 +773,8 @@ export const TranscriptPlayer = forwardRef<
       playSegment: (index: number) => {
         const seg = segments[index];
         if (!seg) return;
-        // Reveal the line even when audio seek is unavailable: a jump is
-        // a reading act first (mirrors a waveform-region click).
-        const el = listRef.current?.querySelector<HTMLElement>(
-          `[data-seg-index="${index}"]`,
-        );
-        if (el) {
-          scrollGuardUntil.current = performance.now() + SCROLL_GUARD_MS;
-          el.scrollIntoView({ block: "nearest" });
-        }
+        ensureRendered(index);
+        setPendingScrollTarget(index);
         play(seg);
       },
       focusCursorRow: () => {
@@ -767,7 +782,7 @@ export const TranscriptPlayer = forwardRef<
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [segments, seek],
+    [segments, seek, ensureRendered],
   );
 
   return (
@@ -815,7 +830,7 @@ export const TranscriptPlayer = forwardRef<
         <CapabilityBanner capability={capability} />
       </div>
       <div ref={listRef}>
-        {segments.map((seg, i) => {
+        {segments.slice(0, renderedEnd).map((seg, i) => {
           // Split mode (issue #59): this focused, unsplit, splittable line shows
           // its words as clickable cut points instead of its plain text. Guarded
           // on a matching parent id so a stale fetch never paints the wrong line.
@@ -858,6 +873,17 @@ export const TranscriptPlayer = forwardRef<
             />
           );
         })}
+        {renderedEnd < segments.length && (
+          <>
+            <div ref={sentinelRef} aria-hidden="true" style={{ height: 1 }} />
+            <p className="text-center text-sm muted py-4">
+              Showing {renderedEnd} of {segments.length} segments.{" "}
+              <button type="button" className="underline" onClick={showAll}>
+                Show all
+              </button>
+            </p>
+          </>
+        )}
       </div>
     </div>
   );
