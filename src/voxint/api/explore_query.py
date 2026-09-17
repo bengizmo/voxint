@@ -11,7 +11,7 @@ from typing import Any
 
 from sqlalchemy import Date as SQLDate
 from sqlalchemy import and_, case, cast, delete, func, or_, select, true
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from voxint.api.term_stats import TermStat, compute_tfidf, source_hash
 from voxint.db import search
@@ -21,6 +21,7 @@ from voxint.db.models import (
     AnnotationTagLink,
     CorpusAnalysisArtifact,
     CorpusAnalysisArtifactKind,
+    Decision,
     MediaFolder,
     MediaItem,
     MediaSourceMetadata,
@@ -296,6 +297,7 @@ def corpus_stats(session: Session, project_id: uuid.UUID | None = None) -> Corpu
             .join(scoped_runs, scoped_runs.c.run_id == TranscriptSegment.pipeline_run_id)
         ).scalar_one()
     )
+    revoke = aliased(AdjudicationDecision)
     total_speakers = int(
         session.execute(
             select(func.count(func.distinct(AdjudicationDecision.speaker_id)))
@@ -305,8 +307,17 @@ def corpus_stats(session: Session, project_id: uuid.UUID | None = None) -> Corpu
                 scoped_runs.c.run_id == AdjudicationDecision.pipeline_run_id,
             )
             .where(
-                AdjudicationDecision.decision == "assign",
+                AdjudicationDecision.decision.in_([
+                    Decision.ASSIGN.value,
+                    Decision.AUTO_ENROLL.value,
+                ]),
                 AdjudicationDecision.speaker_id.isnot(None),
+                ~select(revoke.id)
+                .where(
+                    revoke.decision == Decision.REVOKE.value,
+                    revoke.voids_decision_id == AdjudicationDecision.id,
+                )
+                .exists(),
             )
         ).scalar_one()
     )
@@ -417,7 +428,7 @@ def _corpus_fingerprint(session: Session, project_id: uuid.UUID | None = None) -
         _completed_runs_base(project_id).order_by(PipelineRun.id)
     ).all()
     if not rows:
-        return source_hash([])
+        return source_hash([("_algo", "tfidf_v2")])
 
     run_ids = [r.id for r in rows]
     corr_stmt = (
@@ -438,10 +449,12 @@ def _corpus_fingerprint(session: Session, project_id: uuid.UUID | None = None) -
     corr_by_run: dict[uuid.UUID, str] = {
         rid: str(ts) for rid, ts in session.execute(corr_stmt).all()
     }
-    return source_hash([
+    pairs: list[tuple[str, str]] = [("_algo", "tfidf_v2")]
+    pairs.extend(
         (str(r.id), f"{r.updated_at}:{corr_by_run.get(r.id, '')}")
         for r in rows
-    ])
+    )
+    return source_hash(pairs)
 
 
 def _corpus_documents(
@@ -570,7 +583,7 @@ def term_stats(
     if not docs:
         return TermStatsResult(terms=[], stale=False)
 
-    stats = compute_tfidf(docs)
+    stats = compute_tfidf(docs, min_doc_count=1 if len(docs) <= 1 else 2)
     _write_artifact(session, project_id, stats, fingerprint)
     return TermStatsResult(
         terms=[

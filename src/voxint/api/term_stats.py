@@ -266,12 +266,17 @@ def compute_tfidf(
     documents: list[tuple[uuid.UUID, str]],
     *,
     top_n: int = 200,
+    min_doc_count: int = 2,
 ) -> list[TermStat]:
     """Compute TF-IDF term statistics over (doc_id, text) pairs.
 
     Each document is one pipeline run's concatenated effective text.
-    Returns the top_n terms ranked by average TF-IDF score.
+    Terms appearing in fewer than *min_doc_count* documents are excluded.
+    Returns the top_n terms ranked by a composite score that balances
+    distinctiveness (TF-IDF) with cross-document recurrence.
     """
+    if min_doc_count < 1:
+        raise ValueError("min_doc_count must be >= 1")
     if not documents:
         return []
 
@@ -291,6 +296,8 @@ def compute_tfidf(
 
     tfidf_avg: dict[str, float] = {}
     for term, doc_freq in df.items():
+        if doc_freq < min_doc_count:
+            continue
         idf = math.log(1.0 + n_docs / doc_freq)
         total = 0.0
         for i, tf in enumerate(doc_tfs):
@@ -299,15 +306,22 @@ def compute_tfidf(
                 total += (count / doc_lengths[i]) * idf
         tfidf_avg[term] = total / doc_freq
 
-    ranked = sorted(tfidf_avg.items(), key=lambda kv: (-kv[1], kv[0]))[:top_n]
+    # Composite ranking: TF-IDF weighted by cross-document recurrence.
+    # The composite is an internal sort key; TermStat.tfidf stays the
+    # original average so downstream consumers (opacity, tooltips) see
+    # the unmodified distinctiveness signal.
+    ranked = sorted(
+        tfidf_avg.items(),
+        key=lambda kv: (-(kv[1] * math.log(1.0 + df[kv[0]])), kv[0]),
+    )[:top_n]
     return [
         TermStat(
             term=term,
             count=corpus_counts[term],
             doc_count=df[term],
-            tfidf=round(score, 6),
+            tfidf=round(tfidf_avg[term], 6),
         )
-        for term, score in ranked
+        for term, _ in ranked
     ]
 
 
