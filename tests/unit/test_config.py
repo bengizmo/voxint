@@ -4,7 +4,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from voxint.config import Settings, SettingsError, get_settings
+from voxint.config import (
+    DEFAULT_LLM_BASE_URL,
+    Settings,
+    SettingsError,
+    get_settings,
+    llm_endpoint_explicitly_set,
+)
 
 
 def test_defaults_are_localhost_and_llm_disabled() -> None:
@@ -371,9 +377,7 @@ def test_web_research_enabled_requires_base_url() -> None:
 )
 def test_web_research_base_url_shape_is_validated(base_url: str) -> None:
     with pytest.raises(ValidationError, match="web_search_base_url"):
-        Settings(
-            _env_file=None, voxint_web_research=True, web_search_base_url=base_url
-        )
+        Settings(_env_file=None, voxint_web_research=True, web_search_base_url=base_url)
 
 
 def test_web_research_api_key_never_in_settings_error(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -453,9 +457,7 @@ def test_media_retention_seconds_not_tier_scaled() -> None:
     from voxint.config import TIER_SCALED_TIMING_FIELDS
 
     assert "media_retention_seconds" not in TIER_SCALED_TIMING_FIELDS
-    assert (
-        Settings(_env_file=None, compute_tier="cpu").media_retention_seconds == 2592000
-    )
+    assert Settings(_env_file=None, compute_tier="cpu").media_retention_seconds == 2592000
 
 
 def test_rerun_publish_batch_size_must_be_positive() -> None:
@@ -468,6 +470,25 @@ def test_recovery_publish_batch_size_must_be_positive() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, recovery_publish_batch_size=0)
     assert Settings(_env_file=None).recovery_publish_batch_size == 50
-    assert (
-        Settings(_env_file=None, recovery_publish_batch_size=1).recovery_publish_batch_size == 1
-    )
+    assert Settings(_env_file=None, recovery_publish_batch_size=1).recovery_publish_batch_size == 1
+
+
+# --- llm_endpoint_explicitly_set (#505) ---
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        (DEFAULT_LLM_BASE_URL, False),
+        (DEFAULT_LLM_BASE_URL + "/", False),
+        ("  " + DEFAULT_LLM_BASE_URL + "  ", False),
+        ("", False),
+        ("   ", False),
+        ("http://localhost:8080/v1", True),
+        ("http://localhost:8080/v1/", True),
+        ("https://my-vllm.local/v1", True),
+        ("  http://ollama:11434/v1  ", True),
+    ],
+)
+def test_llm_endpoint_explicitly_set(url: str, expected: bool) -> None:
+    assert llm_endpoint_explicitly_set(url) is expected

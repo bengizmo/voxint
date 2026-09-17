@@ -18,9 +18,12 @@
     <p class="muted">An <code>LLM_API_KEY</code> is set in the environment. ✓
        <span class="muted">(environment)</span></p>
   {% endif %}
+{% elif byo_keyless %}
+  <p class="muted">No API key is needed; a keyless endpoint is configured. &#10003;</p>
 {% else %}
   <p class="notice">No API key is configured. Enter one below (or set
-     <code>LLM_API_KEY</code> in the environment) before enabling.</p>
+     <code>LLM_API_KEY</code> in the environment), or point
+     <code>LLM_BASE_URL</code> at a keyless endpoint, before enabling.</p>
 {% endif %}
 {% if not llm_budget_ok %}
   <p class="notice">The configured LLM run budget doesn't fit the transcription stage

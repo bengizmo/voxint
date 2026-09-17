@@ -88,6 +88,7 @@ from voxint.app_settings import (
     resolve_effective_enrichment_web_research_enabled,
     resolve_effective_llm_api_key,
     resolve_effective_llm_enabled,
+    resolve_effective_llm_endpoint,
     resolve_effective_semantic_index_autogenerate,
     resolve_effective_semantic_index_enabled,
     resolve_effective_synthdetect_autogenerate,
@@ -105,7 +106,7 @@ from voxint.app_settings import (
     validate_effective_flags,
     validate_web_search_base_url,
 )
-from voxint.config import Settings, llm_budget_fits_stage_lease
+from voxint.config import Settings, llm_budget_fits_stage_lease, llm_endpoint_explicitly_set
 from voxint.db.models import AppSettings
 from voxint.diagnostics import LLM_NOT_CONFIGURED_DETAIL, check_state, run_diagnostics
 from voxint.domain_packs.base import DomainPackError
@@ -152,9 +153,7 @@ _TUTORIAL_SEED_ASSET_ERROR = (
 )
 
 
-def _try_seed_tutorial(
-    session: Session, settings: Settings
-) -> tuple[uuid.UUID | None, str | None]:
+def _try_seed_tutorial(session: Session, settings: Settings) -> tuple[uuid.UUID | None, str | None]:
     """Seed the tutorial, mapping known environment/asset failures to bounded copy.
 
     Returns ``(run_id, None)`` on success or ``(None, message)`` on a classified
@@ -173,9 +172,7 @@ def _try_seed_tutorial(
     the true exception is always in the server log.
     """
     try:
-        run_id = seed_tutorial_run(
-            session, media_root=settings.media_root, settings=settings
-        )
+        run_id = seed_tutorial_run(session, media_root=settings.media_root, settings=settings)
     # FileNotFoundError MUST precede the OSError clause below — it is an OSError
     # subclass, and a missing bundled asset is a data problem, not a storage one.
     except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
@@ -239,6 +236,9 @@ def _setup_context(
         "llm_key_present": bool(resolve_effective_llm_api_key(row, settings)),
         "llm_key_source": effective_llm_key_source(row, settings),
         "llm_budget_ok": llm_budget_fits_stage_lease(settings),
+        "byo_keyless": llm_endpoint_explicitly_set(
+            resolve_effective_llm_endpoint(row, settings)[0]
+        ),
         # The finish step offers "Finish setup & start tutorial" (seeds if needed,
         # issue #75) alongside a plain "Finish setup"; this flag only selects the
         # already-seeded vs. seed-on-finish copy, never the redirect.
@@ -258,9 +258,9 @@ def _setup_context(
                 settings,
                 action_prefix="/setup/folders",
                 csrf=context["csrf_setup"],
-                path=folder_path if folder_path is not None else (
-                    request.query_params.get("path") or "."
-                ),
+                path=folder_path
+                if folder_path is not None
+                else (request.query_params.get("path") or "."),
             )
         )
     context.update(overrides)
@@ -565,12 +565,19 @@ def _persist_llm_settings(
     error: str | None = None
     if enabled:
         # Issue #67: a keyless enable is legitimate when the bundled local model is
-        # the active endpoint — resolve it from the just-created row (the operator
-        # may have turned the bundle on in Features first) so the keyless audience
-        # can actually flip the master LLM switch. BYO-only jobs stay key-gated.
+        # the active endpoint. Issue #505: a deliberately configured BYO endpoint
+        # (non-default URL) is also allowed keyless. Resolve the effective base URL
+        # from the candidate (matching post-save resolution) so the guard reflects
+        # the saved state.
         bundled_active = llm_bundled_active(row, settings)
+        effective_base_url = (base_url or "") or settings.llm_base_url
         try:
-            validate_llm_enable(effective_key, settings, bundled_active=bundled_active)
+            validate_llm_enable(
+                effective_key,
+                settings,
+                bundled_active=bundled_active,
+                effective_base_url=effective_base_url,
+            )
         except SetupValidationError as exc:
             error = str(exc)
     # Single deliberate mutation. On a validation failure we fail closed
@@ -625,8 +632,7 @@ _FEATURE_FLAG_META: tuple[tuple[str, str, str], ...] = (
     (
         "ytdlp_enabled",
         "Download media from a URL",
-        "Allow submitting media by URL, fetched with yt-dlp. Independent of the LLM"
-        " features.",
+        "Allow submitting media by URL, fetched with yt-dlp. Independent of the LLM features.",
     ),
 )
 _FEATURE_FLAG_NAMES: tuple[str, ...] = tuple(name for name, _, _ in _FEATURE_FLAG_META)
@@ -682,6 +688,8 @@ def _effective_feature_flag_meta(
     if not plugin_flags:
         return _FEATURE_FLAG_META
     return _FEATURE_FLAG_META + plugin_flags
+
+
 _FEATURE_FLAG_CHOICES: tuple[str, ...] = ("on", "off", "inherit")
 
 # Operator-plain copy for the invariant violations the settings sections surface
@@ -728,8 +736,7 @@ _FEATURE_INVARIANT_COPY: dict[str, str] = {
     ),
     "voxint_web_research=true requires web_search_base_url — the"
     " searxng provider has no default endpoint": (
-        "Web research needs a search provider endpoint. Enter one below, or turn"
-        " Web research off."
+        "Web research needs a search provider endpoint. Enter one below, or turn Web research off."
     ),
     "web_search_base_url must not contain whitespace or backslashes": (
         "The search provider endpoint can't contain spaces or backslashes — check"
@@ -740,12 +747,10 @@ _FEATURE_INVARIANT_COPY: dict[str, str] = {
         " (for example an invalid port)."
     ),
     "web_search_base_url must be an absolute http(s) URL": (
-        "The search provider endpoint must be a full web address starting with"
-        " http:// or https://."
+        "The search provider endpoint must be a full web address starting with http:// or https://."
     ),
     "web_search_base_url must not embed credentials — use web_search_api_key": (
-        "Don't put a username or password in the endpoint — use the API key field"
-        " below instead."
+        "Don't put a username or password in the endpoint — use the API key field below instead."
     ),
     "web_search_base_url must be a bare endpoint (no query/fragment)": (
         "Enter just the endpoint address — no “?query” or “#fragment” at the end."
@@ -838,9 +843,7 @@ def _doctor_checks(request: Request, session: Session) -> list[dict[str, Any]]:
     settings: Settings = request.app.state.settings
     engine = cast(Engine, session.get_bind())
     with httpx.Client(timeout=httpx.Timeout(settings.health_probe_timeout_seconds)) as client:
-        results = run_diagnostics(
-            settings, engine, http_client=client, include_hf_token=False
-        )
+        results = run_diagnostics(settings, engine, http_client=client, include_hf_token=False)
     return [
         {
             "name": r.name,
@@ -897,14 +900,16 @@ def _build_components(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for key in _COMPONENT_ORDER:
         if key == "__api__":
-            rows.append({
-                "label": "Console & API",
-                "dot": "ok",
-                "state_text": "running",
-                "action_url": None,
-                "action_label": None,
-                "action_style": None,
-            })
+            rows.append(
+                {
+                    "label": "Console & API",
+                    "dot": "ok",
+                    "state_text": "running",
+                    "action_url": None,
+                    "action_label": None,
+                    "action_style": None,
+                }
+            )
             continue
         check = by_name.get(key)
         label = _COMPONENT_LABELS.get(key, key)
@@ -949,14 +954,16 @@ def _build_components(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
             else:
                 dot = "warn"
                 state_text = check["detail"] or state
-        rows.append({
-            "label": label,
-            "dot": dot,
-            "state_text": state_text,
-            "action_url": action_url,
-            "action_label": action_label,
-            "action_style": action_style,
-        })
+        rows.append(
+            {
+                "label": label,
+                "dot": dot,
+                "state_text": state_text,
+                "action_url": action_url,
+                "action_label": action_label,
+                "action_style": action_style,
+            }
+        )
     return rows
 
 
@@ -968,11 +975,13 @@ def _build_gauges(
 
     gauges: list[dict[str, Any]] = []
     if host.cpu_percent is not None:
-        gauges.append({
-            "label": "Processor",
-            "value": f"{host.cpu_percent}%",
-            "percent": host.cpu_percent,
-        })
+        gauges.append(
+            {
+                "label": "Processor",
+                "value": f"{host.cpu_percent}%",
+                "percent": host.cpu_percent,
+            }
+        )
     if (
         host.memory_used_bytes is not None
         and host.memory_total_bytes is not None
@@ -981,29 +990,35 @@ def _build_gauges(
         used_gb = host.memory_used_bytes / (1024**3)
         total_gb = host.memory_total_bytes / (1024**3)
         pct = round(100 * host.memory_used_bytes / host.memory_total_bytes)
-        gauges.append({
-            "label": "Memory",
-            "value": f"{used_gb:.1f} / {total_gb:.0f} GB",
-            "percent": pct,
-        })
+        gauges.append(
+            {
+                "label": "Memory",
+                "value": f"{used_gb:.1f} / {total_gb:.0f} GB",
+                "percent": pct,
+            }
+        )
     for gpu in snapshot.gpus:
         if gpu.utilization_percent is not None:
-            gauges.append({
-                "label": "Graphics card",
-                "value": f"{gpu.utilization_percent}%",
-                "percent": gpu.utilization_percent,
-            })
+            gauges.append(
+                {
+                    "label": "Graphics card",
+                    "value": f"{gpu.utilization_percent}%",
+                    "percent": gpu.utilization_percent,
+                }
+            )
         vram_pct = vram_percent(gpu.vram_used_bytes, gpu.vram_total_bytes)
         if vram_pct is not None:
             assert gpu.vram_used_bytes is not None
             assert gpu.vram_total_bytes is not None
             used_gb = gpu.vram_used_bytes / (1024**3)
             total_gb = gpu.vram_total_bytes / (1024**3)
-            gauges.append({
-                "label": "Graphics memory",
-                "value": f"{used_gb:.1f} / {total_gb:.0f} GB",
-                "percent": vram_pct,
-            })
+            gauges.append(
+                {
+                    "label": "Graphics memory",
+                    "value": f"{used_gb:.1f} / {total_gb:.0f} GB",
+                    "percent": vram_pct,
+                }
+            )
     if (
         host.disk_used_bytes is not None
         and host.disk_total_bytes is not None
@@ -1012,11 +1027,13 @@ def _build_gauges(
         used_gb = host.disk_used_bytes / (1024**3)
         total_gb = host.disk_total_bytes / (1024**3)
         pct = round(100 * host.disk_used_bytes / host.disk_total_bytes)
-        gauges.append({
-            "label": "Disk (media)",
-            "value": f"{used_gb:.0f} / {total_gb:.0f} GB",
-            "percent": pct,
-        })
+        gauges.append(
+            {
+                "label": "Disk (media)",
+                "value": f"{used_gb:.0f} / {total_gb:.0f} GB",
+                "percent": pct,
+            }
+        )
     return gauges
 
 
@@ -1153,9 +1170,7 @@ def _handle_reset_flag(
     )
 
 
-def _effective_invariant_messages(
-    row: AppSettings | None, settings: Settings
-) -> list[str]:
+def _effective_invariant_messages(row: AppSettings | None, settings: Settings) -> list[str]:
     """Operator-plain invariant violations for the row's current effective state.
 
     Collects translated messages from all four invariant domains (feature flags,
@@ -1167,9 +1182,7 @@ def _effective_invariant_messages(
         for message in validate_effective_flags(
             EffectiveFlags(
                 llm_enabled=resolve_effective_llm_enabled(row, settings),
-                enrichment_names_enabled=resolve_effective_enrichment_names_enabled(
-                    row, settings
-                ),
+                enrichment_names_enabled=resolve_effective_enrichment_names_enabled(row, settings),
                 enrichment_names_llm_enabled=resolve_effective_enrichment_names_llm_enabled(
                     row, settings
                 ),
@@ -1214,9 +1227,7 @@ def _effective_invariant_messages(
     return errors
 
 
-def _reset_invariant_errors(
-    row: AppSettings, settings: Settings, flag_name: str
-) -> list[str]:
+def _reset_invariant_errors(row: AppSettings, settings: Settings, flag_name: str) -> list[str]:
     """Violations the reset would NEWLY introduce (delta discipline, #404).
 
     Snapshots the current invariant surface, applies the tentative NULL, then
@@ -1281,9 +1292,7 @@ def _persist_feature_flags(
             enrichment_names_enabled=_effective("enrichment_names_enabled"),
             enrichment_names_llm_enabled=_effective("enrichment_names_llm_enabled"),
             enrichment_run_assets_enabled=_effective("enrichment_run_assets_enabled"),
-            enrichment_run_assets_autogenerate=_effective(
-                "enrichment_run_assets_autogenerate"
-            ),
+            enrichment_run_assets_autogenerate=_effective("enrichment_run_assets_autogenerate"),
         )
     )
     if errors:
@@ -1405,8 +1414,7 @@ def _persist_translation(
     auto_choice = submitted.get("translation_autogenerate", "inherit")
     if auto_choice not in _FEATURE_FLAG_CHOICES:
         return [
-            "Unrecognized auto-translate setting — choose On, Off, or Use"
-            " installation setting."
+            "Unrecognized auto-translate setting — choose On, Off, or Use installation setting."
         ]
     target_candidate = None if target_choice == "inherit" else target_choice.lower()
     auto_candidate = None if auto_choice == "inherit" else (auto_choice == "on")
@@ -1513,9 +1521,7 @@ def _persist_web_research(
     # replacement still reports it in the same pass (a normalize failure nulls
     # new_key, which would otherwise hide the contradiction until a second attempt).
     if remove_key and typed_key:
-        errors.append(
-            "Choose either a new web-search API key or “remove saved key”, not both."
-        )
+        errors.append("Choose either a new web-search API key or “remove saved key”, not both.")
     if remove_key:
         cand_key: str | None = None
     elif new_key is not None:
@@ -1595,6 +1601,7 @@ def _persist_web_research(
 # (deliberately NOT a blanket /setup prefix, so an accidental ungated route
 # still fails that guard).
 
+
 @setup_router.get("/setup", include_in_schema=False)
 def setup(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     step = parse_step(request.query_params.get("step"))
@@ -1609,12 +1616,15 @@ def setup(request: Request, operator: OperatorDep, session: SessionDep) -> Respo
     context = _setup_context(request, session, step)
     return templates.TemplateResponse(request, "settings/setup.html", context)
 
+
 def _setup_redirect(step: WizardStep) -> RedirectResponse:
     return RedirectResponse(f"/setup?step={step.value}", status_code=303)
+
 
 # Folder registration on the media step is the browser panel (issue #63):
 # POST /setup/folders, not a bulk textarea. The old POST /setup/media route
 # was removed with the textarea.
+
 
 def _scan_response(request: Request, session: Session, result: ScanResult) -> Response:
     """htmx → the scan preview/result fragment; a plain POST → back to the step.
@@ -1635,6 +1645,7 @@ def _scan_response(request: Request, session: Session, result: ScanResult) -> Re
         )
     return _setup_redirect(WizardStep.MEDIA)
 
+
 @setup_router.post("/setup/scan", include_in_schema=False)
 def setup_scan(
     request: Request,
@@ -1647,6 +1658,7 @@ def setup_scan(
     folders = registered_folder_paths(session)
     result = scan_media_folders(session, settings.media_root, folders, settings)
     return _scan_response(request, session, result)
+
 
 @setup_router.post("/setup/scan/confirm", include_in_schema=False)
 def setup_scan_confirm(
@@ -1673,9 +1685,7 @@ def setup_scan_confirm(
             if (sub := submit_media_item_if_new(session, path)) is not None
         ]
     except DomainPackError as exc:
-        raise HTTPException(
-            status_code=422, detail=deps._submit_domain_pack_detail(exc)
-        ) from exc
+        raise HTTPException(status_code=422, detail=deps._submit_domain_pack_detail(exc)) from exc
     # Commit the whole batch ONCE (commit-before-publish); if the commit fails,
     # nothing is published and no partial state escapes.
     session.commit()
@@ -1715,6 +1725,7 @@ def setup_scan_confirm(
         )
     return _setup_redirect(WizardStep.MEDIA)
 
+
 # ---- Folder browser + per-folder domain packs (issue #63) --------------
 # Two routes per mount: a read-only browse GET (no CSRF — authenticated,
 # bounded, never creates the row) and one mutate POST carrying an action verb.
@@ -1722,6 +1733,7 @@ def setup_scan_confirm(
 # full-page redirect on success, or a full-page re-render carrying the error
 # inline on failure (mirrors _roster_response) — never a silent reload that
 # discards the message and looks like the mutation succeeded.
+
 
 def _folder_panel_response(
     request: Request,
@@ -1753,6 +1765,7 @@ def _folder_panel_response(
     response.headers["Cache-Control"] = "no-store"
     return response
 
+
 @setup_router.get("/setup/folders/browse", include_in_schema=False)
 def setup_folders_browse(
     request: Request,
@@ -1771,6 +1784,7 @@ def setup_folders_browse(
     response.headers["Cache-Control"] = "no-store"
     return response
 
+
 @setup_router.post("/setup/folders", include_in_schema=False)
 def setup_folders(
     request: Request,
@@ -1784,9 +1798,7 @@ def setup_folders(
 ) -> Response:
     _require_csrf(request, CSRF_SETUP, csrf_token)
     settings: Settings = request.app.state.settings
-    error = _apply_folder_mutation(
-        session, settings, action=action, folder=folder, pack=pack
-    )
+    error = _apply_folder_mutation(session, settings, action=action, folder=folder, pack=pack)
     if error is None:
         session.commit()
     else:
@@ -1801,7 +1813,10 @@ def setup_folders(
             request,
             "settings/setup.html",
             _setup_context(
-                request, session, WizardStep.MEDIA, folder_path=path,
+                request,
+                session,
+                WizardStep.MEDIA,
+                folder_path=path,
                 folder_error=message,
             ),
         )
@@ -1817,6 +1832,7 @@ def setup_folders(
         redirect_url=redirect,
         error_page=_error_page,
     )
+
 
 @setup_router.post("/setup/vocabulary", include_in_schema=False)
 def setup_vocabulary(
@@ -1845,6 +1861,7 @@ def setup_vocabulary(
     row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
     row.vocabulary = terms
     return _setup_redirect(WizardStep.LLM)
+
 
 @setup_router.post("/setup/llm", include_in_schema=False)
 def setup_llm(
@@ -1906,6 +1923,7 @@ def setup_llm(
         return _rerender(error)
     return _setup_redirect(WizardStep.SERVICES)
 
+
 @setup_router.post("/setup/finish", include_in_schema=False)
 def setup_finish(
     request: Request,
@@ -1932,9 +1950,7 @@ def setup_finish(
             return templates.TemplateResponse(
                 request,
                 "settings/setup.html",
-                _setup_context(
-                    request, session, WizardStep.FINISH, tutorial_error=error
-                ),
+                _setup_context(request, session, WizardStep.FINISH, tutorial_error=error),
             )
     complete_onboarding(session, llm_enabled_default=settings.llm_enabled)
     # Commit explicitly before the redirect so the request that follows cannot
@@ -1947,9 +1963,7 @@ def setup_finish(
     # seeded) rather than a re-read, so a successful seed can never silently
     # fall through to /review.
     if wants_tutorial and seeded_run_id is not None:
-        return RedirectResponse(
-            f"/runs/{seeded_run_id}?tutorial=run", status_code=303
-        )
+        return RedirectResponse(f"/runs/{seeded_run_id}?tutorial=run", status_code=303)
     return RedirectResponse("/media", status_code=303)
 
 
@@ -1959,6 +1973,7 @@ def setup_finish(
 # un-onboarded operator is bounced to /setup by the gate). The two POSTs verify
 # CSRF_SETTINGS and 409 when no tutorial run is available, so a stray token can
 # never "complete" or "replay" an unseeded tutorial.
+
 
 def _settings_context(
     request: Request,
@@ -1982,9 +1997,7 @@ def _settings_context(
     settings: Settings = request.app.state.settings
     tutorial_run = ready_tutorial_run_id(session)
     row = get_app_settings(session)
-    base_value, base_default, model_value, model_default = llm_endpoint_form_fields(
-        row, settings
-    )
+    base_value, base_default, model_value, model_default = llm_endpoint_form_fields(row, settings)
     # Features section (issue #62): one tri-state row per live-read flag. On an
     # invariant-rejected save, render the operator's submitted choices back
     # (``features_submitted``); otherwise render the stored raw tri-state. The
@@ -2029,24 +2042,24 @@ def _settings_context(
         else:
             reason = ""
         effective = flag_effective[name]
-        feature_flags.append({
-            "name": name,
-            "label": label,
-            "help": help_text,
-            "state": flag_states[name],
-            "env_default": bool(getattr(settings, name)),
-            "effective": effective,
-            "disabled": disabled,
-            "disabled_reason": reason,
-            "dependent": any(d in flag_states for d in deps),
-        })
+        feature_flags.append(
+            {
+                "name": name,
+                "label": label,
+                "help": help_text,
+                "state": flag_states[name],
+                "env_default": bool(getattr(settings, name)),
+                "effective": effective,
+                "disabled": disabled,
+                "disabled_reason": reason,
+                "dependent": any(d in flag_states for d in deps),
+            }
+        )
     # Semantic search section (issue #121): two tri-state rows (the feature +
     # its autogenerate rider). On an invariant-rejected save, render the
     # operator's submitted choices back (``semantic_index_submitted``); otherwise
     # the stored raw tri-state.
-    semantic_submitted: dict[str, str] | None = overrides.pop(
-        "semantic_index_submitted", None
-    )
+    semantic_submitted: dict[str, str] | None = overrides.pop("semantic_index_submitted", None)
     # The tri-state the toggle renders (submitted choice on an invariant-
     # rejected re-render, else the stored raw state). The weights-missing
     # notice gates on the EFFECTIVE enablement derived from it, not the raw
@@ -2062,9 +2075,7 @@ def _settings_context(
     # string override — "inherit" or a language code) + the autogenerate
     # tri-state. On an invariant-rejected save, render the operator's
     # submitted choices back.
-    translation_submitted: dict[str, str] | None = overrides.pop(
-        "translation_submitted", None
-    )
+    translation_submitted: dict[str, str] | None = overrides.pop("translation_submitted", None)
     stored_translation_target = (
         row.translation_target_language.strip()
         if row is not None
@@ -2078,9 +2089,7 @@ def _settings_context(
     # tri-state / override values.
     wr_submitted: dict[str, str] | None = overrides.pop("web_research_submitted", None)
     # Synthdetect section (#145): two tri-state toggles (enabled + autogenerate).
-    synthdetect_submitted: dict[str, str] | None = overrides.pop(
-        "synthdetect_submitted", None
-    )
+    synthdetect_submitted: dict[str, str] | None = overrides.pop("synthdetect_submitted", None)
     wr_base_value, wr_base_default = str_flag_form_field(row, settings, "web_search_base_url")
     wr_domains_value, wr_domains_default = str_flag_form_field(
         row, settings, "source_authority_domains"
@@ -2101,6 +2110,9 @@ def _settings_context(
         "llm_key_present": bool(resolve_effective_llm_api_key(row, settings)),
         "llm_key_source": effective_llm_key_source(row, settings),
         "llm_budget_ok": llm_budget_fits_stage_lease(settings),
+        "byo_keyless": llm_endpoint_explicitly_set(
+            resolve_effective_llm_endpoint(row, settings)[0]
+        ),
         # Completion celebration after POST /settings/tutorial/complete —
         # shown ONLY when the tutorial is genuinely completed, so a spoofed
         # or bookmarked ?tutorial=done on an unseeded/incomplete tutorial
@@ -2129,19 +2141,14 @@ def _settings_context(
         # default) — the honest gate for the weights-missing notice below.
         "semantic_index_effective_enabled": (
             semantic_enabled_state == "on"
-            or (
-                semantic_enabled_state == "inherit"
-                and bool(settings.semantic_index_enabled)
-            )
+            or (semantic_enabled_state == "inherit" and bool(settings.semantic_index_enabled))
         ),
         "semantic_index_autogenerate_state": (
             semantic_submitted.get("semantic_index_autogenerate", "inherit")
             if semantic_submitted is not None
             else feature_flag_state(row, "semantic_index_autogenerate")
         ),
-        "semantic_index_autogenerate_env_default": bool(
-            settings.semantic_index_autogenerate
-        ),
+        "semantic_index_autogenerate_env_default": bool(settings.semantic_index_autogenerate),
         "semantic_index_weights_available": minilm_artifacts_available(),
         "semantic_index_errors": [],
         # Transcript translation (issue #133): the preferred-language select
@@ -2167,9 +2174,7 @@ def _settings_context(
         ),
         "translation_autogenerate_env_default": bool(settings.translation_autogenerate),
         "translation_llm_open": translation_gates_open(settings, row),
-        "translation_language_options": sorted(
-            LANGUAGE_NAMES.items(), key=lambda item: item[1]
-        ),
+        "translation_language_options": sorted(LANGUAGE_NAMES.items(), key=lambda item: item[1]),
         "translation_errors": [],
         # Synthdetect (#145): two tri-state toggles (enabled + autogenerate).
         # Submitted choice on re-render, else the stored raw state.
@@ -2184,9 +2189,7 @@ def _settings_context(
             else feature_flag_state(row, "synthdetect_autogenerate")
         ),
         "synthdetect_enabled_env_default": bool(settings.synthdetect_enabled),
-        "synthdetect_autogenerate_env_default": bool(
-            settings.synthdetect_autogenerate
-        ),
+        "synthdetect_autogenerate_env_default": bool(settings.synthdetect_autogenerate),
         "synthdetect_errors": [],
         # Sources & research (issue #76): the two web-research toggles (raw
         # tri-state, or submitted choice on re-render), the endpoint override +
@@ -2228,9 +2231,9 @@ def _settings_context(
             settings,
             action_prefix="/settings/folders",
             csrf=context["csrf_settings"],
-            path=folder_path if folder_path is not None else (
-                request.query_params.get("path") or "."
-            ),
+            path=folder_path
+            if folder_path is not None
+            else (request.query_params.get("path") or "."),
         )
     )
     # Watch-folder ingest (issue #60): the tri-state toggle beside the folder
@@ -2255,9 +2258,7 @@ def _settings_context(
     # no-JS read-only fallback) plus the JSON props the corrections-editor
     # island hydrates from — the rules, the CSRF-guarded save action, and the
     # #80 bounds so the client can hint before the server (authoritative) gate.
-    stored_corrections = (
-        list(row.corrections) if row is not None and row.corrections else []
-    )
+    stored_corrections = list(row.corrections) if row is not None and row.corrections else []
     context["corrections"] = stored_corrections
     context["corrections_props"] = {
         "rules": stored_corrections,
@@ -2298,19 +2299,13 @@ def _settings_context(
     # ordered by (order, section_id). Console 2.0 renders these on Plugins;
     # the legacy flat page retains its original section loop.
     context["plugin_settings_sections"] = request.app.state.plugins.settings_sections()
-    context["plugins"] = settings_view.build_plugins_view(
-        request.app.state.plugins, row, settings
-    )
+    context["plugins"] = settings_view.build_plugins_view(request.app.state.plugins, row, settings)
     # Benchmark section: most recent runs for the settings page.
     try:
         from voxint.db.models import BenchmarkRun
 
         recent_runs = (
-            session.execute(
-                select(BenchmarkRun)
-                .order_by(BenchmarkRun.created_at.desc())
-                .limit(5)
-            )
+            session.execute(select(BenchmarkRun).order_by(BenchmarkRun.created_at.desc()).limit(5))
             .scalars()
             .all()
         )
@@ -2321,6 +2316,7 @@ def _settings_context(
         context["benchmark_runs"] = []
     context.update(overrides)
     return context
+
 
 def _settings_page_template(request: Request) -> str:
     """Select the legacy page or the Console 2.0 tab owning this request.
@@ -2334,8 +2330,10 @@ def _settings_page_template(request: Request) -> str:
         return "settings/settings.html"
     path = request.url.path
     if path in {
-        "/settings/folders", "/settings/watch-folder",
-        "/settings/web-research", "/settings/media",
+        "/settings/folders",
+        "/settings/watch-folder",
+        "/settings/web-research",
+        "/settings/media",
     }:
         return "settings/media.html"
     if path in {
@@ -2375,18 +2373,14 @@ def settings_page(request: Request, operator: OperatorDep, session: SessionDep) 
 
 
 @router.get("/settings/media", name="settings_media")
-def settings_media_page(
-    request: Request, operator: OperatorDep, session: SessionDep
-) -> Response:
+def settings_media_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     return templates.TemplateResponse(
         request, "settings/media.html", _settings_context(request, session)
     )
 
 
 @router.get("/settings/ai", name="settings_ai")
-def settings_ai_page(
-    request: Request, operator: OperatorDep, session: SessionDep
-) -> Response:
+def settings_ai_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     return templates.TemplateResponse(
         request, "settings/ai.html", _settings_context(request, session)
     )
@@ -2416,9 +2410,7 @@ def _app_settings_or_none(session: Session) -> AppSettings | None:
 
 
 @router.get("/settings/status", name="settings_status")
-def settings_status_page(
-    request: Request, operator: OperatorDep, session: SessionDep
-) -> Response:
+def settings_status_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     settings: Settings = request.app.state.settings
     snapshot = collect_resource_status_or_empty(settings)
     host = collect_host_metrics_or_empty(settings.media_root)
@@ -2458,9 +2450,7 @@ def settings_status_page(
 @router.get("/settings/hardware", name="settings_hardware")
 def settings_hardware_page(request: Request, operator: OperatorDep) -> Response:
     settings: Settings = request.app.state.settings
-    view = settings_view.build_hardware_view(
-        settings, tuple(collect_service_identity(settings))
-    )
+    view = settings_view.build_hardware_view(settings, tuple(collect_service_identity(settings)))
     # pipeline_models feeds the reused settings/_models.html panel (same live
     # service identity the flat page's Pipeline models section rendered).
     context = _sub_page_context(request, hardware=view, pipeline_models=view.services)
@@ -2478,9 +2468,7 @@ def settings_database_page(
 
 
 @router.get("/settings/plugins", name="settings_plugins")
-def settings_plugins_page(
-    request: Request, operator: OperatorDep, session: SessionDep
-) -> Response:
+def settings_plugins_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     settings: Settings = request.app.state.settings
     registry: PluginRegistry = request.app.state.plugins
     row = _app_settings_or_none(session)
@@ -2493,9 +2481,7 @@ def settings_plugins_page(
         context = _settings_context(request, session)
     except SQLAlchemyError:
         session.rollback()
-        context = _sub_page_context(
-            request, plugin_settings_sections=(), plugins=view
-        )
+        context = _sub_page_context(request, plugin_settings_sections=(), plugins=view)
     else:
         context["plugins"] = view
     return templates.TemplateResponse(request, "settings/plugins.html", context)
@@ -2517,6 +2503,7 @@ def settings_plugin_detail_page(
     context = _settings_context(request, session)
     context["plugin"] = view
     return templates.TemplateResponse(request, "settings/plugin_detail.html", context)
+
 
 @router.post("/settings/llm")
 def settings_llm(
@@ -2559,6 +2546,7 @@ def settings_llm(
     session.commit()
     return RedirectResponse(_settings_redirect(request, "llm", "ai"), status_code=303)
 
+
 @router.post("/settings/features")
 async def settings_features(
     request: Request,
@@ -2583,6 +2571,7 @@ async def settings_features(
         )
     session.commit()
     return RedirectResponse(_settings_redirect(request, "features", ""), status_code=303)
+
 
 @router.post("/settings/semantic")
 async def settings_semantic(
@@ -2612,6 +2601,7 @@ async def settings_semantic(
     session.commit()
     return RedirectResponse(_settings_redirect(request, "semantic-search", "ai"), status_code=303)
 
+
 @router.post("/settings/translation")
 async def settings_translation(
     request: Request,
@@ -2626,16 +2616,10 @@ async def settings_translation(
     _require_csrf(request, CSRF_SETTINGS, csrf_token)
     settings: Settings = request.app.state.settings
     row = get_app_settings(session)
-    translation_auto = _reconcile_switches(
-        ("translation_autogenerate",), form, settings, row
-    )
+    translation_auto = _reconcile_switches(("translation_autogenerate",), form, settings, row)
     submitted = {
-        "translation_target_language": str(
-            form.get("translation_target_language", "inherit")
-        ),
-        "translation_autogenerate": translation_auto.get(
-            "translation_autogenerate", "inherit"
-        ),
+        "translation_target_language": str(form.get("translation_target_language", "inherit")),
+        "translation_autogenerate": translation_auto.get("translation_autogenerate", "inherit"),
     }
     errors = _persist_translation(session, settings, submitted=submitted)
     if errors:
@@ -2651,6 +2635,7 @@ async def settings_translation(
         )
     session.commit()
     return RedirectResponse(_settings_redirect(request, "translation", "ai"), status_code=303)
+
 
 @router.post("/settings/corrections")
 def settings_corrections(
@@ -2680,9 +2665,7 @@ def settings_corrections(
     except json.JSONDecodeError:
         message = "The corrections payload was not valid JSON."
         if wants_json:
-            return JSONResponse(
-                {"ok": False, "error": message, "row": None}, status_code=422
-            )
+            return JSONResponse({"ok": False, "error": message, "row": None}, status_code=422)
         return templates.TemplateResponse(
             request,
             _settings_page_template(request),
@@ -2697,18 +2680,14 @@ def settings_corrections(
     # (_set_folder_pack) — refuse with guidance, never 500. Skipping the union
     # silently would be worse (it would let a colliding rule save).
     try:
-        pack_corrections = (
-            default_domain_pack(settings).to_mapping().get("corrections")
-        )
+        pack_corrections = default_domain_pack(settings).to_mapping().get("corrections")
     except DomainPackError:
         message = (
             "Domain packs can't be loaded right now, so corrections can't be "
             "validated — check your domain-pack configuration and try again."
         )
         if wants_json:
-            return JSONResponse(
-                {"ok": False, "error": message, "row": None}, status_code=422
-            )
+            return JSONResponse({"ok": False, "error": message, "row": None}, status_code=422)
         return templates.TemplateResponse(
             request,
             _settings_page_template(request),
@@ -2716,9 +2695,7 @@ def settings_corrections(
             status_code=422,
         )
     try:
-        normalized = normalize_operator_corrections(
-            raw_items, pack_corrections=pack_corrections
-        )
+        normalized = normalize_operator_corrections(raw_items, pack_corrections=pack_corrections)
     except OperatorCorrectionError as exc:
         if wants_json:
             return JSONResponse(
@@ -2737,6 +2714,7 @@ def settings_corrections(
     if wants_json:
         return JSONResponse({"ok": True, "corrections": normalized})
     return RedirectResponse(_settings_redirect(request, "corrections", "ai"), status_code=303)
+
 
 @router.post("/settings/glossary")
 def settings_glossary(
@@ -2782,6 +2760,7 @@ def settings_glossary(
     session.commit()
     return RedirectResponse(_settings_redirect(request, "glossary", "ai"), status_code=303)
 
+
 @router.post("/settings/watch-folder")
 async def settings_watch_folder(
     request: Request,
@@ -2797,11 +2776,10 @@ async def settings_watch_folder(
     reconciled = _reconcile_switches(("watch_folder_enabled",), form, settings, row)
     wf_choice = reconciled.get("watch_folder_enabled", "inherit")
     wf_row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
-    wf_row.watch_folder_enabled = (
-        None if wf_choice == "inherit" else (wf_choice == "on")
-    )
+    wf_row.watch_folder_enabled = None if wf_choice == "inherit" else (wf_choice == "on")
     session.commit()
     return RedirectResponse(_settings_redirect(request, "watch-folder", "media"), status_code=303)
+
 
 @router.post("/settings/web-research")
 async def settings_web_research(
@@ -2814,19 +2792,13 @@ async def settings_web_research(
     _require_csrf(request, CSRF_SETTINGS, csrf_token)
     settings: Settings = request.app.state.settings
     row = get_app_settings(session)
-    wr_master = _reconcile_switches(
-        ("voxint_web_research",), form, settings, row
-    )
-    wr_producer = _reconcile_switches(
-        ("enrichment_web_research_enabled",), form, settings, row
-    )
+    wr_master = _reconcile_switches(("voxint_web_research",), form, settings, row)
+    wr_producer = _reconcile_switches(("enrichment_web_research_enabled",), form, settings, row)
     errors = _persist_web_research(
         session,
         settings,
         submitted_master=wr_master.get("voxint_web_research", "inherit"),
-        submitted_producer=wr_producer.get(
-            "enrichment_web_research_enabled", "inherit"
-        ),
+        submitted_producer=wr_producer.get("enrichment_web_research_enabled", "inherit"),
         raw_base_url=str(form.get("web_search_base_url", "")),
         raw_key=str(form.get("web_search_api_key", "")),
         remove_key=form.get("remove_web_search_api_key") == "true",
@@ -2851,6 +2823,7 @@ async def settings_web_research(
     session.commit()
     return RedirectResponse(_settings_redirect(request, "sources", "media"), status_code=303)
 
+
 # ---- Tab-level POST endpoints (#379) ------------------------------------
 # One POST per settings tab, dispatching to the existing section persisters.
 # These replace the per-section Save buttons with one Save per tab.  The old
@@ -2874,17 +2847,17 @@ async def settings_general_save(
     if reset_flag and isinstance(reset_flag, str):
         return _handle_reset_flag(session, settings, request, reset_flag, tab="")
 
-    reconciled = _reconcile_switches(
-        _FEATURE_FLAG_NAMES, form, settings, row
-    )
+    reconciled = _reconcile_switches(_FEATURE_FLAG_NAMES, form, settings, row)
     errors = _persist_feature_flags(session, settings, submitted=reconciled)
     if errors:
         return templates.TemplateResponse(
             request,
             _settings_page_template(request),
             _settings_context(
-                request, session,
-                features_errors=errors, features_submitted=reconciled,
+                request,
+                session,
+                features_errors=errors,
+                features_submitted=reconciled,
             ),
         )
     session.commit()
@@ -2953,14 +2926,10 @@ async def settings_ai_save(
         errors["llm_error"] = llm_error
 
     # ---- Semantic search section ----
-    semantic_reconciled = _reconcile_switches(
-        _SEMANTIC_FLAG_NAMES, form, settings, row
-    )
+    semantic_reconciled = _reconcile_switches(_SEMANTIC_FLAG_NAMES, form, settings, row)
     nested = session.begin_nested()
     try:
-        semantic_errors = _persist_semantic_index(
-            session, settings, submitted=semantic_reconciled
-        )
+        semantic_errors = _persist_semantic_index(session, settings, submitted=semantic_reconciled)
     except Exception:
         nested.rollback()
         raise
@@ -2973,16 +2942,10 @@ async def settings_ai_save(
         nested.commit()
 
     # ---- Translation section ----
-    translation_auto = _reconcile_switches(
-        ("translation_autogenerate",), form, settings, row
-    )
+    translation_auto = _reconcile_switches(("translation_autogenerate",), form, settings, row)
     translation_reconciled = {
-        "translation_target_language": str(
-            form.get("translation_target_language", "inherit")
-        ),
-        "translation_autogenerate": translation_auto.get(
-            "translation_autogenerate", "inherit"
-        ),
+        "translation_target_language": str(form.get("translation_target_language", "inherit")),
+        "translation_autogenerate": translation_auto.get("translation_autogenerate", "inherit"),
     }
     nested = session.begin_nested()
     try:
@@ -3008,9 +2971,7 @@ async def settings_ai_save(
     except SetupValidationError as exc:
         glossary_error = str(exc)
     if glossary_error is not None:
-        submitted_terms = [
-            line for line in vocabulary_text.splitlines() if line.strip()
-        ]
+        submitted_terms = [line for line in vocabulary_text.splitlines() if line.strip()]
         errors["glossary_error"] = glossary_error
         errors["vocabulary_text"] = vocabulary_text
         errors["vocabulary"] = submitted_terms
@@ -3022,16 +2983,12 @@ async def settings_ai_save(
     session.commit()
 
     if not errors:
-        return RedirectResponse(
-            _settings_redirect(request, "llm", "ai"), status_code=303
-        )
+        return RedirectResponse(_settings_redirect(request, "llm", "ai"), status_code=303)
 
     saved_count = len(section_labels) - len(section_failed) - len(section_partial)
     parts: list[str] = []
     if saved_count:
-        parts.append(
-            f"{saved_count} section{'s' if saved_count != 1 else ''} saved"
-        )
+        parts.append(f"{saved_count} section{'s' if saved_count != 1 else ''} saved")
     for name in section_partial:
         parts.append(f"{name} partially saved")
     if section_failed:
@@ -3040,7 +2997,8 @@ async def settings_ai_save(
         parts.append("No changes saved")
     errors["ai_save_summary"] = "; ".join(parts) + "."
     return templates.TemplateResponse(
-        request, _settings_page_template(request),
+        request,
+        _settings_page_template(request),
         _settings_context(request, session, **errors),
         status_code=422,
     )
@@ -3067,29 +3025,19 @@ async def settings_media_save(
         return _handle_reset_flag(session, settings, request, reset_flag, tab="media")
 
     # ---- Watch-folder section ----
-    wf_reconciled = _reconcile_switches(
-        ("watch_folder_enabled",), form, settings, row
-    )
+    wf_reconciled = _reconcile_switches(("watch_folder_enabled",), form, settings, row)
     wf_choice = wf_reconciled.get("watch_folder_enabled", "inherit")
     wf_row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
-    wf_row.watch_folder_enabled = (
-        None if wf_choice == "inherit" else (wf_choice == "on")
-    )
+    wf_row.watch_folder_enabled = None if wf_choice == "inherit" else (wf_choice == "on")
 
     # ---- Sources & research section ----
-    wr_master = _reconcile_switches(
-        ("voxint_web_research",), form, settings, row
-    )
-    wr_producer = _reconcile_switches(
-        ("enrichment_web_research_enabled",), form, settings, row
-    )
+    wr_master = _reconcile_switches(("voxint_web_research",), form, settings, row)
+    wr_producer = _reconcile_switches(("enrichment_web_research_enabled",), form, settings, row)
     wr_errors = _persist_web_research(
         session,
         settings,
         submitted_master=wr_master.get("voxint_web_research", "inherit"),
-        submitted_producer=wr_producer.get(
-            "enrichment_web_research_enabled", "inherit"
-        ),
+        submitted_producer=wr_producer.get("enrichment_web_research_enabled", "inherit"),
         raw_base_url=str(form.get("web_search_base_url", "")),
         raw_key=str(form.get("web_search_api_key", "")),
         remove_key=form.get("remove_web_search_api_key") == "true",
@@ -3098,34 +3046,31 @@ async def settings_media_save(
     if wr_errors:
         session.rollback()
         wr_submitted = {
-            "voxint_web_research": wr_master.get(
-                "voxint_web_research", "inherit"
-            ),
+            "voxint_web_research": wr_master.get("voxint_web_research", "inherit"),
             "enrichment_web_research_enabled": wr_producer.get(
                 "enrichment_web_research_enabled", "inherit"
             ),
             "web_search_base_url": str(form.get("web_search_base_url", "")),
-            "source_authority_domains": str(
-                form.get("source_authority_domains", "")
-            ),
+            "source_authority_domains": str(form.get("source_authority_domains", "")),
         }
         return templates.TemplateResponse(
-            request, _settings_page_template(request),
+            request,
+            _settings_page_template(request),
             _settings_context(
-                request, session,
+                request,
+                session,
                 web_research_errors=wr_errors,
                 web_research_submitted=wr_submitted,
             ),
         )
     session.commit()
-    return RedirectResponse(
-        _settings_redirect(request, "folders", "media"), status_code=303
-    )
+    return RedirectResponse(_settings_redirect(request, "folders", "media"), status_code=303)
 
 
 # ---- Settings → Media folders + domain packs (issue #63) ---------------
 # The same folder browser as the wizard, mounted on the protected router with
 # CSRF_SETTINGS. Shares _folder_panel_response / _folder_panel_context.
+
 
 @router.get("/settings/folders/browse")
 def settings_folders_browse(
@@ -3145,6 +3090,7 @@ def settings_folders_browse(
     response.headers["Cache-Control"] = "no-store"
     return response
 
+
 @router.post("/settings/folders")
 def settings_folders(
     request: Request,
@@ -3158,9 +3104,7 @@ def settings_folders(
 ) -> Response:
     _require_csrf(request, CSRF_SETTINGS, csrf_token)
     settings: Settings = request.app.state.settings
-    error = _apply_folder_mutation(
-        session, settings, action=action, folder=folder, pack=pack
-    )
+    error = _apply_folder_mutation(session, settings, action=action, folder=folder, pack=pack)
     if error is None:
         session.commit()
     else:
@@ -3187,6 +3131,7 @@ def settings_folders(
         error_page=_error_page,
     )
 
+
 @router.post("/settings/tutorial/seed")
 def tutorial_seed(
     request: Request,
@@ -3211,6 +3156,7 @@ def tutorial_seed(
     session.commit()
     return RedirectResponse(f"/runs/{run_id}?tutorial=run", status_code=303)
 
+
 @router.post("/settings/tutorial/complete")
 def tutorial_complete(
     request: Request,
@@ -3226,6 +3172,7 @@ def tutorial_complete(
         raise HTTPException(status_code=409, detail="no tutorial run to complete")
     session.commit()
     return RedirectResponse("/settings?tutorial=done", status_code=303)
+
 
 @router.post("/settings/tutorial/replay")
 def tutorial_replay(
@@ -3252,6 +3199,7 @@ def tutorial_replay(
 # admin-gated + onboarding-gated at router level) with an additional
 # per-route require_users_enabled gate so they 404 cleanly when the flag
 # is off.
+
 
 def _users_context(
     request: Request,
@@ -3328,7 +3276,9 @@ def settings_users_create(
             request,
             "settings/users.html",
             _users_context(
-                request, session, admin,
+                request,
+                session,
+                admin,
                 users_error="Choose Admin, Reviewer, or Viewer.",
             ),
         )
@@ -3337,20 +3287,27 @@ def settings_users_create(
             request,
             "settings/users.html",
             _users_context(
-                request, session, admin,
+                request,
+                session,
+                admin,
                 users_error="Passwords do not match.",
             ),
         )
     try:
         create_user(
-            session, username=username, password=password, role=UserRole(role),
+            session,
+            username=username,
+            password=password,
+            role=UserRole(role),
         )
     except ValueError as exc:
         return templates.TemplateResponse(
             request,
             "settings/users.html",
             _users_context(
-                request, session, admin,
+                request,
+                session,
+                admin,
                 users_error=str(exc),
             ),
         )
@@ -3360,7 +3317,9 @@ def settings_users_create(
             request,
             "settings/users.html",
             _users_context(
-                request, session, admin,
+                request,
+                session,
+                admin,
                 users_error=f"User {username!r} already exists.",
             ),
         )

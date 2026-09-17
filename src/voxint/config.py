@@ -48,6 +48,18 @@ DEFAULT_LLM_TIMEOUT_SECONDS = 300.0
 # ``voxint.app_settings.byo_llm_configured``).
 DEFAULT_LLM_BASE_URL = "https://api.openai.com/v1"
 
+
+def llm_endpoint_explicitly_set(base_url: str) -> bool:
+    """Whether *base_url* signals a deliberate, operator-chosen LLM endpoint.
+
+    True when the URL is non-blank and differs from :data:`DEFAULT_LLM_BASE_URL`
+    (after stripping whitespace and a trailing slash). Used by the enable gates
+    to allow keyless operation on self-hosted endpoints (#505).
+    """
+    normalized = base_url.strip().rstrip("/")
+    return bool(normalized) and normalized != DEFAULT_LLM_BASE_URL.rstrip("/")
+
+
 # The CPU tier's scaling factor over the GPU-tier timing defaults. CPU
 # inference for these models is roughly 5-20x slower than GPU depending on
 # stage and cores; 4x on top of the already-generous GPU defaults (which carry
@@ -861,9 +873,7 @@ class Settings(BaseSettings):
         # (Lease-guarded outcome writes keep that SAFE, just wasteful, so this is
         # a sanity floor rather than an exact worst-case bound.)
         if self.notify_lease_seconds < self.notify_timeout_seconds:
-            raise ValueError(
-                "notify_lease_seconds must be >= notify_timeout_seconds"
-            )
+            raise ValueError("notify_lease_seconds must be >= notify_timeout_seconds")
         return self
 
     @model_validator(mode="after")

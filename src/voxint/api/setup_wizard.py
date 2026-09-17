@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from voxint.config import Settings, llm_budget_fits_stage_lease
+from voxint.config import Settings, llm_budget_fits_stage_lease, llm_endpoint_explicitly_set
 from voxint.db.models import MediaItem
 from voxint.media.suffixes import MEDIA_SUFFIXES
 
@@ -138,21 +138,15 @@ def normalize_media_folders(raw_folders: Iterable[str], media_root: Path) -> lis
             # raises ``ValueError``). Fail as a validation error the route re-renders,
             # never an uncaught 500 — the add path's counterpart to the browser's
             # recover-to-root guard.
-            raise SetupValidationError(
-                f"media folder path is invalid: {folder!r}"
-            ) from exc
+            raise SetupValidationError(f"media folder path is invalid: {folder!r}") from exc
         if not resolved.is_relative_to(root):
             raise SetupValidationError(f"media folder is outside the media root: {folder!r}")
         if _under_reserved(resolved, reserved):
             # incoming/ and artifacts/ are Voxint-owned (uploads and normalized
             # audio); registering them would re-ingest the pipeline's own outputs.
-            raise SetupValidationError(
-                f"media folder is a reserved Voxint directory: {folder!r}"
-            )
+            raise SetupValidationError(f"media folder is a reserved Voxint directory: {folder!r}")
         if not resolved.is_dir():
-            raise SetupValidationError(
-                f"media folder is not an existing directory: {folder!r}"
-            )
+            raise SetupValidationError(f"media folder is not an existing directory: {folder!r}")
         rel = resolved.relative_to(root).as_posix()  # "." when it is the root itself
         if rel not in seen:
             seen.add(rel)
@@ -277,7 +271,11 @@ def normalize_web_search_api_key(raw: str) -> str | None:
 
 
 def validate_llm_enable(
-    effective_api_key: str, settings: Settings, *, bundled_active: bool = False
+    effective_api_key: str,
+    settings: Settings,
+    *,
+    bundled_active: bool = False,
+    effective_base_url: str = "",
 ) -> None:
     """Guard the two preconditions for turning LLM enhancement on.
 
@@ -302,12 +300,20 @@ def validate_llm_enable(
     still applies. The caller resolves it via
     :func:`voxint.app_settings.llm_bundled_active`; BYO-only jobs (names, topics,
     research) remain key-gated by their own paths, which never consult the bundle.
+
+    ``effective_base_url`` (issue #505): a deliberately configured BYO endpoint
+    (non-default base URL) is allowed keyless — self-hosted endpoints (llama.cpp,
+    vLLM, Ollama) often need no auth, and the client already omits the
+    ``Authorization`` header when the key is empty. The operator's intent to use
+    that endpoint is signalled by setting a non-default URL.
     """
-    if not effective_api_key and not bundled_active:
+    byo_keyless = llm_endpoint_explicitly_set(effective_base_url)
+    if not effective_api_key and not bundled_active and not byo_keyless:
         raise SetupValidationError(
-            "No LLM API key is configured. Enter one here (or set LLM_API_KEY in the "
-            "environment), or turn on the bundled local model (Settings → Features) "
-            "if you are running it, before enabling LLM enhancement."
+            "No LLM API key is configured. Enter one here (or set LLM_API_KEY in "
+            "the environment), turn on the bundled local model (Settings → "
+            "Features), or point LLM_BASE_URL at a keyless endpoint before "
+            "enabling LLM enhancement."
         )
     if not llm_budget_fits_stage_lease(settings):
         raise SetupValidationError(
@@ -428,9 +434,7 @@ def scan_media_folders(
     if candidates:
         existing = set(
             session.execute(
-                select(MediaItem.source_path).where(
-                    MediaItem.source_path.in_(candidates)
-                )
+                select(MediaItem.source_path).where(MediaItem.source_path.in_(candidates))
             ).scalars()
         )
         net_new = [c for c in candidates if c not in existing]
@@ -498,9 +502,7 @@ def _breadcrumbs(rel: str) -> list[tuple[str, str]]:
     return crumbs
 
 
-def list_media_subdirs(
-    media_root: Path, rel_path: str, registered: set[str]
-) -> BrowseListing:
+def list_media_subdirs(media_root: Path, rel_path: str, registered: set[str]) -> BrowseListing:
     """List the immediate child directories of one folder under ``media_root``.
 
     Backs the issue #63 folder browser. ``rel_path`` is an operator-navigated,
