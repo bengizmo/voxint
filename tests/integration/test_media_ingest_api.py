@@ -355,6 +355,21 @@ def test_media_upload_json_replay_idempotent(
     assert resp2.json()["run_id"] == run_id1
 
 
+def test_media_upload_json_403_bad_csrf(
+    client: TestClient,
+) -> None:
+    """A bad CSRF token returns 403 with a JSON detail (the batch-stop contract)."""
+    resp = client.post(
+        "/media/submit",
+        files={"file": ("clip.wav", _wav_bytes(), "audio/wav")},
+        data={"csrf_token": "invalid-token", "submission_id": uuid.uuid4().hex},
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+    assert "detail" in resp.json()
+
+
 def test_media_routes_404_when_flag_off(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:

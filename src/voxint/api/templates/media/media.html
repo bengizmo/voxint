@@ -404,6 +404,8 @@
     var children = document.querySelectorAll('[data-parent="' + folderId + '"]');
     for (var c of children) { c.hidden = expanded; }
   }
+  document.addEventListener('dragover', function (e) { e.preventDefault(); });
+  document.addEventListener('drop', function (e) { e.preventDefault(); });
   document.querySelectorAll('[data-dropzone]').forEach(function (zone) {
     var input = zone.querySelector('input[type=file]');
     if (!input) return;
@@ -605,10 +607,19 @@
           scheduleRender();
         };
         xhr.onload = function () {
-          if (xhr.status >= 200 && xhr.status < 300) {
+          var ok = false;
+          try {
+            var body = JSON.parse(xhr.responseText);
+            ok = body && body.ok === true;
+          } catch (err) { /* non-JSON response */ }
+          if (xhr.status >= 200 && xhr.status < 300 && ok) {
             entry.status = 'queued';
             entry.percent = 100;
             queued++;
+          } else if (xhr.status >= 200 && xhr.status < 300) {
+            entry.status = 'failed';
+            entry.error = 'Unexpected server response (not JSON)';
+            failed++;
           } else {
             entry.status = 'failed';
             entry.error = 'Upload failed (HTTP ' + xhr.status + ')';
