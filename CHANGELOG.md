@@ -6,20 +6,53 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+
+## [0.42.0] - 2026-09-17
+
 ### Added
+- **Progressive transcript rendering (#495).** Initial render is capped at
+  200 segments; the rest load via IntersectionObserver as the user scrolls.
+  All navigation contracts (keyboard, waveform clicks, outline jumps, deep
+  links, playback follow-along) route through an `ensureRendered` gate so
+  jumping to a distant segment works immediately. A "Show all" escape hatch
+  renders the full transcript for native browser find (Ctrl+F) and printing.
+  Server-rendered fallback tables are also capped at 200 rows with a
+  truncation notice for JS-disabled visitors.
+
+- **Keyset pagination for the media library (#494).** The media page uses
+  sort-aware keyset cursor pagination (by added/name/duration/size) with htmx
+  next-page loading and configurable page size (default 50, env
+  `MEDIA_PAGE_SIZE`). Small libraries keep folder grouping; larger ones render
+  flat rows with a folder badge. Numeric cursor values are validated at decode
+  time (forged tokens degrade to page 1, not a 500).
+
+- **Keyless BYO LLM endpoints (#505).** Self-hosted LLM endpoints (llama.cpp,
+  vLLM, Ollama) that need no API key can now be enabled without entering a
+  placeholder key. A new `llm_endpoint_explicitly_set()` predicate gates on
+  `LLM_BASE_URL` pointing away from the default, and the settings UI shows
+  "keyless endpoint configured" instead of the misleading key prompt.
+
 - **CPU model recommendation (#522).** When whisper runs large-v2 on CPU, the
   service startup log and native doctor now advise that a smaller model is
   faster and point to the model guide. The guide gains a "Transcription on CPU"
   section with a ready-to-paste medium configuration.
 
 ### Changed
-- **SSE completion notifications** (#499). The console activity transport
+- **SSE completion notifications (#499).** The console activity transport
   switches from 15-second JSON polling to server-sent events (SSE). Toasts
   and the nav badge now update within seconds of a run completing, with no
   recurring HTTP requests while idle. The browser opens one persistent
   EventSource connection after a one-shot JSON bootstrap. Stale-cursor
   recovery, bfcache lifecycle handling, and bounded reconnect (~60s) are
   built in; if SSE fails the next page navigation re-syncs.
+
+### Fixed
+- **Explore word cloud ranking and speaker count.** The word cloud now uses
+  composite ranking (`tfidf * log(1 + doc_count)`) with a `min_doc_count=2`
+  filter, replacing pure TF-IDF that surfaced only rare singletons. Sizes use
+  `scaleSqrt` by count for visible differentiation. Speaker count now includes
+  both `assign` and `auto_enroll` decisions and excludes revoked decisions.
+  Cache versioning invalidates stale results on deploy.
 
 
 ## [0.41.0] - 2026-09-16
@@ -4402,7 +4435,9 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.40.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.42.0...HEAD
+[0.42.0]: https://github.com/bengizmo/voxint/compare/v0.41.0...v0.42.0
+[0.41.0]: https://github.com/bengizmo/voxint/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/bengizmo/voxint/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/bengizmo/voxint/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/bengizmo/voxint/compare/v0.37.0...v0.38.0
