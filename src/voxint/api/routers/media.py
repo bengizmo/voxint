@@ -23,7 +23,7 @@ from typing import Annotated, Any, Final
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
@@ -587,7 +587,7 @@ def media_submit_upload(
     submission_id: Annotated[str, Form()],
     media_folder_id: Annotated[str, Form()] = "",
     csrf_token: Annotated[str | None, Form()] = None,
-) -> RedirectResponse:
+) -> Response:
     # CSRF before anything: a forged cross-site upload is refused before the DB
     # write / file finalize (mirrors the legacy POST /submit).
     _require_csrf(request, CSRF_MEDIA_SUBMIT, csrf_token)
@@ -624,7 +624,14 @@ def media_submit_upload(
     # Commit-before-publish: the durable QUEUED run must exist before the enqueue,
     # so a broker outage is non-fatal (the recovery sweep republishes).
     session.commit()
-    return _media_redirect(published=result.publish())
+    published = result.publish()
+    if "application/json" in (request.headers.get("accept") or ""):
+        return JSONResponse({
+            "ok": True,
+            "run_id": str(result.run_id),
+            "enqueue": "published" if published else "deferred",
+        })
+    return _media_redirect(published=published)
 
 
 @router.post("/media/fetch")

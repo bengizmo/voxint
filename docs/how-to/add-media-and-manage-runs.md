@@ -38,31 +38,42 @@ one out of sight, free up disk space, and jot down notes.
 
 ### 1. Upload in the browser (start here)
 
-This is the most direct way, and it needs nothing but the file on your computer.
+This is the most direct way, and it needs nothing but the files on your computer.
+You can upload one file or a whole batch at once.
 
 1. Open **Media** in the sidebar. If your Voxint has the Media library turned
    on, this takes you to the **Media** page. Otherwise it opens the **Runs**
    page.
-2. Find the **Upload media** control near the top. Click it and pick an audio
-   or video file.
-3. Click **Submit for transcription**.
+2. Click **+ Add media**, then **Upload from this computer**.
+3. Pick one or more audio or video files. You can also drag files from your
+   file manager and drop them on the upload area.
+4. A list shows each file with its size. You can remove any file before
+   starting, or add more.
+5. Click **Upload N files** (or **Upload 1 file** for a single recording).
 
-Voxint saves the file and starts a run straight away. You are taken to the run's
-page, where you can watch it move through the pipeline (see
-[Watch a run](#watch-a-run) below).
+Each file uploads one at a time with a progress bar. When a file finishes, it
+moves to **Queued** and Voxint starts processing it right away. If one file
+fails (too large, or a connection hiccup), the others keep going. Failed files
+show the reason and offer a **Retry** button.
+
+When the batch is done, you see a summary ("5 of 5 queued for transcription").
+Reload the page to see the new recordings in the library.
 
 On the **Media** page, use the search box to find a recording by name or folder.
 The status filter offers **Needs review**, **Failed**, **Reviewed**, and **All**.
 Each recording's action matches its state: **Review**, **Retry**, or **Open**.
 
-A couple of honest notes:
+A few honest notes:
 
 - **There is a size limit.** Very large uploads are rejected so a single file
   can't exhaust the server. If your file is over the limit, use one of the two
   methods below instead, or split the recording.
-- The upload is durable the moment Voxint accepts it. Even if the task system is
-  briefly busy, your run is safely queued and will start on its own, so you don't
-  need to resubmit.
+- Each upload is durable the moment Voxint accepts it. Even if the task system is
+  briefly busy, your runs are safely queued and will start on their own, so you
+  don't need to resubmit.
+- **Keep the page open** while a batch is uploading. If you close the tab
+  mid-batch, any files that already finished are safe, but the remaining ones
+  are lost and you would need to re-select them.
 
 ### 2. Paste a URL
 

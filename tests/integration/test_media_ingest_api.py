@@ -200,6 +200,176 @@ def test_media_forms_render_with_picker(client: TestClient) -> None:
     assert "not moved" in body
 
 
+def test_media_upload_json_success(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    published: list[uuid.UUID],
+) -> None:
+    """Accept: application/json returns a JSON body instead of a 303 redirect."""
+    body = _wav_bytes()
+    sub_id = uuid.uuid4().hex
+    resp = client.post(
+        "/media/submit",
+        files={"file": ("clip.wav", body, "audio/wav")},
+        data=_data(CSRF_MEDIA_SUBMIT, submission_id=sub_id),
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["enqueue"] == "published"
+    run_id = uuid.UUID(data["run_id"])
+    with session_factory() as session:
+        _, run = _media_and_run(session, f"incoming/{sub_id}/clip.wav")
+        assert run.id == run_id
+        assert run.status == RunStatus.QUEUED.value
+
+
+def test_media_upload_json_deferred(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the broker is unavailable, the JSON response says enqueue=deferred."""
+    from voxint.ingest.service import SubmissionResult
+
+    monkeypatch.setattr(SubmissionResult, "publish", lambda self: False)
+    resp = client.post(
+        "/media/submit",
+        files={"file": ("clip.wav", _wav_bytes(), "audio/wav")},
+        data=_data(CSRF_MEDIA_SUBMIT, submission_id=uuid.uuid4().hex),
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["enqueue"] == "deferred"
+
+
+def test_media_upload_html_redirect_unchanged(
+    client: TestClient,
+    published: list[uuid.UUID],
+) -> None:
+    """Without Accept: application/json, the redirect behavior is unchanged."""
+    resp = client.post(
+        "/media/submit",
+        files={"file": ("clip.wav", _wav_bytes(), "audio/wav")},
+        data=_data(CSRF_MEDIA_SUBMIT, submission_id=uuid.uuid4().hex),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/media?submitted=1"
+
+
+def test_media_upload_json_413_too_large(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """A file exceeding upload_max_bytes returns 413 with a detail message."""
+    settings = Settings(
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+        media_root=tmp_path,
+        upload_max_bytes=100,
+        console_media_enabled=True,
+        csrf_secret=_CSRF_KEY,
+    )
+    c = TestClient(create_app(settings=settings, session_factory=session_factory))
+    c.auth = CREDS
+    seed_onboarded(session_factory)
+    resp = c.post(
+        "/media/submit",
+        files={"file": ("clip.wav", _wav_bytes(0.5), "audio/wav")},
+        data=_data(CSRF_MEDIA_SUBMIT, submission_id=uuid.uuid4().hex),
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 413
+    assert "detail" in resp.json()
+
+
+def test_media_upload_json_422_bad_submission_id(
+    client: TestClient,
+) -> None:
+    """An invalid submission_id returns 422."""
+    resp = client.post(
+        "/media/submit",
+        files={"file": ("clip.wav", _wav_bytes(), "audio/wav")},
+        data=_data(CSRF_MEDIA_SUBMIT, submission_id="not-a-uuid"),
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 422
+    assert "detail" in resp.json()
+
+
+def test_media_upload_json_409_conflict(
+    client: TestClient,
+    published: list[uuid.UUID],
+) -> None:
+    """Re-uploading the same submission_id with different bytes returns 409."""
+    sub_id = uuid.uuid4().hex
+    resp1 = client.post(
+        "/media/submit",
+        files={"file": ("clip.wav", _wav_bytes(0.02), "audio/wav")},
+        data=_data(CSRF_MEDIA_SUBMIT, submission_id=sub_id),
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert resp1.status_code == 200
+    resp2 = client.post(
+        "/media/submit",
+        files={"file": ("clip.wav", _wav_bytes(0.05), "audio/wav")},
+        data=_data(CSRF_MEDIA_SUBMIT, submission_id=sub_id),
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert resp2.status_code == 409
+    assert "detail" in resp2.json()
+
+
+def test_media_upload_json_replay_idempotent(
+    client: TestClient,
+    published: list[uuid.UUID],
+) -> None:
+    """Re-uploading the same submission_id + same bytes is idempotent."""
+    sub_id = uuid.uuid4().hex
+    body = _wav_bytes()
+    resp1 = client.post(
+        "/media/submit",
+        files={"file": ("clip.wav", body, "audio/wav")},
+        data=_data(CSRF_MEDIA_SUBMIT, submission_id=sub_id),
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert resp1.status_code == 200
+    run_id1 = resp1.json()["run_id"]
+    resp2 = client.post(
+        "/media/submit",
+        files={"file": ("clip.wav", body, "audio/wav")},
+        data=_data(CSRF_MEDIA_SUBMIT, submission_id=sub_id),
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["run_id"] == run_id1
+
+
+def test_media_upload_json_403_bad_csrf(
+    client: TestClient,
+) -> None:
+    """A bad CSRF token returns 403 with a JSON detail (the batch-stop contract)."""
+    resp = client.post(
+        "/media/submit",
+        files={"file": ("clip.wav", _wav_bytes(), "audio/wav")},
+        data={"csrf_token": "invalid-token", "submission_id": uuid.uuid4().hex},
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+    assert "detail" in resp.json()
+
+
 def test_media_routes_404_when_flag_off(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:

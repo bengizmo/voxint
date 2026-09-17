@@ -6,6 +6,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Multi-file upload (#497).** The media upload form now accepts multiple files
+  via the file picker or drag-and-drop. Each file uploads sequentially with a
+  per-file progress bar and status (pending, uploading, finalizing, queued,
+  failed). Failed uploads show the server error and offer a retry button that
+  reuses the original submission ID for idempotency. A 403 (auth/CSRF) stops
+  the batch. The `POST /media/submit` endpoint now returns JSON when the
+  request includes `Accept: application/json`. The plain HTML form fallback
+  (single file, POST/redirect) is unchanged.
+
 
 ## [0.42.0] - 2026-09-17
 
