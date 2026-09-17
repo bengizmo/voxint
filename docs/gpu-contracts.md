@@ -1190,6 +1190,83 @@ That triggers the browser acceptance lane and not the pipeline lane.
   browser-verified at the landing commit `af60c45`, which is the release
   content minus version pins, changelog, docs, and screenshots.
 
+#### Verdict: v0.41.0, Gates A/R/M carry, Gate E browser lane run fresh (PASS), pipeline lane blocked (2026-09-16)
+
+v0.41.0 ships searchable speaker combobox (#513), walk-mode speaker identity
+(#512), stale-asset detection (#510), worker readiness (#509), palette recent
+section (#501), export shortcut `d` (#500), and waveform drag-to-select (#502).
+
+`git diff v0.40.0..v0.41.0 -- services/` is **empty**. All inference model
+service images are byte-identical to v0.37.0.
+
+- **Gate A (CUDA titanet regression)**: services unchanged. **Carries** from the
+  v0.37.0 block (standing Blackwell measurement on RTX 5090, sm_120).
+- **Gate R (ROCm)**: `-rocm` image unchanged since v0.33.0. **Carries.** No AMD
+  hardware available.
+- **Gate M (Metal)**: no metal-lane paths changed. **Carries.**
+- **Gate E (whole-pipeline E2E)**: the pipeline-aware diff is **non-empty**
+  (`frontend/src/components/{MediaEditor,SpeakerRail,WaveformStrip}.tsx`,
+  `frontend/src/lib/combobox.ts`, `src/voxint/api/` templates and routes).
+  - **Browser review lane run fresh on mainline content (`ef8a7d9`) on
+    maintainer hardware, Playwright MCP, seed-only disposable DB: PASS.**
+    Review fixture (5 segments): two uncertain chips and one peaks fetch on
+    load; verify-and-advance (one `POST /verify` 200, counter 0→1 of 5, cursor
+    advances); replay after verify with instrumented `play()` (audio element
+    survived the identity patch); skip with no network; click-to-edit; the
+    discard warning (warned `v` fires nothing, second `v` verifies the original
+    text and advances); edit and save (one `POST /text` 200); keymap suppression
+    on a focused `<select>`; the shortcuts dialog opened by `?` key and by
+    button, dismissed by Escape, close control, and backdrop click, with `v`
+    suppressed behind the modal; domain-pack provenance (chip present on
+    segment 0 "corrected by domain pack (1)", absent on segment 2, provenance
+    body "everyone -> everybody", operator edit supersedes and chip disappears);
+    waveform strip present with canvas and single `/peaks` GET 200, region click
+    seeks + plays with no network write, `n` advances `data-cursor-index`,
+    `p` shows playhead; export shortcut `d` toggles the download accordion.
+    **RECONCILE PASS** (1 of 5 verified, 2 corrections matched).
+    Rail fixture (12 segments, 6 speakers, 4-person roster): initial partition
+    "5 voices need you, 1 with very little speech. 1 matched automatically."
+    exact; Needs you order S1 (confirmable), S5 (auto-saved), S2 (ambiguous),
+    S3 (unmatched) with expected headline, pill, and disclosure copy; "Why this
+    match?" carries 0.65 / 0.12 / 0.80, no percent sign; "Why no name?" names
+    nobody, no numbers; Hear this voice fires one `play()` at `currentTime=10`,
+    no label/segment request; Confirm S1 + S5 each a single `POST
+    /labels/<L>/decision` 200, summary drops, transcript lines update; Can't
+    tell S3, Not a person S4 each one decision POST; searchable combobox on S2
+    filters on type, shows `Create "New Person"` option, submitting takes the
+    honest `POST /labels/S2/enroll` 400 ("no speaker audio") with error in rail
+    alert and card retained; Can't tell S2 reaches "Every voice has a ruling."
+    with both Matched automatically and Your rulings open and Change button
+    present. **RECONCILE PASS** (0 of 12 verified, 5 label rulings matched).
+  - **Pipeline lane: blocked.** No AMD hardware available. Pipeline, client,
+    enrichment, and DB code unchanged since v0.37.0.
+
+Gates A/R/M carried on byte-identical services; Gate E browser lane green on
+mainline content; pipeline lane blocked on hardware, with no pipeline code in
+the diff.
+
+#### Verdict: v0.38.0/v0.39.0/v0.40.0, Gates A/R/M carry, Gate E browser lane PASS on v0.40.0 (2026-09-15, 2026-09-16)
+
+v0.38.0 (2026-09-15) ships #475 stage progress chip, #476 learned corrections,
+#478 watch-folder pickup feed. v0.39.0 (2026-09-15) ships #477 archive/restore,
+#488 hard delete. v0.40.0 (2026-09-16) ships command palette (#162), jobs page
+live rows (#496), speaker profile links (#498), viewer-role template wiring
+(#493).
+
+`git diff v0.37.0..v0.40.0 -- services/` is **empty** across all three
+releases. Inference model service images are byte-identical to v0.37.0.
+
+- **Gates A/R/M**: services unchanged across all three. **Carry** from v0.37.0.
+- **Gate E (v0.38.0)**: browser lane PASS (8 scenarios: #476 suggestion grid,
+  accept/dismiss/toggle, #478 feed entries, core review verify + skip). Pipeline
+  lane skipped (no pipeline changes; AMD host offline).
+- **Gate E (v0.39.0)**: no browser-facing changes (#477/#488 are backend-only
+  lifecycle features). Gate E carries from v0.38.0.
+- **Gate E (v0.40.0)**: browser lane run fresh, PASS (30 scenarios, default +
+  rail fixtures, both RECONCILE PASS). Covers command palette, live rows,
+  profile links, and the full review + rail loop. Pipeline lane carries (chain
+  untouched; AMD host unavailable). Superseded by v0.41.0 same day.
+
 #### Verdict: v0.37.0, Gates A/R/M carry, Gate E browser lane run fresh (PASS), pipeline lane blocked (2026-09-14)
 
 v0.37.0 ships the Jobs page TOOK column and degraded stage cells (#244), the

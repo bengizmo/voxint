@@ -297,11 +297,20 @@ It is built in lanes; **landed so far:**
   discard warning (warn on the first `v`, advance on the second), and the keymap
   suppression while a `<select>`/`<textarea>` has focus, asserting the DOM and
   network behaviour of each immediately (only verify and save touch the wire).
+  Additional island behaviors exercised: the keyboard-shortcuts modal (open by
+  key and button, dismiss by Escape/close/backdrop, keymap suppressed behind it),
+  domain-pack correction provenance (chip presence on corrected segments, absence
+  on untouched ones, provenance body content, operator edit supersedes the chip),
+  the waveform strip (canvas and single peaks fetch on load, region click selects
+  and seeks with no write, `n`/`p` sync `data-cursor-index` and the playhead),
+  the searchable speaker combobox (type-ahead filtering, Create option for new
+  persons, enrollment error path), the speaker rail (initial partition, confirm,
+  Can't tell, Not a person, finish line), and the export shortcut `d`.
   Finally the tool's `reconcile` subcommand is a **fail-closed** verifier over
-  `segment_review_states`: the browser was the sole writer, so the verified rows,
-  corrected text, and the N-of-M progress must match exactly what was driven, or
-  it exits non-zero. This replaces the manual browser pass above; run it serially
-  on maintainer hardware (issue #23).
+  `segment_review_states` and `label_rulings`: the browser was the sole writer,
+  so the verified rows, corrected text, label rulings, and the N-of-M progress
+  must match exactly what was driven, or it exits non-zero. This replaces the
+  manual browser pass above; run it serially on maintainer hardware (issue #23).
 
 - **Native (docker-free) install + usage** (the `voxint-native-e2e` skill +
   `tools/native_e2e_lifecycle.py`). This is the lane for epic #68's no-Docker path. The
