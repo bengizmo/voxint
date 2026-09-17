@@ -52,9 +52,7 @@ def make_client(
 
 
 @pytest.fixture()
-def client(
-    session_factory: sessionmaker[Session], media_root: Path
-) -> TestClient:
+def client(session_factory: sessionmaker[Session], media_root: Path) -> TestClient:
     return make_client(session_factory, media_root)
 
 
@@ -200,9 +198,7 @@ def test_add_folder_does_not_disable_env_enabled_llm(
     # switch an env-enabled LLM off: the row is seeded from env (settings.llm_enabled)
     # whenever a genuine app_settings write first creates it.
     (media_root / "m").mkdir()
-    client = make_client(
-        session_factory, media_root, llm_enabled=True, llm_api_key="sk-test"
-    )
+    client = make_client(session_factory, media_root, llm_enabled=True, llm_api_key="sk-test")
     _register_folder(client, "m")
     with session_factory() as session:
         assert registered_folder_paths(session) == ["m"]  # the folder registered
@@ -267,6 +263,20 @@ def test_post_llm_enable_without_key_fails_closed(
     assert "LLM_API_KEY" in resp.text
     row = _row(session_factory)
     assert row is not None and row.llm_enabled is False
+
+
+def test_post_llm_enable_keyless_byo_succeeds(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Issue #505: a non-default LLM_BASE_URL with no key enables successfully.
+    client = make_client(
+        session_factory, media_root, llm_api_key="", llm_base_url="http://localhost:8080/v1"
+    )
+    resp = client.post("/setup/llm", data=_form(enabled="true"))
+    assert resp.status_code == 200
+    assert "LLM_API_KEY" not in resp.text
+    row = _row(session_factory)
+    assert row is not None and row.llm_enabled is True
 
 
 def test_post_llm_enable_over_budget_fails_closed(
@@ -518,9 +528,7 @@ def test_scan_excludes_reserved_trees(
     assert result.candidates == ["top.wav"]
 
 
-def test_scan_skips_symlinks(
-    session_factory: sessionmaker[Session], media_root: Path
-) -> None:
+def test_scan_skips_symlinks(session_factory: sessionmaker[Session], media_root: Path) -> None:
     _write_media(media_root, "real/a.wav")
     (media_root / "link").symlink_to(media_root / "real", target_is_directory=True)
     settings = Settings(_env_file=None, media_root=media_root)  # type: ignore[call-arg]
@@ -530,9 +538,7 @@ def test_scan_skips_symlinks(
     assert result.candidates == ["real/a.wav"]
 
 
-def test_scan_respects_file_cap(
-    session_factory: sessionmaker[Session], media_root: Path
-) -> None:
+def test_scan_respects_file_cap(session_factory: sessionmaker[Session], media_root: Path) -> None:
     for i in range(5):
         _write_media(media_root, f"m/f{i}.wav")
     settings = Settings(_env_file=None, media_root=media_root, setup_scan_max_files=3)  # type: ignore[call-arg]
@@ -565,9 +571,7 @@ def test_scan_skips_a_folder_that_vanished(
     assert result.candidates == ["real/a.wav"]
 
 
-def test_scan_stops_at_entry_cap(
-    session_factory: sessionmaker[Session], media_root: Path
-) -> None:
+def test_scan_stops_at_entry_cap(session_factory: sessionmaker[Session], media_root: Path) -> None:
     for i in range(4):
         _write_media(media_root, f"m/f{i}.wav")
     settings = Settings(_env_file=None, media_root=media_root, setup_scan_max_entries=1)  # type: ignore[call-arg]

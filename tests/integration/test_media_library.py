@@ -112,9 +112,7 @@ def _add_run(
 # ---- the area flag gate -----------------------------------------------------
 
 
-def test_media_404s_when_flag_off(
-    session_factory: sessionmaker[Session], tmp_path: Path
-) -> None:
+def test_media_404s_when_flag_off(session_factory: sessionmaker[Session], tmp_path: Path) -> None:
     client = _make_client(session_factory, tmp_path, media_enabled=False)
     assert client.get("/media").status_code == 404
 
@@ -138,9 +136,7 @@ def test_media_redirects_when_not_onboarded(
         media_root=tmp_path,
         console_media_enabled=True,
     )
-    client = TestClient(
-        create_app(settings=settings, session_factory=session_factory)
-    )
+    client = TestClient(create_app(settings=settings, session_factory=session_factory))
     client.auth = CREDS
     # No seed_onboarded: the onboarding gate (which runs before the area gate)
     # sends an ordinary navigation to /setup.
@@ -364,9 +360,7 @@ def test_latest_run_per_file_wins(
     now = datetime.now(UTC)
     with session_factory() as session:
         media = _add_media(session, source_path="incoming/a.wav")
-        _add_run(
-            session, media, status=RunStatus.FAILED, created_at=now - timedelta(hours=2)
-        )
+        _add_run(session, media, status=RunStatus.FAILED, created_at=now - timedelta(hours=2))
         _add_run(
             session,
             media,
@@ -375,7 +369,7 @@ def test_latest_run_per_file_wins(
         )
         session.commit()
 
-        rows = media_library(session, gates=_GATES)
+        rows = media_library(session, gates=_GATES, limit=50).items
     assert len(rows) == 1
     # The newer (completed) run, not the older failed one.
     assert rows[0].latest_run_status == RunStatus.COMPLETED.value
@@ -389,7 +383,7 @@ def test_archived_runs_are_excluded(
         _add_run(session, media, status=RunStatus.COMPLETED, archived=True)
         session.commit()
 
-        rows = media_library(session, gates=_GATES)
+        rows = media_library(session, gates=_GATES, limit=50).items
     assert len(rows) == 1
     # A file whose only run is archived reads as "not processed yet".
     assert rows[0].latest_run_id is None
@@ -402,7 +396,7 @@ def test_media_with_no_run_has_no_status(
     with session_factory() as session:
         _add_media(session, source_path="incoming/c.wav")
         session.commit()
-        rows = media_library(session, gates=_GATES)
+        rows = media_library(session, gates=_GATES, limit=50).items
     assert rows[0].latest_run_id is None
 
 
@@ -411,7 +405,7 @@ def test_limit_truncates(session_factory: sessionmaker[Session]) -> None:
         _add_media(session, source_path="incoming/d1.wav")
         _add_media(session, source_path="incoming/d2.wav")
         session.commit()
-        rows = media_library(session, gates=_GATES, limit=1)
+        rows = media_library(session, gates=_GATES, limit=1).items
     assert len(rows) == 1
 
 
@@ -438,8 +432,14 @@ def test_sort_by_name_orders_alphabetically(
             created_at=now - timedelta(hours=1),
         )
         session.commit()
-        by_name = [r.source_title for r in media_library(session, gates=_GATES, sort="name")]
-        by_added = [r.source_title for r in media_library(session, gates=_GATES, sort="added")]
+        by_name = [
+            r.source_title
+            for r in media_library(session, gates=_GATES, sort="name", limit=50).items
+        ]
+        by_added = [
+            r.source_title
+            for r in media_library(session, gates=_GATES, sort="added", limit=50).items
+        ]
     assert by_name == ["Alpha", "Zed"]
     assert by_added == ["Zed", "Alpha"]
 
@@ -612,3 +612,49 @@ def test_cards_drilldown_has_selection_affordances(
     assert body.count('name="media_id"') == 3
     assert 'data-select-all-box aria-label="Select all"' in body
     assert "data-action-bar" in body
+
+
+@pytest.mark.parametrize("sort", ["added", "name", "duration", "size"])
+def test_keyset_pages_cover_ties_and_nulls(
+    session_factory: sessionmaker[Session],
+    sort: str,
+) -> None:
+    """Small pages retain every row once, including ties and the NULL tail."""
+    from voxint.api.media_query import MediaCursor, media_library_count
+
+    with session_factory() as session:
+        for index in range(7):
+            _add_media(
+                session,
+                source_path=f"pagination-{index}.wav",
+                title="Same" if index < 4 else None,
+                duration_seconds=10.0 if index < 4 else None,
+                size_bytes=100 if index < 4 else None,
+                created_at=datetime(2026, 9, 17, tzinfo=UTC),
+            )
+        session.commit()
+        expected = media_library(session, gates=_GATES, sort=sort, limit=50)
+        assert expected.total_count == media_library_count(session, gates=_GATES) == 7
+        assert expected.next_cursor is None
+        seen = []
+        cursor = None
+        for _ in range(4):
+            page = media_library(session, gates=_GATES, sort=sort, limit=2, cursor=cursor)
+            seen.extend(row.id for row in page.items)
+            assert page.total_count == 7
+            cursor = page.next_cursor
+            if cursor is None:
+                break
+            assert cursor.created_at.tzinfo == UTC
+            cursor = MediaCursor.decode(cursor.encode())
+        assert cursor is None
+        assert seen == [row.id for row in expected.items]
+        assert len(set(seen)) == 7
+        mismatch = MediaCursor(
+            "size" if sort != "size" else "name", "0", datetime.now(UTC), uuid.uuid4()
+        )
+        first = media_library(session, gates=_GATES, sort=sort, limit=2, cursor=mismatch)
+        assert first.items == expected.items[:2]
+        filtered = media_library(session, gates=_GATES, sort=sort, limit=2, search="Same")
+        assert filtered.total_count == 4
+        assert len(filtered.items) == 2

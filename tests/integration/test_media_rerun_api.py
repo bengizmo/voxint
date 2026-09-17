@@ -31,7 +31,7 @@ from voxint.api.csrf import (
     CSRF_MEDIA_RERUN_CONFIRM,
     mint_csrf_token,
 )
-from voxint.api.media_query import MEDIA_LIBRARY_LIMIT
+from voxint.api.routers.media import MEDIA_BULK_LIMIT
 from voxint.config import Settings
 from voxint.db.models import MediaFolder, MediaItem, PipelineRun, Project, RunStatus
 from voxint.ingest import submit_media_item
@@ -209,14 +209,14 @@ def test_rerun_preview_prevalidation(
 
 
 def test_rerun_preview_over_cap_rejected(client: TestClient) -> None:
-    too_many = [str(uuid.uuid4()) for _ in range(MEDIA_LIBRARY_LIMIT + 1)]
+    too_many = [str(uuid.uuid4()) for _ in range(MEDIA_BULK_LIMIT + 1)]
     resp = client.post(
         "/media/rerun",
         data=_data(CSRF_MEDIA_RERUN, media_id=too_many),
         follow_redirects=False,
     )
     assert resp.status_code == 400
-    assert f"at most {MEDIA_LIBRARY_LIMIT}" in resp.text
+    assert f"at most {MEDIA_BULK_LIMIT}" in resp.text
 
 
 # ---- confirm: dispatch, precedence, parity -----------------------------------

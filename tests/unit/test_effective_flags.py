@@ -126,13 +126,9 @@ def test_bool_row_false_wins_over_env_true() -> None:
 
 def test_str_none_or_blank_row_inherits_env() -> None:
     env = _settings(source_authority_domains="ex.example,gov.example")
-    assert (
-        resolve_effective_source_authority_domains(None, env) == "ex.example,gov.example"
-    )
+    assert resolve_effective_source_authority_domains(None, env) == "ex.example,gov.example"
     blank = AppSettings(id=1, source_authority_domains="   ")
-    assert (
-        resolve_effective_source_authority_domains(blank, env) == "ex.example,gov.example"
-    )
+    assert resolve_effective_source_authority_domains(blank, env) == "ex.example,gov.example"
 
 
 def test_str_non_blank_row_wins() -> None:
@@ -285,9 +281,7 @@ def test_names_llm_requires_llm() -> None:
 
 
 def test_names_llm_requires_names() -> None:
-    errors = validate_effective_flags(
-        _flags(llm_enabled=True, enrichment_names_llm_enabled=True)
-    )
+    errors = validate_effective_flags(_flags(llm_enabled=True, enrichment_names_llm_enabled=True))
     assert errors == [
         "enrichment_names_llm_enabled requires enrichment_names_enabled=true"
         " — the LLM pass is additive to the offline name producer"
@@ -338,9 +332,7 @@ def test_run_assets_autogenerate_requires_run_assets() -> None:
 
 
 def test_web_research_requires_valid_base_url() -> None:
-    errors = validate_effective_flags(
-        _flags(voxint_web_research=True, web_search_base_url="")
-    )
+    errors = validate_effective_flags(_flags(voxint_web_research=True, web_search_base_url=""))
     assert errors == [
         "voxint_web_research=true requires web_search_base_url — the"
         " searxng provider has no default endpoint"
@@ -465,6 +457,17 @@ def test_byo_llm_configured_false_when_byo_equals_bundle() -> None:
     assert byo_llm_configured(None, same) is False
 
 
+def test_byo_llm_configured_default_with_trailing_slash_is_unconfigured() -> None:
+    # Issue #505 tightened normalization: the default URL with a trailing slash
+    # (or whitespace) is still the unconfigured sentinel — not a distinct endpoint.
+    slash = _settings(llm_enabled=True, llm_base_url=DEFAULT_LLM_BASE_URL + "/", llm_api_key="")
+    assert byo_llm_configured(None, slash) is False
+    padded = _settings(
+        llm_enabled=True, llm_base_url="  " + DEFAULT_LLM_BASE_URL + "  ", llm_api_key=""
+    )
+    assert byo_llm_configured(None, padded) is False
+
+
 def test_byo_llm_configured_row_override_wins() -> None:
     # A UI-pinned BYO endpoint (row override) makes it configured even when the env
     # default is the untouched OpenAI placeholder.
@@ -507,9 +510,7 @@ def test_effective_web_search_key_source(monkeypatch) -> None:
     assert effective_web_search_key_source(None, settings_env) == "environment"
     # A stored row key still wins the "stored" label over an env key.
     assert (
-        effective_web_search_key_source(
-            AppSettings(id=1, web_search_api_key="k-row"), settings_env
-        )
+        effective_web_search_key_source(AppSettings(id=1, web_search_api_key="k-row"), settings_env)
         == "stored"
     )
 

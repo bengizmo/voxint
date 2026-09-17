@@ -44,13 +44,16 @@ from voxint.api.csrf import (
 )
 from voxint.api.media_query import (
     DEFAULT_SORT,
-    MEDIA_LIBRARY_LIMIT,
     SORT_LABELS,
     STATUS_LABELS,
+    FolderGroup,
+    InvalidMediaCursorError,
+    MediaCursor,
     folder_options,
     group_by_folder,
     media_library,
     media_summary,
+    media_url,
     sort_is_known,
     status_is_known,
 )
@@ -120,6 +123,9 @@ _VIEWS: Final[tuple[str, ...]] = ("table", "cards")
 _DEFAULT_VIEW: Final[str] = "table"
 
 
+MEDIA_BULK_LIMIT: Final[int] = 500
+
+
 def _files(count: int) -> str:
     """"1 file" / "3 files" — a small honest pluralizer for notice copy."""
     return f"{count} file" if count == 1 else f"{count} files"
@@ -171,7 +177,7 @@ def _parse_media_selection(raw_ids: list[str]) -> list[uuid.UUID]:
 
     Shared by every bulk route so they reject a crafted selection identically:
     a malformed id is a 400, an empty selection is a 400, and more than
-    :data:`MEDIA_LIBRARY_LIMIT` ids is a 400 (reject, never silently truncate —
+    :data:`MEDIA_BULK_LIMIT` ids is a 400 (reject, never silently truncate —
     acting on a misleading subset would be dishonest, and the page never shows
     more than the cap, so this only bites a forged request). Order is preserved
     so a later count-match against a stable load is deterministic.
@@ -190,9 +196,9 @@ def _parse_media_selection(raw_ids: list[str]) -> list[uuid.UUID]:
             parsed.append(media_uuid)
     if not parsed:
         raise _SelectionError(400, "Select at least one file first.")
-    if len(parsed) > MEDIA_LIBRARY_LIMIT:
+    if len(parsed) > MEDIA_BULK_LIMIT:
         raise _SelectionError(
-            400, f"Select at most {MEDIA_LIBRARY_LIMIT} files at once."
+            400, f"Select at most {MEDIA_BULK_LIMIT} files at once."
         )
     return parsed
 
@@ -376,6 +382,7 @@ def _library_context(
     open_folder: str = "",
     search: str = "",
     status: str = "",
+    cursor: MediaCursor | None = None,
 ) -> dict[str, Any]:
     """The full /media render context, shared by the GET page and every error
     re-render.
@@ -394,16 +401,25 @@ def _library_context(
     selected_view = _safe_view(view)
     selected_status = _safe_status(status)
     clean_search = search.strip() if search else ""
-    rows = media_library(
+    page = media_library(
         session,
         sort=selected_sort,
+        limit=settings.media_page_size,
         archived=archived,
         trashed=trashed,
         search=clean_search or None,
         status=selected_status or None,
         gates=gates_from_settings(settings),
+        cursor=cursor,
     )
-    folder_groups, ungrouped_items = group_by_folder(rows)
+    rows = page.items
+    paginated = page.total_count > settings.media_page_size
+    folder_groups: list[FolderGroup]
+    if paginated:
+        folder_groups = []
+        ungrouped_items = rows
+    else:
+        folder_groups, ungrouped_items = group_by_folder(rows)
     summary = media_summary(folder_groups, ungrouped_items)
     secret = request.app.state.csrf_secret
     # The archive-view toggle target: the same sort/layout in the opposite view.
@@ -445,8 +461,22 @@ def _library_context(
         "trashed": trashed,
         "archived_toggle_url": archived_toggle_url,
         "trash_toggle_url": trash_toggle_url,
-        "truncated": len(rows) >= MEDIA_LIBRARY_LIMIT,
-        "limit": MEDIA_LIBRARY_LIMIT,
+        "paginated": paginated,
+        "total_count": page.total_count,
+        "next_url": (
+            media_url(
+                sort=selected_sort,
+                view=selected_view,
+                archived=archived,
+                trashed=trashed,
+                search=clean_search,
+                status=selected_status,
+                cursor=page.next_cursor,
+                open_folder=open_folder,
+            )
+            if page.next_cursor is not None
+            else None
+        ),
         "submission_id": uuid.uuid4().hex,
         "fetch_submission_id": uuid.uuid4().hex,
         "csrf_media_submit": mint_csrf_token(secret, CSRF_MEDIA_SUBMIT),
@@ -505,10 +535,17 @@ def media_library_page(
     open_folder: Annotated[str | None, Query(alias="open")] = None,
     q: str | None = None,
     status: str | None = None,
+    cursor: str | None = None,
 ) -> Response:
     settings: Settings = request.app.state.settings
     show_trashed = trashed == "1"
     show_archived = archived == "1" and not show_trashed
+    parsed_cursor: MediaCursor | None = None
+    if cursor:
+        try:
+            parsed_cursor = MediaCursor.decode(cursor)
+        except InvalidMediaCursorError:
+            parsed_cursor = None
     notice = _success_notice(
         assigned=assigned,
         folder=folder,
@@ -534,7 +571,10 @@ def media_library_page(
         open_folder=open_folder or "",
         search=q or "",
         status=status or "",
+        cursor=parsed_cursor,
     )
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(request, "media/_results.html", context)
     return templates.TemplateResponse(request, "media/media.html", context)
 
 

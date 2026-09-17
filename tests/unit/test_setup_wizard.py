@@ -66,9 +66,7 @@ def test_next_step_advances_and_saturates_at_finish() -> None:
 def test_normalize_media_folders_relative_dirs_deduped(tmp_path: Path) -> None:
     (tmp_path / "podcasts").mkdir()
     (tmp_path / "interviews" / "2026").mkdir(parents=True)
-    out = normalize_media_folders(
-        [" podcasts ", "interviews/2026", "podcasts", "", "."], tmp_path
-    )
+    out = normalize_media_folders([" podcasts ", "interviews/2026", "podcasts", "", "."], tmp_path)
     # "." is the media root itself (allowed); order preserved, dupes dropped.
     assert out == ["podcasts", "interviews/2026", "."]
 
@@ -89,9 +87,7 @@ def test_normalize_media_folders_rejects_missing_dir(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("reserved", ["incoming", "artifacts", "incoming/sub"])
-def test_normalize_media_folders_rejects_reserved_tree(
-    tmp_path: Path, reserved: str
-) -> None:
+def test_normalize_media_folders_rejects_reserved_tree(tmp_path: Path, reserved: str) -> None:
     # incoming/ and artifacts/ are Voxint-owned; registering them (or a subfolder)
     # would re-ingest the pipeline's own uploads/outputs.
     (tmp_path / reserved).mkdir(parents=True)
@@ -109,9 +105,7 @@ def test_normalize_media_folders_caps_count(tmp_path: Path) -> None:
     for i in range(MAX_MEDIA_FOLDERS + 1):
         (tmp_path / f"d{i}").mkdir()
     with pytest.raises(SetupValidationError):
-        normalize_media_folders(
-            [f"d{i}" for i in range(MAX_MEDIA_FOLDERS + 1)], tmp_path
-        )
+        normalize_media_folders([f"d{i}" for i in range(MAX_MEDIA_FOLDERS + 1)], tmp_path)
 
 
 # ---------------------------------------------------------------- vocabulary
@@ -266,6 +260,24 @@ def test_validate_llm_enable_rejects_missing_key() -> None:
     # Empty effective key (no row, no env) → refuse to enable.
     with pytest.raises(SetupValidationError, match="No LLM API key"):
         validate_llm_enable("", _settings(llm_api_key=""))
+
+
+def test_validate_llm_enable_ok_with_keyless_byo_endpoint() -> None:
+    # Issue #505: a deliberately configured BYO endpoint (non-default URL) with no
+    # key is allowed — validate_llm_enable must not raise.
+    validate_llm_enable(
+        "", _settings(llm_api_key=""), effective_base_url="http://localhost:8080/v1"
+    )  # does not raise
+
+
+def test_validate_llm_enable_rejects_default_url_without_key() -> None:
+    # Default URL with no key and no bundle must still be refused.
+    with pytest.raises(SetupValidationError, match="No LLM API key"):
+        validate_llm_enable(
+            "",
+            _settings(llm_api_key=""),
+            effective_base_url="https://api.openai.com/v1",
+        )
 
 
 def test_validate_llm_enable_rejects_budget_over_lease() -> None:
