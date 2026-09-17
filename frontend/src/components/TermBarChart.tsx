@@ -17,7 +17,7 @@ export function TermBarChart({
   maxItems = 20,
   ariaLabel = "Top terms by frequency",
 }: TermBarChartProps) {
-  const items = terms.slice(0, maxItems);
+  const items = terms.slice(0, maxItems).sort((a, b) => b.count - a.count);
   if (!items.length) return null;
 
   const maxCount = Math.max(...items.map((t) => t.count));
