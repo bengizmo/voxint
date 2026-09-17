@@ -6,6 +6,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **SSE completion notifications** (#499). The console activity transport
+  switches from 15-second JSON polling to server-sent events (SSE). Toasts
+  and the nav badge now update within seconds of a run completing, with no
+  recurring HTTP requests while idle. The browser opens one persistent
+  EventSource connection after a one-shot JSON bootstrap. Stale-cursor
+  recovery, bfcache lifecycle handling, and bounded reconnect (~60s) are
+  built in; if SSE fails the next page navigation re-syncs.
+
 
 ## [0.41.0] - 2026-09-16
 
