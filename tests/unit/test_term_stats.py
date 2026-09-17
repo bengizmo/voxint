@@ -48,7 +48,10 @@ def test_compute_tfidf_empty_documents() -> None:
 
 def test_compute_tfidf_single_document() -> None:
     doc_id = uuid.uuid4()
-    result = compute_tfidf([(doc_id, "energy efficiency heating cooling energy")])
+    result = compute_tfidf(
+        [(doc_id, "energy efficiency heating cooling energy")],
+        min_doc_count=1,
+    )
     terms = {s.term: s for s in result}
     assert "energy" in terms
     assert terms["energy"].count == 2
@@ -62,13 +65,13 @@ def test_compute_tfidf_multiple_documents() -> None:
         (uuid.uuid4(), "solar panels energy production renewable"),
         (uuid.uuid4(), "building insulation thermal performance heating"),
     ]
-    result = compute_tfidf(docs)
+    result = compute_tfidf(docs, min_doc_count=1)
     terms = {s.term: s for s in result}
     assert "energy" in terms
     assert terms["energy"].doc_count == 2
     assert "insulation" in terms
     assert terms["insulation"].doc_count == 1
-    # TF-IDF: a term in fewer docs gets higher IDF
+    # Raw TF-IDF: a term in fewer docs gets higher IDF
     assert terms["insulation"].tfidf > terms["energy"].tfidf
 
 
@@ -81,18 +84,71 @@ def test_compute_tfidf_respects_top_n() -> None:
         "sierra", "tango",
     ]
     text = " ".join(words)
-    result = compute_tfidf([(doc_id, text)], top_n=10)
+    result = compute_tfidf([(doc_id, text)], top_n=10, min_doc_count=1)
     assert len(result) == 10
 
 
 def test_compute_tfidf_returns_term_stat_dataclass() -> None:
-    result = compute_tfidf([(uuid.uuid4(), "hello world hello")])
+    result = compute_tfidf([(uuid.uuid4(), "hello world hello")], min_doc_count=1)
     assert len(result) > 0
     assert isinstance(result[0], TermStat)
     assert isinstance(result[0].term, str)
     assert isinstance(result[0].count, int)
     assert isinstance(result[0].doc_count, int)
     assert isinstance(result[0].tfidf, float)
+
+
+def test_compute_tfidf_min_doc_count_filters_singletons() -> None:
+    """With min_doc_count=2, terms appearing in only one document are excluded."""
+    docs = [
+        (uuid.uuid4(), "energy efficiency heating cooling systems"),
+        (uuid.uuid4(), "solar panels energy production renewable"),
+        (uuid.uuid4(), "building insulation thermal performance heating"),
+    ]
+    result = compute_tfidf(docs, min_doc_count=2)
+    terms = {s.term for s in result}
+    # "energy" (doc_count=2) and "heating" (doc_count=2) should be included
+    assert "energy" in terms
+    assert "heating" in terms
+    # "insulation" (doc_count=1) should be excluded
+    assert "insulation" not in terms
+    assert "solar" not in terms
+
+
+def test_compute_tfidf_min_doc_count_1_allows_singletons() -> None:
+    """With min_doc_count=1, single-document terms are kept."""
+    docs = [
+        (uuid.uuid4(), "energy efficiency heating cooling systems"),
+        (uuid.uuid4(), "solar panels energy production renewable"),
+        (uuid.uuid4(), "building insulation thermal performance heating"),
+    ]
+    result = compute_tfidf(docs, min_doc_count=1)
+    terms = {s.term for s in result}
+    assert "insulation" in terms
+    assert "solar" in terms
+    assert "energy" in terms
+
+
+def test_compute_tfidf_composite_ranking() -> None:
+    """Composite ranking rewards cross-document recurrence over pure rarity."""
+    docs = [
+        (uuid.uuid4(), "energy efficiency heating cooling systems energy"),
+        (uuid.uuid4(), "solar panels energy production renewable energy"),
+        (uuid.uuid4(), "building insulation thermal performance heating energy"),
+    ]
+    result = compute_tfidf(docs, min_doc_count=1)
+    term_order = [s.term for s in result]
+    # "energy" appears in all 3 docs and multiple times; composite ranking
+    # should place it above "insulation" which is rarer but only in 1 doc.
+    assert term_order.index("energy") < term_order.index("insulation")
+
+
+def test_compute_tfidf_min_doc_count_validation() -> None:
+    """min_doc_count < 1 raises ValueError."""
+    import pytest
+
+    with pytest.raises(ValueError, match="min_doc_count"):
+        compute_tfidf([], min_doc_count=0)
 
 
 def test_source_hash_deterministic() -> None:

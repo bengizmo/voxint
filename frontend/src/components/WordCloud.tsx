@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import cloud, { type Word } from "d3-cloud";
-import { scaleLinear } from "d3-scale";
+import { scaleLinear, scaleSqrt } from "d3-scale";
 
 export interface TermDatum {
   term: string;
@@ -39,24 +39,26 @@ export function WordCloud({
 }: WordCloudProps) {
   const [words, setWords] = useState<PositionedWord[]>([]);
   const layoutRef = useRef<ReturnType<typeof cloud> | null>(null);
+  const displayed = useMemo(() => terms.slice(0, 80), [terms]);
   const termsKey = useMemo(
-    () => terms.map((t) => `${t.term}:${t.tfidf}`).join(","),
-    [terms],
+    () => displayed.map((t) => `${t.term}:${t.count}:${t.tfidf}`).join(","),
+    [displayed],
   );
 
   useEffect(() => {
     if (!terms.length) return;
 
-    const maxTfidf = Math.max(...terms.map((t) => t.tfidf));
-    const minTfidf = Math.min(...terms.map((t) => t.tfidf));
-    const fontSize = scaleLinear()
-      .domain([minTfidf, maxTfidf])
-      .range([10, 36])
-      .clamp(true);
+    const counts = displayed.map((t) => t.count);
+    const minCount = Math.min(...counts);
+    const maxCount = Math.max(...counts);
+    const fontSize: (n: number) => number =
+      minCount === maxCount
+        ? () => 20
+        : scaleSqrt().domain([minCount, maxCount]).range([10, 36]).clamp(true);
 
-    const input: CloudWord[] = terms.slice(0, 80).map((t) => ({
+    const input: CloudWord[] = displayed.map((t) => ({
       text: t.term,
-      size: fontSize(t.tfidf),
+      size: fontSize(t.count),
       tfidf: t.tfidf,
       count: t.count,
     }));
@@ -96,8 +98,13 @@ export function WordCloud({
 
   if (!terms.length) return null;
 
-  const maxTfidf = Math.max(...words.map((w) => w.tfidf), 1);
-  const opacity = scaleLinear().domain([0, maxTfidf]).range([0.4, 1]);
+  const tfidfValues = words.map((w) => w.tfidf);
+  const maxTfidf = tfidfValues.length ? Math.max(...tfidfValues) : 1;
+  const minTfidf = tfidfValues.length ? Math.min(...tfidfValues) : 0;
+  const opacity: (n: number) => number =
+    minTfidf === maxTfidf
+      ? () => 1
+      : scaleLinear().domain([minTfidf, maxTfidf]).range([0.4, 1]);
 
   return (
     <svg
