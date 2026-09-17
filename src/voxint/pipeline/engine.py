@@ -213,9 +213,7 @@ def _finish_claim(
         claim.metrics = merged
 
 
-def _observe_stage_identity(
-    settings: "Settings | None", stage: Stage
-) -> dict[str, Any] | None:
+def _observe_stage_identity(settings: "Settings | None", stage: Stage) -> dict[str, Any] | None:
     """Best-effort model-identity observation for a stage. Never raises.
 
     Returns None when there is no settings context (identity is advisory, never
@@ -347,9 +345,7 @@ def execute_run(
             if stages is not None and stage not in stages:
                 return held
             try:
-                held = cas_update_run(
-                    session, held, status=RunStatus.RUNNING, current_stage=stage
-                )
+                held = cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=stage)
                 session.commit()
             except StaleRevisionError:
                 # Duplicate dispatch of the same QUEUED run (sweep + pending
@@ -515,9 +511,7 @@ def recover_interrupted_runs(
             )
             if max_attempts is not None and claim is not None and claim.attempt >= max_attempts:
                 continue  # budget exhausted — parked FAILED for the failure lane
-            cas_update_run(
-                session, held, status=RunStatus.QUEUED, current_stage=held.current_stage
-            )
+            cas_update_run(session, held, status=RunStatus.QUEUED, current_stage=held.current_stage)
         except StaleRevisionError:
             continue  # someone else moved it mid-sweep; their view wins
         recovered.append(held.id)

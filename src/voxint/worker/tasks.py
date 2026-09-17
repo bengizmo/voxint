@@ -122,7 +122,7 @@ SATURATED_PREFIX = "saturated:"
 def backoff_seconds(attempts: int, base: float, cap: float) -> float:
     """Exponential in completed attempts, capped; jitter is the caller's."""
     exp = min(max(attempts - 1, 0), 30)
-    return float(min(base * 2 ** exp, cap))
+    return float(min(base * 2**exp, cap))
 
 
 def stage_attempts(
@@ -244,12 +244,8 @@ def _drive_segment(
         # recovery sweep to re-publish forever. Fall back to the live-union path (1),
         # the same corrupt-snapshot tolerance domain_pack_from_snapshot already takes.
         config_resolution_version = parse_config_resolution_version(pack_snapshot)
-        max_speakers_hint = (
-            run_row.diarization_max_speakers if run_row is not None else None
-        )
-        num_speakers_hint = (
-            run_row.diarization_num_speakers if run_row is not None else None
-        )
+        max_speakers_hint = run_row.diarization_max_speakers if run_row is not None else None
+        num_speakers_hint = run_row.diarization_num_speakers if run_row is not None else None
     pack = domain_pack_from_snapshot(pack_snapshot, settings)
     ctx = apply_run_preferences(
         base_ctx,
@@ -268,9 +264,7 @@ def _drive_segment(
         ctx = replace(
             ctx,
             diarization_max_speakers=(
-                max_speakers_hint
-                if max_speakers_hint is not None
-                else ctx.diarization_max_speakers
+                max_speakers_hint if max_speakers_hint is not None else ctx.diarization_max_speakers
             ),
             diarization_num_speakers=num_speakers_hint,
         )
@@ -282,9 +276,7 @@ def _drive_segment(
             raise  # deterministic — the failure lane owns it now
         with factory() as session:
             attempts = stage_attempts(session, run_id, exc.stage)
-            budget = stage_attempts(
-                session, run_id, exc.stage, exclude_saturated=True
-            )
+            budget = stage_attempts(session, run_id, exc.stage, exclude_saturated=True)
         if not is_saturation(exc) and budget >= settings.stage_max_attempts:
             raise  # transient budget exhausted; stays FAILED, honestly
         if not requeue_failed_stage(factory, exc.failed_snapshot):
@@ -313,9 +305,7 @@ def _drive_segment(
             # registry ⇒ no plugins ⇒ no-op.
             dispatch_run_completed(
                 get_plugins().plugins,
-                RunCompletedEvent(
-                    run_id=run_id, session_factory=factory, settings=settings
-                ),
+                RunCompletedEvent(run_id=run_id, session_factory=factory, settings=settings),
             )
             _refresh_term_stats(factory, run_id)
             _refresh_speaker_insights(factory, run_id)
@@ -442,9 +432,7 @@ def recovery_sweep() -> dict[str, int]:
                 break
             stage = Stage(stage_value) if stage_value else None
             try:
-                pipeline_task_for_stage(stage).apply_async(
-                    (str(rid),), ignore_result=True
-                )
+                pipeline_task_for_stage(stage).apply_async((str(rid),), ignore_result=True)
                 dispatched += 1
             except OperationalError:
                 logger.warning(
@@ -474,9 +462,7 @@ def recovery_sweep() -> dict[str, int]:
     if stale_embedding_jobs:
         for job_id in stale_embedding_jobs:
             try:
-                generate_segment_embeddings.apply_async(
-                    (str(job_id),), ignore_result=True
-                )
+                generate_segment_embeddings.apply_async((str(job_id),), ignore_result=True)
             except OperationalError:
                 logger.warning(
                     "embedding recovery enqueue deferred (broker unavailable); "
@@ -674,9 +660,7 @@ def _autogenerate_run_assets(
             # governs auto-generation — never enqueue LLM work after the
             # operator turned it off (issue #10/#74). create_jobs re-checks
             # the same gate.
-            if not app_settings.resolve_effective_enrichment_run_assets_autogenerate(
-                row, settings
-            ):
+            if not app_settings.resolve_effective_enrichment_run_assets_autogenerate(row, settings):
                 return
             if not asset_jobs.run_asset_gates_open(settings, row):
                 return
@@ -785,9 +769,7 @@ def _autogenerate_segment_embeddings(
                     run_id,
                 )
                 return
-            job, _ = embedding_jobs.create_jobs(
-                session, pipeline_run_id=run_id, settings=settings
-            )
+            job, _ = embedding_jobs.create_jobs(session, pipeline_run_id=run_id, settings=settings)
             session.commit()
             job_id = str(job.id) if job is not None else None
         if job_id is not None:
@@ -816,9 +798,7 @@ def _auto_enroll_speakers(
         logger.exception("post-finalize auto-enrollment failed for run %s", run_id)
 
 
-def _refresh_term_stats(
-    factory: sessionmaker[Session], run_id: uuid.UUID
-) -> None:
+def _refresh_term_stats(factory: sessionmaker[Session], run_id: uuid.UUID) -> None:
     """Best-effort post-completion term-stats refresh (issue #334).
 
     Enqueues a corpus-wide refresh so the explore word cloud stays warm.
@@ -861,9 +841,7 @@ def compute_term_stats(project_id_str: str | None = None) -> dict[str, int]:
     return {"terms": len(result.terms)}
 
 
-def _refresh_speaker_insights(
-    factory: sessionmaker[Session], run_id: uuid.UUID
-) -> None:
+def _refresh_speaker_insights(factory: sessionmaker[Session], run_id: uuid.UUID) -> None:
     """Best-effort post-completion speaker-insights refresh (issue #335).
 
     Enqueues a corpus-wide refresh so speaker profile insights stay warm.

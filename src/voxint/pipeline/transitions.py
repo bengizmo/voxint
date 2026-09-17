@@ -59,9 +59,7 @@ class InvalidTransitionError(Exception):
 
 class StaleRevisionError(Exception):
     def __init__(self, run_id: uuid.UUID, expected_revision: int) -> None:
-        super().__init__(
-            f"run {run_id} moved past revision {expected_revision}; re-read and retry"
-        )
+        super().__init__(f"run {run_id} moved past revision {expected_revision}; re-read and retry")
         self.run_id = run_id
         self.expected_revision = expected_revision
 
@@ -93,9 +91,7 @@ def next_stage(current: Stage | None) -> Stage | None:
     return STAGE_ORDER[idx + 1] if idx + 1 < len(STAGE_ORDER) else None
 
 
-def validate_transition(
-    held: RunSnapshot, status: RunStatus, stage: Stage | None
-) -> None:
+def validate_transition(held: RunSnapshot, status: RunStatus, stage: Stage | None) -> None:
     """Reject any (status, stage) pair the state machine does not define."""
     current, held_stage = held.status, held.current_stage
     if status not in ALLOWED_TRANSITIONS[current]:
@@ -131,19 +127,15 @@ def validate_transition(
         # QUEUED → PAUSED may carry held_stage=None (a fresh run never started)
         if held_stage is not None and stage is not held_stage:
             raise reject(f"must keep stage {held_stage!r}, got {stage!r}")
-    elif (
-        (current is RunStatus.AWAITING_ADJUDICATION and status is RunStatus.RUNNING)
-        or (current is RunStatus.PAUSED and status is RunStatus.QUEUED)
+    elif (current is RunStatus.AWAITING_ADJUDICATION and status is RunStatus.RUNNING) or (
+        current is RunStatus.PAUSED and status is RunStatus.QUEUED
     ):
         if stage is not held_stage:
             raise reject(f"resume must keep stage {held_stage!r}, got {stage!r}")
     elif current is RunStatus.FAILED and status is RunStatus.QUEUED:
         # requeue keeps the failed stage; restart clears to None (start over)
         if stage is not held_stage and stage is not None:
-            raise reject(
-                f"requeue must keep stage {held_stage!r} or restart (None),"
-                f" got {stage!r}"
-            )
+            raise reject(f"requeue must keep stage {held_stage!r} or restart (None), got {stage!r}")
     elif current in (RunStatus.COMPLETED, RunStatus.CANCELLED) and status is RunStatus.QUEUED:
         if stage is not None:
             raise reject("restart must clear current_stage (start from scratch)")
