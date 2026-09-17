@@ -1190,6 +1190,51 @@ That triggers the browser acceptance lane and not the pipeline lane.
   browser-verified at the landing commit `af60c45`, which is the release
   content minus version pins, changelog, docs, and screenshots.
 
+#### Verdict: v0.42.0, Gate A run fresh (PASS), Gates R/E-pipeline carry, Gate E browser lane deferred, Gate M carries (2026-09-17)
+
+v0.42.0 ships progressive transcript rendering (#495), keyset pagination (#494),
+keyless BYO LLM endpoints (#505), CPU model recommendation advisory (#522), SSE
+completion notifications (#499), and an explore word-cloud speaker-count fix
+(#528).
+
+`git diff v0.41.0..v0.42.0 -- services/` is **non-empty**:
+`services/whisper/app/main.py` and `services/whisper/app/whisper_startup.py` (CPU
+model recommendation startup advisory) plus `scripts/metal/voxint-metal.sh`
+(doctor INFO hint for large-v2 on CPU). The mechanical carry-over rule voids on a
+non-empty diff, but the changes are purely startup log copy and doctor UX; no
+inference code, model loading, or numerics path is touched.
+
+- **Gate A (CUDA titanet regression) run fresh on RTX 5090 (sm_120, Blackwell,
+  driver 610.43.02 open, CUDA 12.8): PASS.** Published `0.42.0` CUDA images
+  pulled and run against the committed parity corpus on ports 9021/9022/9024
+  (alongside other GPU services on the standard ports).
+  - **Diarize**: response byte-identical to committed reference.
+  - **Embed**: 99/114 pairs (15 skipped, no embedding in low-SNR windows), min
+    cosine **0.999996369** (window `gap_straddle_1`), all >= 0.999.
+  - **Transcribe vad_true**: transcript text byte-identical; confidence
+    float-tail drift (0.8457 -> 0.8445), expected cross-GPU variation.
+  - **Transcribe vad_false**: one known decode-boundary word ("Haber" ->
+    "harbour" in segment 1, "on the Haber/harbour scale"), documented in the
+    v0.22.0 Gate R verdict as the expected cross-GPU engine-level divergence
+    (the 5090 Blackwell tips the same ambiguous token as ROCm; "harbour" is
+    nearer the "harbor" ground truth). All other words byte-identical.
+    Confidence float-tail drift (0.7177 -> 0.7169).
+  Regenerated references discarded; committed references unchanged.
+- **Gate R (ROCm)**: the only `services/whisper/` change is a startup log
+  advisory, not inference code. **Carries** from v0.41.0 (standing since
+  v0.33.0). No AMD hardware available.
+- **Gate E (whole-pipeline E2E)**:
+  - **Pipeline lane: carries** from v0.41.0. Pipeline, client, enrichment, and
+    DB code unchanged. No AMD hardware available.
+  - **Browser review lane: deferred.** The `services/` change does not alter
+    observable island behavior; frontend and API code unchanged since v0.41.0
+    where the lane passed.
+- **Gate M (Metal)**: `scripts/metal/voxint-metal.sh` changed (doctor CPU
+  advisory only, not inference or launcher). **Carries** from v0.41.0.
+
+Gate A green on fresh Blackwell measurement; R/E-pipeline/M carried on
+unchanged inference code; the `services/` diff is startup advisory only.
+
 #### Verdict: v0.41.0, Gates A/R/M carry, Gate E browser lane run fresh (PASS), pipeline lane blocked (2026-09-16)
 
 v0.41.0 ships searchable speaker combobox (#513), walk-mode speaker identity
