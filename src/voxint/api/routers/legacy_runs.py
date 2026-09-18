@@ -161,6 +161,7 @@ from voxint.enrichment.translations import (
 from voxint.export import MEDIA_TYPES, format_timespan, transcript_payload
 from voxint.ingest import (
     MissingStageError,
+    RestartPrerequisiteError,
     RunArchivedError,
     RunMediaNotDeletableError,
     RunNotArchivableError,
@@ -1690,28 +1691,46 @@ def restart_run_route(
     revision: Annotated[int, Form()],
     csrf_token: Annotated[str | None, Form()] = None,
     acknowledge_label_risk: Annotated[bool, Form()] = False,
+    from_stage: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
-    """Restart a terminal run from scratch — re-processes all stages from ACQUIRE.
+    """Restart a terminal run, optionally from a selected pipeline stage.
 
-    Returns 409 when segment-scope rulings or enrichment evidence block restart
-    (append-only, cannot be deleted), or when label-scope rulings exist and
-    *acknowledge_label_risk* is not set. Both restart forms (run detail and
-    editor) render a required checkbox when label-scope rulings exist and
-    disable the button entirely when hard blockers are present.
+    When *from_stage* is omitted or empty, restarts from ACQUIRE (full restart).
+    When set to a valid stage name (e.g. ``enhance_match``), restarts from that
+    stage, keeping upstream outputs intact and eagerly deleting downstream
+    outputs.
+
+    Returns 409 when segment-scope rulings or enrichment evidence block restart,
+    when label-scope rulings exist and *acknowledge_label_risk* is not set, or
+    when upstream prerequisites are missing.
     """
     _require_csrf(request, CSRF_RESTART, csrf_token)
     run = _run_or_404(session, run_id)
     _reject_if_archived(run)
+
+    parsed_stage: Stage | None = None
+    if from_stage:
+        try:
+            parsed_stage = Stage(from_stage)
+        except ValueError:
+            raise HTTPException(
+                status_code=422, detail=f"unknown stage: {from_stage}"
+            ) from None
+
     try:
         restart_run(
             session,
             run_id,
+            from_stage=parsed_stage,
             expected_revision=revision,
             acknowledge_label_risk=acknowledge_label_risk,
         )
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (RunRestartBlockedError, RunRestartLabelRiskError) as exc:
+    except (
+        RunRestartBlockedError, RunRestartLabelRiskError,
+        RestartPrerequisiteError,
+    ) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (
         RunNotRestartableError, RunArchivedError,
@@ -1720,7 +1739,7 @@ def restart_run_route(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     session.commit()
     return _run_redirect(
-        run_id, published=deps._publish_or_defer(run_id, stage=None)
+        run_id, published=deps._publish_or_defer(run_id, stage=parsed_stage)
     )
 
 

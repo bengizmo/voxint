@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session, joinedload
 from voxint.app_settings import get_app_settings
 from voxint.config import Settings, get_settings
 from voxint.db.models import (
+    STAGE_ORDER,
     AudioArtifact,
     AudioChunk,
     MediaFolder,
@@ -49,6 +50,7 @@ from voxint.db.models import (
     PipelineRun,
     Project,
     RunStatus,
+    Stage,
 )
 from voxint.domain_packs.base import dedup_order_preserving, union_pack_name_seeds
 from voxint.domain_packs.corrections import parse_corrections, union_pack_corrections
@@ -87,9 +89,7 @@ class SubmissionResult:
         from voxint.worker.tasks import pipeline_task_for_stage
 
         try:
-            pipeline_task_for_stage(None).apply_async(
-                (str(self.run_id),), ignore_result=True
-            )
+            pipeline_task_for_stage(None).apply_async((str(self.run_id),), ignore_result=True)
         except OperationalError:
             logger.warning(
                 "pipeline enqueue deferred (broker unavailable); run %s stays "
@@ -109,7 +109,6 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 # ext4/xfs cap a single path component at 255 bytes; stay under it with margin
 # for the ``.upload-XXXX.part`` sibling temp name mkstemp writes alongside it.
 _MAX_FILENAME_BYTES = 200
-
 
 
 class IngestError(Exception):
@@ -171,9 +170,7 @@ class RunNotCancellableError(IngestError):
     """
 
     def __init__(self, run_id: uuid.UUID, status: RunStatus) -> None:
-        super().__init__(
-            "this run has already finished and can no longer be cancelled"
-        )
+        super().__init__("this run has already finished and can no longer be cancelled")
         self.run_id = run_id
         self.status = status
 
@@ -228,8 +225,7 @@ class RunRestartBlockedError(IngestError):
         parts: list[str] = []
         if impact.segment_scope_decisions > 0:
             parts.append(
-                f"{impact.segment_scope_decisions} segment/word-range"
-                " adjudication decision(s)"
+                f"{impact.segment_scope_decisions} segment/word-range adjudication decision(s)"
             )
         if impact.enrichment_evidence > 0:
             parts.append(
@@ -258,6 +254,25 @@ class RunRestartLabelRiskError(IngestError):
         )
         self.run_id = run_id
         self.count = count
+
+
+class RestartPrerequisiteError(IngestError):
+    """Restart blocked because an upstream stage's outputs are missing."""
+
+    def __init__(
+        self,
+        run_id: uuid.UUID,
+        from_stage: Stage,
+        reason: str,
+        earliest_viable: Stage | None = None,
+    ) -> None:
+        hint = ""
+        if earliest_viable is not None:
+            hint = f" The earliest viable restart stage is {earliest_viable.value}."
+        super().__init__(f"cannot restart from {from_stage.value}: {reason}.{hint}")
+        self.run_id = run_id
+        self.from_stage = from_stage
+        self.earliest_viable = earliest_viable
 
 
 class RunNotArchivableError(IngestError):
@@ -579,9 +594,7 @@ def preview_effective_config(
     )
 
 
-def _effective_pack_name(
-    domain_pack_name: str | None, sidecar: Sidecar | None
-) -> str | None:
+def _effective_pack_name(domain_pack_name: str | None, sidecar: Sidecar | None) -> str | None:
     """The explicit pack name for a submission (issue #104 precedence).
 
     A caller-supplied name wins over the sidecar's, which wins over the folder
@@ -938,7 +951,10 @@ def pause_run(
         raise StaleRevisionError(run_id, expected_revision)
     try:
         return cas_update_run(
-            session, held, status=RunStatus.PAUSED, current_stage=held.current_stage,
+            session,
+            held,
+            status=RunStatus.PAUSED,
+            current_stage=held.current_stage,
         )
     except StaleRevisionError:
         session.expire(run)
@@ -969,45 +985,92 @@ def resume_run(
     if expected_revision is not None and held.revision != expected_revision:
         raise StaleRevisionError(run_id, expected_revision)
     return cas_update_run(
-        session, held, status=RunStatus.QUEUED, current_stage=held.current_stage,
+        session,
+        held,
+        status=RunStatus.QUEUED,
+        current_stage=held.current_stage,
     )
 
 
-_RESTARTABLE_STATUSES = frozenset(
-    {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
-)
+_RESTARTABLE_STATUSES = frozenset({RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED})
 
 
-def restart_impact(session: Session, run_id: uuid.UUID) -> RestartImpact:
-    """Inspect what a restart would destroy or invalidate for *run_id*."""
+def restart_impact(
+    session: Session,
+    run_id: uuid.UUID,
+    *,
+    from_stage: Stage | None = None,
+) -> RestartImpact:
+    """Inspect what a restart would destroy or invalidate for *run_id*.
+
+    When *from_stage* is ``None`` (full restart from ACQUIRE), all blockers
+    apply. Stage-aware gate profiles:
+
+    - ACQUIRE / PREPARE / TRANSCRIBE: full blockers (segments are deleted).
+    - DIARIZE_EMBED: segments survive, so segment-scope decisions and
+      enrichment evidence are NOT blockers; label-scope risk remains (labels
+      may shift).
+    - ENHANCE_MATCH / FINALIZE: no blockers at all (safe for all runs).
+    """
     from voxint.db.models import (
         AdjudicationDecision,
         EnrichmentCandidateEvidence,
         TranscriptSegment,
     )
 
-    label_scope = session.scalar(
-        select(func.count()).select_from(AdjudicationDecision).where(
-            AdjudicationDecision.pipeline_run_id == run_id,
-            AdjudicationDecision.transcript_segment_id.is_(None),
+    stage_idx = STAGE_ORDER.index(from_stage) if from_stage is not None else 0
+    enhance_idx = STAGE_ORDER.index(Stage.ENHANCE_MATCH)
+    diarize_idx = STAGE_ORDER.index(Stage.DIARIZE_EMBED)
+
+    if stage_idx >= enhance_idx:
+        return RestartImpact(
+            label_scope_decisions=0,
+            segment_scope_decisions=0,
+            enrichment_evidence=0,
         )
-    ) or 0
-    segment_scope = session.scalar(
-        select(func.count()).select_from(AdjudicationDecision).where(
-            AdjudicationDecision.pipeline_run_id == run_id,
-            AdjudicationDecision.transcript_segment_id.is_not(None),
+
+    label_scope = (
+        session.scalar(
+            select(func.count())
+            .select_from(AdjudicationDecision)
+            .where(
+                AdjudicationDecision.pipeline_run_id == run_id,
+                AdjudicationDecision.transcript_segment_id.is_(None),
+            )
         )
-    ) or 0
-    evidence = session.scalar(
-        select(func.count())
-        .select_from(EnrichmentCandidateEvidence)
-        .join(
-            TranscriptSegment,
-            EnrichmentCandidateEvidence.transcript_segment_id
-            == TranscriptSegment.id,
+        or 0
+    )
+
+    if stage_idx >= diarize_idx:
+        return RestartImpact(
+            label_scope_decisions=label_scope,
+            segment_scope_decisions=0,
+            enrichment_evidence=0,
         )
-        .where(TranscriptSegment.pipeline_run_id == run_id)
-    ) or 0
+
+    segment_scope = (
+        session.scalar(
+            select(func.count())
+            .select_from(AdjudicationDecision)
+            .where(
+                AdjudicationDecision.pipeline_run_id == run_id,
+                AdjudicationDecision.transcript_segment_id.is_not(None),
+            )
+        )
+        or 0
+    )
+    evidence = (
+        session.scalar(
+            select(func.count())
+            .select_from(EnrichmentCandidateEvidence)
+            .join(
+                TranscriptSegment,
+                EnrichmentCandidateEvidence.transcript_segment_id == TranscriptSegment.id,
+            )
+            .where(TranscriptSegment.pipeline_run_id == run_id)
+        )
+        or 0
+    )
     return RestartImpact(
         label_scope_decisions=label_scope,
         segment_scope_decisions=segment_scope,
@@ -1015,18 +1078,223 @@ def restart_impact(session: Session, run_id: uuid.UUID) -> RestartImpact:
     )
 
 
+def _eager_invalidate_downstream(
+    session: Session,
+    run_id: uuid.UUID,
+    from_stage: Stage,
+) -> None:
+    """Delete all outputs of stages >= *from_stage* so the run restarts clean.
+
+    Called inside the restart transaction, after the impact check has passed.
+    The delete sets mirror what each stage body writes (delete-then-insert),
+    but applied eagerly before the run is re-queued. The cascading structure
+    is cumulative: each stage's delete set includes everything later stages
+    would also delete.
+    """
+    from sqlalchemy import delete, update
+
+    from voxint.db.models import (
+        DiarizationTurn,
+        MatchCandidate,
+        SpeakerAssignment,
+        SynthdetectScore,
+        TranscriptSegment,
+    )
+
+    stage_idx = STAGE_ORDER.index(from_stage)
+    transcribe_idx = STAGE_ORDER.index(Stage.TRANSCRIBE)
+    segments_will_be_deleted = stage_idx <= transcribe_idx
+
+    # ENHANCE_MATCH: reset enhancement columns, delete match outputs.
+    if stage_idx <= STAGE_ORDER.index(Stage.ENHANCE_MATCH):
+        if not segments_will_be_deleted:
+            session.execute(
+                update(TranscriptSegment)
+                .where(TranscriptSegment.pipeline_run_id == run_id)
+                .values(enhanced_text=None, correction_trace=[], corrector_version=None)
+            )
+        session.execute(
+            delete(SpeakerAssignment).where(SpeakerAssignment.pipeline_run_id == run_id)
+        )
+        session.execute(delete(MatchCandidate).where(MatchCandidate.pipeline_run_id == run_id))
+
+    # DIARIZE_EMBED: delete turns + synthdetect scores, null segment labels.
+    if stage_idx <= STAGE_ORDER.index(Stage.DIARIZE_EMBED):
+        session.execute(delete(SynthdetectScore).where(SynthdetectScore.pipeline_run_id == run_id))
+        session.execute(delete(DiarizationTurn).where(DiarizationTurn.pipeline_run_id == run_id))
+        if not segments_will_be_deleted:
+            session.execute(
+                update(TranscriptSegment)
+                .where(TranscriptSegment.pipeline_run_id == run_id)
+                .values(diarization_label=None)
+            )
+
+    # TRANSCRIBE: delete segments (cascades review states, split boundaries,
+    # annotations, saved quotes, learned-correction evidence); clear run-level
+    # transcript metadata.
+    if segments_will_be_deleted:
+        session.execute(
+            delete(TranscriptSegment).where(TranscriptSegment.pipeline_run_id == run_id)
+        )
+        session.execute(
+            update(PipelineRun)
+            .where(PipelineRun.id == run_id)
+            .values(
+                initial_prompt=None,
+                detected_language=None,
+                detected_language_probability=None,
+            )
+        )
+
+    # PREPARE: delete audio artifacts and chunks.
+    if stage_idx <= STAGE_ORDER.index(Stage.PREPARE):
+        session.execute(delete(AudioArtifact).where(AudioArtifact.pipeline_run_id == run_id))
+        session.execute(delete(AudioChunk).where(AudioChunk.pipeline_run_id == run_id))
+
+    # Clear any active review claim -- a reprocessed run re-entering
+    # adjudication needs a fresh claim.
+    session.execute(
+        update(PipelineRun)
+        .where(PipelineRun.id == run_id)
+        .values(
+            review_claim_token=None,
+            review_claimed_by=None,
+            review_claimed_at=None,
+            review_claim_expires_at=None,
+        )
+    )
+
+    session.flush()
+
+
+def _validate_prerequisites(
+    session: Session,
+    run_id: uuid.UUID,
+    from_stage: Stage,
+) -> None:
+    """Verify the upstream stage completed and its outputs exist.
+
+    Raises :class:`RestartPrerequisiteError` when the run cannot start from
+    *from_stage* because an upstream stage's outputs are missing.
+    """
+    from voxint.db.models import (
+        StageRun,
+        StageStatus,
+        TranscriptSegment,
+    )
+
+    stage_idx = STAGE_ORDER.index(from_stage)
+    if stage_idx == 0:
+        run = session.get(PipelineRun, run_id)
+        if run is None:
+            raise RunNotFoundError(run_id)
+        item = session.get(MediaItem, run.media_item_id)
+        if item is None or item.trashed_at is not None or item.purged_at is not None:
+            raise RestartPrerequisiteError(run_id, from_stage, "media item is trashed or purged")
+        return
+
+    upstream = STAGE_ORDER[stage_idx - 1]
+
+    upstream_completed = (
+        session.scalar(
+            select(func.count())
+            .select_from(StageRun)
+            .where(
+                StageRun.pipeline_run_id == run_id,
+                StageRun.stage == upstream.value,
+                StageRun.status == StageStatus.COMPLETED.value,
+            )
+        )
+        or 0
+    )
+    if upstream_completed == 0:
+        raise RestartPrerequisiteError(
+            run_id,
+            from_stage,
+            f"upstream stage {upstream.value} has not completed",
+            earliest_viable=_find_earliest_viable(session, run_id),
+        )
+
+    if from_stage == Stage.TRANSCRIBE:
+        has_audio = (
+            session.scalar(
+                select(func.count())
+                .select_from(AudioArtifact)
+                .where(
+                    AudioArtifact.pipeline_run_id == run_id,
+                    AudioArtifact.kind == "preprocessed_audio",
+                    AudioArtifact.reclaimed_at.is_(None),
+                )
+            )
+            or 0
+        )
+        if has_audio == 0:
+            raise RestartPrerequisiteError(
+                run_id,
+                from_stage,
+                "preprocessed audio artifact is missing or reclaimed",
+                earliest_viable=Stage.PREPARE,
+            )
+
+    if from_stage == Stage.DIARIZE_EMBED:
+        has_segments = (
+            session.scalar(
+                select(func.count())
+                .select_from(TranscriptSegment)
+                .where(TranscriptSegment.pipeline_run_id == run_id)
+            )
+            or 0
+        )
+        if has_segments == 0:
+            raise RestartPrerequisiteError(
+                run_id,
+                from_stage,
+                "no transcript segments exist",
+                earliest_viable=Stage.TRANSCRIBE,
+            )
+
+
+def _find_earliest_viable(session: Session, run_id: uuid.UUID) -> Stage:
+    """Return the earliest stage from which a restart can begin."""
+    from voxint.db.models import StageRun, StageStatus
+
+    for i, _stage in enumerate(STAGE_ORDER):
+        if i == 0:
+            continue
+        upstream = STAGE_ORDER[i - 1]
+        completed = (
+            session.scalar(
+                select(func.count())
+                .select_from(StageRun)
+                .where(
+                    StageRun.pipeline_run_id == run_id,
+                    StageRun.stage == upstream.value,
+                    StageRun.status == StageStatus.COMPLETED.value,
+                )
+            )
+            or 0
+        )
+        if completed == 0:
+            return STAGE_ORDER[max(0, i - 1)]
+    return STAGE_ORDER[-1]
+
+
 def restart_run(
     session: Session,
     run_id: uuid.UUID,
     *,
+    from_stage: Stage | None = None,
     expected_revision: int | None = None,
     acknowledge_label_risk: bool = False,
 ) -> RunSnapshot:
-    """CAS-restart a terminal run from scratch (stage=None → starts at ACQUIRE).
+    """CAS-restart a terminal run, optionally from a selected stage.
 
-    Unlike requeue (which retries the failed stage), restart clears the stage and
-    error so the full pipeline runs again. Prior StageRun rows are preserved as
-    earlier attempts. The caller commits then lazily publishes.
+    *from_stage* ``None`` (the default) restarts from ACQUIRE (full restart).
+    A named stage restarts from that point, keeping upstream outputs intact and
+    eagerly deleting downstream outputs in the same transaction.
+
+    The caller commits then publishes via
+    ``pipeline_task_for_stage(from_stage)``.
 
     Raises :class:`RunRestartBlockedError` when segment-scope adjudication
     decisions or enrichment evidence reference transcript segments that would be
@@ -1035,10 +1303,8 @@ def restart_run(
     Raises :class:`RunRestartLabelRiskError` when label-scope decisions exist and
     *acknowledge_label_risk* is not set, since re-diarization may reassign labels.
 
-    The preflight reads are not serialized with adjudication writers: a concurrent
-    insert between the count and the CAS commit could slip through. This is
-    acceptable under Voxint's single-operator design; the transcribe stage's FK
-    constraint is the hard backstop.
+    Raises :class:`RestartPrerequisiteError` when upstream stage outputs are
+    missing and the run cannot start from the requested stage.
     """
     run = session.get(PipelineRun, run_id)
     if run is None:
@@ -1051,14 +1317,30 @@ def restart_run(
     if expected_revision is not None and held.revision != expected_revision:
         raise StaleRevisionError(run_id, expected_revision)
 
-    impact = restart_impact(session, run_id)
+    impact = restart_impact(session, run_id, from_stage=from_stage)
     if impact.has_blockers:
         raise RunRestartBlockedError(run_id, impact)
     if impact.label_scope_decisions > 0 and not acknowledge_label_risk:
         raise RunRestartLabelRiskError(run_id, impact.label_scope_decisions)
 
+    effective_stage = from_stage if from_stage is not None else Stage.ACQUIRE
+
+    _validate_prerequisites(session, run_id, effective_stage)
+
+    try:
+        _eager_invalidate_downstream(session, run_id, effective_stage)
+    except IntegrityError:
+        session.rollback()
+        fresh_impact = restart_impact(session, run_id, from_stage=from_stage)
+        raise RunRestartBlockedError(run_id, fresh_impact) from None
+
     return cas_update_run(
-        session, held, status=RunStatus.QUEUED, current_stage=None, error=None,
+        session,
+        held,
+        status=RunStatus.QUEUED,
+        current_stage=from_stage,
+        error=None,
+        processing_cycle=held.processing_cycle + 1,
     )
 
 
@@ -1067,9 +1349,7 @@ def restart_run(
 # want to hide or clear (it stays requeueable only until archived — see the
 # archived-run guard on requeue). PAUSED is excluded: it is live (resume or
 # cancel first).
-_ARCHIVABLE_STATUSES = frozenset(
-    {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
-)
+_ARCHIVABLE_STATUSES = frozenset({RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED})
 
 
 def archive_run(session: Session, run_id: uuid.UUID) -> PipelineRun:
@@ -1181,14 +1461,10 @@ def delete_run_derived_media(
 
     root = media_root.resolve()
     rows: list[AudioArtifact | AudioChunk] = [
-        *session.execute(
-            select(AudioArtifact).where(AudioArtifact.pipeline_run_id == run_id)
-        )
+        *session.execute(select(AudioArtifact).where(AudioArtifact.pipeline_run_id == run_id))
         .scalars()
         .all(),
-        *session.execute(
-            select(AudioChunk).where(AudioChunk.pipeline_run_id == run_id)
-        )
+        *session.execute(select(AudioChunk).where(AudioChunk.pipeline_run_id == run_id))
         .scalars()
         .all(),
     ]
@@ -1223,9 +1499,7 @@ def unlink_media_paths(paths: tuple[Path, ...]) -> MediaUnlinkResult:
         except OSError as exc:
             failed += 1
             logger.warning("failed to unlink derived-media file %s: %s", path, exc)
-    return MediaUnlinkResult(
-        files_deleted=deleted, files_missing=missing, files_failed=failed
-    )
+    return MediaUnlinkResult(files_deleted=deleted, files_missing=missing, files_failed=failed)
 
 
 def sanitize_upload_filename(filename: str) -> str:
@@ -1246,9 +1520,7 @@ def sanitize_upload_filename(filename: str) -> str:
     if _CONTROL_CHARS.search(name):
         raise UploadValidationError("upload filename contains control characters")
     if len(name.encode("utf-8")) > _MAX_FILENAME_BYTES:
-        raise UploadValidationError(
-            f"upload filename exceeds {_MAX_FILENAME_BYTES} bytes"
-        )
+        raise UploadValidationError(f"upload filename exceeds {_MAX_FILENAME_BYTES} bytes")
     # os.path.basename is a no-op once slashes are rejected; keep it as a belt so
     # a future relaxation of the slash rule can never let a directory through.
     if os.path.basename(name) != name:
@@ -1426,9 +1698,7 @@ def submit_upload(
             winner = session.execute(
                 select(MediaItem).where(MediaItem.source_path == rel)
             ).scalar_one()
-            return _replay_run(
-                session, winner, size=size, sha256=sha256, domain_pack=domain_pack
-            )
+            return _replay_run(session, winner, size=size, sha256=sha256, domain_pack=domain_pack)
         os.replace(temp_path, dest)  # atomic publish; only the insert winner is here
         published = True
         # Orphan-on-crash (deferred to Slice 5 recovery): if submit() or the
@@ -1531,12 +1801,8 @@ def submit_url(
             session.add(media)
             session.flush()
     except IntegrityError:
-        winner = session.execute(
-            select(MediaItem).where(MediaItem.source_path == rel)
-        ).scalar_one()
-        return _replay_url_run(
-            session, winner, source_url=validated_url, domain_pack=domain_pack
-        )
+        winner = session.execute(select(MediaItem).where(MediaItem.source_path == rel)).scalar_one()
+        return _replay_url_run(session, winner, source_url=validated_url, domain_pack=domain_pack)
     run = submit(session, media.id, domain_pack=domain_pack)
     return SubmissionResult(run_id=run.id)
 

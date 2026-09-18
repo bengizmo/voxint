@@ -903,18 +903,45 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
 - **`POST /runs/{id}/resume`**: an exact-revision (CAS) resume of a `PAUSED`
   run. Drives the run from `PAUSED` to `QUEUED` and re-enqueues it for worker
   pickup; the run continues from the stage it was paused at.
-- **`POST /runs/{id}/restart`**: an exact-revision (CAS) restart-from-scratch
-  of a `COMPLETED`, `FAILED`, or `CANCELLED` run, from the Manage section on
-  the run detail page. Drives the run to `QUEUED` with `current_stage=None`,
-  so it re-processes from ACQUIRE. Prior `StageRun` rows are preserved as
-  earlier attempts, not deleted. A preflight check guards the button based on
-  adjudication state: when segment-scope rulings exist (tied to transcript
-  segments that will be regenerated), restart is **blocked** (disabled button
-  with a "Blocked" notice). When only label-scope rulings exist (speaker
-  assignments that may apply to different voices after re-processing),
-  restart requires a `acknowledge_label_risk` checkbox. When no adjudication
-  work exists, a plain confirmation dialog guards the button. Both the
-  run-detail and editor pages render these states.
+- **`POST /runs/{id}/restart`**: an exact-revision (CAS) restart of a
+  `COMPLETED`, `FAILED`, or `CANCELLED` run. Accepts an optional `from_stage`
+  form field (a stage name like `enhance_match`); when omitted, restarts from
+  ACQUIRE (full restart). Each restart bumps `processing_cycle` so retry
+  budgets reset.
+
+  **Stage-aware restart** (`from_stage` set): upstream outputs are preserved;
+  downstream outputs are eagerly deleted in the same transaction before the run
+  is re-queued. Prerequisite validation checks that the upstream stage completed
+  and its data exists (e.g. preprocessed audio for TRANSCRIBE, transcript
+  segments for DIARIZE_EMBED). Returns 409 with a
+  `RestartPrerequisiteError` message when prerequisites are missing, including
+  a hint for the earliest viable restart stage. Returns 422 for an unknown
+  stage name.
+
+  **Blocker matrix** (stage-aware):
+
+  | Restart from | Segment-scope blocked? | Enrichment blocked? | Label-scope risk? |
+  |---|:---:|:---:|:---:|
+  | ACQUIRE / PREPARE / TRANSCRIBE | yes | yes | yes |
+  | DIARIZE_EMBED | no (segments survive) | no | yes (labels shift) |
+  | ENHANCE_MATCH / FINALIZE | no | no | no |
+
+  ENHANCE_MATCH and FINALIZE restarts are safe for all runs, including those
+  with adjudication decisions. This is the common case ("I updated the roster,
+  re-match").
+
+  A preflight check guards the button based on adjudication state: when
+  segment-scope rulings exist (tied to transcript segments that would be
+  regenerated), restart is **blocked** (disabled button with a "Blocked"
+  notice). When only label-scope rulings exist (speaker assignments that may
+  apply to different voices after re-processing), restart requires an
+  `acknowledge_label_risk` checkbox. When no adjudication work exists, a plain
+  confirmation dialog guards the button. Both the run-detail and editor pages
+  render these states.
+
+  The publish path routes through `pipeline_task_for_stage(from_stage)`, so a
+  restart from ENHANCE_MATCH dispatches directly to the POST lane without
+  touching the GPU queue.
 - **`POST /runs/{id}/cancel`**: an exact-revision (CAS) cancel of a *live* run
   (`QUEUED` / `RUNNING` / `PAUSED` / `AWAITING_ADJUDICATION`), from a button
   on the run detail page. Cancellation is **cooperative and pure DB state**: it
