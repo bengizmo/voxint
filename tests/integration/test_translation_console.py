@@ -209,7 +209,7 @@ class TestConsole:
         done = client.get(f"/runs/{run_id}/translation").text
         assert "hx-trigger" not in done  # terminal render stops polling
         assert "Spanish (es)" in done
-        assert "out of date" not in done
+        assert "Out of date" not in done
         # An operator edit stales the generation: banner, no partial alignment.
         with session_factory() as session:
             segment = session.execute(
@@ -221,5 +221,5 @@ class TestConsole:
             set_correction(session, segment=segment, text="Edited afterwards.")
             session.commit()
         stale = client.get(f"/runs/{run_id}/translation").text
-        assert "out of date" in stale
+        assert "Out of date" in stale
         assert "Re-translate" in stale

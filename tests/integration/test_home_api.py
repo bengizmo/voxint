@@ -160,7 +160,7 @@ def test_home_renders_attention_cards_and_stats(
     assert cards_at < body.index("ACTIVITY")
     # Attention counts: the seed's one unresolved COMPLETED run (singular
     # label inflection, #318).
-    assert "recordings to review" in body
+    assert "runs to review" in body
     assert "voice without a name" in body
     assert "failed runs" in body
     # Non-zero cards link to their queues.
@@ -184,7 +184,7 @@ def test_home_attention_counts_match_their_queues(
         voices = sum(e.unresolved_labels for e in queue)
     assert (eligible, voices) == (1, 1)
     body = client.get("/").text
-    assert "recordings to review" in body
+    assert "runs to review" in body
     assert "voice without a name" in body
 
 
@@ -192,7 +192,7 @@ def test_home_empty_states_are_quiet_not_links(client: TestClient) -> None:
     """Zero attention cards show counts with neutral copy, no arrow links."""
     body = client.get("/").text
     # All three attention cards show zero with neutral notes.
-    assert "recordings to review" in body
+    assert "runs to review" in body
     assert "voices without a name" in body
     assert "nothing broke" in body
     # No arrow links on zero cards (the attention-arrow only renders when > 0).
@@ -258,7 +258,7 @@ def test_home_matches_metrics_snapshot(
     # review backlog: the backlog is the /review queue's eligibility count —
     # COMPLETED runs with unresolved labels (issue #117), one here.
     assert 'voxint_runs{status="awaiting_adjudication"} 2' in metrics
-    assert "recordings to review" in home
+    assert "runs to review" in home
 
 
 def test_home_activity_feed_lists_runs_and_speakers(

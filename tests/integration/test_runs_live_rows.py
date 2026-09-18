@@ -70,7 +70,7 @@ def test_mixed_completion(client: TestClient, session_factory: sessionmaker[Sess
     assert "needs review" in done_row.lower()
     assert 'href="/review"' in done_row
     assert "is-just-finished" not in live_row
-    assert "pill running" in live_row
+    assert 'class="chip chip-info ">Running</span>' in live_row
 
 
 @pytest.mark.parametrize(
