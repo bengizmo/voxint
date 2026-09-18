@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from voxint.media.ytdlp import (
+    _MAX_DOWNLOADS_CANCELLED,
     AcquisitionError,
     _isolate_child,
     _kill_process_group,
@@ -36,6 +37,35 @@ def test_nonzero_exit_raises_with_stderr_tail() -> None:
     with pytest.raises(AcquisitionError, match="exit 3") as excinfo:
         run_download_command(["sh", "-c", "echo boom 1>&2; exit 3"], timeout_seconds=5)
     assert "boom" in str(excinfo.value)
+
+
+def test_tolerated_exit_does_not_raise() -> None:
+    """Exit 101 (DownloadCancelled) is the expected outcome of --max-downloads 1
+    after a successful single-item download. When tolerate_exit matches, the
+    function returns normally; the caller's file-existence check is the real
+    gate (ACQUIRE's _single_output)."""
+    run_download_command(
+        ["sh", "-c", "exit 101"],
+        timeout_seconds=5,
+        tolerate_exit=_MAX_DOWNLOADS_CANCELLED,
+    )
+
+
+def test_tolerated_exit_still_rejects_other_codes() -> None:
+    """Only the specific tolerated code is accepted; a different nonzero exit
+    still raises even when tolerate_exit is set."""
+    with pytest.raises(AcquisitionError, match="exit 2"):
+        run_download_command(
+            ["sh", "-c", "echo fail 1>&2; exit 2"],
+            timeout_seconds=5,
+            tolerate_exit=_MAX_DOWNLOADS_CANCELLED,
+        )
+
+
+def test_exit_101_rejected_without_tolerance() -> None:
+    """Without tolerate_exit, exit 101 is a failure like any other nonzero code."""
+    with pytest.raises(AcquisitionError, match="exit 101"):
+        run_download_command(["sh", "-c", "exit 101"], timeout_seconds=5)
 
 
 def test_missing_binary_raises() -> None:

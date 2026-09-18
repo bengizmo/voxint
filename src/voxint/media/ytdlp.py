@@ -63,6 +63,7 @@ _KILL_GRACE_SECONDS = 5.0
 # so it stays in effect on the yt-dlp process itself. libc is loaded once here,
 # before any fork, so the post-fork hook does no dlopen in that fragile context.
 _PR_SET_PDEATHSIG = 1
+_MAX_DOWNLOADS_CANCELLED = 101
 try:
     _libc: "ctypes.CDLL | None" = ctypes.CDLL("libc.so.6", use_errno=True)
 except OSError:  # pragma: no cover - non-glibc platform; the group-kill still applies
@@ -119,9 +120,15 @@ def _kill_process_group(
 
 
 def run_download_command(
-    argv: list[str], *, timeout_seconds: float, extra_secrets: "tuple[str, ...]" = ()
+    argv: list[str],
+    *,
+    timeout_seconds: float,
+    extra_secrets: "tuple[str, ...]" = (),
+    tolerate_exit: "int | None" = None,
 ) -> None:
     """Run a download argument vector under a hard wall-clock timeout.
+    ``tolerate_exit`` allows an expected exit code, such as yt-dlp's 101 from
+    ``--max-downloads``.
 
     Spawns ``argv`` in its own process group, waits up to ``timeout_seconds``,
     and on expiry terminates the entire group (``terminate → kill``) so a stalled
@@ -171,7 +178,7 @@ def run_download_command(
         raise AcquisitionError(
             f"acquisition exceeded the {timeout_seconds:g}s wall-clock timeout"
         ) from None
-    if proc.returncode != 0:
+    if proc.returncode != 0 and proc.returncode != tolerate_exit:
         # Redact BEFORE slicing: yt-dlp echoes the full source URL (signed query
         # params, embedded creds) into stderr. Slicing first could keep a
         # schemeless "?token=..." tail the redactor no longer recognises, so the
@@ -279,7 +286,10 @@ def build_ytdlp_downloader(
             url,
         ]
         run_download_command(
-            argv, timeout_seconds=timeout_seconds, extra_secrets=tuple(secret_values)
+            argv,
+            timeout_seconds=timeout_seconds,
+            extra_secrets=tuple(secret_values),
+            tolerate_exit=_MAX_DOWNLOADS_CANCELLED,
         )
 
     return download

@@ -6,6 +6,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- URL submissions failing with 403 on YouTube due to missing JS challenge
+  solver; dependency upgraded to `yt-dlp[default]` which includes
+  `yt-dlp-ejs` (#557)
+- Successful single-item downloads falsely reported as failures due to yt-dlp
+  exit code 101 (`DownloadCancelled`) from `--max-downloads 1` (#557)
+
 
 ## [0.43.0] - 2026-09-18
 
