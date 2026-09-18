@@ -107,6 +107,9 @@ CSRF_ROSTER_EMBEDDING_DELETE = "roster-embedding-delete"
 # are independent mutations with different blast radii.
 CSRF_RESEARCH_START = "research-start"
 CSRF_RESEARCH_CANCEL = "research-cancel"
+# Model-service lifecycle controls (#556). One action covers all three services
+# (the service key is validated server-side, not embedded in the token).
+CSRF_SERVICE_CONTROL = "service-control"
 CSRF_PROFILE_DECISION = "profile-decision"
 # Manual speaker-profile field edits on the Console 2.0 profile page (#159) —
 # a distinct act from ruling on a research draft, so a distinct token.

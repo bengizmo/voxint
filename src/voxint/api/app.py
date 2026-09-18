@@ -243,9 +243,7 @@ class _SecurityHeadersMiddleware:
 
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
-                _apply_security_headers(
-                    MutableHeaders(scope=message), token_path=token_path
-                )
+                _apply_security_headers(MutableHeaders(scope=message), token_path=token_path)
             await send(message)
 
         await self._app(scope, receive, send_with_headers)
@@ -365,9 +363,7 @@ async def _http_exception_handler(request: Request, exc: HTTPException) -> Respo
         )
     if exc.headers and exc.status_code < 500:
         response.headers.update(exc.headers)
-    _apply_security_headers(
-        response.headers, token_path=_is_token_sensitive_path(request.url.path)
-    )
+    _apply_security_headers(response.headers, token_path=_is_token_sensitive_path(request.url.path))
     return response
 
 
@@ -387,9 +383,7 @@ async def _security_headers_on_error(request: Request, exc: Exception) -> Respon
             status_code=500,
             media_type="application/json",
         )
-    _apply_security_headers(
-        response.headers, token_path=_is_token_sensitive_path(request.url.path)
-    )
+    _apply_security_headers(response.headers, token_path=_is_token_sensitive_path(request.url.path))
     return response
 
 
@@ -408,13 +402,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         with session_scope(factory) as session:
             removed = reconcile_orphaned_incoming(session, resolved.media_root)
             if removed:
-                logger.info(
-                    "reconciled %d orphaned incoming file(s)", len(removed)
-                )
+                logger.info("reconciled %d orphaned incoming file(s)", len(removed))
     except Exception:
-        logger.warning(
-            "startup reconciler skipped (database unavailable)", exc_info=True
-        )
+        logger.warning("startup reconciler skipped (database unavailable)", exc_info=True)
     yield
 
 
@@ -463,6 +453,11 @@ def create_app(
     # Lazy: building the engine at import time would make `/healthz` (and any
     # DB-less test import) depend on a reachable database.
     app.state.session_factory = session_factory
+    # Service lifecycle controller (#556): instantiated once at startup, used
+    # by the Status page to offer restart buttons when the backend supports it.
+    from voxint.api.service_control import get_controller
+
+    app.state.service_controller = get_controller(resolved)
     app.state.media_gate = None
     # Coarse, header-only body-size gate that runs before any route parses the
     # body (see _RequestSizeLimitMiddleware); the streaming per-file cap stays
@@ -480,7 +475,8 @@ def create_app(
     # Starlette raises its base HTTPException for router-generated errors such
     # as a nonexistent path; FastAPI's HTTPException is a subclass used by routes.
     app.add_exception_handler(
-        StarletteHTTPException, _http_exception_handler  # type: ignore[arg-type]
+        StarletteHTTPException,
+        _http_exception_handler,  # type: ignore[arg-type]
     )
     app.add_exception_handler(HTTPException, _http_exception_handler)  # type: ignore[arg-type]
     app.add_exception_handler(Exception, _security_headers_on_error)
@@ -726,9 +722,7 @@ def _register_routes(app: FastAPI) -> None:
         if (path, method.upper()) in core_pairs
     )
     if core_conflicts:
-        raise PluginError(
-            "plugin route collisions with core: " + "; ".join(core_conflicts)
-        )
+        raise PluginError("plugin route collisions with core: " + "; ".join(core_conflicts))
     # Reject plugin routes under /api/ — the public API sub-app owns that
     # prefix and plugin routes mounted on the console would shadow it.
     api_squatters = sorted(
@@ -739,8 +733,7 @@ def _register_routes(app: FastAPI) -> None:
     )
     if api_squatters:
         raise PluginError(
-            "plugin routes must not use the /api/ prefix: "
-            + "; ".join(api_squatters)
+            "plugin routes must not use the /api/ prefix: " + "; ".join(api_squatters)
         )
     if built_routers:
         gated_plugins = APIRouter(dependencies=[Depends(require_onboarded)])
@@ -773,9 +766,7 @@ def _register_routes(app: FastAPI) -> None:
     # this stamp is always true. The shell reads flag AND stamp, so
     # flipping CONSOLE_MEDIA_ENABLED alone points the sidebar Media link and the
     # "Add media" quick action at /media — the dark-ship activation switch.
-    app.state.media_routed = any(
-        route.path == "/media" for route in _iter_api_routes(app.routes)
-    )
+    app.state.media_routed = any(route.path == "/media" for route in _iter_api_routes(app.routes))
     # Activity (#162) dark-ships routed-but-undiscovered: /activity/events always
     # registers, so this stamp is always true. shell.activity_enabled ANDs the
     # flag and this stamp.

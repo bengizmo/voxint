@@ -768,6 +768,18 @@
     ]
   ],
   [
+    "/settings/status/services/{service_key}/restart",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/settings/status/services/{service_key}/row",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/settings/hardware",
     [
       "GET"

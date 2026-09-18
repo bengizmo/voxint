@@ -1164,6 +1164,22 @@
     true
   ],
   [
+    "/settings/status/services/{service_key}/restart",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/status/services/{service_key}/row",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/settings/translation",
     [
       "POST"

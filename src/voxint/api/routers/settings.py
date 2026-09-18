@@ -10,11 +10,13 @@ the router-level onboarding gate.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import datetime
+from html import escape
 from pathlib import Path
 from typing import Annotated, Any, cast
 from urllib.parse import urlencode
@@ -26,11 +28,18 @@ from sqlalchemy import Engine, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
-from starlette.responses import RedirectResponse
+from starlette.responses import HTMLResponse, RedirectResponse
 
 from voxint.api import settings_view
 from voxint.api.auth import AuthContext
-from voxint.api.csrf import CSRF_SETTINGS, CSRF_SETUP, CSRF_USERS, mint_csrf_token
+from voxint.api.csrf import (
+    CSRF_SERVICE_CONTROL,
+    CSRF_SETTINGS,
+    CSRF_SETUP,
+    CSRF_USERS,
+    mint_csrf_token,
+)
+from voxint.api.health_probe import _probe_one
 from voxint.api.host_metrics import HostMetricsSnapshot, collect_host_metrics_or_empty
 from voxint.api.languages import LANGUAGE_NAMES
 from voxint.api.resource_status import (
@@ -50,6 +59,13 @@ from voxint.api.routers.deps import (
     require_users_enabled,
     templates,
     viewer_write_guard,
+)
+from voxint.api.service_control import (
+    SERVICE_KEYS,
+    SERVICES,
+    ControlOutcome,
+    ServiceController,
+    ServiceState,
 )
 from voxint.api.service_identity import collect_service_identity
 from voxint.api.setup_wizard import (
@@ -882,7 +898,9 @@ _COMPONENT_ORDER = (
 )
 
 
-def _build_components(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_components(
+    checks: list[dict[str, Any]], controller: ServiceController
+) -> list[dict[str, Any]]:
     """Map doctor checks to the R6 component list with friendly names.
 
     Adds a synthetic "Console & API" entry (the app is serving this page, so it
@@ -903,6 +921,10 @@ def _build_components(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
             rows.append(
                 {
                     "label": "Console & API",
+                    "key": None,
+                    "controllable": False,
+                    "terminal_hint": None,
+                    "is_model_service": False,
                     "dot": "ok",
                     "state_text": "running",
                     "action_url": None,
@@ -954,9 +976,18 @@ def _build_components(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
             else:
                 dot = "warn"
                 state_text = check["detail"] or state
+        service_key = {
+            "transcription": "transcription",
+            "diarization": "diarization",
+            "speaker embedding": "speaker_embedding",
+        }.get(key)
         rows.append(
             {
                 "label": label,
+                "key": service_key,
+                "controllable": controller.controllable if service_key else False,
+                "terminal_hint": controller.terminal_hint(service_key) if service_key else None,
+                "is_model_service": service_key is not None,
                 "dot": dot,
                 "state_text": state_text,
                 "action_url": action_url,
@@ -2433,18 +2464,103 @@ def settings_status_page(request: Request, operator: OperatorDep, session: Sessi
             },
         )
     checks = _doctor_checks(request, session)
-    components = _build_components(checks)
+    components = _build_components(checks, request.app.state.service_controller)
+    csrf_token = mint_csrf_token(request.app.state.csrf_secret, CSRF_SERVICE_CONTROL)
     overall_ok = all(c["dot"] != "warn" for c in components)
     context = _sub_page_context(
         request,
         overall_ok=overall_ok,
         install_summary=_install_summary(settings, snapshot),
         components=components,
+        csrf_token=csrf_token,
         gauges=gauges,
         gauge_note=None,
         warnings=warnings,
     )
     return templates.TemplateResponse(request, "settings/status.html", context)
+
+
+def _service_row_html(
+    service_key: str, state_text: str, dot: str, *, action: str = "", polling: bool = False
+) -> str:
+    poll_attrs = (
+        f' hx-get="/settings/status/services/{service_key}/row"'
+        ' hx-trigger="every 3s" hx-swap="outerHTML"'
+        if polling
+        else ""
+    )
+    return (
+        f'<li id="service-{service_key}" class="component-row"{poll_attrs}>'
+        f'<span class="cr-dot is-{dot}"></span>'
+        f'<span class="cr-name">{escape(SERVICES[service_key].label)}</span>'
+        f'<span class="cr-state">{escape(state_text)}</span>'
+        f'<span class="cr-action">{action}</span></li>'
+    )
+
+
+@router.post("/settings/status/services/{service_key}/restart")
+async def settings_service_restart(
+    service_key: str,
+    request: Request,
+    admin: AdminDep,
+    operator: OperatorDep,
+    csrf_token: str = Form(...),
+) -> HTMLResponse:
+    if service_key not in SERVICE_KEYS:
+        raise HTTPException(status_code=404, detail="Unknown service")
+    _require_csrf(request, CSRF_SERVICE_CONTROL, csrf_token)
+    controller: ServiceController = request.app.state.service_controller
+    result = await asyncio.get_running_loop().run_in_executor(None, controller.restart, service_key)
+    logger.info(
+        "service_restart actor=%s service_key=%s outcome=%s",
+        operator,
+        service_key,
+        result.outcome.value,
+    )
+    if result.outcome in (ControlOutcome.RESTARTED, ControlOutcome.TIMEOUT):
+        return HTMLResponse(_service_row_html(service_key, "Restarting...", "warn", polling=True))
+    if result.outcome == ControlOutcome.BUSY:
+        return HTMLResponse(
+            _service_row_html(service_key, "Restart already in progress", "warn", polling=True),
+        )
+    return HTMLResponse(_service_row_html(service_key, result.detail, "warn"))
+
+
+@router.get("/settings/status/services/{service_key}/row")
+def settings_service_row(service_key: str, request: Request, admin: AdminDep) -> HTMLResponse:
+    if service_key not in SERVICE_KEYS:
+        raise HTTPException(status_code=404, detail="Unknown service")
+    service = SERVICES[service_key]
+    settings: Settings = request.app.state.settings
+    controller: ServiceController = request.app.state.service_controller
+    # This synchronous route runs in FastAPI's thread pool, including Docker inspection.
+    with httpx.Client(timeout=httpx.Timeout(settings.health_probe_timeout_seconds)) as client:
+        health = _probe_one(client, service.label, getattr(settings, service.settings_url_attr))
+    state = controller.inspect(service_key) if controller.controllable else ServiceState.UNKNOWN
+    dot = "ok" if health.up else "off" if state == ServiceState.STOPPED else "warn"
+    action = ""
+    if controller.controllable and state == ServiceState.RUNNING:
+        token = mint_csrf_token(request.app.state.csrf_secret, CSRF_SERVICE_CONTROL)
+        confirmation = (
+            f"Restart {service.label}? This takes 10-20 seconds while the model reloads. "
+            "Jobs using it may fail and retry."
+        )
+        action = (
+            "<form>"
+            f'<input type="hidden" name="csrf_token" value="{escape(token)}">'
+            f'<button type="button" hx-post="/settings/status/services/{service_key}/restart"'
+            f' hx-target="#service-{service_key}" hx-swap="outerHTML"'
+            f' hx-confirm="{escape(confirmation)}">Restart</button></form>'
+        )
+    elif not controller.controllable:
+        hint = controller.terminal_hint(service_key)
+        if hint:
+            action = f"<code>{escape(hint)}</code>"
+    response = HTMLResponse(
+        _service_row_html(service_key, health.detail, dot, action=action, polling=not health.up)
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.get("/settings/hardware", name="settings_hardware")

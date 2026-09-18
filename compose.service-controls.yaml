@@ -1,0 +1,23 @@
+# Opt-in overlay: lets the web console restart model services (#556).
+#
+# Mounts the Docker socket into the API container so it can talk to the
+# Docker Engine API. This grants the API process host-equivalent control
+# over all containers -- acceptable for single-operator deployments, but
+# a meaningful privilege escalation. Do not enable unless you trust every
+# user who can log in to the console.
+#
+# Usage:
+#   docker compose -f compose.yaml -f compose.gpu.yaml \
+#     -f compose.service-controls.yaml up -d
+#
+# DOCKER_GID must match the docker group on the host. Find it with:
+#   getent group docker | cut -d: -f3
+# Default 999 works on most Linux installs. Set it in .env if yours differs.
+services:
+  api:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:-999}"
+    environment:
+      VOXINT_SERVICE_CONTROL: docker
