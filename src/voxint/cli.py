@@ -464,16 +464,36 @@ def _restart(args: argparse.Namespace) -> int:
                 print("error: run is archived -- unarchive it first")
                 return 2
             impact = restart_impact(session, run_id, from_stage=parsed_stage)
-            if impact.has_blockers:
+            if impact.requires_void and not args.acknowledge_void:
+                parts: list[str] = []
+                if impact.segment_scope_decisions > 0:
+                    parts.append(
+                        f"{impact.segment_scope_decisions} segment/word-range"
+                        " adjudication decision(s)"
+                    )
+                if impact.enrichment_evidence > 0:
+                    parts.append(f"{impact.enrichment_evidence} enrichment evidence row(s)")
+                if impact.derived_embeddings > 0:
+                    parts.append(f"{impact.derived_embeddings} derived speaker embedding(s)")
+                detail = ", ".join(parts)
                 print(
-                    "error: cannot restart: "
-                    f"{impact.segment_scope_decisions} segment/word-range adjudication "
-                    f"decision(s) and {impact.enrichment_evidence} enrichment evidence "
-                    "row(s) reference transcript segments that would be deleted. "
-                    "These rows are append-only. Submit the media item as a new run instead."
+                    f"warning: restart will void all adjudication decisions,"
+                    f" detach {detail}, and delete derived speaker embeddings."
                 )
-                return 2
-            if impact.label_scope_decisions > 0 and not args.acknowledge_label_risk:
+                if args.yes:
+                    print("error: pass --acknowledge-void to acknowledge")
+                    return 2
+                try:
+                    if input("Proceed? [y/N] ").strip().lower() not in {"y", "yes"}:
+                        return 2
+                except EOFError:
+                    return 2
+                args.acknowledge_void = True
+            if (
+                impact.label_scope_decisions > 0
+                and not args.acknowledge_void
+                and not args.acknowledge_label_risk
+            ):
                 print(
                     f"warning: {impact.label_scope_decisions} label-scope adjudication "
                     "decision(s) exist. Re-diarization may reassign speaker labels, "
@@ -504,6 +524,7 @@ def _restart(args: argparse.Namespace) -> int:
                 from_stage=parsed_stage,
                 expected_revision=run.revision,
                 acknowledge_label_risk=args.acknowledge_label_risk,
+                acknowledge_void=args.acknowledge_void,
             )
     except (
         IngestError,
@@ -571,7 +592,11 @@ def _restart_bulk(args: argparse.Namespace) -> int:
             return 0
         if args.dry_run:
             return _restart_bulk_dry_run(
-                candidates, factory, parsed_stage, args.acknowledge_label_risk
+                candidates,
+                factory,
+                parsed_stage,
+                args.acknowledge_label_risk,
+                args.acknowledge_void,
             )
         if not args.yes:
             desc = f"from {stage_label}" if parsed_stage else "(full restart)"
@@ -583,7 +608,13 @@ def _restart_bulk(args: argparse.Namespace) -> int:
                     return 2
             except EOFError:
                 return 2
-        return _restart_bulk_execute(candidates, factory, parsed_stage, args.acknowledge_label_risk)
+        return _restart_bulk_execute(
+            candidates,
+            factory,
+            parsed_stage,
+            args.acknowledge_label_risk,
+            args.acknowledge_void,
+        )
     finally:
         engine.dispose()
 
@@ -593,6 +624,7 @@ def _restart_bulk_dry_run(
     factory: "sessionmaker[Session]",
     from_stage: "Stage | None",
     acknowledge_label_risk: bool,
+    acknowledge_void: bool,
 ) -> int:
     from voxint.db.models import PipelineRun, RunStatus
     from voxint.db.session import session_scope
@@ -600,7 +632,7 @@ def _restart_bulk_dry_run(
 
     _RESTART_OK = {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
     stage_label = from_stage.value if from_stage else "acquire"
-    counts = {"restart_ready": 0, "blocked": 0, "label_risk": 0, "ineligible": 0}
+    counts = {"restart_ready": 0, "void_required": 0, "label_risk": 0, "ineligible": 0}
     for run_id, _revision in candidates:
         with session_scope(factory) as session:
             run = session.get(PipelineRun, run_id)
@@ -609,20 +641,23 @@ def _restart_bulk_dry_run(
                 counts["ineligible"] += 1
                 continue
             impact = restart_impact(session, run_id, from_stage=from_stage)
-        if impact.has_blockers:
+        if impact.requires_void and not acknowledge_void:
             print(
-                f"{run_id}: blocked ({impact.segment_scope_decisions} segment"
-                f" decisions, {impact.enrichment_evidence} enrichment rows)"
+                f"{run_id}: void-required ({impact.segment_scope_decisions} segment"
+                f" decisions, {impact.enrichment_evidence} enrichment rows,"
+                f" {impact.derived_embeddings} embeddings)"
             )
-            counts["blocked"] += 1
-        elif impact.label_scope_decisions > 0 and not acknowledge_label_risk:
+            counts["void_required"] += 1
+        elif (
+            impact.label_scope_decisions > 0 and not acknowledge_void and not acknowledge_label_risk
+        ):
             print(f"{run_id}: label-risk ({impact.label_scope_decisions} label decisions)")
             counts["label_risk"] += 1
         else:
             print(f"{run_id}: restart-ready (from {stage_label})")
             counts["restart_ready"] += 1
     print(
-        f"\n{counts['restart_ready']} restart-ready, {counts['blocked']} blocked,"
+        f"\n{counts['restart_ready']} restart-ready, {counts['void_required']} void-required,"
         f" {counts['label_risk']} label-risk, {counts['ineligible']} ineligible"
     )
     return 0
@@ -633,6 +668,7 @@ def _restart_bulk_execute(
     factory: "sessionmaker[Session]",
     from_stage: "Stage | None",
     acknowledge_label_risk: bool,
+    acknowledge_void: bool,
 ) -> int:
     from sqlalchemy.exc import SQLAlchemyError
 
@@ -663,11 +699,18 @@ def _restart_bulk_execute(
                     print(f"{run_id}: skipped (no longer eligible)", file=sys.stderr)
                     continue
                 impact = restart_impact(session, run_id, from_stage=from_stage)
-                if impact.has_blockers:
+                if impact.requires_void and not acknowledge_void:
                     blocked += 1
-                    print(f"{run_id}: skipped (blocked)", file=sys.stderr)
+                    print(
+                        f"{run_id}: skipped (void-required, pass --acknowledge-void)",
+                        file=sys.stderr,
+                    )
                     continue
-                if impact.label_scope_decisions > 0 and not acknowledge_label_risk:
+                if (
+                    impact.label_scope_decisions > 0
+                    and not acknowledge_void
+                    and not acknowledge_label_risk
+                ):
                     label_risk_skipped += 1
                     print(
                         f"{run_id}: skipped (label-risk, pass --acknowledge-label-risk)",
@@ -680,6 +723,7 @@ def _restart_bulk_execute(
                     from_stage=from_stage,
                     expected_revision=revision,
                     acknowledge_label_risk=acknowledge_label_risk,
+                    acknowledge_void=acknowledge_void,
                 )
             restarted_ids.append(run_id)
         except StaleRevisionError:
@@ -2790,6 +2834,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--acknowledge-label-risk",
         action="store_true",
         help="acknowledge that label-scope rulings may apply to different voices",
+    )
+    restart_p.add_argument(
+        "--acknowledge-void",
+        action="store_true",
+        help="acknowledge voiding all adjudication decisions and detaching evidence",
     )
     restart_p.add_argument("--yes", "-y", action="store_true", help="skip the confirmation prompt")
     restart_p.set_defaults(fn=_restart)

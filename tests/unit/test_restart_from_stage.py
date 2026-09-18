@@ -18,8 +18,8 @@ from voxint.db.models import RunStatus, Stage
 from voxint.ingest.service import (
     RestartImpact,
     RestartPrerequisiteError,
-    RunRestartBlockedError,
     RunRestartLabelRiskError,
+    RunRestartVoidRequiredError,
     _eager_invalidate_downstream,
     _validate_prerequisites,
     restart_impact,
@@ -39,18 +39,24 @@ class TestRestartImpactStageAware:
         label_scope: int = 0,
         segment_scope: int = 0,
         evidence: int = 0,
+        derived_embeddings: int = 0,
     ) -> MagicMock:
         """Return a mock session whose scalar() returns the given counts in
         the order restart_impact queries them."""
         session = MagicMock()
-        session.scalar.side_effect = [label_scope, segment_scope, evidence]
+        session.scalar.side_effect = [
+            label_scope,
+            segment_scope,
+            evidence,
+            derived_embeddings,
+        ]
         return session
 
     def test_enhance_match_always_clean(self) -> None:
         session = self._session_with_counts(label_scope=5, segment_scope=3, evidence=2)
         impact = restart_impact(session, uuid.uuid4(), from_stage=Stage.ENHANCE_MATCH)
         assert impact == RestartImpact(0, 0, 0)
-        assert not impact.has_blockers
+        assert not impact.requires_void
         session.scalar.assert_not_called()
 
     def test_finalize_always_clean(self) -> None:
@@ -66,7 +72,7 @@ class TestRestartImpactStageAware:
         assert impact.label_scope_decisions == 7
         assert impact.segment_scope_decisions == 0
         assert impact.enrichment_evidence == 0
-        assert not impact.has_blockers
+        assert not impact.requires_void
 
     def test_diarize_embed_zero_labels(self) -> None:
         session = MagicMock()
@@ -74,23 +80,28 @@ class TestRestartImpactStageAware:
         impact = restart_impact(session, uuid.uuid4(), from_stage=Stage.DIARIZE_EMBED)
         assert impact == RestartImpact(0, 0, 0)
 
-    def test_transcribe_full_blockers(self) -> None:
-        session = self._session_with_counts(label_scope=2, segment_scope=3, evidence=1)
+    def test_transcribe_full_counts(self) -> None:
+        session = self._session_with_counts(
+            label_scope=2,
+            segment_scope=3,
+            evidence=1,
+            derived_embeddings=1,
+        )
         impact = restart_impact(session, uuid.uuid4(), from_stage=Stage.TRANSCRIBE)
         assert impact.label_scope_decisions == 2
         assert impact.segment_scope_decisions == 3
         assert impact.enrichment_evidence == 1
-        assert impact.has_blockers
+        assert impact.requires_void
 
-    def test_prepare_full_blockers(self) -> None:
+    def test_prepare_requires_void(self) -> None:
         session = self._session_with_counts(label_scope=0, segment_scope=5, evidence=0)
         impact = restart_impact(session, uuid.uuid4(), from_stage=Stage.PREPARE)
-        assert impact.has_blockers
+        assert impact.requires_void
 
-    def test_acquire_full_blockers(self) -> None:
+    def test_acquire_requires_void(self) -> None:
         session = self._session_with_counts(label_scope=0, segment_scope=0, evidence=3)
         impact = restart_impact(session, uuid.uuid4(), from_stage=Stage.ACQUIRE)
-        assert impact.has_blockers
+        assert impact.requires_void
 
     def test_none_from_stage_is_full_restart(self) -> None:
         session = self._session_with_counts(label_scope=1, segment_scope=2, evidence=3)
@@ -105,6 +116,8 @@ class TestRestartImpactStageAware:
 # ---------------------------------------------------------------------------
 
 
+@patch("voxint.ingest.service._invalidate_run_embeddings", return_value=0)
+@patch("voxint.ingest.service._void_run_decisions", return_value=0)
 class TestEagerInvalidateDownstream:
     """Verify the right delete/update statements are issued per stage."""
 
@@ -116,46 +129,67 @@ class TestEagerInvalidateDownstream:
     def _execute_count(self, session: MagicMock) -> int:
         return session.execute.call_count
 
-    def test_finalize_clears_only_review_claims(self) -> None:
+    def test_finalize_clears_only_review_claims(
+        self,
+        mock_void: MagicMock,
+        mock_inv: MagicMock,
+    ) -> None:
         session = self._make_session()
         _eager_invalidate_downstream(session, uuid.uuid4(), Stage.FINALIZE)
-        # Only the review-claim clear + flush
         assert self._execute_count(session) == 1
         session.flush.assert_called_once()
 
-    def test_enhance_match_clears_enhancement_and_match(self) -> None:
+    def test_enhance_match_clears_enhancement_and_match(
+        self,
+        mock_void: MagicMock,
+        mock_inv: MagicMock,
+    ) -> None:
         session = self._make_session()
         _eager_invalidate_downstream(session, uuid.uuid4(), Stage.ENHANCE_MATCH)
-        # enhanced_text update + speaker_assignments delete + match_candidates delete
-        # + review claim clear = 4
         assert self._execute_count(session) == 4
         session.flush.assert_called_once()
 
-    def test_diarize_embed_includes_enhance_match(self) -> None:
+    def test_diarize_embed_includes_enhance_match(
+        self,
+        mock_void: MagicMock,
+        mock_inv: MagicMock,
+    ) -> None:
         session = self._make_session()
         _eager_invalidate_downstream(session, uuid.uuid4(), Stage.DIARIZE_EMBED)
-        # enhance_match (3) + synthdetect delete + turns delete + label null + review claim = 7
         assert self._execute_count(session) == 7
 
-    def test_transcribe_includes_diarize(self) -> None:
+    def test_transcribe_includes_diarize(
+        self,
+        mock_void: MagicMock,
+        mock_inv: MagicMock,
+    ) -> None:
         session = self._make_session()
         _eager_invalidate_downstream(session, uuid.uuid4(), Stage.TRANSCRIBE)
         # Segments will be deleted, so enhancement UPDATE and label-null UPDATE
         # are skipped. assignments delete + candidates delete + synthdetect delete
         # + turns delete + segments delete + run metadata clear + review claim = 7
         assert self._execute_count(session) == 7
+        mock_void.assert_called_once()
+        mock_inv.assert_called_once()
 
-    def test_prepare_includes_transcribe(self) -> None:
+    def test_prepare_includes_transcribe(
+        self,
+        mock_void: MagicMock,
+        mock_inv: MagicMock,
+    ) -> None:
         session = self._make_session()
         _eager_invalidate_downstream(session, uuid.uuid4(), Stage.PREPARE)
         # transcribe (6) + artifacts delete + chunks delete + review claim = 9
         assert self._execute_count(session) == 9
 
-    def test_acquire_same_as_prepare(self) -> None:
+    def test_acquire_same_as_prepare(
+        self,
+        mock_void: MagicMock,
+        mock_inv: MagicMock,
+    ) -> None:
         session = self._make_session()
         rid = uuid.uuid4()
         _eager_invalidate_downstream(session, rid, Stage.ACQUIRE)
-        # ACQUIRE has no extra outputs beyond PREPARE
         session_p = self._make_session()
         _eager_invalidate_downstream(session_p, rid, Stage.PREPARE)
         assert self._execute_count(session) == self._execute_count(session_p)
@@ -355,7 +389,7 @@ class TestRestartRunFromStage:
         run = self._mock_run()
         session.get.return_value = run
 
-        with pytest.raises(RunRestartBlockedError):
+        with pytest.raises(RunRestartVoidRequiredError):
             restart_run(session, run.id, from_stage=Stage.TRANSCRIBE)
 
     @patch("voxint.ingest.service._eager_invalidate_downstream")
@@ -448,6 +482,89 @@ class TestRestartRunFromStage:
         restart_run(session, run.id, from_stage=None)
         mock_invalidate.assert_called_once_with(session, run.id, Stage.ACQUIRE)
 
+    @patch("voxint.ingest.service._eager_invalidate_downstream")
+    @patch("voxint.ingest.service._validate_prerequisites")
+    @patch("voxint.ingest.service.restart_impact")
+    def test_void_required_without_ack_raises(
+        self,
+        mock_impact: MagicMock,
+        mock_prereq: MagicMock,
+        mock_invalidate: MagicMock,
+    ) -> None:
+        mock_impact.return_value = RestartImpact(
+            label_scope_decisions=2,
+            segment_scope_decisions=5,
+            enrichment_evidence=1,
+        )
+        session = MagicMock()
+        run = self._mock_run()
+        session.get.return_value = run
+
+        with pytest.raises(RunRestartVoidRequiredError):
+            restart_run(session, run.id, from_stage=Stage.TRANSCRIBE)
+        mock_invalidate.assert_not_called()
+
+    @patch("voxint.ingest.service._eager_invalidate_downstream")
+    @patch("voxint.ingest.service._validate_prerequisites")
+    @patch("voxint.ingest.service.restart_impact")
+    @patch("voxint.ingest.service.cas_update_run")
+    def test_void_required_with_ack_proceeds(
+        self,
+        mock_cas: MagicMock,
+        mock_impact: MagicMock,
+        mock_prereq: MagicMock,
+        mock_invalidate: MagicMock,
+    ) -> None:
+        mock_impact.return_value = RestartImpact(
+            label_scope_decisions=2,
+            segment_scope_decisions=5,
+            enrichment_evidence=1,
+        )
+        mock_cas.return_value = MagicMock()
+        session = MagicMock()
+        run = self._mock_run()
+        session.get.return_value = run
+
+        restart_run(
+            session,
+            run.id,
+            from_stage=Stage.TRANSCRIBE,
+            acknowledge_void=True,
+        )
+        mock_cas.assert_called_once()
+        mock_invalidate.assert_called_once()
+
+    @patch("voxint.ingest.service._eager_invalidate_downstream")
+    @patch("voxint.ingest.service._validate_prerequisites")
+    @patch("voxint.ingest.service.restart_impact")
+    @patch("voxint.ingest.service.cas_update_run")
+    def test_void_subsumes_label_risk(
+        self,
+        mock_cas: MagicMock,
+        mock_impact: MagicMock,
+        mock_prereq: MagicMock,
+        mock_invalidate: MagicMock,
+    ) -> None:
+        """When acknowledge_void is set, label risk is subsumed."""
+        mock_impact.return_value = RestartImpact(
+            label_scope_decisions=5,
+            segment_scope_decisions=3,
+            enrichment_evidence=1,
+        )
+        mock_cas.return_value = MagicMock()
+        session = MagicMock()
+        run = self._mock_run()
+        session.get.return_value = run
+
+        restart_run(
+            session,
+            run.id,
+            from_stage=Stage.TRANSCRIBE,
+            acknowledge_void=True,
+            acknowledge_label_risk=False,
+        )
+        mock_cas.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # RestartPrerequisiteError shape
@@ -490,7 +607,7 @@ def test_post_segment_stages_have_no_blockers(from_stage: Stage) -> None:
     session = MagicMock()
     impact = restart_impact(session, uuid.uuid4(), from_stage=from_stage)
     assert impact == RestartImpact(0, 0, 0)
-    assert not impact.has_blockers
+    assert not impact.requires_void
 
 
 @pytest.mark.parametrize(
@@ -498,14 +615,15 @@ def test_post_segment_stages_have_no_blockers(from_stage: Stage) -> None:
     [Stage.ACQUIRE, Stage.PREPARE, Stage.TRANSCRIBE],
     ids=["acquire", "prepare", "transcribe"],
 )
-def test_pre_diarize_stages_query_all_three_counts(from_stage: Stage) -> None:
+def test_pre_diarize_stages_query_all_counts(from_stage: Stage) -> None:
     session = MagicMock()
-    session.scalar.side_effect = [1, 2, 3]
+    session.scalar.side_effect = [1, 2, 3, 4]
     impact = restart_impact(session, uuid.uuid4(), from_stage=from_stage)
     assert impact.label_scope_decisions == 1
     assert impact.segment_scope_decisions == 2
     assert impact.enrichment_evidence == 3
-    assert session.scalar.call_count == 3
+    assert impact.derived_embeddings == 4
+    assert session.scalar.call_count == 4
 
 
 # ---------------------------------------------------------------------------
@@ -520,7 +638,7 @@ class TestRestartStageProfiles:
         profiles = restart_stage_profiles(RestartImpact(0, 0, 0))
         for profile in profiles:
             assert profile["safe"] is True
-            assert profile["blocked"] is False
+            assert profile["requires_void"] is False
             assert profile["label_risk"] is False
             assert profile["label_count"] == 0
 
@@ -529,12 +647,12 @@ class TestRestartStageProfiles:
 
         profiles = restart_stage_profiles(RestartImpact(3, 0, 0))
         for profile in profiles[:4]:
-            assert profile["blocked"] is False
+            assert profile["requires_void"] is False
             assert profile["label_risk"] is True
             assert profile["label_count"] == 3
             assert profile["safe"] is False
         for profile in profiles[4:]:
-            assert profile["blocked"] is False
+            assert profile["requires_void"] is False
             assert profile["label_risk"] is False
             assert profile["label_count"] == 0
             assert profile["safe"] is True
@@ -544,16 +662,16 @@ class TestRestartStageProfiles:
 
         profiles = restart_stage_profiles(RestartImpact(2, 5, 1))
         for profile in profiles[:3]:
-            assert profile["blocked"] is True
+            assert profile["requires_void"] is True
             assert profile["label_risk"] is False
             assert profile["label_count"] == 2
             assert profile["safe"] is False
-        assert profiles[3]["blocked"] is False
+        assert profiles[3]["requires_void"] is False
         assert profiles[3]["label_risk"] is True
         assert profiles[3]["label_count"] == 2
         assert profiles[3]["safe"] is False
         for profile in profiles[4:]:
-            assert profile["blocked"] is False
+            assert profile["requires_void"] is False
             assert profile["label_risk"] is False
             assert profile["label_count"] == 0
             assert profile["safe"] is True
@@ -568,7 +686,7 @@ class TestRestartStageProfiles:
             assert set(profile) == {
                 "stage",
                 "label",
-                "blocked",
+                "requires_void",
                 "label_risk",
                 "label_count",
                 "safe",
@@ -647,7 +765,7 @@ class TestRestartCLI:
         mock_restart.assert_not_called()
         mock_publish.assert_not_called()
 
-    def test_restart_cli_blocked(
+    def test_restart_cli_void_required(
         self,
         mock_publish: MagicMock,
         mock_restart: MagicMock,
@@ -666,7 +784,7 @@ class TestRestartCLI:
 
         mock_impact.return_value = RestartImpact(2, 5, 1)
         assert _parse_and_run("restart", str(run_id), "--yes") == 2
-        assert "cannot restart" in capsys.readouterr().out
+        assert "--acknowledge-void" in capsys.readouterr().out
         mock_impact.assert_called_once_with(session, run_id, from_stage=None)
         mock_restart.assert_not_called()
         mock_publish.assert_not_called()
@@ -706,6 +824,7 @@ class TestRestartCLI:
             from_stage=None,
             expected_revision=1,
             acknowledge_label_risk=False,
+            acknowledge_void=False,
         )
         mock_publish.assert_called_once_with(run_id, stage=None)
 
@@ -744,6 +863,7 @@ class TestRestartCLI:
             from_stage=Stage.ENHANCE_MATCH,
             expected_revision=1,
             acknowledge_label_risk=False,
+            acknowledge_void=False,
         )
         mock_publish.assert_called_once_with(run_id, stage=Stage.ENHANCE_MATCH)
 
@@ -840,5 +960,6 @@ class TestRestartCLI:
             from_stage=None,
             expected_revision=1,
             acknowledge_label_risk=True,
+            acknowledge_void=False,
         )
         mock_publish.assert_called_once_with(run_id, stage=None)
