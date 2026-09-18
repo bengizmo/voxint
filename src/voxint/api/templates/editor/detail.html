@@ -65,19 +65,8 @@
     </dl>
     {% set restartable = selected_run.status in ('completed', 'failed', 'cancelled') and not selected_run.archived_at %}
     {% if restartable and csrf_restart %}
-    {% set full_blocked = restart_impact and restart_impact.has_blockers %}
-    {% set full_label_risk = restart_impact and restart_impact.label_scope_decisions > 0 and not restart_impact.has_blockers %}
-    {% if full_blocked %}
-    <div class="mt-2">
-      <button type="button" class="text-sm" disabled>
-        {% if selected_run.status == 'failed' %}Retry{% else %}Re-run{% endif %}
-      </button>
-      <span class="text-sm notice-warn">Blocked:
-        {{ restart_impact.segment_scope_decisions }} segment-scope ruling(s) and
-        {{ restart_impact.enrichment_evidence }} enrichment evidence row(s)
-        prevent restart. Submit as a new run instead.</span>
-    </div>
-    {% else %}
+    {% set full_requires_void = restart_impact and restart_impact.requires_void %}
+    {% set full_label_risk = restart_impact and restart_impact.label_scope_decisions > 0 and not full_requires_void %}
     <form method="post" action="/runs/{{ selected_run.id }}/restart" class="mt-2"
           id="editor-restart-form">
       <input type="hidden" name="revision" value="{{ selected_run.revision }}">
@@ -85,18 +74,17 @@
       <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap">
         <select name="from_stage" id="editor-restart-stage" class="text-sm">
           <option value=""
-            data-blocked="false"
+            data-requires-void="{{ full_requires_void|tojson }}"
             data-label-risk="{{ full_label_risk|tojson }}"
             data-label-count="{{ restart_impact.label_scope_decisions if restart_impact else 0 }}"
-            >All stages{% if full_label_risk %} (label risk){% endif %}</option>
+            >All stages{% if full_requires_void %} (void required){% elif full_label_risk %} (label risk){% endif %}</option>
           {% if restart_stages %}
           {% for sp in restart_stages %}
           <option value="{{ sp.stage }}"
-            {% if sp.blocked %}disabled{% endif %}
-            data-blocked="{{ sp.blocked|tojson }}"
+            data-requires-void="{{ sp.requires_void|tojson }}"
             data-label-risk="{{ sp.label_risk|tojson }}"
             data-label-count="{{ sp.label_count }}">
-            {{ sp.label }}{% if sp.blocked %} (blocked){% endif %}
+            {{ sp.label }}{% if sp.requires_void %} (void required){% elif sp.label_risk %} (label risk){% endif %}
           </option>
           {% endfor %}
           {% endif %}
@@ -105,6 +93,25 @@
           {% if selected_run.status == 'failed' %}Retry{% else %}Re-run{% endif %}
         </button>
       </div>
+      {% if full_requires_void %}
+      <div id="editor-restart-void-warn" class="notice-warn text-sm" style="margin-top: 0.25em">
+        <label>
+          <input type="checkbox" name="acknowledge_void" value="true"
+                 id="editor-restart-void-ack" required>
+          <span id="editor-restart-void-msg">All decisions will be voided,
+            {{ restart_impact.segment_scope_decisions }} segment ruling(s) and
+            {{ restart_impact.enrichment_evidence }} evidence row(s) detached,
+            {{ restart_impact.derived_embeddings }} embedding(s) deleted.</span>
+        </label>
+      </div>
+      {% else %}
+      <div id="editor-restart-void-warn" class="notice-warn text-sm" style="margin-top: 0.25em; display: none">
+        <label>
+          <input type="checkbox" name="acknowledge_void" value="true" id="editor-restart-void-ack">
+          <span id="editor-restart-void-msg"></span>
+        </label>
+      </div>
+      {% endif %}
       {% if full_label_risk %}
       <div id="editor-restart-warn" class="notice-warn text-sm" style="margin-top: 0.25em">
         <label>
@@ -127,24 +134,37 @@
     (function() {
       var sel = document.getElementById('editor-restart-stage');
       var btn = document.getElementById('editor-restart-btn');
+      var voidDiv = document.getElementById('editor-restart-void-warn');
+      var voidBox = document.getElementById('editor-restart-void-ack');
       var warnDiv = document.getElementById('editor-restart-warn');
       var ackBox = document.getElementById('editor-restart-ack');
       var msg = document.getElementById('editor-restart-msg');
       var form = document.getElementById('editor-restart-form');
       function update() {
         var opt = sel.options[sel.selectedIndex];
-        var blocked = opt.dataset.blocked === 'true';
+        var requiresVoid = opt.dataset.requiresVoid === 'true';
         var labelRisk = opt.dataset.labelRisk === 'true';
         var labelCount = parseInt(opt.dataset.labelCount || '0', 10);
-        btn.disabled = blocked;
-        if (labelRisk) {
-          warnDiv.style.display = '';
-          ackBox.required = true;
-          msg.textContent = labelCount + ' speaker ruling(s) may apply to different voices after re-processing.';
-        } else {
+        btn.disabled = false;
+        if (requiresVoid) {
+          voidDiv.style.display = '';
+          voidBox.required = true;
           warnDiv.style.display = 'none';
           ackBox.required = false;
           ackBox.checked = false;
+        } else {
+          voidDiv.style.display = 'none';
+          voidBox.required = false;
+          voidBox.checked = false;
+          if (labelRisk) {
+            warnDiv.style.display = '';
+            ackBox.required = true;
+            msg.textContent = labelCount + ' speaker ruling(s) may apply to different voices after re-processing.';
+          } else {
+            warnDiv.style.display = 'none';
+            ackBox.required = false;
+            ackBox.checked = false;
+          }
         }
       }
       sel.addEventListener('change', update);
@@ -157,7 +177,6 @@
       });
     })();
     </script>
-    {% endif %}
     {% endif %}
     <p class="mt-1"><a href="/runs/{{ selected_run.id }}" class="text-sm">Run details</a></p>
     {% endif %}

@@ -7,12 +7,27 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Provenance-preserving reprocessing (#507).** Runs with adjudication
+  decisions or enrichment evidence can now be restarted from stages that
+  delete transcript segments (ACQUIRE, PREPARE, TRANSCRIBE). Previously these
+  runs were hard-blocked. On restart, all adjudication decisions are
+  auto-voided via the existing REVOKE mechanism, derived speaker embeddings
+  are deleted, and the FK SET NULL cascade detaches transcript-segment
+  references on decision and evidence rows. Detached rows retain their
+  original scope in `original_transcript_segment_id` and
+  `original_start_word_index`/`original_end_word_index` provenance columns
+  for audit. The append-only trigger is narrowed to allow only this specific
+  detach path, with a void-before-detach invariant enforced at the database
+  level. `restart_impact` now excludes already-voided decisions from counts.
+  The CLI gains `--acknowledge-void`; the web UI shows a void-acknowledgement
+  checkbox when restarting from a segment-deleting stage.
 - **Restart from stage (#506).** Terminal runs can now be restarted from any
   pipeline stage, not just ACQUIRE. Upstream outputs are preserved; downstream
   outputs are eagerly deleted in the same transaction. A stage-aware blocker
   matrix gates the restart: ENHANCE_MATCH and FINALIZE are safe for all runs
   (no blockers), DIARIZE_EMBED preserves segments but warns about label-scope
-  risk, and ACQUIRE through TRANSCRIBE retain full adjudication blockers.
+  risk, and ACQUIRE through TRANSCRIBE require void acknowledgement when
+  adjudication decisions or enrichment evidence exist (see #507).
   Prerequisite validation checks that upstream outputs exist before queuing.
   Each restart bumps `processing_cycle` so retry budgets reset. The run-detail
   and editor pages show a **stage selector dropdown** next to the restart
