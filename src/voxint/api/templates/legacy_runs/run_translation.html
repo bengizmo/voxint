@@ -1,3 +1,4 @@
+{% from "fragments/_chips.html" import chip, needs_review_chip %}
 {# One run's translation block (issue #133): current generation(s) with
    freshness, plus generation controls. Included on the run detail page AND
    served standalone by GET /runs/{id}/translation — the div re-polls itself
@@ -40,7 +41,7 @@ working rendition, not a certified translation.</p>
 {% for entry in translation_state.translations %}
 <details class="run-translation" open>
   <summary>{{ language_label(entry.translation.target_language) }}
-    {%- if entry.stale %} <span class="pill failed">out of date</span>{% endif %}
+    {%- if entry.stale %} {{ chip("out of date") }}{% endif %}
   </summary>
   {% if entry.stale %}
   <p class="muted">The transcript changed since this translation was generated —

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "fragments/_chips.html" import chip, needs_review_chip %}
 {% block title %}Voxint — {{ plugin.name }}{% endblock %}
 {% block body %}
 {# Console 2.0 P6 per-plugin page (issue #161): a plugin's identity, gate state,
@@ -14,8 +15,7 @@
 <dl>
   <dt>Id</dt><dd><code>{{ plugin.plugin_id }}</code></dd>
   <dt>State</dt>
-  <dd><span class="pill {{ "ready" if plugin.enabled else "unverified" }}">
-    {{ "on" if plugin.enabled else "off" }}</span></dd>
+  <dd>{{ chip("enabled" if plugin.enabled else "disabled") }}</dd>
   <dt>Description</dt><dd>{{ plugin.description }}</dd>
 </dl>
 {% for w in plugin.warnings %}

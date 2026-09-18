@@ -1,3 +1,4 @@
+{% from "fragments/_chips.html" import chip, needs_review_chip %}
 {# One run's asset block (issue #41): per-kind current asset + generation
    controls. Included on the run detail page AND served standalone by
    GET /runs/{id}/assets — the div re-polls itself only while a job is
@@ -32,8 +33,8 @@ starting point, not a verified record.</p>
 {% for entry in assets.kinds %}
 <details class="run-asset" {% if entry.asset or entry.job %}open{% endif %}>
   <summary>{{ entry.title }}
-    {%- if entry.stale %} <span class="pill failed">stale</span>{% endif %}
-    {%- if entry.job_active %} <span class="pill running">{{ entry.job.status }}</span>{% endif %}
+    {%- if entry.stale %} {{ chip("out of date") }}{% endif %}
+    {%- if entry.job_active %} {{ chip(entry.job.status) }}{% endif %}
   </summary>
 
   {% if entry.job and not entry.job_active and entry.job.status != "succeeded" %}
@@ -96,7 +97,7 @@ starting point, not a verified record.</p>
     Generated {{ entry.asset.completed_at.strftime("%Y-%m-%d %H:%M") }}
     · {{ entry.asset.model }} · generation {{ entry.asset.generation }}
     {% if entry.asset.config and entry.asset.config.truncated %}
-    · <span class="pill">input truncated</span>
+    · <span class="pill">Input truncated</span>
     {% endif %}
     {% if entry.stale %}
     <br>The transcript or metadata changed since this was generated — regenerate to refresh.

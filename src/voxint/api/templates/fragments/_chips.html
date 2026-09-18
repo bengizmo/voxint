@@ -15,17 +15,38 @@
   "verified by you": ("chip-ok",     "✓ verified by you"),
   "reviewed":       ("chip-ok",      "✓ reviewed"),
   "all reviewed":   ("chip-ok",      "✓ all reviewed"),
-  "done":           ("chip-ok",      "done"),
+  "done":           ("chip-ok",      "Done"),
   "transcribing":   ("chip-info",    none),
-  "needs review":   ("chip-warn",    "needs review"),
-  "needs you":      ("chip-warn",    "needs review"),
-  "need you":       ("chip-warn",    "needs review"),
-  "failed":         ("chip-danger",  "failed"),
-  "active":         ("chip-ok",      "active"),
-  "archived":       ("chip-neutral", "archived"),
-  "watched":        ("chip-neutral", "watched"),
+  "needs review":   ("chip-warn",    "Needs review"),
+  "needs you":      ("chip-warn",    "Needs review"),
+  "need you":       ("chip-warn",    "Needs review"),
+  "failed":         ("chip-danger",  "Failed"),
+  "active":         ("chip-ok",      "Active"),
+  "archived":       ("chip-neutral", "Archived"),
+  "watched":        ("chip-neutral", "Watched"),
   "learned":        ("chip-info",    none),
-  "unknown":        ("chip-neutral", "unknown"),
+  "unknown":        ("chip-neutral", "Unknown"),
+  "completed": ("chip-ok", "Completed"),
+  "succeeded": ("chip-ok", "Completed"),
+  "ready": ("chip-ok", "Ready"),
+  "requeued": ("chip-ok", "Requeued"),
+  "running": ("chip-info", "Running"),
+  "working": ("chip-info", "Working"),
+  "busy": ("chip-info", "Busy"),
+  "queued": ("chip-neutral", "Queued"),
+  "awaiting_adjudication": ("chip-warn", "Needs review"),
+  "awaiting adjudication": ("chip-warn", "Needs review"),
+  "cancelled": ("chip-neutral", "Cancelled"),
+  "skipped": ("chip-neutral", "Skipped"),
+  "idle": ("chip-neutral", "Idle"),
+  "no speakers": ("chip-neutral", "No speakers"),
+  "paused": ("chip-warn", "Paused"),
+  "unverified": ("chip-warn", "Unverified"),
+  "restart pending": ("chip-warn", "Restart pending"),
+  "disabled": ("chip-warn", "Disabled"),
+  "enabled": ("chip-ok", "Enabled"),
+  "interrupted": ("chip-warn", "Interrupted"),
+  "out of date": ("chip-danger", "Out of date"),
 } %}
 
 {# Count-inflected "needs review" chip. Owns BOTH the inflection and the warn
@@ -36,7 +57,8 @@
 {%- endmacro %}
 
 {% macro chip(label, extra_class="") -%}
-{%- set key = label.split()[0] if label.split()[0] in ["transcribing", "learned"] else label.lower().rstrip("s") if label.lower().rstrip("s") in CHIP_MAP else label.lower() -%}
+{%- set parts = label.split() -%}
+{%- set key = parts[0]|lower if parts and parts[0]|lower in ["transcribing", "learned"] else label.lower() -%}
 {%- set entry = CHIP_MAP.get(key, ("chip-neutral", none)) -%}
 <span class="chip {{ entry[0] }} {{ extra_class }}">{{ entry[1] or label }}</span>
 {%- endmacro %}

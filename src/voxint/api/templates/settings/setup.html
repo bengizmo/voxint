@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "fragments/_chips.html" import chip, needs_review_chip %}
 {% set labels = {
   "welcome": "Welcome",
   "media": "Media folders",
@@ -144,7 +145,7 @@
      <strong>unverified</strong> means an optional feature couldn't be confirmed:</p>
   {% for check in doctor_checks %}
   <div class="svc">
-    <span class="pill {{ check.state }}">{{ check.state }}</span>
+    {{ chip(check.state) }}
     <strong>{{ check.name }}</strong>
     <span class="muted">{{ check.detail }}</span>
   </div>
