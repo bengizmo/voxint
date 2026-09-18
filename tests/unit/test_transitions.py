@@ -13,8 +13,16 @@ from voxint.pipeline.transitions import (
 )
 
 
-def snap(status: RunStatus, stage: Stage | None, revision: int = 0) -> RunSnapshot:
-    return RunSnapshot(id=uuid.uuid4(), status=status, current_stage=stage, revision=revision)
+def snap(
+    status: RunStatus, stage: Stage | None, revision: int = 0, processing_cycle: int = 1
+) -> RunSnapshot:
+    return RunSnapshot(
+        id=uuid.uuid4(),
+        status=status,
+        current_stage=stage,
+        revision=revision,
+        processing_cycle=processing_cycle,
+    )
 
 
 def test_stage_order_walk() -> None:
@@ -95,10 +103,9 @@ def test_failure_and_pause_keep_their_stage() -> None:
 
 def test_requeue_from_failed_keeps_stage_or_restarts() -> None:
     held = snap(RunStatus.FAILED, Stage.TRANSCRIBE)
-    validate_transition(held, RunStatus.QUEUED, Stage.TRANSCRIBE)
+    validate_transition(held, RunStatus.QUEUED, Stage.TRANSCRIBE)  # requeue
     validate_transition(held, RunStatus.QUEUED, None)  # restart from scratch
-    with pytest.raises(InvalidTransitionError):
-        validate_transition(held, RunStatus.QUEUED, Stage.FINALIZE)
+    validate_transition(held, RunStatus.QUEUED, Stage.FINALIZE)  # restart-from-stage
 
 
 def test_running_handoff_parks_at_exactly_next_stage() -> None:
@@ -171,18 +178,18 @@ def test_paused_cannot_go_directly_to_running() -> None:
         validate_transition(held, RunStatus.RUNNING, Stage.TRANSCRIBE)
 
 
-def test_restart_from_completed_clears_stage() -> None:
+def test_restart_from_completed_allows_any_stage() -> None:
     held = snap(RunStatus.COMPLETED, None)
-    validate_transition(held, RunStatus.QUEUED, None)
-    with pytest.raises(InvalidTransitionError):
-        validate_transition(held, RunStatus.QUEUED, Stage.ACQUIRE)
+    validate_transition(held, RunStatus.QUEUED, None)  # full restart
+    validate_transition(held, RunStatus.QUEUED, Stage.ACQUIRE)  # restart-from-stage
+    validate_transition(held, RunStatus.QUEUED, Stage.ENHANCE_MATCH)
 
 
-def test_restart_from_cancelled_clears_stage() -> None:
+def test_restart_from_cancelled_allows_any_stage() -> None:
     held = snap(RunStatus.CANCELLED, Stage.PREPARE)
-    validate_transition(held, RunStatus.QUEUED, None)
-    with pytest.raises(InvalidTransitionError):
-        validate_transition(held, RunStatus.QUEUED, Stage.PREPARE)
+    validate_transition(held, RunStatus.QUEUED, None)  # full restart
+    validate_transition(held, RunStatus.QUEUED, Stage.PREPARE)  # same stage
+    validate_transition(held, RunStatus.QUEUED, Stage.DIARIZE_EMBED)  # different stage
 
 
 def test_paused_has_entry_in_allowed() -> None:

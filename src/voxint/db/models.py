@@ -655,6 +655,9 @@ class PipelineRun(Base):
             "detected_language_probability IS NULL OR detected_language IS NOT NULL",
             name="pipeline_runs_detected_language_pairing_check",
         ),
+        CheckConstraint(
+            "processing_cycle >= 1", name="pipeline_runs_processing_cycle_nonneg_check"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -736,6 +739,7 @@ class PipelineRun(Base):
     # NULL, and also when the service forced a language or substituted a
     # fallback (no honest score exists for a detection that did not happen).
     detected_language_probability: Mapped[float | None] = mapped_column(Float)
+    processing_cycle: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -756,10 +760,17 @@ class StageRun(Base):
 
     __tablename__ = "stage_runs"
     __table_args__ = (
-        UniqueConstraint("pipeline_run_id", "stage", "attempt", name="stage_runs_attempt_key"),
+        UniqueConstraint(
+            "pipeline_run_id",
+            "stage",
+            "processing_cycle",
+            "attempt",
+            name="stage_runs_attempt_key",
+        ),
         CheckConstraint(f"stage IN ({_enum_values(Stage)})", name="stage_runs_stage_check"),
         CheckConstraint(f"status IN ({_enum_values(StageStatus)})", name="stage_runs_status_check"),
         CheckConstraint("attempt >= 1", name="stage_runs_attempt_positive_check"),
+        CheckConstraint("processing_cycle >= 1", name="stage_runs_processing_cycle_nonneg_check"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -767,6 +778,7 @@ class StageRun(Base):
     stage: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, default=StageStatus.RUNNING.value)
     attempt: Mapped[int] = mapped_column(Integer, default=1)
+    processing_cycle: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
     worker_id: Mapped[str | None] = mapped_column(Text)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -72,6 +72,7 @@ class RunSnapshot:
     status: RunStatus
     current_stage: Stage | None
     revision: int
+    processing_cycle: int = 1
 
 
 def snapshot(run: PipelineRun) -> RunSnapshot:
@@ -80,6 +81,7 @@ def snapshot(run: PipelineRun) -> RunSnapshot:
         status=RunStatus(run.status),
         current_stage=Stage(run.current_stage) if run.current_stage else None,
         revision=run.revision,
+        processing_cycle=run.processing_cycle,
     )
 
 
@@ -134,11 +136,17 @@ def validate_transition(held: RunSnapshot, status: RunStatus, stage: Stage | Non
             raise reject(f"resume must keep stage {held_stage!r}, got {stage!r}")
     elif current is RunStatus.FAILED and status is RunStatus.QUEUED:
         # requeue keeps the failed stage; restart clears to None (start over)
-        if stage is not held_stage and stage is not None:
-            raise reject(f"requeue must keep stage {held_stage!r} or restart (None), got {stage!r}")
+        # or targets any stage in the canonical order (restart-from-stage)
+        if stage is not held_stage and stage is not None and stage not in STAGE_ORDER:
+            raise reject(
+                f"requeue must keep stage {held_stage!r}, restart (None),"
+                f" or target a valid stage, got {stage!r}"
+            )
     elif current in (RunStatus.COMPLETED, RunStatus.CANCELLED) and status is RunStatus.QUEUED:
-        if stage is not None:
-            raise reject("restart must clear current_stage (start from scratch)")
+        # restart clears to None (start over) or targets any stage (restart-from-stage);
+        # prerequisite and impact validation is the service layer's policy
+        if stage is not None and stage not in STAGE_ORDER:
+            raise reject(f"restart stage must be in STAGE_ORDER, got {stage!r}")
     elif status is RunStatus.COMPLETED:
         if held_stage is not STAGE_ORDER[-1]:
             raise reject(f"cannot complete from stage {held_stage!r}")
@@ -153,6 +161,7 @@ def cas_update_run(
     status: RunStatus,
     current_stage: Stage | None,
     error: str | None = None,
+    processing_cycle: int | None = None,
     settings: "Settings | None" = None,
 ) -> RunSnapshot:
     """Apply a validated transition iff the run is still at ``held.revision``.
@@ -163,25 +172,30 @@ def cas_update_run(
     (tests, ingest, CLI requeue) pass nothing and never emit — those transitions
     are non-notifiable anyway. Emission is a persistence-only insert; no network
     or broker work happens here.
+
+    When *processing_cycle* is set, the cycle is bumped atomically with the
+    state change (deliberate restart only — never for requeue/resume/recovery).
     """
     validate_transition(held, status, current_stage)
+    values: dict[str, Any] = {
+        "status": status.value,
+        "current_stage": current_stage.value if current_stage else None,
+        "error": cap_length(error) if error is not None else None,
+        "revision": held.revision + 1,
+    }
+    if processing_cycle is not None:
+        values["processing_cycle"] = processing_cycle
     result = cast(
         CursorResult[Any],
         session.execute(
             update(PipelineRun)
             .where(PipelineRun.id == held.id, PipelineRun.revision == held.revision)
-            .values(
-                status=status.value,
-                current_stage=current_stage.value if current_stage else None,
-                # General length cap for every PipelineRun.error write; the
-                # ACQUIRE stderr tail is already redacted at its raise site.
-                error=cap_length(error) if error is not None else None,
-                revision=held.revision + 1,
-            )
+            .values(**values)
         ),
     )
     if result.rowcount != 1:
         raise StaleRevisionError(held.id, held.revision)
+    new_cycle = processing_cycle if processing_cycle is not None else held.processing_cycle
     new_revision = held.revision + 1
     if settings is not None:
         # Local import keeps the transition primitive free of a module-level
@@ -205,5 +219,9 @@ def cas_update_run(
 
             record_run_completed(session, held.id)
     return RunSnapshot(
-        id=held.id, status=status, current_stage=current_stage, revision=new_revision
+        id=held.id,
+        status=status,
+        current_stage=current_stage,
+        revision=new_revision,
+        processing_cycle=new_cycle,
     )

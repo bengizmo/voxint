@@ -130,6 +130,7 @@ def stage_attempts(
     run_id: uuid.UUID,
     stage: Stage,
     *,
+    processing_cycle: int | None = None,
     exclude_saturated: bool = False,
 ) -> int:
     """Transient-failure attempts recorded in the ledger — the restart-proof
@@ -141,6 +142,9 @@ def stage_attempts(
 
     When *exclude_saturated* is set, saturation rejections (flow control) are
     also excluded — they should not consume the budget for genuine failures.
+
+    When *processing_cycle* is set, only attempts from that cycle count — a
+    deliberate restart (which bumps the cycle) gives a fresh budget.
     """
     if exclude_saturated:
         error_filter = or_(
@@ -155,17 +159,16 @@ def stage_attempts(
             StageRun.error.is_(None),
             ~StageRun.error.like(f"{INTERRUPTED_PREFIX}%"),
         )
+    filters = [
+        StageRun.pipeline_run_id == run_id,
+        StageRun.stage == stage.value,
+        StageRun.status == StageStatus.FAILED.value,
+        error_filter,
+    ]
+    if processing_cycle is not None:
+        filters.append(StageRun.processing_cycle == processing_cycle)
     return int(
-        session.execute(
-            select(func.count())
-            .select_from(StageRun)
-            .where(
-                StageRun.pipeline_run_id == run_id,
-                StageRun.stage == stage.value,
-                StageRun.status == StageStatus.FAILED.value,
-                error_filter,
-            )
-        ).scalar_one()
+        session.execute(select(func.count()).select_from(StageRun).where(*filters)).scalar_one()
     )
 
 
@@ -274,9 +277,16 @@ def _drive_segment(
     except StageFailedError as exc:
         if not retryable_cause(exc) or exc.failed_snapshot is None:
             raise  # deterministic — the failure lane owns it now
+        cycle = exc.failed_snapshot.processing_cycle
         with factory() as session:
-            attempts = stage_attempts(session, run_id, exc.stage)
-            budget = stage_attempts(session, run_id, exc.stage, exclude_saturated=True)
+            attempts = stage_attempts(session, run_id, exc.stage, processing_cycle=cycle)
+            budget = stage_attempts(
+                session,
+                run_id,
+                exc.stage,
+                processing_cycle=cycle,
+                exclude_saturated=True,
+            )
         if not is_saturation(exc) and budget >= settings.stage_max_attempts:
             raise  # transient budget exhausted; stays FAILED, honestly
         if not requeue_failed_stage(factory, exc.failed_snapshot):

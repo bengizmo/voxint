@@ -300,7 +300,12 @@ def test_saturation_skips_retry_budget(monkeypatch: pytest.MonkeyPatch) -> None:
 
     _factory, _ctx, run_id = _stub_segment_driver(monkeypatch)
     cause = ServiceError("saturated", "Service at capacity; retry later", retryable=True)
-    snapshot = SimpleNamespace(status=RunStatus.FAILED, current_stage=Stage.TRANSCRIBE, revision=1)
+    snapshot = SimpleNamespace(
+        status=RunStatus.FAILED,
+        current_stage=Stage.TRANSCRIBE,
+        revision=1,
+        processing_cycle=1,
+    )
 
     monkeypatch.setattr(
         tasks_mod,
@@ -326,7 +331,12 @@ def test_non_saturation_exhausts_retry_budget(monkeypatch: pytest.MonkeyPatch) -
 
     _factory, _ctx, run_id = _stub_segment_driver(monkeypatch)
     cause = ServiceError("transport_error", "timeout", retryable=True)
-    snapshot = SimpleNamespace(status=RunStatus.FAILED, current_stage=Stage.TRANSCRIBE, revision=1)
+    snapshot = SimpleNamespace(
+        status=RunStatus.FAILED,
+        current_stage=Stage.TRANSCRIBE,
+        revision=1,
+        processing_cycle=1,
+    )
 
     monkeypatch.setattr(
         tasks_mod,
@@ -351,7 +361,12 @@ def test_mixed_saturation_then_transport_still_retries(
 
     _factory, _ctx, run_id = _stub_segment_driver(monkeypatch)
     cause = ServiceError("transport_error", "timeout", retryable=True)
-    snapshot = SimpleNamespace(status=RunStatus.FAILED, current_stage=Stage.TRANSCRIBE, revision=1)
+    snapshot = SimpleNamespace(
+        status=RunStatus.FAILED,
+        current_stage=Stage.TRANSCRIBE,
+        revision=1,
+        processing_cycle=1,
+    )
 
     monkeypatch.setattr(
         tasks_mod,
@@ -362,7 +377,12 @@ def test_mixed_saturation_then_transport_still_retries(
     )
 
     def _stage_attempts(
-        session: object, rid: object, stage: object, *, exclude_saturated: bool = False
+        session: object,
+        rid: object,
+        stage: object,
+        *,
+        processing_cycle: int | None = None,
+        exclude_saturated: bool = False,
     ) -> int:
         if exclude_saturated:
             return 2  # only 2 real transport failures
