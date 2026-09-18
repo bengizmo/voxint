@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Voxint is pre-alpha. Only the latest release (and `main`) receives security
+Voxint is pre-1.0. Only the latest release (and `main`) receives security
 fixes.
 
 ## Reporting a vulnerability
