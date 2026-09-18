@@ -506,3 +506,339 @@ def test_pre_diarize_stages_query_all_three_counts(from_stage: Stage) -> None:
     assert impact.segment_scope_decisions == 2
     assert impact.enrichment_evidence == 3
     assert session.scalar.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Slice C: restart stage profiles and CLI (#506)
+# ---------------------------------------------------------------------------
+
+
+class TestRestartStageProfiles:
+    def test_all_clean(self) -> None:
+        from voxint.ingest.service import restart_stage_profiles
+
+        profiles = restart_stage_profiles(RestartImpact(0, 0, 0))
+        for profile in profiles:
+            assert profile["safe"] is True
+            assert profile["blocked"] is False
+            assert profile["label_risk"] is False
+            assert profile["label_count"] == 0
+
+    def test_with_label_scope_only(self) -> None:
+        from voxint.ingest.service import restart_stage_profiles
+
+        profiles = restart_stage_profiles(RestartImpact(3, 0, 0))
+        for profile in profiles[:4]:
+            assert profile["blocked"] is False
+            assert profile["label_risk"] is True
+            assert profile["label_count"] == 3
+            assert profile["safe"] is False
+        for profile in profiles[4:]:
+            assert profile["blocked"] is False
+            assert profile["label_risk"] is False
+            assert profile["label_count"] == 0
+            assert profile["safe"] is True
+
+    def test_with_segment_scope_blockers(self) -> None:
+        from voxint.ingest.service import restart_stage_profiles
+
+        profiles = restart_stage_profiles(RestartImpact(2, 5, 1))
+        for profile in profiles[:3]:
+            assert profile["blocked"] is True
+            assert profile["label_risk"] is False
+            assert profile["label_count"] == 2
+            assert profile["safe"] is False
+        assert profiles[3]["blocked"] is False
+        assert profiles[3]["label_risk"] is True
+        assert profiles[3]["label_count"] == 2
+        assert profiles[3]["safe"] is False
+        for profile in profiles[4:]:
+            assert profile["blocked"] is False
+            assert profile["label_risk"] is False
+            assert profile["label_count"] == 0
+            assert profile["safe"] is True
+
+    def test_returns_correct_stage_values(self) -> None:
+        from voxint.db.models import STAGE_ORDER
+        from voxint.ingest.service import restart_stage_profiles
+
+        profiles = restart_stage_profiles(RestartImpact(0, 0, 0))
+        assert [profile["stage"] for profile in profiles] == [stage.value for stage in STAGE_ORDER]
+        for profile in profiles:
+            assert set(profile) == {
+                "stage",
+                "label",
+                "blocked",
+                "label_risk",
+                "label_count",
+                "safe",
+            }
+            assert isinstance(profile["label"], str)
+            assert profile["label"]
+
+    def test_returns_six_profiles(self) -> None:
+        from voxint.ingest.service import restart_stage_profiles
+
+        assert len(restart_stage_profiles(RestartImpact(0, 0, 0))) == 6
+
+
+def _parse_and_run(*args: str) -> int:
+    from voxint.cli import build_parser
+
+    ns = build_parser().parse_args(args)
+    return ns.fn(ns)
+
+
+@patch("voxint.db.session.build_engine")
+@patch("voxint.db.session.build_session_factory")
+@patch("voxint.db.session.session_scope")
+@patch("voxint.ingest.restart_impact")
+@patch("voxint.ingest.restart_run")
+@patch("voxint.cli._publish_or_defer")
+class TestRestartCLI:
+    def test_restart_cli_invalid_uuid(
+        self,
+        mock_publish: MagicMock,
+        mock_restart: MagicMock,
+        mock_impact: MagicMock,
+        mock_scope: MagicMock,
+        mock_factory: MagicMock,
+        mock_engine: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        session = mock_scope.return_value.__enter__.return_value
+        session.get.return_value = MagicMock(revision=1, status="completed", archived_at=None)
+        mock_engine.return_value = object()
+        mock_factory.return_value = object()
+        mock_impact.return_value = RestartImpact(0, 0, 0)
+
+        assert _parse_and_run("restart", "bogus", "--yes") == 2
+        assert "invalid run UUID" in capsys.readouterr().out
+        mock_engine.assert_not_called()
+        mock_scope.assert_not_called()
+        mock_impact.assert_not_called()
+        mock_restart.assert_not_called()
+        mock_publish.assert_not_called()
+
+    def test_restart_cli_run_not_found(
+        self,
+        mock_publish: MagicMock,
+        mock_restart: MagicMock,
+        mock_impact: MagicMock,
+        mock_scope: MagicMock,
+        mock_factory: MagicMock,
+        mock_engine: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from voxint.db.models import PipelineRun
+
+        run_id = uuid.uuid4()
+        session = mock_scope.return_value.__enter__.return_value
+        session.get.return_value = MagicMock(revision=1, status="completed", archived_at=None)
+        mock_engine.return_value = object()
+        mock_factory.return_value = object()
+        mock_impact.return_value = RestartImpact(0, 0, 0)
+
+        session.get.return_value = None
+        assert _parse_and_run("restart", str(run_id), "--yes") == 2
+        assert "no run" in capsys.readouterr().out
+        session.get.assert_called_once_with(PipelineRun, run_id)
+        mock_impact.assert_not_called()
+        mock_restart.assert_not_called()
+        mock_publish.assert_not_called()
+
+    def test_restart_cli_blocked(
+        self,
+        mock_publish: MagicMock,
+        mock_restart: MagicMock,
+        mock_impact: MagicMock,
+        mock_scope: MagicMock,
+        mock_factory: MagicMock,
+        mock_engine: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        run_id = uuid.uuid4()
+        session = mock_scope.return_value.__enter__.return_value
+        session.get.return_value = MagicMock(revision=1, status="completed", archived_at=None)
+        mock_engine.return_value = object()
+        mock_factory.return_value = object()
+        mock_impact.return_value = RestartImpact(0, 0, 0)
+
+        mock_impact.return_value = RestartImpact(2, 5, 1)
+        assert _parse_and_run("restart", str(run_id), "--yes") == 2
+        assert "cannot restart" in capsys.readouterr().out
+        mock_impact.assert_called_once_with(session, run_id, from_stage=None)
+        mock_restart.assert_not_called()
+        mock_publish.assert_not_called()
+
+    def test_restart_cli_success_with_yes(
+        self,
+        mock_publish: MagicMock,
+        mock_restart: MagicMock,
+        mock_impact: MagicMock,
+        mock_scope: MagicMock,
+        mock_factory: MagicMock,
+        mock_engine: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        run_id = uuid.uuid4()
+        session = mock_scope.return_value.__enter__.return_value
+        session.get.return_value = MagicMock(revision=1, status="completed", archived_at=None)
+        mock_engine.return_value = object()
+        mock_factory.return_value = object()
+        mock_impact.return_value = RestartImpact(0, 0, 0)
+
+        def publish_after_commit(*args: object, **kwargs: object) -> bool:
+            mock_scope.return_value.__exit__.assert_called_once_with(None, None, None)
+            return True
+
+        mock_publish.side_effect = publish_after_commit
+
+        assert _parse_and_run("restart", str(run_id), "--yes") == 0
+        assert f"restarted {run_id} (full restart)" in capsys.readouterr().out
+        mock_engine.assert_called_once_with()
+        mock_factory.assert_called_once_with(mock_engine.return_value)
+        mock_scope.assert_called_once_with(mock_factory.return_value)
+        mock_impact.assert_called_once_with(session, run_id, from_stage=None)
+        mock_restart.assert_called_once_with(
+            session,
+            run_id,
+            from_stage=None,
+            expected_revision=1,
+            acknowledge_label_risk=False,
+        )
+        mock_publish.assert_called_once_with(run_id, stage=None)
+
+    def test_restart_cli_from_stage_with_yes(
+        self,
+        mock_publish: MagicMock,
+        mock_restart: MagicMock,
+        mock_impact: MagicMock,
+        mock_scope: MagicMock,
+        mock_factory: MagicMock,
+        mock_engine: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        run_id = uuid.uuid4()
+        session = mock_scope.return_value.__enter__.return_value
+        session.get.return_value = MagicMock(revision=1, status="completed", archived_at=None)
+        mock_engine.return_value = object()
+        mock_factory.return_value = object()
+        mock_impact.return_value = RestartImpact(0, 0, 0)
+
+        def publish_after_commit(*args: object, **kwargs: object) -> bool:
+            mock_scope.return_value.__exit__.assert_called_once_with(None, None, None)
+            return True
+
+        mock_publish.side_effect = publish_after_commit
+
+        assert _parse_and_run("restart", str(run_id), "--from-stage", "enhance_match", "--yes") == 0
+        assert f"restarted {run_id} from enhance_match" in capsys.readouterr().out
+        mock_engine.assert_called_once_with()
+        mock_factory.assert_called_once_with(mock_engine.return_value)
+        mock_scope.assert_called_once_with(mock_factory.return_value)
+        mock_impact.assert_called_once_with(session, run_id, from_stage=Stage.ENHANCE_MATCH)
+        mock_restart.assert_called_once_with(
+            session,
+            run_id,
+            from_stage=Stage.ENHANCE_MATCH,
+            expected_revision=1,
+            acknowledge_label_risk=False,
+        )
+        mock_publish.assert_called_once_with(run_id, stage=Stage.ENHANCE_MATCH)
+
+    def test_restart_cli_label_risk_needs_ack(
+        self,
+        mock_publish: MagicMock,
+        mock_restart: MagicMock,
+        mock_impact: MagicMock,
+        mock_scope: MagicMock,
+        mock_factory: MagicMock,
+        mock_engine: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        run_id = uuid.uuid4()
+        session = mock_scope.return_value.__enter__.return_value
+        session.get.return_value = MagicMock(revision=1, status="completed", archived_at=None)
+        mock_engine.return_value = object()
+        mock_factory.return_value = object()
+        mock_impact.return_value = RestartImpact(0, 0, 0)
+
+        mock_impact.return_value = RestartImpact(3, 0, 0)
+        assert _parse_and_run("restart", str(run_id), "--yes") == 2
+        assert "--acknowledge-label-risk" in capsys.readouterr().out
+        mock_restart.assert_not_called()
+        mock_publish.assert_not_called()
+
+    def test_restart_cli_eof_on_stdin(
+        self,
+        mock_publish: MagicMock,
+        mock_restart: MagicMock,
+        mock_impact: MagicMock,
+        mock_scope: MagicMock,
+        mock_factory: MagicMock,
+        mock_engine: MagicMock,
+    ) -> None:
+        run_id = uuid.uuid4()
+        session = mock_scope.return_value.__enter__.return_value
+        session.get.return_value = MagicMock(revision=1, status="completed", archived_at=None)
+        mock_engine.return_value = object()
+        mock_factory.return_value = object()
+        mock_impact.return_value = RestartImpact(0, 0, 0)
+
+        with patch("builtins.input", side_effect=EOFError) as mock_input:
+            assert _parse_and_run("restart", str(run_id)) == 2
+
+        mock_input.assert_called_once_with("Restart? [y/N] ")
+        mock_restart.assert_not_called()
+        mock_publish.assert_not_called()
+
+    def test_restart_cli_interactive_decline(
+        self,
+        mock_publish: MagicMock,
+        mock_restart: MagicMock,
+        mock_impact: MagicMock,
+        mock_scope: MagicMock,
+        mock_factory: MagicMock,
+        mock_engine: MagicMock,
+    ) -> None:
+        run_id = uuid.uuid4()
+        session = mock_scope.return_value.__enter__.return_value
+        session.get.return_value = MagicMock(revision=1, status="completed", archived_at=None)
+        mock_engine.return_value = object()
+        mock_factory.return_value = object()
+        mock_impact.return_value = RestartImpact(0, 0, 0)
+
+        with patch("builtins.input", return_value="n") as mock_input:
+            assert _parse_and_run("restart", str(run_id)) == 2
+
+        mock_input.assert_called_once_with("Restart? [y/N] ")
+        mock_restart.assert_not_called()
+        mock_publish.assert_not_called()
+
+    def test_restart_cli_yes_with_label_ack_succeeds(
+        self,
+        mock_publish: MagicMock,
+        mock_restart: MagicMock,
+        mock_impact: MagicMock,
+        mock_scope: MagicMock,
+        mock_factory: MagicMock,
+        mock_engine: MagicMock,
+    ) -> None:
+        run_id = uuid.uuid4()
+        session = mock_scope.return_value.__enter__.return_value
+        session.get.return_value = MagicMock(revision=1, status="completed", archived_at=None)
+        mock_engine.return_value = object()
+        mock_factory.return_value = object()
+        mock_impact.return_value = RestartImpact(3, 0, 0)
+
+        assert _parse_and_run("restart", str(run_id), "--yes", "--acknowledge-label-risk") == 0
+
+        mock_restart.assert_called_once_with(
+            session,
+            run_id,
+            from_stage=None,
+            expected_revision=1,
+            acknowledge_label_risk=True,
+        )
+        mock_publish.assert_called_once_with(run_id, stage=None)

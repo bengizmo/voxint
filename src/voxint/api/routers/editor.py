@@ -63,14 +63,12 @@ from voxint.enrichment.translation_jobs import (
     normalized_language,
     translation_gates_open,
 )
-from voxint.ingest import restart_impact
+from voxint.ingest import restart_impact, restart_stage_profiles
 from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import active_speakers
 from voxint.tutorial.steps import TutorialPage
 
-router = APIRouter(
-    dependencies=[Depends(require_onboarded), Depends(require_media_enabled)]
-)
+router = APIRouter(dependencies=[Depends(require_onboarded), Depends(require_media_enabled)])
 
 
 @router.get("/media/{media_id}/editor", name="media_detail")
@@ -115,9 +113,7 @@ def media_detail_page(
                 except ClaimMismatchError:
                     token = None
 
-            lines = attributed_transcript(
-                session, run_id, text=TranscriptText.CORRECTED
-            )
+            lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
             palette = speaker_palette(run_label_universe(session, run_id))
             verified_n, total = verified_progress(session, run_id)
             capability = playback_capability(
@@ -209,9 +205,7 @@ def media_detail_page(
                 island_props["translate"] = None
 
     if island_props is not None:
-        island_props["claimCsrf"] = mint_csrf_token(
-            request.app.state.csrf_secret, CSRF_CLAIM
-        )
+        island_props["claimCsrf"] = mint_csrf_token(request.app.state.csrf_secret, CSRF_CLAIM)
         island_props["multiUser"] = settings.voxint_multi_user
 
     csrf_restart = (
@@ -253,6 +247,7 @@ def media_detail_page(
             "progress": {"verified": verified_n, "total": total},
             "csrf_restart": csrf_restart,
             "restart_impact": ri,
+            "restart_stages": restart_stage_profiles(ri) if ri else None,
             "active_nav": "media",
             "tutorial": tutorial,
             "palette_actions": palette_actions(
@@ -300,20 +295,17 @@ def editor_claim(
 
     if tutorial:
         return RedirectResponse(
-            f"/media/{media_id}/editor?run={run_id}&token={token}"
-            f"&tutorial={tutorial}",
+            f"/media/{media_id}/editor?run={run_id}&token={token}&tutorial={tutorial}",
             status_code=303,
         )
 
-    return JSONResponse({
-        "token": str(token),
-        "tagCsrf": mint_csrf_token(
-            request.app.state.csrf_secret, CSRF_ANNOTATION_TAGS
-        ),
-        "clipCsrf": mint_csrf_token(
-            request.app.state.csrf_secret, CSRF_CLIP_EXTRACT
-        ),
-    })
+    return JSONResponse(
+        {
+            "token": str(token),
+            "tagCsrf": mint_csrf_token(request.app.state.csrf_secret, CSRF_ANNOTATION_TAGS),
+            "clipCsrf": mint_csrf_token(request.app.state.csrf_secret, CSRF_CLIP_EXTRACT),
+        }
+    )
 
 
 @router.post("/media/{media_id}/editor/refresh")

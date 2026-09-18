@@ -1078,6 +1078,67 @@ def restart_impact(
     )
 
 
+def restart_stage_profiles(
+    full_impact: RestartImpact,
+) -> list[dict[str, object]]:
+    """Derive per-stage restart profiles from a single full-restart impact.
+
+    Returns one dict per STAGE_ORDER member with keys: stage, label,
+    blocked, label_risk, label_count, safe.  No DB queries -- pure
+    projection of the counts in *full_impact*.
+    """
+    _LABELS = {
+        Stage.ACQUIRE: "Acquire",
+        Stage.PREPARE: "Prepare audio",
+        Stage.TRANSCRIBE: "Transcribe",
+        Stage.DIARIZE_EMBED: "Diarize + embed",
+        Stage.ENHANCE_MATCH: "Enhance + match",
+        Stage.FINALIZE: "Finalize",
+    }
+    enhance_idx = STAGE_ORDER.index(Stage.ENHANCE_MATCH)
+    diarize_idx = STAGE_ORDER.index(Stage.DIARIZE_EMBED)
+    profiles: list[dict[str, object]] = []
+    for i, stage in enumerate(STAGE_ORDER):
+        if i >= enhance_idx:
+            profiles.append(
+                {
+                    "stage": stage.value,
+                    "label": _LABELS[stage],
+                    "blocked": False,
+                    "label_risk": False,
+                    "label_count": 0,
+                    "safe": True,
+                }
+            )
+        elif i >= diarize_idx:
+            profiles.append(
+                {
+                    "stage": stage.value,
+                    "label": _LABELS[stage],
+                    "blocked": False,
+                    "label_risk": full_impact.label_scope_decisions > 0,
+                    "label_count": full_impact.label_scope_decisions,
+                    "safe": full_impact.label_scope_decisions == 0,
+                }
+            )
+        else:
+            profiles.append(
+                {
+                    "stage": stage.value,
+                    "label": _LABELS[stage],
+                    "blocked": full_impact.has_blockers,
+                    "label_risk": (
+                        not full_impact.has_blockers and full_impact.label_scope_decisions > 0
+                    ),
+                    "label_count": full_impact.label_scope_decisions,
+                    "safe": (
+                        not full_impact.has_blockers and full_impact.label_scope_decisions == 0
+                    ),
+                }
+            )
+    return profiles
+
+
 def _eager_invalidate_downstream(
     session: Session,
     run_id: uuid.UUID,

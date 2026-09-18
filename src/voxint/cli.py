@@ -412,6 +412,97 @@ def _requeue(args: argparse.Namespace) -> int:
     return 0
 
 
+def _restart(args: argparse.Namespace) -> int:
+    from voxint.db.models import STAGE_ORDER, PipelineRun, RunStatus, Stage
+    from voxint.db.session import build_engine, build_session_factory, session_scope
+    from voxint.ingest import IngestError, RestartPrerequisiteError, restart_impact, restart_run
+    from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
+
+    try:
+        run_id = uuid.UUID(args.run_id)
+    except ValueError:
+        print(f"error: invalid run UUID: {args.run_id}")
+        return 2
+    parsed_stage = Stage(args.from_stage) if args.from_stage else None
+    restart_description = (
+        f"from {parsed_stage.value}" if parsed_stage is not None else "(full restart)"
+    )
+    factory = build_session_factory(build_engine())
+    try:
+        with session_scope(factory) as session:
+            run = session.get(PipelineRun, run_id)
+            if run is None:
+                print(f"error: no run {run_id}")
+                return 2
+            _RESTART_OK = {
+                RunStatus.COMPLETED.value,
+                RunStatus.FAILED.value,
+                RunStatus.CANCELLED.value,
+            }
+            if run.status not in _RESTART_OK:
+                print(
+                    f"error: run is {run.status},"
+                    " only completed/failed/cancelled runs can be restarted"
+                )
+                return 2
+            if run.archived_at is not None:
+                print("error: run is archived -- unarchive it first")
+                return 2
+            impact = restart_impact(session, run_id, from_stage=parsed_stage)
+            if impact.has_blockers:
+                print(
+                    "error: cannot restart: "
+                    f"{impact.segment_scope_decisions} segment/word-range adjudication "
+                    f"decision(s) and {impact.enrichment_evidence} enrichment evidence "
+                    "row(s) reference transcript segments that would be deleted. "
+                    "These rows are append-only. Submit the media item as a new run instead."
+                )
+                return 2
+            if impact.label_scope_decisions > 0 and not args.acknowledge_label_risk:
+                print(
+                    f"warning: {impact.label_scope_decisions} label-scope adjudication "
+                    "decision(s) exist. Re-diarization may reassign speaker labels, "
+                    "causing existing rulings to apply to different voices."
+                )
+                if args.yes:
+                    print("error: pass --acknowledge-label-risk to acknowledge this risk")
+                    return 2
+                try:
+                    if input("Proceed? [y/N] ").strip().lower() not in {"y", "yes"}:
+                        return 2
+                except EOFError:
+                    return 2
+                args.acknowledge_label_risk = True
+            if not args.yes:
+                effective_stage = parsed_stage if parsed_stage is not None else Stage.ACQUIRE
+                stages = STAGE_ORDER[STAGE_ORDER.index(effective_stage) :]
+                print(f"Restart run {run_id} {restart_description}.")
+                print("Stages to rerun: " + ", ".join(stage.value for stage in stages))
+                try:
+                    if input("Restart? [y/N] ").strip().lower() not in {"y", "yes"}:
+                        return 2
+                except EOFError:
+                    return 2
+            restart_run(
+                session,
+                run_id,
+                from_stage=parsed_stage,
+                expected_revision=run.revision,
+                acknowledge_label_risk=args.acknowledge_label_risk,
+            )
+    except (
+        IngestError,
+        StaleRevisionError,
+        InvalidTransitionError,
+        RestartPrerequisiteError,
+    ) as exc:
+        print(f"error: {exc}")
+        return 2
+    print(f"restarted {run_id} {restart_description}")
+    _publish_or_defer(run_id, stage=parsed_stage)
+    return 0
+
+
 def _cancel(args: argparse.Namespace) -> int:
     from sqlalchemy import select
 
@@ -1296,8 +1387,7 @@ def _speakers_reembed(args: argparse.Namespace) -> int:
             migrated_enrollments += result.enrollments
             stale.extend(result.stale_enrollment_ids)
             print(
-                f"{run_id}: {result.turns} turn(s), "
-                f"{result.enrollments} enrolment row(s) updated"
+                f"{run_id}: {result.turns} turn(s), {result.enrollments} enrolment row(s) updated"
             )
         for run_id in migrated_run_ids:
             with factory() as session:
@@ -1319,9 +1409,7 @@ def _speakers_reembed(args: argparse.Namespace) -> int:
         engine.dispose()
 
 
-def _format_skip(
-    skip: "SkippedPair", speakers: dict[uuid.UUID, str]
-) -> str:
+def _format_skip(skip: "SkippedPair", speakers: dict[uuid.UUID, str]) -> str:
     """Format a skipped-pair reason for CLI display."""
     name_a = speakers.get(skip.pair.speaker_a_id, "<unknown>")
     name_b = speakers.get(skip.pair.speaker_b_id, "<unknown>")
@@ -1521,9 +1609,7 @@ def _speakers_reconcile(args: argparse.Namespace) -> int:
         if not args.yes and not args.dry_run:
             try:
                 confirmed = (
-                    input(f"Reconcile {len(plan.affected_run_ids)} run(s)? [y/N] ")
-                    .strip()
-                    .lower()
+                    input(f"Reconcile {len(plan.affected_run_ids)} run(s)? [y/N] ").strip().lower()
                     == "y"
                 )
             except EOFError:
@@ -2060,20 +2146,19 @@ def _benchmark_list(args: argparse.Namespace) -> int:
 
         factory = build_session_factory(engine)
         with factory() as session:
-            runs = session.execute(
-                select(BenchmarkRun)
-                .order_by(BenchmarkRun.created_at.desc())
-                .limit(args.limit)
-            ).scalars().all()
+            runs = (
+                session.execute(
+                    select(BenchmarkRun).order_by(BenchmarkRun.created_at.desc()).limit(args.limit)
+                )
+                .scalars()
+                .all()
+            )
 
         if not runs:
             print("No benchmark runs found.")
             return 0
 
-        print(
-            f"{'TAG':<20} {'STATUS':<12} {'WER':>8} "
-            f"{'TIME':>8} {'FILES':>5} {'DATE':<20}"
-        )
+        print(f"{'TAG':<20} {'STATUS':<12} {'WER':>8} {'TIME':>8} {'FILES':>5} {'DATE':<20}")
         print("-" * 80)
         for run in runs:
             tag = (run.tag or "")[:20]
@@ -2138,18 +2223,18 @@ def _benchmark_compare(args: argparse.Namespace) -> int:
             items1 = {
                 i.corpus_file_id: i
                 for i in session.execute(
-                    select(BenchmarkItem).where(
-                        BenchmarkItem.benchmark_run_id == run1.id
-                    )
-                ).scalars().all()
+                    select(BenchmarkItem).where(BenchmarkItem.benchmark_run_id == run1.id)
+                )
+                .scalars()
+                .all()
             }
             items2 = {
                 i.corpus_file_id: i
                 for i in session.execute(
-                    select(BenchmarkItem).where(
-                        BenchmarkItem.benchmark_run_id == run2.id
-                    )
-                ).scalars().all()
+                    select(BenchmarkItem).where(BenchmarkItem.benchmark_run_id == run2.id)
+                )
+                .scalars()
+                .all()
             }
 
         tag1 = run1.tag or str(run1.id)[:8]
@@ -2199,10 +2284,7 @@ def _benchmark_compare(args: argparse.Namespace) -> int:
             d = s2 - s1
             sign = "+" if d > 0 else ""
             print("-" * 55)
-            print(
-                f"{'POOLED':<25} {s1:>7.1%} {s2:>7.1%} "
-                f"{sign}{d:>7.1%}"
-            )
+            print(f"{'POOLED':<25} {s1:>7.1%} {s2:>7.1%} {sign}{d:>7.1%}")
             t1 = run1.summary.get("total_time_s", 0)
             t2 = run2.summary.get("total_time_s", 0)
             print(f"{'TIME':<25} {t1:>7.0f}s {t2:>7.0f}s")
@@ -2457,6 +2539,24 @@ def build_parser() -> argparse.ArgumentParser:
     requeue_p = sub.add_parser("requeue", help="requeue a failed run at its failed stage")
     requeue_p.add_argument("run_id")
     requeue_p.set_defaults(fn=_requeue)
+
+    restart_p = sub.add_parser(
+        "restart", help="restart a terminal run, optionally from a selected stage"
+    )
+    restart_p.add_argument("run_id", help="pipeline run UUID")
+    restart_p.add_argument(
+        "--from-stage",
+        choices=["acquire", "prepare", "transcribe", "diarize_embed", "enhance_match", "finalize"],
+        default=None,
+        help="stage to restart from (default: full restart from acquire)",
+    )
+    restart_p.add_argument(
+        "--acknowledge-label-risk",
+        action="store_true",
+        help="acknowledge that label-scope rulings may apply to different voices",
+    )
+    restart_p.add_argument("--yes", "-y", action="store_true", help="skip the confirmation prompt")
+    restart_p.set_defaults(fn=_restart)
 
     cancel_p = sub.add_parser(
         "cancel", help="cancel a live run (or all queued runs with --all-queued)"
@@ -2805,7 +2905,9 @@ def build_parser() -> argparse.ArgumentParser:
     create_user_p = user_sub.add_parser("create", help="create a new user account")
     create_user_p.add_argument("username")
     create_user_p.add_argument(
-        "--role", choices=["admin", "reviewer", "viewer"], default="reviewer",
+        "--role",
+        choices=["admin", "reviewer", "viewer"],
+        default="reviewer",
     )
     create_user_p.set_defaults(fn=_user_create)
     list_users_p = user_sub.add_parser("list", help="list user accounts")

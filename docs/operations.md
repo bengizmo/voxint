@@ -561,6 +561,7 @@ docker compose exec api voxint submit path/to/file.mp3   # local path relative t
 docker compose exec api voxint fetch <url>               # yt-dlp URL ingestion (reads the URL from stdin if omitted)
 docker compose exec api voxint status <run-id>           # run state + per-stage attempt ledger
 docker compose exec api voxint requeue <run-id>          # re-enter a FAILED run at its failed stage
+docker compose exec api voxint restart <run-id> [--from-stage STAGE] [--yes] [--acknowledge-label-risk]
 docker compose exec api voxint list                      # recent runs, newest first (--status, --limit, --json)
 docker compose exec api voxint export <run-id> --format srt   # export a transcript (see below)
 docker compose exec api voxint doctor                    # read-only preflight for every dependency
@@ -930,14 +931,14 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   with adjudication decisions. This is the common case ("I updated the roster,
   re-match").
 
-  A preflight check guards the button based on adjudication state: when
-  segment-scope rulings exist (tied to transcript segments that would be
-  regenerated), restart is **blocked** (disabled button with a "Blocked"
-  notice). When only label-scope rulings exist (speaker assignments that may
-  apply to different voices after re-processing), restart requires an
-  `acknowledge_label_risk` checkbox. When no adjudication work exists, a plain
-  confirmation dialog guards the button. Both the run-detail and editor pages
-  render these states.
+  Both the run-detail and editor pages show a **stage selector dropdown** next
+  to the restart button. Each option in the dropdown reflects the stage-aware
+  impact: blocked stages are disabled with a "(blocked)" suffix, stages with
+  label-scope risk show "(label risk)" and require a checkbox acknowledgment,
+  and safe stages (ENHANCE_MATCH, FINALIZE) are always available. The default
+  "The beginning (all stages)" option applies the full-restart blocker matrix.
+  Selecting a later stage and clicking Restart posts the `from_stage` field to
+  the existing endpoint.
 
   The publish path routes through `pipeline_task_for_stage(from_stage)`, so a
   restart from ENHANCE_MATCH dispatches directly to the POST lane without

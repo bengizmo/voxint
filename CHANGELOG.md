@@ -7,17 +7,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
-- **Restart from stage (#506, Slice B).** `restart_run` now accepts
-  `from_stage: Stage | None` to restart a terminal run from any pipeline stage,
-  not just ACQUIRE. Upstream outputs are preserved; downstream outputs are
-  eagerly deleted in the same transaction. A stage-aware blocker matrix gates
-  the restart: ENHANCE_MATCH and FINALIZE are safe for all runs (no blockers),
-  DIARIZE_EMBED preserves segments but warns about label-scope risk, and
-  ACQUIRE through TRANSCRIBE retain full adjudication blockers. Prerequisite
-  validation checks that upstream outputs exist before queuing. Each restart
-  bumps `processing_cycle` so retry budgets reset. The API route accepts a
-  `from_stage` form field with 422 on unknown stages and 409 on prerequisite
-  failures.
+- **Restart from stage (#506).** Terminal runs can now be restarted from any
+  pipeline stage, not just ACQUIRE. Upstream outputs are preserved; downstream
+  outputs are eagerly deleted in the same transaction. A stage-aware blocker
+  matrix gates the restart: ENHANCE_MATCH and FINALIZE are safe for all runs
+  (no blockers), DIARIZE_EMBED preserves segments but warns about label-scope
+  risk, and ACQUIRE through TRANSCRIBE retain full adjudication blockers.
+  Prerequisite validation checks that upstream outputs exist before queuing.
+  Each restart bumps `processing_cycle` so retry budgets reset. The run-detail
+  and editor pages show a **stage selector dropdown** next to the restart
+  button, with per-stage impact indicators (blocked, label risk, safe). The
+  CLI gains a `voxint restart <run-id> [--from-stage STAGE] [--yes]` command
+  with an interactive impact preview and confirmation prompt.
 - **Multi-file upload (#497).** The media upload form now accepts multiple files
   via the file picker or drag-and-drop. Each file uploads sequentially with a
   per-file progress bar and status (pending, uploading, finalizing, queued,
