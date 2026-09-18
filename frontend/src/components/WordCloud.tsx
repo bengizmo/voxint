@@ -46,7 +46,10 @@ export function WordCloud({
   );
 
   useEffect(() => {
-    if (!terms.length) return;
+    if (!terms.length) {
+      setWords([]);
+      return;
+    }
 
     const counts = displayed.map((t) => t.count);
     const minCount = Math.min(...counts);
@@ -67,7 +70,16 @@ export function WordCloud({
       layoutRef.current.stop();
     }
 
+    // Reset the seed for every layout, including effect replays and resizes.
+    // d3-cloud uses this generator for starting positions and spiral direction.
+    let seed = 42;
+    const random = () => {
+      seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+
     const layout = cloud()
+      .random(random)
       .size([width, height])
       .words(input)
       .padding(3)
@@ -132,7 +144,10 @@ export function WordCloud({
             role="button"
             tabIndex={0}
             onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") onTermClick(w.text);
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onTermClick(w.text);
+              }
             }}
           >
             <title>

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   DRAG_THRESHOLD,
-  formatTime,
   isDragDistance,
   normalizeRange,
 } from "./waveform-selection";
@@ -57,36 +56,6 @@ describe("normalizeRange", () => {
 
   it("handles fractional seconds", () => {
     expect(normalizeRange(1.5, 3.7, 10)).toEqual({ start: 1.5, end: 3.7 });
-  });
-});
-
-describe("formatTime", () => {
-  it("formats zero seconds", () => {
-    expect(formatTime(0)).toBe("0:00");
-  });
-
-  it("formats seconds under a minute", () => {
-    expect(formatTime(5)).toBe("0:05");
-    expect(formatTime(45)).toBe("0:45");
-  });
-
-  it("formats whole minutes", () => {
-    expect(formatTime(60)).toBe("1:00");
-    expect(formatTime(120)).toBe("2:00");
-  });
-
-  it("formats minutes and seconds", () => {
-    expect(formatTime(65)).toBe("1:05");
-    expect(formatTime(754)).toBe("12:34");
-  });
-
-  it("truncates fractional seconds", () => {
-    expect(formatTime(5.9)).toBe("0:05");
-    expect(formatTime(59.999)).toBe("0:59");
-  });
-
-  it("handles large values", () => {
-    expect(formatTime(3661)).toBe("61:01");
   });
 });
 

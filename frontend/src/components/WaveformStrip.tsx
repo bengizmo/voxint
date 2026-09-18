@@ -8,7 +8,8 @@ import {
 
 import type { PeaksPayload, TimeRange, Turn } from "../lib/peaks";
 import { segmentAtTime } from "../lib/peaks";
-import { formatTime, isDragDistance, normalizeRange } from "../lib/waveform-selection";
+import { formatTime } from "../lib/format";
+import { isDragDistance, normalizeRange } from "../lib/waveform-selection";
 import type { Segment } from "./TranscriptPlayer";
 
 // Who-spoke-when waveform strip (issue #57). One DPR-aware canvas: mirrored

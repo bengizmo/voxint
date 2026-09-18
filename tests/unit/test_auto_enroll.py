@@ -98,7 +98,7 @@ def test_display_name_auto_enroll_shows_speaker_name() -> None:
 
 def test_display_name_auto_enroll_no_name_falls_back_to_label() -> None:
     state = _display_state(Resolution.AUTO_ENROLL, None)
-    assert display_name(state, _seg("SPEAKER_02")) == "SPEAKER_02"
+    assert display_name(state, _seg("SPEAKER_02")) == "Voice 3"
 
 
 # -- Harness export (eval truth) ---------------------------------------------

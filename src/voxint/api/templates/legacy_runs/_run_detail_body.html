@@ -1,3 +1,4 @@
+{% from "fragments/_chips.html" import chip, needs_review_chip %}
 {# Run-detail body (issue #160). Every form posts to the existing
    /runs/{id}/... action endpoints.
 
@@ -8,8 +9,8 @@
 <dl class="def-grid">
   <dt>Status</dt>
   <dd>
-    <span class="pill {{ run.status }}">{{ run.status }}</span>
-    {% if run_archived %}<span class="pill skipped">archived</span>{% endif %}
+    {{ chip(run.status) }}
+    {% if run_archived %}{{ chip("archived") }}{% endif %}
   </dd>
   <dt>Current stage</dt>
   <dd>{{ humanize_stage(run.current_stage) if run.current_stage else "Not started" }}</dd>
@@ -440,7 +441,7 @@ finished before Voxint began recording the detected language.</p>
   <div class="gt-row">
     <span>{{ s.stage }}</span>
     <span>{{ s.attempt }}</span>
-    <span><span class="pill {{ s.status }}">{{ s.status }}</span></span>
+    <span>{{ chip(s.status) }}</span>
     <span>{{ s.worker_id or "-" }}</span>
     <span>{{ s.started_at.strftime("%Y-%m-%d %H:%M:%S") if s.started_at else "-" }}</span>
     <span>{{ s.finished_at.strftime("%Y-%m-%d %H:%M:%S") if s.finished_at else "-" }}</span>

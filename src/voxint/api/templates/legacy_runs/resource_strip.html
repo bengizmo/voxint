@@ -1,3 +1,4 @@
+{% from "fragments/_chips.html" import chip, needs_review_chip %}
 {# Curated hardware strip (hardware-aware W3). Pure render over a
    ResourceStripView. It warns ONLY on driver thermal throttling or a
    currently-full service queue, each with one plain-language remedy; high VRAM
@@ -19,7 +20,7 @@
     {% endfor %}
     <div class="gpu-states">
       {% for g in resource_strip.gpus %}
-      <span class="pill {{ g.state }}">GPU {{ g.short_uuid }}: {{ g.state }}</span>
+      <span>GPU {{ g.short_uuid }}: {{ chip(g.state) }}</span>
       {% endfor %}
       {% if not resource_strip.warnings %}
       <span class="muted">No hardware warnings.</span>

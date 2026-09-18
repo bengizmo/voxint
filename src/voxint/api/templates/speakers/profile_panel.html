@@ -1,3 +1,4 @@
+{% from "fragments/_chips.html" import chip, needs_review_chip %}
 {# The speaker's profile fields (#159, #246, #383): aggregate provenance chip,
    3-column grid (ROLE / ORGANIZATION / LINKS), inline edit per field. Saves
    submit per-field via htmx; clearing is done by blanking the input and saving.
@@ -9,7 +10,8 @@
     <h2>Profile</h2>
     {% if profile.values()|list %}
     {% set has_accepted = profile.values()|selectattr("provenance", "eq", "enrichment")|list %}
-    <span class="pill{% if has_accepted %} completed{% endif %}">{% if has_accepted %}filled in by web research{% else %}entered by hand{% endif %} — edit anything</span>
+    {{ chip("completed" if has_accepted else "unknown") }}
+    <span class="muted">{% if has_accepted %}Filled in by web research{% else %}Entered by hand{% endif %} — edit anything</span>
     {% endif %}
   </div>
   {% if profile_error %}<p class="error" role="alert">{{ profile_error }}</p>{% endif %}

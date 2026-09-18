@@ -3,7 +3,14 @@
 {% block title %}Voxint — home{% endblock %}
 
 {% block cb_breadcrumb %}home{% endblock %}
-{% block cb_summary %}{{ date_summary }} · everything running locally{% endblock %}
+{% block cb_summary %}<time id="home-date" datetime="{{ date_iso }}">{{ date_summary }}</time> · everything running locally
+<script>
+  (function () {
+    const el = document.getElementById('home-date');
+    el.textContent = new Date(el.dateTime).toLocaleDateString('en-US', {weekday: 'long', month: 'short', day: 'numeric'});
+  })();
+</script>
+{% endblock %}
 {% block cb_actions %}
 {% if shell.can_write %}
 <a class="cb-btn cb-btn-primary" href="{% if shell.media_enabled %}/media{% else %}/runs#add-media{% endif %}">+ Add media</a>
@@ -17,10 +24,10 @@
     <div class="attention-card{% if review_backlog %} attention-warn{% endif %}">
       <span class="attention-count">{{ review_backlog }}</span>
       <div class="attention-body">
-        <strong class="attention-label">recordings to review</strong>
+        <strong class="attention-label">runs to review</strong>
         <span class="attention-note">finished, waiting on speaker decisions</span>
       </div>
-      {% if review_backlog %}<a class="attention-arrow" href="/review" aria-label="Review recordings">→</a>{% endif %}
+      {% if review_backlog %}<a class="attention-arrow" href="/review" aria-label="Review runs">→</a>{% endif %}
     </div>
     <div class="attention-card{% if unresolved_voices %} attention-warn{% endif %}">
       <span class="attention-count">{{ unresolved_voices }}</span>

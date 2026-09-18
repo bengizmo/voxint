@@ -283,9 +283,11 @@ def test_export_attributes_grounded_but_not_heard_name(
 
     # The grounded label is attributed to its roster speaker.
     assert f"] {layout['roster_speaker']['display_name']}:" in body
-    # Both unresolved labels render as their raw diarization label.
-    assert f"] {layout['heard_name']['label']}:" in body
-    assert f"] {layout['unresolved_label']}:" in body
+    # Both unresolved labels render as humanized "Voice N" display names.
+    heard_idx = int(layout["heard_name"]["label"].split("_")[1])
+    assert f"] Voice {heard_idx + 1}:" in body
+    unresolved_idx = int(layout["unresolved_label"].split("_")[1])
+    assert f"] Voice {unresolved_idx + 1}:" in body
     # The heard name is never promoted to an attribution.
     assert f"] {layout['heard_name']['name']}:" not in body
     # Every utterance's text is present.

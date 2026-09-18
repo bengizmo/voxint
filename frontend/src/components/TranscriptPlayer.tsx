@@ -1,3 +1,4 @@
+import { formatTime } from "../lib/format";
 import {
   forwardRef,
   memo,
@@ -21,7 +22,7 @@ import { fetchPeaks, type PeaksPayload, type TimeRange, type Turn } from "../lib
 import { type AnnotationLineSpan } from "../lib/annotations";
 import { SpeakerCombobox } from "./SpeakerCombobox";
 import { resolveJumpIndex } from "../lib/jump";
-import { CapabilityBanner, SpeedControl } from "./PlaybackControls";
+import { AudioTransport, CapabilityBanner, SpeedControl } from "./PlaybackControls";
 import { WaveformStrip } from "./WaveformStrip";
 import { useProgressiveRender } from "../lib/progressive-render";
 
@@ -264,10 +265,6 @@ export interface TranscriptPlayerHandle {
   focusCursorRow: () => void;
 }
 
-function formatTime(seconds: number): string {
-  return seconds.toFixed(2);
-}
-
 interface TranscriptRowProps {
   seg: Segment;
   index: number;
@@ -360,13 +357,13 @@ const TranscriptRow = memo(function TranscriptRow({
         }}
         disabled={!seek}
         title={seek ? "Play this line" : seekDisabledReason}
-        aria-label={`Play line at ${formatTime(seg.start)} seconds`}
+        aria-label={`Play line at ${formatTime(seg.start, { decimals: 2 })}`}
         className="mr-2"
       >
         ▶
       </button>
       <span className="opacity-60 tabular-nums mr-2">
-        [{formatTime(seg.start)}–{formatTime(seg.end)}]
+        [{formatTime(seg.start, { decimals: 2 })}–{formatTime(seg.end, { decimals: 2 })}]
       </span>
       {uncertain && (
         <span
@@ -376,12 +373,7 @@ const TranscriptRow = memo(function TranscriptRow({
           uncertain
         </span>
       )}
-      {seg.label ? (
-        <span className="spk-badge">{seg.label}</span>
-      ) : null}
-      {seg.speaker !== seg.label ? (
-        <><strong>{seg.speaker}:</strong>{" "}</>
-      ) : " "}
+      <><strong>{seg.speaker}:</strong>{" "}</>
       {splitting ? (
         // A cut lands BEFORE the clicked word, so word 0 has no legal cut
         // (its index would be 0, and the backend requires 0 < index < n);
@@ -480,7 +472,7 @@ const SCROLL_KEYS = new Set([
 ]);
 
 // Audio-synced transcript with per-line playback (issue #49) and follow-along
-// highlight + per-speaker colors (issue #50). Native <audio> plus the segment
+// highlight + per-speaker colors (issue #50). Custom audio transport plus the segment
 // list, highlighting the currently-playing segment via the element's
 // `timeupdate` event. Per-line ▶ / click-to-seek play just that ASR line's
 // span; both are gated on the fail-closed capability contract (issue #55) and,
@@ -787,9 +779,7 @@ export const TranscriptPlayer = forwardRef<
 
   return (
     <div>
-      {/* Player surface (issue #92): the native <audio>, speed control, waveform
-          and capability banner framed as one styled panel. The native control is
-          wrapped, never replaced (report §9.1) — a custom transport is #95. */}
+      {/* The hidden media element remains shared by transport and segment playback. */}
       <div className="player-surface">
         <div className="flex items-center my-2">
           <SpeedControl rate={rate} onChange={onRateChange} />
@@ -805,13 +795,14 @@ export const TranscriptPlayer = forwardRef<
         </div>
         <audio
           ref={audioRef}
-          controls
+          hidden
+          preload="metadata"
           src={mediaUrl}
-          className="w-full my-2"
           data-run-id={runId}
         >
           Your browser does not support the audio element.
         </audio>
+        <AudioTransport audioRef={audioRef} mediaUrl={mediaUrl} />
         {peaks && (
           <WaveformStrip
             peaks={peaks}

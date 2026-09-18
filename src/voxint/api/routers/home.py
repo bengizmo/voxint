@@ -43,7 +43,7 @@ _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 
 def _date_summary(now: datetime) -> str:
     weekday = _WEEKDAYS[now.weekday()]
-    return f"{weekday}, {now.strftime('%b')} {now.day}"
+    return f"{weekday}, {now.strftime('%b')} {now.day} UTC"
 
 
 @router.get("/", name="home")
@@ -68,6 +68,7 @@ def home(
         "request": request,
         "active_nav": "home",
         "now": now,
+        "date_iso": now.isoformat(),
         "date_summary": _date_summary(now),
         "window": selected,
         "window_invalid": window_invalid,

@@ -61,6 +61,7 @@
       --ink: #23201b;          /* primary text — warm near-black */
       --ink-2: #5c564c;        /* secondary text (muted, still AA on paper) */
       --ink-3: #6a6459;        /* tertiary / captions — AA (>=4.5:1) on all surfaces */
+      --data-fill: #7b8794;  /* data viz / decorative fills — neutral, not accent */
       --line-rgb: 230 223 210; /* hairline border channels (islands: border-line/40) */
       --line: rgb(var(--line-rgb));
       --line-strong: #d3cab9;  /* stronger divider */
@@ -69,7 +70,7 @@
       /* Calm teal accent — brand · links · focus · primary. Kept distinct from
          --ok green so "interactive" never reads as "success". */
       --accent: #2f7d76;
-      --accent-ink: #1f5c56;   /* accent text on paper (AA) */
+      --accent-ink: #1a524d;   /* accent text on paper (AA) */
       --accent-strong: #256a63;
       --accent-soft: #dcebe8;  /* tinted accent fills */
 
@@ -153,7 +154,8 @@
       :root:not([data-theme="light"]) {
         color-scheme: dark;
         --paper: #121316; --surface: #16181c; --surface-2: #1a1c20;
-        --ink: #dfe3e8; --ink-2: #8b929c; --ink-3: #6b7280;
+        --ink: #dfe3e8; --ink-2: #9ca3af; --ink-3: #8a919c;
+        --data-fill: #6b7b8a;
         --line-rgb: 38 41 47; --line-strong: #33373e; --line-subtle: #1c1f24;
         --accent: #4fc0b5; --accent-ink: #6dd0c6; --accent-strong: #5fc8be;
         --accent-soft: #172423;
@@ -175,7 +177,8 @@
       :root[data-theme="dark"] {
         color-scheme: dark;
         --paper: #121316; --surface: #16181c; --surface-2: #1a1c20;
-        --ink: #dfe3e8; --ink-2: #8b929c; --ink-3: #6b7280;
+        --ink: #dfe3e8; --ink-2: #9ca3af; --ink-3: #8a919c;
+        --data-fill: #6b7b8a;
         --line-rgb: 38 41 47; --line-strong: #33373e; --line-subtle: #1c1f24;
         --accent: #4fc0b5; --accent-ink: #6dd0c6; --accent-strong: #5fc8be;
         --accent-soft: #172423;
@@ -233,7 +236,11 @@
     .rail-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .icon-rail .rail-link:hover { background: var(--surface-2); color: var(--ink); }
     .icon-rail .rail-link[aria-current="page"] { color: var(--accent);
-               outline: 4px solid rgba(79,192,181,.18); outline-offset: -4px; }
+               background: var(--surface-2); }
+    /* Current page uses a left bar; the outer outline is reserved for focus. */
+    .icon-rail .rail-link[aria-current="page"]::before { content: "";
+               position: absolute; left: 0; top: 4px; bottom: 4px;
+               border-left: 3px solid var(--accent); }
     .icon-rail .rail-link svg,
     .command-bar .rail-link svg { width: 18px; height: 18px; }
     /* Tooltip: CSS-only, appears on hover/focus-visible */
@@ -410,12 +417,12 @@
                border-radius: var(--r-md); background: var(--surface); color: var(--ink); }
     .lib-search-row select { padding: .35rem .5rem; font: inherit;
                border: 1px solid var(--line); border-radius: var(--r-md);
-               background: var(--surface); color: var(--ink); }
+               background: var(--surface-2); color: var(--ink); }
     .lib-search-clear { font-size: var(--t-sm); color: var(--accent); text-decoration: none; }
     .file-missing-notice { display: inline-flex; align-items: baseline; gap: var(--space-1);
-               flex-wrap: wrap; }
+               flex-wrap: wrap; min-width: 0; max-width: 100%; }
     .file-missing-path { font-size: var(--t-sm); color: var(--ink-2); word-break: break-all;
-               max-width: 20rem; overflow: hidden; text-overflow: ellipsis;
+               min-width: 0; max-width: min(20rem, 100%); overflow: hidden; text-overflow: ellipsis;
                white-space: nowrap; display: inline-block; vertical-align: bottom; }
     .view-toggle { display: inline-flex; border: 1px solid var(--line);
                border-radius: var(--r-md); overflow: hidden; }
@@ -424,7 +431,7 @@
                text-decoration: none; background: var(--surface); }
     .view-toggle a[aria-current="true"], .view-toggle .is-active {
                background: var(--surface-2); color: var(--ink); font-weight: 600; }
-    .lib-table { overflow-x: auto; max-width: 100%; }
+    .lib-table { overflow-x: auto; min-width: 0; max-width: 100%; }
     .lib-table table { margin: var(--space-3) 0; }
     .lib-cards { list-style: none; display: grid; padding: 0;
                grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
@@ -443,6 +450,7 @@
     .me-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(14rem, 18rem);
                gap: var(--space-4); align-items: start; }
     @media (max-width: 48rem) { .me-layout { grid-template-columns: 1fr; } }
+    .me-segment-actions { position: sticky; top: 0; z-index: 2; background: var(--paper); padding-bottom: var(--space-2); border-bottom: 1px solid var(--line); margin-bottom: var(--space-2); }
     h1 { font-size: var(--t-xl); line-height: 1.2; letter-spacing: -.012em; }
     h2 { font-size: var(--t-lg); line-height: 1.2; letter-spacing: -.008em; }
     h3 { font-size: var(--t-md); line-height: 1.25; }
@@ -485,12 +493,25 @@
     button.secondary { background: transparent; border-color: transparent;
       color: var(--accent-ink); padding-left: .35rem; padding-right: .35rem; }
     button.secondary:hover { background: var(--accent-soft); border-color: transparent; }
+    input, select, textarea { accent-color: var(--accent); }
     input:not(:where([type=checkbox], [type=radio], [type=file], [type=hidden])),
     select, textarea {
       font: inherit; color: var(--ink); background: var(--surface);
       border: 1px solid var(--line); border-radius: var(--r-sm); padding: .3rem .45rem; }
     input:not(:where([type=checkbox], [type=radio], [type=file], [type=hidden])):focus-visible,
     select:focus-visible, textarea:focus-visible { border-color: var(--focus-ring); }
+    select, select option { background: var(--surface-2); color: var(--ink); }
+    .playback-speed { border-radius: var(--r-md); padding: var(--space-1) var(--space-2); }
+    .audio-transport { display: flex; flex-wrap: wrap; align-items: center;
+      gap: var(--space-2); padding: var(--space-2); margin: var(--space-2) 0;
+      background: var(--surface-2); color: var(--ink); border-radius: var(--r-md); }
+    .audio-transport .audio-transport-toggle { color: var(--accent-ink); min-width: 4.5rem; }
+    .audio-transport input[type="range"] { flex: 1 1 8rem; min-width: 0;
+      padding: 0; border: 0; background: transparent; cursor: pointer; }
+    .audio-transport input:disabled { cursor: not-allowed; opacity: .55; }
+    .audio-transport-time { font-family: var(--font-mono); font-size: var(--t-sm);
+      font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .audio-transport-error { flex-basis: 100%; margin: 0; }
     .label-card { border: 1px solid var(--line); border-radius: var(--r-md);
                   padding: .8rem 1rem; margin: .8rem 0; background: var(--surface); }
     .rail-summary { font-size: 1.05rem; font-weight: 600; color: var(--ink);
@@ -573,6 +594,8 @@
     /* Device-activity pills (W3): neutral/informational, never an alarm colour. */
     .pill.idle, .pill.unknown { background: var(--surface-2); color: var(--ink-3); }
     .pill.working, .pill.busy { background: var(--info-soft); border-color: var(--info); }
+    .pill.warn { background: var(--warn-soft); border-color: var(--warn); }
+    .pill.muted { color: var(--ink-3); }
     /* Curated hardware strip: a calm band above the run figures. */
     .resource-strip { margin: 0 0 1rem; }
     .resource-strip .gpu-states { display: flex; flex-wrap: wrap; gap: .5rem;
@@ -741,7 +764,8 @@
        The .spk-N class names are the public hook (islands + tests rely on them);
        they map onto the --spk-N tokens so chrome and islands share one source. */
     .tp-line { border-left: 3px solid var(--spk-accent, transparent);
-               padding: .15rem .5rem; border-radius: 0 var(--r-sm) var(--r-sm) 0; }
+               padding: .15rem .5rem; border-radius: 0 var(--r-sm) var(--r-sm) 0;
+               scroll-margin-top: 10rem; }
     .label-card { border-left: .35rem solid var(--spk-accent, var(--line)); }
     .spk-badge { font-size: .72rem; color: var(--ink-2); border: 1px solid var(--line);
                  border-radius: var(--r-sm); padding: 0 .35rem;
@@ -816,7 +840,7 @@
                       border-radius: var(--r-full); background: var(--surface-2);
                       border: 1px solid var(--line); }
     .progress-track > span { display: block; height: 100%; border-radius: var(--r-full);
-                      background: linear-gradient(90deg, var(--accent), var(--accent-strong)); }
+                      background: var(--data-fill); }
     /* Tonal on purpose — no shadow: elevation is reserved for the review header
        cards (report §9.5); the player reads as an inset panel, not a float. */
     .player-surface { background: var(--surface); border: 1px solid var(--line);
@@ -944,7 +968,7 @@
     .minibar { display: inline-block; vertical-align: middle; width: 6rem; height: .5rem;
                border-radius: var(--r-full); background: var(--surface-2); overflow: hidden;
                margin-left: .5rem; }
-    .minibar > span { display: block; height: 100%; background: var(--accent); opacity: .55; }
+    .minibar > span { display: block; height: 100%; background: var(--data-fill); opacity: .55; }
 
     /* ============================================================
        Ops Console shared primitives (epic #205, V3 #208).
@@ -998,7 +1022,7 @@
                 color: var(--accent-contrast); }
 
     /* --- Grid-row data views ------------------------------------ */
-    .grid-table { display: grid; width: 100%; overflow-x: auto; }
+    .grid-table { display: grid; width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; }
     .grid-table .gt-header { display: contents; }
     .grid-table .gt-header > * { font-size: var(--t-micro); text-transform: uppercase;
                 letter-spacing: .06em; color: var(--ink-3); padding: var(--space-2) var(--space-3);
@@ -1348,7 +1372,8 @@
     .media-card-duration { position: absolute; top: var(--space-2); right: var(--space-3);
                 font-family: var(--font-mono); font-size: var(--t-sm); color: var(--ink-2); }
     .media-card-title { display: block; margin-top: var(--space-3);
-                font-weight: 500; color: var(--ink); text-decoration: none; }
+                font-weight: 500; color: var(--ink); text-decoration: none;
+                min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .media-card-title:hover { color: var(--accent); }
     a.media-card-title { cursor: pointer; }
     .media-card-meta { font-size: var(--t-sm); color: var(--ink-2); margin-top: var(--space-1); }

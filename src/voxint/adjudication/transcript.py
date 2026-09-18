@@ -7,6 +7,7 @@ its own formatting (HTML vs plain text).
 """
 
 import enum
+import re
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ from sqlalchemy.orm import Session
 from voxint.adjudication.attribution import walk_attributions
 from voxint.adjudication.resolver import LabelState, Resolution, SegmentOverride
 from voxint.db.models import TranscriptSegment
+
+_SPEAKER_RE = re.compile(r"^SPEAKER_(\d+)$")
 
 
 class TranscriptText(enum.StrEnum):
@@ -189,26 +192,32 @@ def effective_text(seg: TranscriptSegment, corrected_text: str | None) -> str:
     return seg.raw_text
 
 
+def _humanize_label(label: str) -> str:
+    """Convert SPEAKER_00 to 'Voice 1'; pass through other labels."""
+    m = _SPEAKER_RE.match(label)
+    return f"Voice {int(m.group(1)) + 1}" if m else label
+
+
 def display_name(state: LabelState | None, seg: TranscriptSegment) -> str:
     """The speaker string for a segment, given its label's resolved state.
 
     A grounded/assigned label shows its speaker name; exclude/unknown rulings
-    annotate the local label; everything unresolved falls back to the raw label.
+    annotate the humanized label; everything unresolved uses the humanized label.
     """
     label = seg.diarization_label or "(no speaker)"
     if state is None:
-        return label
+        return _humanize_label(label)
     if state.resolution in (
         Resolution.HUMAN_ASSIGN,
         Resolution.GROUNDED_COSINE,
         Resolution.AUTO_ENROLL,
     ):
-        return state.speaker_name or label
+        return state.speaker_name or _humanize_label(label)
     if state.resolution is Resolution.HUMAN_EXCLUDE:
-        return f"(excluded) {label}"
+        return f"(excluded) {_humanize_label(label)}"
     if state.resolution is Resolution.HUMAN_UNKNOWN:
-        return f"Unknown ({label})"
-    return label
+        return f"Unknown ({_humanize_label(label)})"
+    return _humanize_label(label)
 
 
 def segment_speaker(override: SegmentOverride, seg: TranscriptSegment) -> str:

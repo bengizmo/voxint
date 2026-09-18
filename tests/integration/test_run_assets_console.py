@@ -173,14 +173,14 @@ class TestConsole:
         execute_job(session_factory, job_id, settings=settings, llm=FakeLLM([MENTIONS_BODY]))
         fragment = client.get(f"/runs/{run_id}/assets")
         assert "Acme Corp" in fragment.text
-        assert "stale" not in fragment.text
+        assert "Out of date" not in fragment.text
         # Change the source → the badge appears.
         with session_factory() as session:
             segment = session.query(TranscriptSegment).filter_by(pipeline_run_id=run_id).one()
             segment.enhanced_text = "Hello, I am Joanne from Acme Corporation."
             session.commit()
         fragment = client.get(f"/runs/{run_id}/assets")
-        assert "stale" in fragment.text
+        assert "Out of date" in fragment.text
 
 
 class TestExport:

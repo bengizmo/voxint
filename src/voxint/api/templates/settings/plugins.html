@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "fragments/_chips.html" import chip, needs_review_chip %}
 {% block title %}Voxint — plugins{% endblock %}
 {% block body %}
 {% from "settings/_tab_strip.html" import settings_tabs with context %}
@@ -24,8 +25,7 @@
     {% for p in plugins.active %}
     <tr>
       <td><a href="/settings/plugins/{{ p.plugin_id }}">{{ p.name }}</a></td>
-      <td><span class="pill {{ "ready" if p.enabled else "unverified" }}">
-        {{ "on" if p.enabled else "off" }}</span></td>
+      <td>{{ chip("enabled" if p.enabled else "disabled") }}</td>
       <td>{{ "yes" if p.has_section else "no" }}</td>
       <td>{{ p.description }}{% for w in p.warnings %}<br>
         <span class="muted">{{ w }}</span>{% endfor %}</td>

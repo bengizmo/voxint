@@ -323,7 +323,7 @@ def test_zero_label_run_shows_no_speakers_badge(
     with session_factory() as session:
         make_run(session, labels=[])
     body = client.get("/runs", params={"review": "resolved"}).text
-    assert "no speakers" in body
+    assert "No speakers" in body
 
 
 def test_source_path_is_html_escaped(
@@ -710,7 +710,7 @@ def test_non_running_status_chips_are_unchanged(
 
     first = client.get("/runs").text
     assert _status_cell(first, queued) == "Queued"
-    assert _status_cell(first, awaiting) == "Awaiting adjudication"
+    assert _status_cell(first, awaiting) == "Needs review"
     assert "%" not in _status_cell(first, queued)
     assert "%" not in _status_cell(first, awaiting)
 
@@ -1033,8 +1033,8 @@ def test_run_detail_shows_stage_ledger(
     assert "STAGE" in body
     # Status is never colour-only on the detail page: the run-status pill and each
     # stage-status pill carry their state word as text inside the span.
-    assert 'class="pill completed">completed</span>' in body
-    assert 'class="pill failed">failed</span>' in body
+    assert 'class="chip chip-ok ">Completed</span>' in body
+    assert 'class="chip chip-danger ">Failed</span>' in body
 
 
 def test_run_detail_unknown_run_404(client: TestClient) -> None:
@@ -1113,7 +1113,7 @@ def test_runs_list_links_to_detail(
     assert "RUN" in body
     # Status is never colour-only here either: the humanized label sits inside the
     # status pill span (the run is COMPLETED by default).
-    assert 'class="pill completed">Completed</span>' in body
+    assert 'class="chip chip-ok ">Completed</span>' in body
 
 
 # --- transcript (shared resolver-attributed presenter) ------------------------

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "fragments/_chips.html" import chip, needs_review_chip %}
 {% block title %}Voxint — hardware{% endblock %}
 {% block body %}
 {% from "settings/_tab_strip.html" import settings_tabs with context %}
@@ -46,7 +47,7 @@
       <td>{{ f.label }}</td>
       <td><code>{{ f.env_key }}</code></td>
       <td>{{ f.running }}{% if f.restart_pending %}<br>
-        <span class="pill warn">restart pending</span>
+        {{ chip("restart pending") }}
         <span class="muted">environment now: {{ f.pending }}</span>{% endif %}</td>
     </tr>
     {% endfor %}

@@ -354,8 +354,8 @@ def test_get_services_renders_doctor_checks(
     assert "redis" in body
     # Real test DB is up → postgres ready; the closed-port deps → failed. Both pill
     # states must appear (never a false all-good with a required dep down).
-    assert '<span class="pill ready">ready</span>' in body
-    assert '<span class="pill failed">failed</span>' in body
+    assert '<span class="chip chip-ok ">Ready</span>' in body
+    assert '<span class="chip chip-danger ">Failed</span>' in body
     # Plain-language remediation for a down dependency, no stack trace.
     assert "Start the model services" in body
 
@@ -394,7 +394,7 @@ def test_services_step_llm_enabled_unreachable_is_unverified(
     )
     body = client.get("/setup?step=services").text
     assert "llm endpoint" in body
-    assert '<span class="pill unverified">unverified</span>' in body
+    assert '<span class="chip chip-warn ">Unverified</span>' in body
     assert "sk-SECRETKEY" not in body
     assert "127.0.0.1:1" not in body  # no DSN / endpoint leaked
 
@@ -436,7 +436,7 @@ def test_services_step_renders_when_database_is_down(media_root: Path) -> None:
     resp = client.get("/setup?step=services")
     assert resp.status_code == 200
     assert "postgres" in resp.text
-    assert '<span class="pill failed">failed</span>' in resp.text
+    assert '<span class="chip chip-danger ">Failed</span>' in resp.text
 
 
 def test_services_step_llm_row_follows_row_over_env_on(
