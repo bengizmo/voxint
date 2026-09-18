@@ -413,6 +413,21 @@ def _requeue(args: argparse.Namespace) -> int:
 
 
 def _restart(args: argparse.Namespace) -> int:
+    if args.run_id is not None and (args.all_restartable or args.statuses or args.since):
+        print("error: run_id cannot be combined with bulk selectors (--all, --status, --since)")
+        return 2
+    if args.run_id is None and not (args.all_restartable or args.statuses or args.since):
+        print("error: provide a run_id or a bulk selector (--all, --status, --since)")
+        return 2
+    if args.all_restartable and args.statuses:
+        print("error: --all cannot be combined with --status")
+        return 2
+    if args.dry_run and args.run_id is not None:
+        print("error: --dry-run is only supported in bulk mode")
+        return 2
+    if args.run_id is None:
+        return _restart_bulk(args)
+
     from voxint.db.models import STAGE_ORDER, PipelineRun, RunStatus, Stage
     from voxint.db.session import build_engine, build_session_factory, session_scope
     from voxint.ingest import IngestError, RestartPrerequisiteError, restart_impact, restart_run
@@ -501,6 +516,202 @@ def _restart(args: argparse.Namespace) -> int:
     print(f"restarted {run_id} {restart_description}")
     _publish_or_defer(run_id, stage=parsed_stage)
     return 0
+
+
+def _restart_bulk(args: argparse.Namespace) -> int:
+    """Bulk restart: select runs by status/date, preview or execute."""
+    import datetime
+
+    from sqlalchemy import select
+
+    from voxint.db.models import PipelineRun, RunStatus, Stage
+    from voxint.db.session import build_engine, build_session_factory, session_scope
+
+    parsed_stage = Stage(args.from_stage) if args.from_stage else None
+    stage_label = parsed_stage.value if parsed_stage else "acquire"
+    if args.statuses:
+        target_statuses = list(dict.fromkeys(args.statuses))
+    else:
+        # --all or --since alone implies all restartable statuses.
+        target_statuses = [
+            RunStatus.COMPLETED.value,
+            RunStatus.FAILED.value,
+            RunStatus.CANCELLED.value,
+        ]
+
+    since_dt = None
+    if args.since is not None:
+        if not args.since:
+            print("error: --since requires a non-empty date (YYYY-MM-DD)")
+            return 2
+        try:
+            since_dt = datetime.datetime.strptime(args.since, "%Y-%m-%d").replace(
+                tzinfo=datetime.UTC
+            )
+        except ValueError:
+            print(f"error: invalid date format: {args.since} (expected YYYY-MM-DD)")
+            return 2
+
+    engine = build_engine()
+    factory = build_session_factory(engine)
+    try:
+        with session_scope(factory) as session:
+            q = (
+                select(PipelineRun.id, PipelineRun.revision)
+                .where(PipelineRun.status.in_(target_statuses))
+                .where(PipelineRun.archived_at.is_(None))
+            )
+            if since_dt is not None:
+                q = q.where(PipelineRun.created_at >= since_dt)
+            q = q.order_by(PipelineRun.created_at, PipelineRun.id)
+            candidates = [(run_id, revision) for run_id, revision in session.execute(q).all()]
+
+        if not candidates:
+            print("no matching runs")
+            return 0
+        if args.dry_run:
+            return _restart_bulk_dry_run(
+                candidates, factory, parsed_stage, args.acknowledge_label_risk
+            )
+        if not args.yes:
+            desc = f"from {stage_label}" if parsed_stage else "(full restart)"
+            try:
+                if input(f"Restart {len(candidates)} runs {desc}? [y/N] ").strip().lower() not in {
+                    "y",
+                    "yes",
+                }:
+                    return 2
+            except EOFError:
+                return 2
+        return _restart_bulk_execute(candidates, factory, parsed_stage, args.acknowledge_label_risk)
+    finally:
+        engine.dispose()
+
+
+def _restart_bulk_dry_run(
+    candidates: list[tuple[uuid.UUID, int]],
+    factory: "sessionmaker[Session]",
+    from_stage: "Stage | None",
+    acknowledge_label_risk: bool,
+) -> int:
+    from voxint.db.models import PipelineRun, RunStatus
+    from voxint.db.session import session_scope
+    from voxint.ingest import restart_impact
+
+    _RESTART_OK = {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
+    stage_label = from_stage.value if from_stage else "acquire"
+    counts = {"restart_ready": 0, "blocked": 0, "label_risk": 0, "ineligible": 0}
+    for run_id, _revision in candidates:
+        with session_scope(factory) as session:
+            run = session.get(PipelineRun, run_id)
+            if run is None or run.status not in _RESTART_OK or run.archived_at is not None:
+                print(f"{run_id}: ineligible (status changed)")
+                counts["ineligible"] += 1
+                continue
+            impact = restart_impact(session, run_id, from_stage=from_stage)
+        if impact.has_blockers:
+            print(
+                f"{run_id}: blocked ({impact.segment_scope_decisions} segment"
+                f" decisions, {impact.enrichment_evidence} enrichment rows)"
+            )
+            counts["blocked"] += 1
+        elif impact.label_scope_decisions > 0 and not acknowledge_label_risk:
+            print(f"{run_id}: label-risk ({impact.label_scope_decisions} label decisions)")
+            counts["label_risk"] += 1
+        else:
+            print(f"{run_id}: restart-ready (from {stage_label})")
+            counts["restart_ready"] += 1
+    print(
+        f"\n{counts['restart_ready']} restart-ready, {counts['blocked']} blocked,"
+        f" {counts['label_risk']} label-risk, {counts['ineligible']} ineligible"
+    )
+    return 0
+
+
+def _restart_bulk_execute(
+    candidates: list[tuple[uuid.UUID, int]],
+    factory: "sessionmaker[Session]",
+    from_stage: "Stage | None",
+    acknowledge_label_risk: bool,
+) -> int:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from voxint.config import get_settings
+    from voxint.db.models import PipelineRun, RunStatus
+    from voxint.db.session import session_scope
+    from voxint.ingest import IngestError, RestartPrerequisiteError, restart_impact, restart_run
+    from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
+
+    _RESTART_OK = {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
+    per_run_errors = (
+        IngestError,
+        InvalidTransitionError,
+        RestartPrerequisiteError,
+        SQLAlchemyError,
+    )
+    restarted_ids: list[uuid.UUID] = []
+    blocked = 0
+    label_risk_skipped = 0
+    stale = 0
+    errors = 0
+    for run_id, revision in candidates:
+        try:
+            with session_scope(factory) as session:
+                run = session.get(PipelineRun, run_id)
+                if run is None or run.status not in _RESTART_OK or run.archived_at is not None:
+                    stale += 1
+                    print(f"{run_id}: skipped (no longer eligible)", file=sys.stderr)
+                    continue
+                impact = restart_impact(session, run_id, from_stage=from_stage)
+                if impact.has_blockers:
+                    blocked += 1
+                    print(f"{run_id}: skipped (blocked)", file=sys.stderr)
+                    continue
+                if impact.label_scope_decisions > 0 and not acknowledge_label_risk:
+                    label_risk_skipped += 1
+                    print(
+                        f"{run_id}: skipped (label-risk, pass --acknowledge-label-risk)",
+                        file=sys.stderr,
+                    )
+                    continue
+                restart_run(
+                    session,
+                    run_id,
+                    from_stage=from_stage,
+                    expected_revision=revision,
+                    acknowledge_label_risk=acknowledge_label_risk,
+                )
+            restarted_ids.append(run_id)
+        except StaleRevisionError:
+            stale += 1
+            print(f"{run_id}: skipped (concurrently modified)", file=sys.stderr)
+        except per_run_errors as exc:
+            errors += 1
+            print(f"{run_id}: error: {exc}", file=sys.stderr)
+
+    settings = get_settings()
+    publish_cap = settings.rerun_publish_batch_size
+    published = 0
+    deferred = 0
+    broker_down = False
+    for i, run_id in enumerate(restarted_ids):
+        if broker_down or i >= publish_cap:
+            deferred += 1
+            continue
+        if _publish_or_defer(run_id, stage=from_stage):
+            published += 1
+        else:
+            broker_down = True
+            deferred += 1
+
+    total_skipped = blocked + label_risk_skipped + stale + errors
+    print(
+        f"restarted {len(restarted_ids)}, skipped {total_skipped}"
+        f" ({blocked} blocked, {label_risk_skipped} label-risk,"
+        f" {stale} stale, {errors} errors),"
+        f" published {published}, deferred {deferred}"
+    )
+    return 1 if errors else 0
 
 
 def _cancel(args: argparse.Namespace) -> int:
@@ -2543,7 +2754,32 @@ def build_parser() -> argparse.ArgumentParser:
     restart_p = sub.add_parser(
         "restart", help="restart a terminal run, optionally from a selected stage"
     )
-    restart_p.add_argument("run_id", help="pipeline run UUID")
+    restart_p.add_argument(
+        "run_id", nargs="?", default=None, help="pipeline run UUID (single-run mode)"
+    )
+    restart_p.add_argument(
+        "--status",
+        action="append",
+        dest="statuses",
+        choices=["completed", "failed", "cancelled"],
+        help="restart runs with this status (repeatable)",
+    )
+    restart_p.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_restartable",
+        help="restart all completed/failed/cancelled runs",
+    )
+    restart_p.add_argument(
+        "--since",
+        default=None,
+        help="only runs created on or after this date (YYYY-MM-DD, UTC)",
+    )
+    restart_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show per-run restart impact without restarting",
+    )
     restart_p.add_argument(
         "--from-stage",
         choices=["acquire", "prepare", "transcribe", "diarize_embed", "enhance_match", "finalize"],
