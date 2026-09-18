@@ -44,6 +44,12 @@ type Speaker = { id: string; displayName: string };
 type Decide = (label: string, action: string, speakerId?: string) => void;
 type Enroll = (label: string, name: string) => Promise<boolean>;
 
+const SPEAKER_RE = /^SPEAKER_(\d+)$/;
+function humanizeLabel(label: string): string {
+  const m = SPEAKER_RE.exec(label);
+  return m ? `Voice ${Number(m[1]) + 1}` : label;
+}
+
 function RulingRow({
   state,
   speakers,
@@ -72,7 +78,7 @@ function RulingRow({
       {mode === "needs-you" && confirmable && (
         <button
           type="button"
-          className="primary"
+          className="secondary"
           disabled={busy}
           onClick={() =>
             onDecide(state.label, "assign", state.candidateSpeakerId!)
@@ -141,7 +147,7 @@ function SpeakerCard({
       className={`label-card${state.paletteIndex != null ? ` spk-${state.paletteIndex}` : ""}`}
     >
       <h3>
-        {state.label}{" "}
+        {humanizeLabel(state.label)}{" "}
         <span
           className={`pill ${state.resolution === "auto_enroll" ? "grounded" : "unresolved"}`}
         >
@@ -234,7 +240,7 @@ function ResolvedRow({
       className={`label-card rail-row${state.paletteIndex != null ? ` spk-${state.paletteIndex}` : ""}`}
     >
       <h3>
-        {state.label}{" "}
+        {humanizeLabel(state.label)}{" "}
         <span className={`pill ${isHumanRuling(state) ? "human" : "grounded"}`}>
           {pill}
         </span>
@@ -475,7 +481,7 @@ function MergePanel({
               type="button"
               onClick={() => void doMerge()}
               disabled={mergeBusy}
-              className="primary text-sm mr-2"
+              className="secondary text-sm mr-2"
             >
               {mergeBusy ? "Merging…" : "Confirm merge"}
             </button>

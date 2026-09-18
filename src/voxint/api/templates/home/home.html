@@ -3,7 +3,14 @@
 {% block title %}Voxint — home{% endblock %}
 
 {% block cb_breadcrumb %}home{% endblock %}
-{% block cb_summary %}{{ date_summary }} · everything running locally{% endblock %}
+{% block cb_summary %}<time id="home-date" datetime="{{ date_iso }}">{{ date_summary }}</time> · everything running locally
+<script>
+  (function () {
+    const el = document.getElementById('home-date');
+    el.textContent = new Date(el.dateTime).toLocaleDateString('en-US', {weekday: 'long', month: 'short', day: 'numeric'});
+  })();
+</script>
+{% endblock %}
 {% block cb_actions %}
 {% if shell.can_write %}
 <a class="cb-btn cb-btn-primary" href="{% if shell.media_enabled %}/media{% else %}/runs#add-media{% endif %}">+ Add media</a>
