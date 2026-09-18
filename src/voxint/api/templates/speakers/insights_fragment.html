@@ -22,7 +22,7 @@
          class="term-bar-row" role="listitem"
          title="{{ t.term }}: used {{ t.count }}x (z-score {{ '%.1f'|format(t.z_score) }})">
         <span class="term-bar-label">{{ t.term }}</span>
-        <span class="term-bar-fill" aria-hidden="true" style="width: {{ t.count / max_count * 100 }}%"></span>
+        <span class="term-bar-fill" aria-hidden="true" style="width: {{ (t.count / max_count * 100)|round(1) }}%"></span>
         <span class="term-bar-count">{{ t.count }}</span>
       </a>
       {% endfor %}

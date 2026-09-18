@@ -72,8 +72,10 @@ export function AudioTransport({
     else {
       try {
         await audio.play();
-      } catch {
-        setError("Playback could not start. Try playing again.");
+      } catch (err) {
+        if ((err as DOMException).name !== "AbortError") {
+          setError("Playback could not start. Try playing again.");
+        }
       }
     }
   };

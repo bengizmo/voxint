@@ -46,7 +46,10 @@ export function WordCloud({
   );
 
   useEffect(() => {
-    if (!terms.length) return;
+    if (!terms.length) {
+      setWords([]);
+      return;
+    }
 
     const counts = displayed.map((t) => t.count);
     const minCount = Math.min(...counts);
@@ -141,7 +144,10 @@ export function WordCloud({
             role="button"
             tabIndex={0}
             onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") onTermClick(w.text);
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onTermClick(w.text);
+              }
             }}
           >
             <title>
