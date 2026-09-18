@@ -65,7 +65,9 @@
     </dl>
     {% set restartable = selected_run.status in ('completed', 'failed', 'cancelled') and not selected_run.archived_at %}
     {% if restartable and csrf_restart %}
-    {% if restart_impact and restart_impact.has_blockers %}
+    {% set full_blocked = restart_impact and restart_impact.has_blockers %}
+    {% set full_label_risk = restart_impact and restart_impact.label_scope_decisions > 0 and not restart_impact.has_blockers %}
+    {% if full_blocked %}
     <div class="mt-2">
       <button type="button" class="text-sm" disabled>
         {% if selected_run.status == 'failed' %}Retry{% else %}Re-run{% endif %}
@@ -75,31 +77,86 @@
         {{ restart_impact.enrichment_evidence }} enrichment evidence row(s)
         prevent restart. Submit as a new run instead.</span>
     </div>
-    {% elif restart_impact and restart_impact.label_scope_decisions > 0 %}
-    <form method="post" action="/runs/{{ selected_run.id }}/restart" class="mt-2">
+    {% else %}
+    <form method="post" action="/runs/{{ selected_run.id }}/restart" class="mt-2"
+          id="editor-restart-form">
       <input type="hidden" name="revision" value="{{ selected_run.revision }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_restart }}">
-      <div class="notice-warn text-sm" style="margin-bottom: 0.25em">
+      <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap">
+        <select name="from_stage" id="editor-restart-stage" class="text-sm">
+          <option value=""
+            data-blocked="false"
+            data-label-risk="{{ full_label_risk|tojson }}"
+            data-label-count="{{ restart_impact.label_scope_decisions if restart_impact else 0 }}"
+            >All stages{% if full_label_risk %} (label risk){% endif %}</option>
+          {% if restart_stages %}
+          {% for sp in restart_stages %}
+          <option value="{{ sp.stage }}"
+            {% if sp.blocked %}disabled{% endif %}
+            data-blocked="{{ sp.blocked|tojson }}"
+            data-label-risk="{{ sp.label_risk|tojson }}"
+            data-label-count="{{ sp.label_count }}">
+            {{ sp.label }}{% if sp.blocked %} (blocked){% endif %}
+          </option>
+          {% endfor %}
+          {% endif %}
+        </select>
+        <button type="submit" class="text-sm" id="editor-restart-btn">
+          {% if selected_run.status == 'failed' %}Retry{% else %}Re-run{% endif %}
+        </button>
+      </div>
+      {% if full_label_risk %}
+      <div id="editor-restart-warn" class="notice-warn text-sm" style="margin-top: 0.25em">
         <label>
-          <input type="checkbox" name="acknowledge_label_risk" value="true" required>
-          {{ restart_impact.label_scope_decisions }} speaker ruling(s) may apply
-          to different voices after re-processing.
+          <input type="checkbox" name="acknowledge_label_risk" value="true"
+                 id="editor-restart-ack" required>
+          <span id="editor-restart-msg">{{ restart_impact.label_scope_decisions }}
+            speaker ruling(s) may apply to different voices after re-processing.</span>
         </label>
       </div>
-      <button type="submit" class="text-sm"
-        onclick="return confirm('Restart from scratch? This re-processes all stages.')">
-        {% if selected_run.status == 'failed' %}Retry{% else %}Re-run{% endif %}
-      </button>
+      {% else %}
+      <div id="editor-restart-warn" class="notice-warn text-sm" style="margin-top: 0.25em; display: none">
+        <label>
+          <input type="checkbox" name="acknowledge_label_risk" value="true" id="editor-restart-ack">
+          <span id="editor-restart-msg"></span>
+        </label>
+      </div>
+      {% endif %}
     </form>
-    {% else %}
-    <form method="post" action="/runs/{{ selected_run.id }}/restart" class="mt-2">
-      <input type="hidden" name="revision" value="{{ selected_run.revision }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_restart }}">
-      <button type="submit" class="text-sm"
-        onclick="return confirm('Restart from scratch? This re-processes all stages.')">
-        {% if selected_run.status == 'failed' %}Retry{% else %}Re-run{% endif %}
-      </button>
-    </form>
+    <script>
+    (function() {
+      var sel = document.getElementById('editor-restart-stage');
+      var btn = document.getElementById('editor-restart-btn');
+      var warnDiv = document.getElementById('editor-restart-warn');
+      var ackBox = document.getElementById('editor-restart-ack');
+      var msg = document.getElementById('editor-restart-msg');
+      var form = document.getElementById('editor-restart-form');
+      function update() {
+        var opt = sel.options[sel.selectedIndex];
+        var blocked = opt.dataset.blocked === 'true';
+        var labelRisk = opt.dataset.labelRisk === 'true';
+        var labelCount = parseInt(opt.dataset.labelCount || '0', 10);
+        btn.disabled = blocked;
+        if (labelRisk) {
+          warnDiv.style.display = '';
+          ackBox.required = true;
+          msg.textContent = labelCount + ' speaker ruling(s) may apply to different voices after re-processing.';
+        } else {
+          warnDiv.style.display = 'none';
+          ackBox.required = false;
+          ackBox.checked = false;
+        }
+      }
+      sel.addEventListener('change', update);
+      form.addEventListener('submit', function(e) {
+        var opt = sel.options[sel.selectedIndex];
+        var label = opt.value ? opt.textContent.trim().split(' (')[0] : 'all stages';
+        if (!confirm('Restart from ' + label + '? Downstream results will be re-processed.')) {
+          e.preventDefault();
+        }
+      });
+    })();
+    </script>
     {% endif %}
     {% endif %}
     <p class="mt-1"><a href="/runs/{{ selected_run.id }}" class="text-sm">Run details</a></p>

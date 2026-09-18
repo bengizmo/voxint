@@ -161,6 +161,7 @@ from voxint.enrichment.translations import (
 from voxint.export import MEDIA_TYPES, format_timespan, transcript_payload
 from voxint.ingest import (
     MissingStageError,
+    RestartPrerequisiteError,
     RunArchivedError,
     RunMediaNotDeletableError,
     RunNotArchivableError,
@@ -183,6 +184,7 @@ from voxint.ingest import (
     requeue_failed_run,
     restart_impact,
     restart_run,
+    restart_stage_profiles,
     resume_run,
     submit_upload,
     submit_url,
@@ -224,9 +226,7 @@ _FINISHED_STATUSES = frozenset(
 )
 
 
-def _run_ids_with_status(
-    items: Sequence[RunListItem], statuses: frozenset[str]
-) -> list[uuid.UUID]:
+def _run_ids_with_status(items: Sequence[RunListItem], statuses: frozenset[str]) -> list[uuid.UUID]:
     """Select ids in page order for polling or terminal highlighting."""
     return [item.run_id for item in items if item.status in statuses]
 
@@ -236,9 +236,7 @@ def _poll_seconds(items: Sequence[RunListItem], live_ids: Sequence[uuid.UUID]) -
     tracked = set(live_ids)
     return (
         5
-        if any(
-            item.status == RunStatus.RUNNING.value and item.run_id in tracked for item in items
-        )
+        if any(item.status == RunStatus.RUNNING.value and item.run_id in tracked for item in items)
         else 15
     )
 
@@ -247,6 +245,7 @@ _MEDIA_CHUNK_BYTES = 256 * 1024
 # Bound on the per-run operator notes (issue #36) — hygiene for a TEXT column,
 # generous enough for real operator prose.
 MAX_OPERATOR_NOTES_CHARS = 10_000
+
 
 def _export_raw_host_only(raw: dict[str, Any] | None) -> dict[str, Any] | None:
     """Reduce the URL keys in an exported ``raw`` snapshot to host-only (D4).
@@ -402,9 +401,7 @@ def _run_assets_response(
         "legacy_runs/run_assets.html",
         {
             "request": request,
-            "assets": _run_assets_state(
-                session, request.app.state.settings, run_id, error
-            ),
+            "assets": _run_assets_state(session, request.app.state.settings, run_id, error),
             "csrf_assets_generate": mint_csrf_token(secret, CSRF_ASSETS_GENERATE),
             "csrf_assets_cancel": mint_csrf_token(secret, CSRF_ASSETS_CANCEL),
         },
@@ -428,9 +425,7 @@ def _run_translation_state(
         source_problem = str(exc)
     run = session.get(PipelineRun, run_id)
     detected = normalized_language(run.detected_language) if run is not None else None
-    preferred = normalized_language(
-        resolve_effective_translation_target_language(row, settings)
-    )
+    preferred = normalized_language(resolve_effective_translation_target_language(row, settings))
     # The generate select defaults to the preferred language; with none set,
     # the operator picks one per run (blank forces an explicit choice). A
     # preferred language MATCHING the detected one also defaults to blank:
@@ -448,8 +443,7 @@ def _run_translation_state(
                 # out of date rather than dressing it up as viewable (review
                 # finding — the card must never promise a view the transcript
                 # page and ?lang= exports would refuse).
-                "stale": current_hash is None
-                or head.source_content_hash != current_hash,
+                "stale": current_hash is None or head.source_content_hash != current_hash,
             }
             for head in heads
         ],
@@ -521,8 +515,7 @@ def _transcript_translation_context(
         {
             "code": head.target_language,
             "label": language_label(head.target_language),
-            "stale": current_hash is None
-            or head.source_content_hash != current_hash,
+            "stale": current_hash is None or head.source_content_hash != current_hash,
         }
         for head in heads
     ]
@@ -572,9 +565,7 @@ def _transcript_translation_context(
         "note": note,
         # Fresh generations only — the export menu's translated links (a stale
         # generation gets NO link; its export would 409).
-        "fresh": [
-            {"code": v["code"], "label": v["label"]} for v in views if not v["stale"]
-        ],
+        "fresh": [{"code": v["code"], "label": v["label"]} for v in views if not v["stale"]],
     }
 
 
@@ -620,7 +611,7 @@ def _peaks_cache_response(request: Request, body: bytes, artifact_id: uuid.UUID)
     if if_none_match is not None:
         # Strip an optional weak-validator prefix before comparing (weak match).
         candidates = {
-            v.strip()[2:] if v.strip().startswith('W/') else v.strip()
+            v.strip()[2:] if v.strip().startswith("W/") else v.strip()
             for v in if_none_match.split(",")
         }
         if "*" in candidates or etag in candidates:
@@ -733,11 +724,7 @@ def runs(
         if page.next_cursor
         else None
     )
-    grouped_items = (
-        group_failed_runs(page.items)
-        if active_view is LifecycleView.FAILED
-        else None
-    )
+    grouped_items = group_failed_runs(page.items) if active_view is LifecycleView.FAILED else None
     _queue_paused = is_queue_paused(session)
     _now = datetime.now(UTC)
     # Degraded stage cells read the cached resource snapshot (short-TTL,
@@ -757,7 +744,8 @@ def runs(
     stage_progress = _stage_progress_for(page.items, dashboard, _now)
     live_ids = (
         _run_ids_with_status(page.items, _LIVE_STATUSES)[:RUNS_LIVE_ROWS_MAX]
-        if grouped_items is None and not show_archived else []
+        if grouped_items is None and not show_archived
+        else []
     )
     return templates.TemplateResponse(
         request,
@@ -812,9 +800,7 @@ def runs(
                 include=search_filters.language,
             ),
             "LifecycleView": LifecycleView,
-            "clear_url": runs_url(
-                lifecycle=active_view, archived=show_archived
-            ),
+            "clear_url": runs_url(lifecycle=active_view, archived=show_archived),
             "pipeline_summary": _pipeline_summary(
                 run_status_counts(session),
                 queue_paused=_queue_paused,
@@ -847,14 +833,13 @@ def runs(
             "csrf_queue_resume": mint_csrf_token(request.app.state.csrf_secret, CSRF_QUEUE_RESUME),
             # Gate the URL-fetch form: when off, it renders disabled (POST /fetch
             # also refuses with 403), matching the CLI's ytdlp_enabled refusal.
-            "ytdlp_enabled": resolve_effective_ytdlp_enabled(
-                get_app_settings(session), settings
-            ),
+            "ytdlp_enabled": resolve_effective_ytdlp_enabled(get_app_settings(session), settings),
             # Injected clock for the relative-age render (format_age(now=…)).
             "now": _now,
             "active_nav": "runs",
         },
     )
+
 
 @core_router.get("/search")
 def search(
@@ -1013,15 +998,14 @@ def submit_media_upload(
     except DomainPackError as exc:
         # Freeze-time snapshot collision (issue #84) / unresolvable pack (issue
         # #11): surface a plain-language 422, not the raw 500 the bare raise gave.
-        raise HTTPException(
-            status_code=422, detail=deps._submit_domain_pack_detail(exc)
-        ) from exc
+        raise HTTPException(status_code=422, detail=deps._submit_domain_pack_detail(exc)) from exc
     # Commit-before-publish: the durable QUEUED run must exist before the
     # enqueue, so commit here rather than leaning on the dependency's
     # post-return commit (which would run after publish). A broker outage is
     # then non-fatal — the run stays QUEUED and the recovery sweep republishes.
     session.commit()
     return _run_redirect(result.run_id, published=result.publish())
+
 
 @core_router.post("/fetch")
 def fetch_media_url(
@@ -1060,14 +1044,13 @@ def fetch_media_url(
         # Freeze-time snapshot collision (issue #84) / unresolvable pack (issue
         # #11): plain-language 422 rather than a raw 500. The snapshot is frozen
         # before any row/source_path write, so nothing is stranded.
-        raise HTTPException(
-            status_code=422, detail=deps._submit_domain_pack_detail(exc)
-        ) from exc
+        raise HTTPException(status_code=422, detail=deps._submit_domain_pack_detail(exc)) from exc
     # Commit-before-publish, exactly as /submit: the durable QUEUED run must
     # exist before the enqueue, so a broker outage leaves it QUEUED for the
     # recovery sweep rather than failing the request.
     session.commit()
     return _run_redirect(result.run_id, published=result.publish())
+
 
 def build_run_detail_context(
     run_id: uuid.UUID,
@@ -1087,9 +1070,7 @@ def build_run_detail_context(
     # The attempt ledger, chronological — matches `voxint status`.
     stage_runs = list(
         session.execute(
-            select(StageRun)
-            .where(StageRun.pipeline_run_id == run_id)
-            .order_by(StageRun.started_at)
+            select(StageRun).where(StageRun.pipeline_run_id == run_id).order_by(StageRun.started_at)
         ).scalars()
     )
     settings: Settings = request.app.state.settings
@@ -1118,6 +1099,7 @@ def build_run_detail_context(
         RunStatus.FAILED.value,
         RunStatus.CANCELLED.value,
     )
+    ri = restart_impact(session, run.id) if run_terminal and not run_archived else None
     context: dict[str, Any] = {
         "request": request,
         "run": run,
@@ -1153,17 +1135,10 @@ def build_run_detail_context(
         # archive once the run carries a stamp.
         "run_archived": run_archived,
         "run_terminal": run_terminal,
-        "restart_impact": (
-            restart_impact(session, run.id)
-            if run_terminal and not run_archived
-            else None
-        ),
-        "csrf_run_archive": mint_csrf_token(
-            request.app.state.csrf_secret, CSRF_RUN_ARCHIVE
-        ),
-        "csrf_run_unarchive": mint_csrf_token(
-            request.app.state.csrf_secret, CSRF_RUN_UNARCHIVE
-        ),
+        "restart_impact": ri,
+        "restart_stages": restart_stage_profiles(ri) if ri else None,
+        "csrf_run_archive": mint_csrf_token(request.app.state.csrf_secret, CSRF_RUN_ARCHIVE),
+        "csrf_run_unarchive": mint_csrf_token(request.app.state.csrf_secret, CSRF_RUN_UNARCHIVE),
         "csrf_run_media_delete": mint_csrf_token(
             request.app.state.csrf_secret, CSRF_RUN_MEDIA_DELETE
         ),
@@ -1181,9 +1156,7 @@ def build_run_detail_context(
         "csrf_assets_generate": mint_csrf_token(
             request.app.state.csrf_secret, CSRF_ASSETS_GENERATE
         ),
-        "csrf_assets_cancel": mint_csrf_token(
-            request.app.state.csrf_secret, CSRF_ASSETS_CANCEL
-        ),
+        "csrf_assets_cancel": mint_csrf_token(request.app.state.csrf_secret, CSRF_ASSETS_CANCEL),
         # Transcript translation (issue #133): current generation(s)
         # with staleness, plus generation controls.
         "translation_state": _run_translation_state(session, settings, run_id),
@@ -1195,9 +1168,7 @@ def build_run_detail_context(
         ),
         # Some callers suppress the guided-tour banner explicitly.
         "tutorial": (
-            _tutorial_banner(
-                request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id
-            )
+            _tutorial_banner(request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id)
             if tutorial
             else None
         ),
@@ -1227,6 +1198,7 @@ def run_detail(
         "legacy_runs/run_detail.html",
         build_run_detail_context(run_id, request, session),
     )
+
 
 @core_router.get("/runs/{run_id}/transcript")
 def run_transcript(
@@ -1277,9 +1249,7 @@ def run_transcript(
                 "speaker": para.speaker,
                 "lines": para.text.split("\n"),
                 "timespan": (
-                    format_timespan(para.start_seconds, para.end_seconds)
-                    if timestamps
-                    else None
+                    format_timespan(para.start_seconds, para.end_seconds) if timestamps else None
                 ),
             }
             for para in paragraphize_transcript(lines)
@@ -1314,9 +1284,7 @@ def run_transcript(
     # transcript-only label (a segment whose label has no turn). Two cheap
     # DISTINCT queries, kept explicit so the shared universe is provable here.
     palette = speaker_palette(run_label_universe(session, run_id))
-    island_props = _transcript_island_props(
-        session, run_id, lines, palette, capability, settings
-    )
+    island_props = _transcript_island_props(session, run_id, lines, palette, capability, settings)
     # Navigable outline (issue #87) pairs with the reviewed/corrected transcript,
     # like the interleaved translation view below: its quotes and summary/topics
     # are built from the corrected rendition (build_outline reads the effective
@@ -1355,6 +1323,7 @@ def run_transcript(
             "active_nav": "runs",
         },
     )
+
 
 # /review/{run_id}/transcript registers between core_router and actions_router
 # (legacy_review.transcript_router, included in app.py's registration order).
@@ -1420,44 +1389,50 @@ def bulk_retry(
     for run_id, expected_revision in pairs:
         run = session.get(PipelineRun, run_id)
         if run is None:
-            results.append({
-                "run_id": run_id,
-                "label": run_id.hex[:8],
-                "status": "skipped",
-                "reason": "run not found",
-            })
+            results.append(
+                {
+                    "run_id": run_id,
+                    "label": run_id.hex[:8],
+                    "status": "skipped",
+                    "reason": "run not found",
+                }
+            )
             continue
         try:
             failed_stage = Stage(run.current_stage) if run.current_stage else None
             source_path = run.media_item.source_path if run.media_item else ""
-            label = friendly_media_label(
-                title_from_snapshot(run.sidecar), source_path
-            )
+            label = friendly_media_label(title_from_snapshot(run.sidecar), source_path)
         except (ValueError, AttributeError):
             failed_stage = None
             label = run_id.hex[:8]
         try:
             with session.begin_nested():
-                requeue_failed_run(
-                    session, run_id, expected_revision=expected_revision
-                )
+                requeue_failed_run(session, run_id, expected_revision=expected_revision)
         except (
-            RunNotFoundError, RunArchivedError, RunNotFailedError,
-            MissingStageError, StaleRevisionError, InvalidTransitionError,
+            RunNotFoundError,
+            RunArchivedError,
+            RunNotFailedError,
+            MissingStageError,
+            StaleRevisionError,
+            InvalidTransitionError,
             IntegrityError,
         ) as exc:
-            results.append({
+            results.append(
+                {
+                    "run_id": run_id,
+                    "label": label,
+                    "status": "skipped",
+                    "reason": _SKIP_REASONS.get(type(exc), "cannot requeue"),
+                }
+            )
+            continue
+        results.append(
+            {
                 "run_id": run_id,
                 "label": label,
-                "status": "skipped",
-                "reason": _SKIP_REASONS.get(type(exc), "cannot requeue"),
-            })
-            continue
-        results.append({
-            "run_id": run_id,
-            "label": label,
-            "status": "requeued",
-        })
+                "status": "requeued",
+            }
+        )
         pending_publishes.append((run_id, failed_stage))
 
     try:
@@ -1502,8 +1477,7 @@ def bulk_retry(
             "requeued": requeued_count,
             "skipped": skipped_count,
             "any_deferred": any(
-                r["status"] == "requeued" and not r.get("published")
-                for r in results
+                r["status"] == "requeued" and not r.get("published") for r in results
             ),
         },
     )
@@ -1549,13 +1523,9 @@ def queue_resume_route(
     for run_id, stage_value in queued:
         stage = Stage(stage_value) if stage_value else None
         try:
-            pipeline_task_for_stage(stage).apply_async(
-                (str(run_id),), ignore_result=True
-            )
+            pipeline_task_for_stage(stage).apply_async((str(run_id),), ignore_result=True)
         except OperationalError:
-            logger.warning(
-                "queue resume: broker unavailable; remaining runs deferred to sweep"
-            )
+            logger.warning("queue resume: broker unavailable; remaining runs deferred to sweep")
             break
     return RedirectResponse("/runs", status_code=303)
 
@@ -1595,9 +1565,8 @@ def requeue_run(
     # exist before the enqueue, and a broker outage leaves it QUEUED for the
     # recovery sweep rather than failing the request.
     session.commit()
-    return _run_redirect(
-        run_id, published=deps._publish_or_defer(run_id, stage=failed_stage)
-    )
+    return _run_redirect(run_id, published=deps._publish_or_defer(run_id, stage=failed_stage))
+
 
 @actions_router.post("/runs/{run_id}/cancel")
 def cancel_run_route(
@@ -1633,6 +1602,7 @@ def cancel_run_route(
     # Pure DB state, no enqueue — commit and return to the run detail (PRG).
     session.commit()
     return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
 
 @actions_router.post("/runs/{run_id}/pause")
 def pause_run_route(
@@ -1676,9 +1646,7 @@ def resume_run_route(
     except (RunNotPausedError, RunArchivedError, StaleRevisionError, InvalidTransitionError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     session.commit()
-    return _run_redirect(
-        run_id, published=deps._publish_or_defer(run_id, stage=paused_stage)
-    )
+    return _run_redirect(run_id, published=deps._publish_or_defer(run_id, stage=paused_stage))
 
 
 @actions_router.post("/runs/{run_id}/restart")
@@ -1690,38 +1658,55 @@ def restart_run_route(
     revision: Annotated[int, Form()],
     csrf_token: Annotated[str | None, Form()] = None,
     acknowledge_label_risk: Annotated[bool, Form()] = False,
+    from_stage: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
-    """Restart a terminal run from scratch — re-processes all stages from ACQUIRE.
+    """Restart a terminal run, optionally from a selected pipeline stage.
 
-    Returns 409 when segment-scope rulings or enrichment evidence block restart
-    (append-only, cannot be deleted), or when label-scope rulings exist and
-    *acknowledge_label_risk* is not set. Both restart forms (run detail and
-    editor) render a required checkbox when label-scope rulings exist and
-    disable the button entirely when hard blockers are present.
+    When *from_stage* is omitted or empty, restarts from ACQUIRE (full restart).
+    When set to a valid stage name (e.g. ``enhance_match``), restarts from that
+    stage, keeping upstream outputs intact and eagerly deleting downstream
+    outputs.
+
+    Returns 409 when segment-scope rulings or enrichment evidence block restart,
+    when label-scope rulings exist and *acknowledge_label_risk* is not set, or
+    when upstream prerequisites are missing.
     """
     _require_csrf(request, CSRF_RESTART, csrf_token)
     run = _run_or_404(session, run_id)
     _reject_if_archived(run)
+
+    parsed_stage: Stage | None = None
+    if from_stage:
+        try:
+            parsed_stage = Stage(from_stage)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"unknown stage: {from_stage}") from None
+
     try:
         restart_run(
             session,
             run_id,
+            from_stage=parsed_stage,
             expected_revision=revision,
             acknowledge_label_risk=acknowledge_label_risk,
         )
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (RunRestartBlockedError, RunRestartLabelRiskError) as exc:
+    except (
+        RunRestartBlockedError,
+        RunRestartLabelRiskError,
+        RestartPrerequisiteError,
+    ) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (
-        RunNotRestartableError, RunArchivedError,
-        StaleRevisionError, InvalidTransitionError,
+        RunNotRestartableError,
+        RunArchivedError,
+        StaleRevisionError,
+        InvalidTransitionError,
     ) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     session.commit()
-    return _run_redirect(
-        run_id, published=deps._publish_or_defer(run_id, stage=None)
-    )
+    return _run_redirect(run_id, published=deps._publish_or_defer(run_id, stage=parsed_stage))
 
 
 @actions_router.post("/runs/{run_id}/archive")
@@ -1747,6 +1732,7 @@ def archive_run_route(
     session.commit()
     return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
+
 @actions_router.post("/runs/{run_id}/unarchive")
 def unarchive_run_route(
     run_id: uuid.UUID,
@@ -1766,6 +1752,7 @@ def unarchive_run_route(
     session.commit()
     return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
+
 @actions_router.post("/runs/{run_id}/media/delete")
 def delete_run_media_route(
     run_id: uuid.UUID,
@@ -1783,9 +1770,7 @@ def delete_run_media_route(
     _require_csrf(request, CSRF_RUN_MEDIA_DELETE, csrf_token)
     settings: Settings = request.app.state.settings
     try:
-        plan = delete_run_derived_media(
-            session, run_id, media_root=settings.media_root
-        )
+        plan = delete_run_derived_media(session, run_id, media_root=settings.media_root)
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RunMediaNotDeletableError as exc:
@@ -1803,6 +1788,7 @@ def delete_run_media_route(
         }
     )
     return RedirectResponse(f"/runs/{run_id}?{params}", status_code=303)
+
 
 @actions_router.post("/runs/{run_id}/notes")
 def save_operator_notes(
@@ -1829,6 +1815,7 @@ def save_operator_notes(
     run.operator_notes = cleaned or None
     session.commit()
     return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
 
 @actions_router.get("/runs/{run_id}/export.json")
 def export_run_json(
@@ -1898,9 +1885,7 @@ def export_run_json(
                 "generation": asset.generation,
                 "source_content_hash": asset.source_content_hash,
                 "stale": (
-                    asset.source_content_hash != current_hash
-                    if current_hash is not None
-                    else None
+                    asset.source_content_hash != current_hash if current_hash is not None else None
                 ),
                 "machine_generated": True,
                 "completed_at": asset.completed_at.isoformat(),
@@ -1936,6 +1921,7 @@ def export_run_json(
 # holds without a new flag or token path. The one windowed series
 # (voxint_runs_created_24h) bakes its window into the metric name.
 
+
 def _resource_snapshot(request: Request) -> ResourceSnapshot:
     """The cached hardware snapshot for a render, guarded to never raise.
 
@@ -1947,19 +1933,19 @@ def _resource_snapshot(request: Request) -> ResourceSnapshot:
     """
     return collect_resource_status_or_empty(request.app.state.settings)
 
+
 @dashboards_router.get("/metrics")
 def metrics(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     now = datetime.now(UTC)
     stats = collect_stats(session, since=now - DEFAULT_WINDOW, now=now)
     # Append the hardware gauges from the same cached snapshot the dashboard
     # and resource page render, so a scrape and the UI cannot disagree.
-    body = render_prometheus(stats) + render_resource_prometheus(
-        _resource_snapshot(request)
-    )
+    body = render_prometheus(stats) + render_resource_prometheus(_resource_snapshot(request))
     return Response(
         content=body,
         media_type="text/plain; version=0.0.4; charset=utf-8",
     )
+
 
 # ---- Operator dashboard (issue #13) ----------------------------------------
 # The dashboard folded into Home (Console 2.0 P1, #152): the task cards and
@@ -1968,9 +1954,11 @@ def metrics(request: Request, operator: OperatorDep, session: SessionDep) -> Res
 # so bookmarks and muscle memory keep working (REDIRECT_MAP row in the
 # characterization contract).
 
+
 @dashboards_router.get("/dashboard")
 def dashboard(operator: OperatorDep) -> RedirectResponse:
     return RedirectResponse("/", status_code=303)
+
 
 # ---- Hardware resource page (hardware-aware W3) -----------------------------
 # The fuller live view (aggregated GPU card, per-service admission, curated
@@ -1980,6 +1968,7 @@ def dashboard(operator: OperatorDep) -> RedirectResponse:
 # The route remains as a permanent authenticated redirect so bookmarks, muscle
 # memory, and an already-open Resources tab's in-flight poll keep working
 # (REDIRECT_MAP row in the characterization contract).
+
 
 @dashboards_router.get("/resources")
 def resources(operator: OperatorDep) -> RedirectResponse:
@@ -1992,6 +1981,7 @@ def run_assets_fragment(
 ) -> Response:
     _run_or_404(session, run_id)
     return _run_assets_response(request, session, run_id)
+
 
 @tail_router.post("/runs/{run_id}/assets/generate")
 def run_assets_generate(
@@ -2016,9 +2006,7 @@ def run_assets_generate(
         try:
             kinds = (RunAssetKind(kind),)
         except ValueError as exc:
-            raise HTTPException(
-                status_code=422, detail=f"unknown asset kind {kind!r}"
-            ) from exc
+            raise HTTPException(status_code=422, detail=f"unknown asset kind {kind!r}") from exc
     try:
         created, _skipped = create_jobs(
             session, pipeline_run_id=run_id, kinds=kinds, settings=settings
@@ -2038,6 +2026,7 @@ def run_assets_generate(
         else None
     )
     return _run_assets_response(request, session, run_id, error=notice)
+
 
 @tail_router.post("/runs/{run_id}/assets/{job_id}/cancel")
 def run_assets_cancel(
@@ -2060,12 +2049,14 @@ def run_assets_cancel(
     session.commit()
     return _run_assets_response(request, session, run_id)
 
+
 @tail_router.get("/runs/{run_id}/translation")
 def run_translation_fragment(
     run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
 ) -> Response:
     _run_or_404(session, run_id)
     return _run_translation_response(request, session, run_id)
+
 
 @tail_router.post("/runs/{run_id}/translation/generate")
 def run_translation_generate(
@@ -2098,9 +2089,7 @@ def run_translation_generate(
     target = normalized_language(target_language)
     if target is None:
         target = normalized_language(
-            resolve_effective_translation_target_language(
-                get_app_settings(session), settings
-            )
+            resolve_effective_translation_target_language(get_app_settings(session), settings)
         )
     if target is None:
         return respond(
@@ -2130,6 +2119,7 @@ def run_translation_generate(
         started=False,
     )
 
+
 @tail_router.post("/runs/{run_id}/translation/{job_id}/cancel")
 def run_translation_cancel(
     run_id: uuid.UUID,
@@ -2150,6 +2140,7 @@ def run_translation_cancel(
     # Commit now so the executor's post-call check sees it immediately.
     session.commit()
     return _run_translation_response(request, session, run_id)
+
 
 @tail_router.get("/media/{run_id}")
 @tail_router.head("/media/{run_id}")
@@ -2183,9 +2174,8 @@ def media(
     if request.method == "HEAD":
         fh.close()
         return Response(status_code=status, headers=headers)
-    return StreamingResponse(
-        _stream_file(fh, start, length), status_code=status, headers=headers
-    )
+    return StreamingResponse(_stream_file(fh, start, length), status_code=status, headers=headers)
+
 
 @tail_router.get("/runs/{run_id}/clips/{clip_id}")
 @tail_router.head("/runs/{run_id}/clips/{clip_id}")
@@ -2235,6 +2225,7 @@ def run_clip(
         _stream_file(clip.handle, start, length), status_code=status, headers=headers
     )
 
+
 @tail_router.get("/media/{run_id}/peaks")
 def media_peaks(
     run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
@@ -2256,9 +2247,7 @@ def media_peaks(
 
     # Fast path: a trusted cache hit, no lock.
     cached = load_cached_peaks(session, run_id, media_root)
-    if cached is not None and _peaks_cache_trusted(
-        session, run_id, media_root, cached
-    ):
+    if cached is not None and _peaks_cache_trusted(session, run_id, media_root, cached):
         return _peaks_cache_response(request, cached.body, cached.artifact_id)
 
     # Slow path: serialize compute+publish per run with a transaction-scoped
@@ -2272,9 +2261,7 @@ def media_peaks(
     # Re-check under the lock: a racing request may have just populated the
     # cache while we waited, and its committed row is the canonical one.
     cached = load_cached_peaks(session, run_id, media_root)
-    if cached is not None and _peaks_cache_trusted(
-        session, run_id, media_root, cached
-    ):
+    if cached is not None and _peaks_cache_trusted(session, run_id, media_root, cached):
         return _peaks_cache_response(request, cached.body, cached.artifact_id)
 
     gate = _get_media_gate(request)
@@ -2289,9 +2276,7 @@ def media_peaks(
         try:
             payload = compute_peaks(fh)
         except PeaksError as exc:
-            raise HTTPException(
-                status_code=404, detail=f"waveform unavailable: {exc}"
-            ) from exc
+            raise HTTPException(status_code=404, detail=f"waveform unavailable: {exc}") from exc
     finally:
         fh.close()
     row_id = store_peaks(session, run_id, media_root, payload, fingerprint)
