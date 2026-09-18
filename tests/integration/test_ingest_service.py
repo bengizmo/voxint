@@ -76,9 +76,7 @@ def _drive_to_failed(session: Session, run_id: uuid.UUID, stage: Stage) -> RunSn
         nxt = next_stage(held.current_stage)
         assert nxt is not None, f"{stage!r} not reachable in STAGE_ORDER"
         held = cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=nxt)
-    held = cas_update_run(
-        session, held, status=RunStatus.FAILED, current_stage=stage, error="boom"
-    )
+    held = cas_update_run(session, held, status=RunStatus.FAILED, current_stage=stage, error="boom")
     session.commit()
     return held
 
@@ -160,9 +158,7 @@ def test_submit_stamps_from_folder_mapping(
         session.add(MediaFolder(path="interviews", domain_pack="interview"))
         session.commit()
     with session_factory() as session:
-        mapped = submit_media_item(
-            session, "interviews/ep1.wav", settings=settings
-        )
+        mapped = submit_media_item(session, "interviews/ep1.wav", settings=settings)
         unmapped = submit_media_item(session, "misc/x.wav", settings=settings)
         session.commit()
         mapped_id, unmapped_id = mapped.run_id, unmapped.run_id
@@ -427,9 +423,7 @@ def test_submit_media_item_recovers_from_concurrent_insert(
     assert loser_out["run_id"] != winner_run
     with session_factory() as session:
         media = (
-            session.execute(select(MediaItem).where(MediaItem.source_path == path))
-            .scalars()
-            .all()
+            session.execute(select(MediaItem).where(MediaItem.source_path == path)).scalars().all()
         )
         assert len(media) == 1
         assert len(session.execute(select(PipelineRun)).scalars().all()) == 2
@@ -939,14 +933,11 @@ def test_submit_media_item_applies_sidecar(
     _write_pack(tmp_path, "podcast", name_seeds=["Pack Seed"])
     settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
     sidecar = parse_sidecar(
-        "title: T\nspeakers: [Jane Doe]\ndomain_pack: podcast\n"
-        "notes: from sidecar\nextra: kept\n",
+        "title: T\nspeakers: [Jane Doe]\ndomain_pack: podcast\nnotes: from sidecar\nextra: kept\n",
         source_name="a.wav.yaml",
     )
     with session_factory() as session:
-        run = submit_media_item(
-            session, "incoming/a.wav", settings=settings, sidecar=sidecar
-        )
+        run = submit_media_item(session, "incoming/a.wav", settings=settings, sidecar=sidecar)
         session.commit()
         run_id = run.run_id
     with session_factory() as session:
@@ -993,9 +984,7 @@ def test_submit_persists_explicit_speaker_hint(
     # A CLI-style explicit exact count is frozen on the run; the bound is dropped
     # because an exact count subsumes it (num wins at diarize time).
     with session_factory() as session:
-        run = submit_media_item(
-            session, "incoming/a.wav", diarization_num_speakers=2
-        )
+        run = submit_media_item(session, "incoming/a.wav", diarization_num_speakers=2)
         session.commit()
         run_id = run.run_id
     with session_factory() as session:
@@ -1008,9 +997,7 @@ def test_submit_persists_explicit_bound(
     session_factory: sessionmaker[Session],
 ) -> None:
     with session_factory() as session:
-        run = submit_media_item(
-            session, "incoming/b.wav", diarization_max_speakers=4
-        )
+        run = submit_media_item(session, "incoming/b.wav", diarization_max_speakers=4)
         session.commit()
         run_id = run.run_id
     with session_factory() as session:
@@ -1360,7 +1347,7 @@ def test_restart_blocked_by_segment_scope_ruling(
     session_factory: sessionmaker[Session],
 ) -> None:
     from voxint.db.models import AdjudicationDecision, Speaker
-    from voxint.ingest import RunRestartBlockedError
+    from voxint.ingest import RunRestartVoidRequiredError
 
     with session_factory() as session:
         run_id, seg_ids = _completed_run_with_segments(session, "incoming/restart-seg.wav")
@@ -1381,17 +1368,17 @@ def test_restart_blocked_by_segment_scope_ruling(
         session.commit()
 
     with session_factory() as session:
-        with pytest.raises(RunRestartBlockedError) as exc_info:
+        with pytest.raises(RunRestartVoidRequiredError) as exc_info:
             restart_run(session, run_id)
         assert exc_info.value.impact.segment_scope_decisions == 1
-        assert exc_info.value.impact.has_blockers
+        assert exc_info.value.impact.requires_void
 
 
 def test_restart_blocked_by_word_range_ruling(
     session_factory: sessionmaker[Session],
 ) -> None:
     from voxint.db.models import AdjudicationDecision, Speaker
-    from voxint.ingest import RunRestartBlockedError
+    from voxint.ingest import RunRestartVoidRequiredError
 
     with session_factory() as session:
         run_id, seg_ids = _completed_run_with_segments(session, "incoming/restart-word.wav")
@@ -1414,10 +1401,10 @@ def test_restart_blocked_by_word_range_ruling(
         session.commit()
 
     with session_factory() as session:
-        with pytest.raises(RunRestartBlockedError) as exc_info:
+        with pytest.raises(RunRestartVoidRequiredError) as exc_info:
             restart_run(session, run_id)
         assert exc_info.value.impact.segment_scope_decisions == 1
-        assert exc_info.value.impact.has_blockers
+        assert exc_info.value.impact.requires_void
 
 
 def test_restart_blocked_by_enrichment_evidence(
@@ -1431,7 +1418,7 @@ def test_restart_blocked_by_enrichment_evidence(
         EnrichmentProducerRun,
         Speaker,
     )
-    from voxint.ingest import RunRestartBlockedError
+    from voxint.ingest import RunRestartVoidRequiredError
 
     with session_factory() as session:
         run_id, seg_ids = _completed_run_with_segments(session, "incoming/restart-evid.wav")
@@ -1473,10 +1460,10 @@ def test_restart_blocked_by_enrichment_evidence(
         session.commit()
 
     with session_factory() as session:
-        with pytest.raises(RunRestartBlockedError) as exc_info:
+        with pytest.raises(RunRestartVoidRequiredError) as exc_info:
             restart_run(session, run_id)
         assert exc_info.value.impact.enrichment_evidence == 1
-        assert exc_info.value.impact.has_blockers
+        assert exc_info.value.impact.requires_void
 
 
 def test_restart_label_risk_requires_acknowledgement(
@@ -1512,14 +1499,12 @@ def test_restart_label_risk_requires_acknowledgement(
 def test_restart_ack_does_not_bypass_segment_blockers(
     session_factory: sessionmaker[Session],
 ) -> None:
-    """acknowledge_label_risk=True must NOT bypass RunRestartBlockedError."""
+    """acknowledge_label_risk=True must NOT bypass RunRestartVoidRequiredError."""
     from voxint.db.models import AdjudicationDecision, Speaker
-    from voxint.ingest import RunRestartBlockedError
+    from voxint.ingest import RunRestartVoidRequiredError
 
     with session_factory() as session:
-        run_id, seg_ids = _completed_run_with_segments(
-            session, "incoming/restart-ack-block.wav"
-        )
+        run_id, seg_ids = _completed_run_with_segments(session, "incoming/restart-ack-block.wav")
         session.add(
             AdjudicationDecision(
                 pipeline_run_id=run_id,
@@ -1546,7 +1531,7 @@ def test_restart_ack_does_not_bypass_segment_blockers(
         session.commit()
 
     with session_factory() as session:
-        with pytest.raises(RunRestartBlockedError) as exc_info:
+        with pytest.raises(RunRestartVoidRequiredError) as exc_info:
             restart_run(session, run_id, acknowledge_label_risk=True)
         assert exc_info.value.impact.segment_scope_decisions == 1
         assert exc_info.value.impact.label_scope_decisions == 1

@@ -173,6 +173,7 @@ from voxint.ingest import (
     RunNotRestartableError,
     RunRestartBlockedError,
     RunRestartLabelRiskError,
+    RunRestartVoidRequiredError,
     UploadConflictError,
     UploadTooLargeError,
     UploadValidationError,
@@ -1658,6 +1659,7 @@ def restart_run_route(
     revision: Annotated[int, Form()],
     csrf_token: Annotated[str | None, Form()] = None,
     acknowledge_label_risk: Annotated[bool, Form()] = False,
+    acknowledge_void: Annotated[bool, Form()] = False,
     from_stage: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
     """Restart a terminal run, optionally from a selected pipeline stage.
@@ -1667,7 +1669,7 @@ def restart_run_route(
     stage, keeping upstream outputs intact and eagerly deleting downstream
     outputs.
 
-    Returns 409 when segment-scope rulings or enrichment evidence block restart,
+    Returns 409 when voiding is required and *acknowledge_void* is not set,
     when label-scope rulings exist and *acknowledge_label_risk* is not set, or
     when upstream prerequisites are missing.
     """
@@ -1689,12 +1691,14 @@ def restart_run_route(
             from_stage=parsed_stage,
             expected_revision=revision,
             acknowledge_label_risk=acknowledge_label_risk,
+            acknowledge_void=acknowledge_void,
         )
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (
         RunRestartBlockedError,
         RunRestartLabelRiskError,
+        RunRestartVoidRequiredError,
         RestartPrerequisiteError,
     ) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

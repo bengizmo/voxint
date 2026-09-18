@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from voxint.media.ytdlp import (
+    _MAX_DOWNLOADS_CANCELLED,
     AcquisitionError,
     _isolate_child,
     _kill_process_group,
@@ -36,6 +37,35 @@ def test_nonzero_exit_raises_with_stderr_tail() -> None:
     with pytest.raises(AcquisitionError, match="exit 3") as excinfo:
         run_download_command(["sh", "-c", "echo boom 1>&2; exit 3"], timeout_seconds=5)
     assert "boom" in str(excinfo.value)
+
+
+def test_tolerated_exit_does_not_raise() -> None:
+    """Exit 101 (DownloadCancelled) is the expected outcome of --max-downloads 1
+    after a successful single-item download. When tolerate_exit matches, the
+    function returns normally; the caller's file-existence check is the real
+    gate (ACQUIRE's _single_output)."""
+    run_download_command(
+        ["sh", "-c", "exit 101"],
+        timeout_seconds=5,
+        tolerate_exit=_MAX_DOWNLOADS_CANCELLED,
+    )
+
+
+def test_tolerated_exit_still_rejects_other_codes() -> None:
+    """Only the specific tolerated code is accepted; a different nonzero exit
+    still raises even when tolerate_exit is set."""
+    with pytest.raises(AcquisitionError, match="exit 2"):
+        run_download_command(
+            ["sh", "-c", "echo fail 1>&2; exit 2"],
+            timeout_seconds=5,
+            tolerate_exit=_MAX_DOWNLOADS_CANCELLED,
+        )
+
+
+def test_exit_101_rejected_without_tolerance() -> None:
+    """Without tolerate_exit, exit 101 is a failure like any other nonzero code."""
+    with pytest.raises(AcquisitionError, match="exit 101"):
+        run_download_command(["sh", "-c", "exit 101"], timeout_seconds=5)
 
 
 def test_missing_binary_raises() -> None:
@@ -292,6 +322,30 @@ def test_downloader_argv_captures_info_json_alongside_the_download(
     assert args.index(f"infojson:{dest / INFO_JSON_FILENAME}") < term
     assert str(dest / "source.%(ext)s") in args
     assert args[-2:] == ["--", "https://example.com/video"]
+
+
+def test_downloader_tolerates_exit_101(tmp_path: Path) -> None:
+    """The production downloader closure passes tolerate_exit=101 so a successful
+    single-item download (yt-dlp returns DownloadCancelled after --max-downloads 1)
+    does not raise. A different nonzero code still raises through the closure."""
+    stub = tmp_path / "stub.sh"
+    stub.write_text("#!/bin/sh\nexit 101\n")
+    stub.chmod(0o755)
+    dest = tmp_path / "out"
+    dest.mkdir()
+    downloader = build_ytdlp_downloader(
+        timeout_seconds=10, socket_timeout_seconds=7.0, ytdlp_bin=str(stub)
+    )
+    downloader("https://example.com/video", dest, 4242)
+
+    stub_fail = tmp_path / "stub_fail.sh"
+    stub_fail.write_text("#!/bin/sh\nexit 2\n")
+    stub_fail.chmod(0o755)
+    downloader_fail = build_ytdlp_downloader(
+        timeout_seconds=10, socket_timeout_seconds=7.0, ytdlp_bin=str(stub_fail)
+    )
+    with pytest.raises(AcquisitionError, match="exit 2"):
+        downloader_fail("https://example.com/video", dest, 4242)
 
 
 def test_run_download_command_scrubs_extra_secret_from_stderr() -> None:
