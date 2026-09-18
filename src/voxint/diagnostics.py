@@ -21,6 +21,8 @@ Two deliberate rules:
 
 import contextlib
 import os
+import shutil
+import subprocess
 from dataclasses import dataclass
 from typing import Literal
 
@@ -37,6 +39,7 @@ from voxint.app_settings import (
     resolve_effective_llm_api_key,
     resolve_effective_llm_enabled,
     resolve_effective_llm_endpoint,
+    resolve_effective_ytdlp_enabled,
 )
 from voxint.config import Settings
 
@@ -277,6 +280,39 @@ def check_llm(
     return CheckResult("llm endpoint", False, False, f"rejected (HTTP {resp.status_code})")
 
 
+def check_ytdlp_js_runtime(*, ytdlp_enabled: bool) -> CheckResult | None:
+    """Advisory: is a Deno runtime available for yt-dlp's JS challenge solver?
+
+    yt-dlp enables only Deno by default (the downloader passes ``--no-config``
+    and supplies no ``--js-runtimes``), so Node/Bun/QuickJS on PATH would not
+    actually be used. This checks for Deno specifically.
+    """
+    if not ytdlp_enabled:
+        return None
+    deno = shutil.which("deno")
+    if deno is None:
+        return CheckResult(
+            "yt-dlp JS runtime",
+            False,
+            False,
+            "no Deno found on PATH; YouTube downloads may fail "
+            "(install Deno or update the Voxint image)",
+        )
+    try:
+        result = subprocess.run(
+            [deno, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        version_line = (
+            result.stdout.split("\n")[0].strip() if result.stdout else "unknown"
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        version_line = "unknown"
+    return CheckResult("yt-dlp JS runtime", True, False, version_line)
+
+
 def run_diagnostics(
     settings: Settings,
     engine: Engine,
@@ -354,6 +390,13 @@ def run_diagnostics(
     )
     if llm is not None:
         results.append(llm)
+    ytdlp_enabled = settings.ytdlp_enabled
+    with contextlib.suppress(SQLAlchemyError), Session(engine) as session:
+        row = get_app_settings(session)
+        ytdlp_enabled = resolve_effective_ytdlp_enabled(row, settings)
+    js_rt = check_ytdlp_js_runtime(ytdlp_enabled=ytdlp_enabled)
+    if js_rt is not None:
+        results.append(js_rt)
     return results
 
 
