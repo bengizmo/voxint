@@ -15,6 +15,7 @@ the standard UI-enable path writes the row, not the environment.
 from typing import Any
 
 from voxint.api.routers.settings import _build_components
+from voxint.api.service_control import NoopController
 
 
 def _check(name: str, state: str, detail: str) -> dict[str, Any]:
@@ -32,7 +33,8 @@ def test_bundled_only_install_shows_green_bundle_and_unconfigured_byo() -> None:
         [
             _check("llm bundled", "ready", "reachable (HTTP 200)"),
             _check("llm endpoint", "ready", "not configured"),
-        ]
+        ],
+        NoopController("test"),
     )
     bundled = _row(rows, "Bundled AI model")
     assert bundled["dot"] == "ok"
@@ -46,7 +48,7 @@ def test_bundled_only_install_shows_green_bundle_and_unconfigured_byo() -> None:
 
 def test_bundled_unreachable_is_a_warning() -> None:
     rows = _build_components(
-        [_check("llm bundled", "unverified", "unreachable (ConnectError)")]
+        [_check("llm bundled", "unverified", "unreachable (ConnectError)")], NoopController("test")
     )
     bundled = _row(rows, "Bundled AI model")
     assert bundled["dot"] == "warn"
@@ -54,14 +56,14 @@ def test_bundled_unreachable_is_a_warning() -> None:
 
 
 def test_bundle_inactive_renders_an_off_row_not_a_warning() -> None:
-    rows = _build_components([])
+    rows = _build_components([], NoopController("test"))
     bundled = _row(rows, "Bundled AI model")
     assert bundled["dot"] == "off" and bundled["state_text"] == "off"
 
 
 def test_llm_disabled_byo_row_keeps_turn_on_action() -> None:
     # No "llm endpoint" check at all == the lane is effectively off.
-    rows = _build_components([])
+    rows = _build_components([], NoopController("test"))
     byo = _row(rows, "Your own AI endpoint")
     assert byo["dot"] == "off"
     assert byo["state_text"] == "off -- used for polish & profiles"
@@ -77,7 +79,8 @@ def test_deliberately_configured_byo_that_rejects_stays_warn() -> None:
         [
             _check("llm bundled", "ready", "reachable (HTTP 200)"),
             _check("llm endpoint", "unverified", "rejected (HTTP 401)"),
-        ]
+        ],
+        NoopController("test"),
     )
     byo = _row(rows, "Your own AI endpoint")
     assert byo["dot"] == "warn"
@@ -91,11 +94,15 @@ def test_rejecting_byo_warns_without_any_enablement_input() -> None:
     # whenever env said disabled — silencing the exact broken-deliberate-config
     # warning #316 promises. _build_components no longer takes settings at all;
     # a lone rejecting check must warn.
-    rows = _build_components([_check("llm endpoint", "unverified", "rejected (HTTP 401)")])
+    rows = _build_components(
+        [_check("llm endpoint", "unverified", "rejected (HTTP 401)")], NoopController("test")
+    )
     byo = _row(rows, "Your own AI endpoint")
     assert byo["dot"] == "warn"
 
 
 def test_old_single_label_is_gone() -> None:
-    rows = _build_components([_check("llm endpoint", "ready", "reachable (HTTP 200)")])
+    rows = _build_components(
+        [_check("llm endpoint", "ready", "reachable (HTTP 200)")], NoopController("test")
+    )
     assert all(r["label"] != "Local AI model" for r in rows)

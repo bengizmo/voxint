@@ -26,20 +26,7 @@
     <h2 class="oc-section-title">PARTS OF VOXINT</h2>
     <ul class="component-list">
       {% for c in components %}
-      <li class="component-row">
-        <span class="cr-dot {% if c.dot == 'ok' %}is-ok{% elif c.dot == 'off' %}is-off{% else %}is-warn{% endif %}"></span>
-        <span class="cr-name">{{ c.label }}</span>
-        <span class="cr-state">{{ c.state_text }}</span>
-        <span class="cr-action">
-          {% if c.action_url %}
-          {% if c.action_style == "primary" %}
-          <a class="cb-btn cb-btn-primary" href="{{ c.action_url }}">{{ c.action_label }}</a>
-          {% else %}
-          <a href="{{ c.action_url }}">{{ c.action_label }}</a>
-          {% endif %}
-          {% endif %}
-        </span>
-      </li>
+      {% include "settings/_service_row.html" %}
       {% endfor %}
     </ul>
   </section>

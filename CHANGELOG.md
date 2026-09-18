@@ -6,6 +6,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Service controls (#556).** The Settings > Status page now offers a restart
+  button for each model service (Transcriber, Voice separation, Voice identity)
+  when the `compose.service-controls.yaml` overlay is included. Controls use
+  the Docker Engine API over the mounted socket. Deployments without the overlay
+  show terminal hints instead. Native macOS and Metal hybrid modes are not yet
+  supported and show manual restart commands.
+
 
 ## [0.43.0] - 2026-09-18
 

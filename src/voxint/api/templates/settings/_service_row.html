@@ -1,0 +1,26 @@
+<li id="service-{{ c.key or '' }}" class="component-row">
+  <span class="cr-dot {% if c.dot == 'ok' %}is-ok{% elif c.dot == 'off' %}is-off{% else %}is-warn{% endif %}"></span>
+  <span class="cr-name">{{ c.label }}</span>
+  <span class="cr-state">{{ c.state_text }}</span>
+  <span class="cr-action">
+    {% if c.is_model_service and c.controllable %}
+      <form method="post" action="/settings/status/services/{{ c.key }}/restart"
+            hx-post="/settings/status/services/{{ c.key }}/restart"
+            hx-target="#service-{{ c.key }}"
+            hx-swap="outerHTML"
+            hx-confirm="Restart {{ c.label }}? This takes 10–20 seconds while the model reloads. Jobs using it may fail and retry."
+            style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="cb-btn cb-btn-secondary" hx-disabled-elt="this">Restart</button>
+      </form>
+    {% elif c.is_model_service and c.terminal_hint %}
+      <span class="oc-muted" style="font-size:var(--t-xs)">{{ c.terminal_hint }}</span>
+    {% elif c.action_url %}
+      {% if c.action_style == "primary" %}
+        <a class="cb-btn cb-btn-primary" href="{{ c.action_url }}">{{ c.action_label }}</a>
+      {% else %}
+        <a href="{{ c.action_url }}">{{ c.action_label }}</a>
+      {% endif %}
+    {% endif %}
+  </span>
+</li>

@@ -27,6 +27,7 @@ Reference & internals:
 | `harness.md` | Offline scoring harness: `voxint score` file contracts, verdict vocabularies, the cross-space invariant, feeding it from live runs (`voxint.harness_export` + the `export_match_evidence` driver), and the attribution evaluation layer (AMI recurrence, protocol manifests, gold-to-slot alignment, the `eval_attribution` CLI driver) |
 | [`benchmark.md`](benchmark.md) | Shipped benchmark corpus, CLI runner, WER scorer, and cross-run comparison |
 | `operations.md` | Deployment, migrations, pipeline operations, recovery, adjudication workflow, [multi-user authentication](operations.md#multi-user-authentication) |
+| [`service-controls.md`](service-controls.md) | Enable model service restarts from Settings > Status, manual restart commands, and troubleshooting |
 | `native-macos-preview.md` | Technical preview: run the whole stack on macOS/arm64 without Docker, under `launchd` (`scripts/native/voxint-native.sh`) |
 | `testing.md` | Test layers and how to run them; the manual browser-verification procedure for the review console; the offline eval-quality harness (DER/JER/WER/cpWER against AMI/VoxConverse); the attribution eval harness (FAR/FRR/coverage, frozen regression pack) |
 | `release-process.md` | Maintainers: how a release is cut (tag → GHCR images → PyPI → GitHub Release) |

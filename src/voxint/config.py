@@ -203,6 +203,14 @@ class Settings(BaseSettings):
     # construction for the whole app. Dev-from-source stays unset -> "unknown",
     # which is honest.
     voxint_install_kind: str | None = None
+
+    # Service lifecycle control (#556). Explicit opt-in: "docker" enables
+    # restart via Docker Engine API (requires socket mount), "launchd" via
+    # launchctl (native installs). None/empty = controls disabled.
+    voxint_service_control: str | None = None
+    voxint_docker_socket: str = "/var/run/docker.sock"
+    voxint_compose_project: str = "voxint"
+
     asr_url: str = "http://localhost:8022"
     diarizer_url: str = "http://localhost:8024"
     embedder_url: str = "http://localhost:8021"
