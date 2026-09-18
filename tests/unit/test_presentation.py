@@ -269,7 +269,11 @@ def test_humanize_empty_string_is_returned_verbatim() -> None:
         ("interrupted: worker died mid-stage", "worker restarted mid-stage"),
         ("FileNotFoundError: /data/media/clip.wav", "file not found"),
         ("No such file or directory: '/tmp/audio.mp3'", "file not found"),
+        ('{"code": "file_not_found"}', "file not found"),
         ("ConnectionError: [Errno 111] Connection refused", "service unreachable"),
+        ("httpx.ConnectError: server disconnected", "service unreachable"),
+        ("ECONNREFUSED", "service unreachable"),
+        ("All connection attempts failed", "service unreachable"),
         ("connect ECONNREFUSED 127.0.0.1:8000", "service unreachable"),
         ("downloaded file is empty", "downloaded file was empty"),
         ("AcquisitionError: URL acquisition timed out", "download failed"),
@@ -284,6 +288,101 @@ def test_humanize_empty_string_is_returned_verbatim() -> None:
     ],
 )
 def test_humanize_error(error: str | None, expected: str | None) -> None:
+    from voxint.api.presentation import humanize_error
+
+    assert humanize_error(error) == expected
+
+
+@pytest.mark.parametrize(
+    ("errors", "label", "hint"),
+    [
+        (
+            ["PermissionError: clip.wav", "Permission denied", "EACCES"],
+            "file access denied",
+            "Check read access to the recording and write access to the output folder.",
+        ),
+        (
+            ["worker saturated", "service at capacity", "HTTP 429"],
+            "service is busy",
+            "Wait for current processing to finish, then retry.",
+        ),
+        (
+            [
+                "httpx.ConnectTimeout", "httpx.ReadTimeout", "httpx.WriteTimeout",
+                "httpx.PoolTimeout", "TimeoutError", "subprocess.TimeoutExpired",
+                "request timed out", "HTTP 408", "HTTP 504",
+            ],
+            "processing timed out",
+            "Try again. If it keeps timing out, check service health and recording size.",
+        ),
+        (
+            ["model_unavailable", "service unavailable", "HTTP 502", "HTTP 503", "Bad Gateway"],
+            "service is unavailable",
+            "Check that the required service has started and its model has loaded.",
+        ),
+        (
+            ["No space left on device", "ENOSPC"],
+            "storage is full",
+            "Free space on the media or temporary storage volume, then retry.",
+        ),
+        (
+            ["no decodable audio stream", "invalid_media"],
+            "recording could not be read",
+            "Check that the recording contains playable audio, or upload another copy.",
+        ),
+        (
+            ["ffmpeg failed on clip.wav", "ffprobe failed on clip.wav"],
+            "audio preparation failed",
+            "Check that the recording plays correctly and try another copy.",
+        ),
+        (
+            [
+                "download command failed (exit 1)",
+                "download command failed (exit -9)",
+                "expected exactly one downloaded file, found 0",
+                "expected exactly one downloaded file, found 12",
+            ],
+            "download failed",
+            "Check that the link opens a single accessible recording, then retry.",
+        ),
+        (
+            ["path_violation"],
+            "recording location is not accessible",
+            "Ask an administrator to check the media folder configuration.",
+        ),
+        (
+            ["inference_failed"],
+            "model processing failed",
+            "Retry once. If it fails again, check the model service logs for details.",
+        ),
+    ],
+)
+def test_humanize_error_service_patterns(errors: list[str], label: str, hint: str) -> None:
+    from voxint.api.presentation import humanize_error, normalize_error
+
+    for error in errors:
+        for raw in (error, error.swapcase()):
+            assert humanize_error(raw) == label
+            result = normalize_error(raw)
+            assert result is not None
+            assert result.label == label
+            assert result.hint == hint
+            assert result.raw == raw
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        ("CUDA out of memory: inference_failed", "GPU ran out of memory"),
+        ("torch.cuda error: timed out", "GPU error"),
+        ("ConnectionError: service unavailable", "service unreachable"),
+        ("FileNotFoundError: ffprobe failed on clip.wav", "file not found"),
+        ("HTTP 4290", "HTTP 4290"),
+        ("not_invalid_media", "not_invalid_media"),
+        ("unsaturated", "unsaturated"),
+    ],
+)
+def test_humanize_error_pattern_precedence_and_boundaries(error: str, expected: str) -> None:
     from voxint.api.presentation import humanize_error
 
     assert humanize_error(error) == expected
