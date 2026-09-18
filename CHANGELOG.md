@@ -4,7 +4,7 @@ All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog
 versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between minors).
 
 
-## [Unreleased]
+## [0.44.0] - 2026-09-18
 
 ### Added
 - **Service controls (#556).** The Settings > Status page now offers a restart
