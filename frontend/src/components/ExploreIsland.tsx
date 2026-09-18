@@ -329,58 +329,6 @@ export function ExploreIsland({
 
   return (
     <section aria-label="Explore results">
-      <div
-        className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4"
-        aria-label="Corpus statistics"
-      >
-        {statTiles.map(([value, label]) => (
-          <div
-            className="rounded-[var(--r-md)] border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-center"
-            key={label}
-          >
-            <span className="block font-mono text-base font-semibold text-[var(--ink)]">
-              {value}
-            </span>
-            <span className="text-[length:var(--t-micro)] uppercase tracking-wide text-[var(--ink-3)]">
-              {label}
-            </span>
-          </div>
-        ))}
-      </div>
-
-      {terms.length > 0 ? (
-        <div className="explore-term-panel mb-4">
-          <h2 className="explore-term-heading">Top terms</h2>
-          <div className="explore-term-grid">
-            <div className="explore-term-cloud">
-              <WordCloud terms={terms} onTermClick={handleTermClick} />
-            </div>
-            <div className="explore-term-bars">
-              <TermBarChart terms={terms} onTermClick={handleTermClick} />
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="explore-term-panel mb-4">
-        <h2 className="explore-term-heading">Highlight tags</h2>
-        {tags.length > 0 ? (
-          <TermBarChart
-            terms={tags.map((t) => ({
-              term: t.name,
-              count: t.count,
-              doc_count: 0,
-              tfidf: 0,
-            }))}
-            ariaLabel="Highlight tags by annotation count"
-          />
-        ) : (
-          <p className="text-sm text-[var(--ink-3)]">No highlight tags yet.</p>
-        )}
-      </div>
-
-      <MeaningMap projectId={filters.project_id} />
-
       {!query ? (
         stats.total_runs === 0 ? (
           <div className="py-12 text-center text-base text-[var(--ink-3)]">
@@ -574,6 +522,58 @@ export function ExploreIsland({
           ) : null}
         </>
       )}
+
+      <div
+        className="mb-4 mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4"
+        aria-label="Corpus statistics"
+      >
+        {statTiles.map(([value, label]) => (
+          <div
+            className="rounded-[var(--r-md)] border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-center"
+            key={label}
+          >
+            <span className="block font-mono text-base font-semibold text-[var(--ink)]">
+              {value}
+            </span>
+            <span className="text-[length:var(--t-micro)] uppercase tracking-wide text-[var(--ink-3)]">
+              {label}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {terms.length > 0 ? (
+        <div className="explore-term-panel mb-4">
+          <h2 className="explore-term-heading">Top terms</h2>
+          <div className="explore-term-grid">
+            <div className="explore-term-cloud">
+              <WordCloud terms={terms} onTermClick={handleTermClick} />
+            </div>
+            <div className="explore-term-bars">
+              <TermBarChart terms={terms} onTermClick={handleTermClick} />
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="explore-term-panel mb-4">
+        <h2 className="explore-term-heading">Highlight tags</h2>
+        {tags.length > 0 ? (
+          <TermBarChart
+            terms={tags.map((t) => ({
+              term: t.name,
+              count: t.count,
+              doc_count: 0,
+              tfidf: 0,
+            }))}
+            ariaLabel="Highlight tags by annotation count"
+          />
+        ) : (
+          <p className="text-sm text-[var(--ink-3)]">No highlight tags yet.</p>
+        )}
+      </div>
+
+      <MeaningMap projectId={filters.project_id} />
     </section>
   );
 }

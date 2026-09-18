@@ -1,3 +1,4 @@
+{% from "fragments/_chips.html" import chip, needs_review_chip %}
 {# Per-user table row, used both in the full users.html page and as an htmx
    swap target for role change and disable/enable mutations. The variable `u`
    is one User model instance; `csrf_users` and `current_admin` come from the
@@ -22,9 +23,9 @@
   </td>
   <td>
     {% if u.disabled_at is not none %}
-    <span class="pill unverified">Disabled</span>
+    {{ chip("disabled") }}
     {% else %}
-    <span class="pill ready">Active</span>
+    {{ chip("active") }}
     {% endif %}
   </td>
   <td>{{ format_clock_time(u.created_at) }}</td>

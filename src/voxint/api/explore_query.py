@@ -289,7 +289,11 @@ def corpus_stats(session: Session, project_id: uuid.UUID | None = None) -> Corpu
         )
     scoped_runs = run_ids.subquery()
 
-    total_runs = int(session.execute(select(func.count()).select_from(scoped_runs)).scalar_one())
+    total_runs = int(
+        session.execute(
+            select(func.count(func.distinct(scoped_runs.c.media_item_id))).select_from(scoped_runs)
+        ).scalar_one()
+    )
     total_segments = int(
         session.execute(
             select(func.count())

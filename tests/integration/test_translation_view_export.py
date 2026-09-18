@@ -181,7 +181,7 @@ class TestExports:
             session.commit()
         client = _build_client(session_factory)
         body = client.get(f"/runs/{run_id}/translation").text
-        assert "out of date" in body
+        assert "Out of date" in body
         assert "View it beneath each line" not in body
 
     def test_lang_with_raw_or_enhanced_is_422(

@@ -291,10 +291,14 @@ _ERROR_PATTERNS: list[tuple[re.Pattern[str], str, str | None]] = [
      "downloaded file was empty", "Check that the source file exists and is not zero-length."),
     (re.compile(r"AcquisitionError|URL acquisition", re.IGNORECASE),
      "download failed", "Check that the URL is reachable and try again."),
-    (re.compile(r"FileNotFoundError|No such file", re.IGNORECASE),
+    (re.compile(r"FileNotFoundError|No such file|\bfile_not_found\b", re.IGNORECASE),
      "file not found", "Check that the source file still exists at the expected path."),
-    (re.compile(r"ConnectionError|connect.*refused", re.IGNORECASE),
-     "service unreachable", "A model service is down. Check that all containers are running."),
+    (re.compile(
+        r"ConnectionError|ConnectError|connect.*refused|"
+        r"\bECONNREFUSED\b|all connection attempts failed",
+        re.IGNORECASE,
+    ), "service unreachable",
+     "A model service is down. Check that all containers are running."),
     (re.compile(
         r"(?:empty|zero[- ]duration).*audio|audio.*(?:empty|zero[- ]duration)",
         re.IGNORECASE,
@@ -309,6 +313,71 @@ _ERROR_PATTERNS: list[tuple[re.Pattern[str], str, str | None]] = [
      "GPU ran out of memory", "Try a shorter recording or restart the model service."),
     (re.compile(r"torch\.cuda.*error|CUBLAS_STATUS|CUDNN", re.IGNORECASE),
      "GPU error", "Restart the model service and retry."),
+    (
+        re.compile(r"PermissionError|permission denied|\bEACCES\b", re.IGNORECASE),
+        "file access denied",
+        "Check read access to the recording and write access to the output folder.",
+    ),
+    (
+        re.compile(r"\bsaturated\b|service at capacity|HTTP 429\b", re.IGNORECASE),
+        "service is busy",
+        "Wait for current processing to finish, then retry.",
+    ),
+    (
+        re.compile(
+            r"\b(?:Connect|Read|Write|Pool)Timeout\b|TimeoutError|"
+            r"TimeoutExpired|\btimed out\b|HTTP (?:408|504)\b",
+            re.IGNORECASE,
+        ),
+        "processing timed out",
+        "Try again. If it keeps timing out, check service health and recording size.",
+    ),
+    (
+        re.compile(
+            r"\bmodel_unavailable\b|service unavailable|"
+            r"HTTP (?:502|503)\b|bad gateway",
+            re.IGNORECASE,
+        ),
+        "service is unavailable",
+        "Check that the required service has started and its model has loaded.",
+    ),
+    (
+        re.compile(r"No space left on device|\bENOSPC\b", re.IGNORECASE),
+        "storage is full",
+        "Free space on the media or temporary storage volume, then retry.",
+    ),
+    (
+        re.compile(
+            r"no decodable audio stream|\binvalid_media\b",
+            re.IGNORECASE,
+        ),
+        "recording could not be read",
+        "Check that the recording contains playable audio, or upload another copy.",
+    ),
+    (
+        re.compile(r"\bff(?:mpeg|probe) failed on\b", re.IGNORECASE),
+        "audio preparation failed",
+        "Check that the recording plays correctly and try another copy.",
+    ),
+    (
+        re.compile(
+            r"download command failed \(exit -?\d+\)|"
+            r"expected exactly one downloaded file, found \d+",
+            re.IGNORECASE,
+        ),
+        "download failed",
+        "Check that the link opens a single accessible recording, then retry.",
+    ),
+    (
+        re.compile(r"\bpath_violation\b", re.IGNORECASE),
+        "recording location is not accessible",
+        "Ask an administrator to check the media folder configuration.",
+    ),
+    (
+        re.compile(r"\binference_failed\b", re.IGNORECASE),
+        "model processing failed",
+        "Retry once. If it fails again, check the model service logs for details.",
+    ),
 ]
 
 

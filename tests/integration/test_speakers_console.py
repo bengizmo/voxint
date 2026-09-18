@@ -178,7 +178,7 @@ def test_flag_on_renders_overview_with_numbers(
     # Alice (human assign) carries the verified chip; Bob (grounded, no
     # diagnostics row) shows "needs review", never "weak".
     assert "verified" in page.text
-    assert "needs review" in page.text
+    assert "Needs review" in page.text
     # Unnamed voices listed first: Bob (unverified) before Alice (verified).
     assert page.text.index("Bob") < page.text.index("Alice")
 
@@ -523,7 +523,7 @@ def test_profile_manual_edit_set_clear_and_refusals(
     assert plain.headers["location"] == f"/speakers/{speaker_id}"
     page = client.get(f"/speakers/{speaker_id}")
     assert "Ornithologist." in page.text
-    assert "entered by hand" in page.text
+    assert "Entered by hand" in page.text
     # htmx POST: the refreshed panel fragment only.
     fragment = client.post(
         f"/speakers/{speaker_id}/profile",
@@ -584,7 +584,7 @@ def test_profile_decision_refreshes_panel_out_of_band(
     assert f'id="research-{speaker_id}"' in resp.text
     assert 'hx-swap-oob="true"' in resp.text
     assert 'id="profile-panel"' in resp.text
-    assert "filled in by web research" in resp.text
+    assert "Filled in by web research" in resp.text
     assert "Wrote the book on birds." in resp.text
     # No-JS decision from the profile page: a full-page 303, never a bare fragment.
     nojs = client.post(

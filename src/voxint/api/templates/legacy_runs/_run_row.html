@@ -11,13 +11,13 @@
       {% if it.status == "running" and progress %}
       <span class="pill running" title="{% if progress.using_heuristic %}Estimated from a default stage duration, there is not enough history yet; as of last refresh{% else %}Estimated from recent completed attempts of this stage; as of last refresh{% endif %}">{{ humanize_stage_progress(progress.stage) }}{% if progress.overrun %} &middot; taking longer{% else %} ~{{ progress.percent }}%{% endif %}</span>
       {% else %}
-      <span class="pill {{ it.status }}">{{ humanize_status(it.status) }}</span>
+      {{ chip(humanize_status(it.status)) }}
       {% endif %}
-      {% if it.archived %}<span class="pill skipped">archived</span>{% endif %}
+      {% if it.archived %}{{ chip("archived") }}{% endif %}
     </span>
     <span>
       {% if it.status == "completed" %}
-        {% if it.label_count == 0 %}<span class="pill muted">no speakers</span>
+        {% if it.label_count == 0 %}{{ chip("no speakers") }}
         {% elif it.unresolved_count > 0 %}{{ needs_review_chip(it.unresolved_count) }}
         {% else %}{{ chip("reviewed") }}{% endif %}
       {% elif it.status == "failed" and it.error %}

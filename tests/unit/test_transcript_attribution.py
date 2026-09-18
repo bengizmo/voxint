@@ -61,8 +61,20 @@ def _state(resolution: Resolution, speaker_name: str | None) -> SimpleNamespace:
     return SimpleNamespace(resolution=resolution, speaker_name=speaker_name)
 
 
-def test_display_name_no_state_uses_raw_label() -> None:
-    assert display_name(None, _seg("SPEAKER_00")) == "SPEAKER_00"
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [
+        ("SPEAKER_00", "Voice 1"),
+        ("SPEAKER_05", "Voice 6"),
+        ("SPEAKER_100", "Voice 101"),
+        ("Host", "Host"),
+        ("SPEAKER_X", "SPEAKER_X"),
+        ("SPEAKER_00_extra", "SPEAKER_00_extra"),
+        ("custom_SPEAKER_00", "custom_SPEAKER_00"),
+    ],
+)
+def test_display_name_no_state_humanizes_label(label: str, expected: str) -> None:
+    assert display_name(None, _seg(label)) == expected
 
 
 def test_display_name_no_state_no_label_is_placeholder() -> None:
@@ -79,25 +91,31 @@ def test_display_name_grounded_cosine_shows_speaker_name() -> None:
     assert display_name(state, _seg("SPEAKER_01")) == "Bob"
 
 
-def test_display_name_assign_without_name_falls_back_to_label() -> None:
-    # A grounded/assigned state with no name still shows the local label.
-    state = _state(Resolution.HUMAN_ASSIGN, None)
-    assert display_name(state, _seg("SPEAKER_00")) == "SPEAKER_00"
+@pytest.mark.parametrize(
+    "resolution",
+    [Resolution.HUMAN_ASSIGN, Resolution.GROUNDED_COSINE, Resolution.AUTO_ENROLL],
+)
+def test_display_name_assign_without_name_humanizes_label(resolution: Resolution) -> None:
+    state = _state(resolution, None)
+    assert display_name(state, _seg("SPEAKER_00")) == "Voice 1"
 
 
 def test_display_name_exclude_annotates_label() -> None:
     state = _state(Resolution.HUMAN_EXCLUDE, None)
-    assert display_name(state, _seg("SPEAKER_00")) == "(excluded) SPEAKER_00"
+    assert display_name(state, _seg("SPEAKER_00")) == "(excluded) Voice 1"
+    assert display_name(state, _seg("Host")) == "(excluded) Host"
 
 
 def test_display_name_unknown_annotates_label() -> None:
     state = _state(Resolution.HUMAN_UNKNOWN, None)
-    assert display_name(state, _seg("SPEAKER_00")) == "Unknown (SPEAKER_00)"
+    assert display_name(state, _seg("SPEAKER_00")) == "Unknown (Voice 1)"
+    assert display_name(state, _seg("Host")) == "Unknown (Host)"
 
 
 def test_display_name_unresolved_falls_back_to_label() -> None:
     state = _state(Resolution.UNRESOLVED, None)
-    assert display_name(state, _seg("SPEAKER_00")) == "SPEAKER_00"
+    assert display_name(state, _seg("SPEAKER_00")) == "Voice 1"
+    assert display_name(state, _seg("Host")) == "Host"
 
 
 # --------------------------------------------------------------------------- #

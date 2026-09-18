@@ -6,6 +6,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+
+## [0.43.0] - 2026-09-18
+
 ### Added
 - **Provenance-preserving reprocessing (#507).** Runs with adjudication
   decisions or enrichment evidence can now be restarted from stages that
