@@ -6,6 +6,35 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Provenance-preserving reprocessing (#507).** Runs with adjudication
+  decisions or enrichment evidence can now be restarted from stages that
+  delete transcript segments (ACQUIRE, PREPARE, TRANSCRIBE). Previously these
+  runs were hard-blocked. On restart, all adjudication decisions are
+  auto-voided via the existing REVOKE mechanism, derived speaker embeddings
+  are deleted, and the FK SET NULL cascade detaches transcript-segment
+  references on decision and evidence rows. Detached rows retain their
+  original scope in `original_transcript_segment_id` and
+  `original_start_word_index`/`original_end_word_index` provenance columns
+  for audit. The append-only trigger is narrowed to allow only this specific
+  detach path, with a void-before-detach invariant enforced at the database
+  level. `restart_impact` now excludes already-voided decisions from counts.
+  The CLI gains `--acknowledge-void`; the web UI shows a void-acknowledgement
+  checkbox when restarting from a segment-deleting stage.
+
+### Changed
+- Restart-from-stage (#506) now allows ACQUIRE/PREPARE/TRANSCRIBE restarts on
+  runs with adjudication decisions: decisions are auto-voided and segment
+  references detached with provenance, replacing the previous hard block (#507)
+
+### Fixed
+- URL submissions failing with 403 on YouTube due to missing JS challenge
+  solver; dependency upgraded to `yt-dlp[default]` which includes
+  `yt-dlp-ejs`. Native installs with a JS runtime (Node/Deno) get the fix
+  immediately; container images need a runtime added separately (#557)
+- Successful single-item downloads falsely reported as failures due to yt-dlp
+  exit code 101 (`DownloadCancelled`) from `--max-downloads 1` (#557)
+
 
 ## [0.43.0] - 2026-09-18
 

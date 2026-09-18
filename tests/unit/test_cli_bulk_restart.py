@@ -70,16 +70,24 @@ def test_commit_failure_isolated_and_only_committed_runs_published(bulk, capsys)
         return True
 
     bulk.publish.side_effect = publish
-    assert cli._restart_bulk_execute(bulk.candidates, bulk.factory, Stage.ENHANCE_MATCH, False) == 1
+    rc = cli._restart_bulk_execute(
+        bulk.candidates,
+        bulk.factory,
+        Stage.ENHANCE_MATCH,
+        False,
+        False,
+    )
+    assert rc == 1
     bulk.sessions[1].rollback.assert_called_once()
     assert bulk.publish.call_count == 2
-    assert "restarted 3, skipped 1" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "restarted 3, skipped 1" in out
     assert bulk.restart.call_args_list[0].kwargs["expected_revision"] == 1
 
 
 def test_broker_outage_stops_publish_attempts(bulk, capsys):
     bulk.publish.return_value = False
-    assert cli._restart_bulk_execute(bulk.candidates, bulk.factory, None, False) == 0
+    assert cli._restart_bulk_execute(bulk.candidates, bulk.factory, None, False, False) == 0
     bulk.publish.assert_called_once_with(bulk.candidates[0][0], stage=None)
     assert "published 0, deferred 4" in capsys.readouterr().out
     for session in bulk.sessions:
@@ -93,8 +101,8 @@ def test_dry_run_reports_impact_without_mutation_or_dispatch(bulk, capsys):
         RestartImpact(0, 2, 1),
         RestartImpact(3, 0, 0),
     ]
-    assert cli._restart_bulk_dry_run(bulk.candidates, bulk.factory, None, False) == 0
-    assert "1 restart-ready, 1 blocked, 1 label-risk, 1 ineligible" in capsys.readouterr().out
+    assert cli._restart_bulk_dry_run(bulk.candidates, bulk.factory, None, False, False) == 0
+    assert "1 restart-ready, 1 void-required, 1 label-risk, 1 ineligible" in capsys.readouterr().out
     bulk.restart.assert_not_called()
     bulk.publish.assert_not_called()
 
@@ -106,11 +114,12 @@ def test_selection_filters_and_closes_before_preview(monkeypatch, bulk):
     monkeypatch.setattr(db_session, "build_engine", lambda: engine)
     monkeypatch.setattr(db_session, "build_session_factory", lambda _: lambda: selection)
 
-    def preview(candidates, factory, stage, acknowledge):
+    def preview(candidates, factory, stage, acknowledge, acknowledge_void):
         selection.close.assert_called_once()
         assert candidates == bulk.candidates
         assert stage == Stage.FINALIZE
         assert not acknowledge
+        assert not acknowledge_void
         return 0
 
     monkeypatch.setattr(cli, "_restart_bulk_dry_run", preview)
@@ -152,7 +161,7 @@ def test_stale_revision_counted_as_stale_not_error(bulk, capsys):
         return MagicMock()
 
     bulk.restart.side_effect = restart_side_effect
-    rc = cli._restart_bulk_execute(bulk.candidates, bulk.factory, None, False)
+    rc = cli._restart_bulk_execute(bulk.candidates, bulk.factory, None, False, False)
     assert rc == 0
     out = capsys.readouterr()
     assert "restarted 3" in out.out
