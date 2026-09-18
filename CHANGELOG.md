@@ -26,12 +26,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - Restart-from-stage (#506) now allows ACQUIRE/PREPARE/TRANSCRIBE restarts on
   runs with adjudication decisions: decisions are auto-voided and segment
   references detached with provenance, replacing the previous hard block (#507)
+- Docker worker image now bundles Deno 2.9.7 (sha256-pinned, multi-arch) so
+  yt-dlp's JS challenge solver works out of the box. `voxint doctor` reports
+  an advisory when no Deno runtime is found on PATH (#560)
 
 ### Fixed
 - URL submissions failing with 403 on YouTube due to missing JS challenge
   solver; dependency upgraded to `yt-dlp[default]` which includes
   `yt-dlp-ejs`. Native installs with a JS runtime (Node/Deno) get the fix
-  immediately; container images need a runtime added separately (#557)
+  immediately; container images now bundle Deno (#557, #560)
 - Successful single-item downloads falsely reported as failures due to yt-dlp
   exit code 101 (`DownloadCancelled`) from `--max-downloads 1` (#557)
 
