@@ -1,11 +1,11 @@
 # Voxint
 
-**Reviewed, searchable, speaker-attributed transcripts for recordings that
-should not leave your hardware.**
+**An open, self-hosted speech intelligence platform for small teams,
+journalists, and researchers who want full control over their audio corpus.**
 
 Voxint transcribes audio and video, separates and identifies voices across
 recordings, and opens a review console where you confirm each speaker and
-correct the wording before you export. Machine proposals stay separate from
+correct the wording before you export. Automated suggestions stay separate from
 your rulings. You always have the final say.
 
 Built for researchers, journalists, educators, and small teams whose
@@ -17,6 +17,12 @@ Your audio is processed locally by default. Two optional features reach the
 network when you turn them on: fetching a recording from a URL, and sending
 transcript text to an outside AI model to polish the wording. Both are off
 or opt-in, and clearly labelled.
+
+Voxint stands on the shoulders of remarkable open-source work in speech and
+audio: faster-whisper, pyannote.audio, NeMo's TitaNet, yt-dlp, and many
+others. These projects made state-of-the-art speech intelligence accessible
+to developers; Voxint's job is to make it accessible to everyone else. Thank
+you to every contributor.
 
 > **Status: beta (v0.43), approaching 1.0.** The pipeline, review console,
 > CLI, API, and export path are in daily use, held to ~4,800 tests, full
@@ -52,7 +58,7 @@ Voxint takes a recording and walks it through four steps:
    who spoke when, then suggests who each voice is by comparing it against
    a roster that grows as you use it.
 3. **You review**: confirm each speaker, and fix any wording, in a console
-   built for exactly this. Machine guesses stay separate from your
+   built for exactly this. Automated suggestions stay separate from your
    decisions; you always have the final say.
 4. **Read or export**: read a finished transcript on screen, or download a
    clean, speaker-labelled copy (plain text, Markdown, subtitles, or
