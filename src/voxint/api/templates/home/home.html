@@ -24,10 +24,10 @@
     <div class="attention-card{% if review_backlog %} attention-warn{% endif %}">
       <span class="attention-count">{{ review_backlog }}</span>
       <div class="attention-body">
-        <strong class="attention-label">recordings to review</strong>
+        <strong class="attention-label">runs to review</strong>
         <span class="attention-note">finished, waiting on speaker decisions</span>
       </div>
-      {% if review_backlog %}<a class="attention-arrow" href="/review" aria-label="Review recordings">→</a>{% endif %}
+      {% if review_backlog %}<a class="attention-arrow" href="/review" aria-label="Review runs">→</a>{% endif %}
     </div>
     <div class="attention-card{% if unresolved_voices %} attention-warn{% endif %}">
       <span class="attention-count">{{ unresolved_voices }}</span>
