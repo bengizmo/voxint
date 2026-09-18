@@ -1,7 +1,15 @@
 # Contributing to Voxint
 
-Thanks for your interest. Voxint is pre-alpha, so expect churn through the 0.x
-series. The full documentation index is [docs/README.md](docs/README.md).
+Voxint is beta, approaching 1.0. The project follows 0.x semver, so expect
+breaking changes between minor releases. The full documentation index is
+[docs/README.md](docs/README.md).
+
+Whether you are fixing a bug, writing a plugin, improving docs, testing on new
+hardware, or reporting what happened when you ran Voxint on real recordings,
+there is a place for your contribution. Good starting points: issues labelled
+`good first issue` or `help wanted`, the [plugin author guide](docs/plugins.md)
+(the lowest-friction way to add a capability), and documentation for workflows
+we have not covered yet.
 
 ## Development setup
 

@@ -165,7 +165,7 @@ class TestRunDetailRestart:
         assert "required" in html
         assert "speaker ruling" in html
 
-    def test_segment_blocker_disables_button(
+    def test_segment_scope_shows_void_acknowledgement(
         self, client: TestClient, session_factory: sessionmaker[Session]
     ) -> None:
         with session_factory() as session:
@@ -175,9 +175,8 @@ class TestRunDetailRestart:
         resp = client.get(f"/runs/{run_id}", follow_redirects=False)
         assert resp.status_code == 200
         html = resp.text
-        assert "disabled" in html
-        assert "Blocked" in html
-        assert "Submit the file as a new run instead" in html
+        assert "acknowledge_void" in html
+        assert "void required" in html.lower() or "will be voided" in html
 
 
 class TestRestartPost:
@@ -250,7 +249,7 @@ class TestEditorRestart:
         assert "required" in html
         assert "speaker ruling" in html
 
-    def test_editor_segment_blocker_disables_button(
+    def test_editor_segment_scope_shows_void_acknowledgement(
         self, editor_client: TestClient, session_factory: sessionmaker[Session]
     ) -> None:
         with session_factory() as session:
@@ -260,6 +259,5 @@ class TestEditorRestart:
         resp = editor_client.get(f"/media/{media_id}/editor", follow_redirects=False)
         assert resp.status_code == 200
         html = resp.text
-        assert "disabled>" in html
-        assert "Blocked" in html
-        assert "Submit as a new run instead" in html
+        assert "acknowledge_void" in html
+        assert "void required" in html.lower() or "will be voided" in html

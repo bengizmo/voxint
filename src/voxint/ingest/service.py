@@ -212,9 +212,11 @@ class RestartImpact:
     label_scope_decisions: int
     segment_scope_decisions: int
     enrichment_evidence: int
+    derived_embeddings: int = 0
 
     @property
-    def has_blockers(self) -> bool:
+    def requires_void(self) -> bool:
+        """Restart requires voiding decisions to unblock segment deletion."""
         return self.segment_scope_decisions > 0 or self.enrichment_evidence > 0
 
 
@@ -237,6 +239,32 @@ class RunRestartBlockedError(IngestError):
             f"cannot restart: {detail} reference transcript segments that"
             " would be deleted. These rows are append-only and cannot be"
             " removed. Submit the media item as a new run instead."
+        )
+        self.run_id = run_id
+        self.impact = impact
+
+
+class RunRestartVoidRequiredError(IngestError):
+    """Restart requires voiding decisions and detaching evidence."""
+
+    def __init__(self, run_id: uuid.UUID, impact: RestartImpact) -> None:
+        parts: list[str] = []
+        if impact.segment_scope_decisions > 0:
+            parts.append(
+                f"{impact.segment_scope_decisions} segment/word-range adjudication decision(s)"
+            )
+        if impact.enrichment_evidence > 0:
+            parts.append(
+                f"{impact.enrichment_evidence} enrichment evidence row(s)"
+                " linked to transcript segments"
+            )
+        if impact.derived_embeddings > 0:
+            parts.append(f"{impact.derived_embeddings} derived speaker embedding(s)")
+        detail = ", ".join(parts)
+        super().__init__(
+            f"restart will void all adjudication decisions, detach {detail},"
+            " and delete derived speaker embeddings for this run."
+            " Acknowledge to proceed."
         )
         self.run_id = run_id
         self.impact = impact
@@ -1003,18 +1031,24 @@ def restart_impact(
 ) -> RestartImpact:
     """Inspect what a restart would destroy or invalidate for *run_id*.
 
-    When *from_stage* is ``None`` (full restart from ACQUIRE), all blockers
+    When *from_stage* is ``None`` (full restart from ACQUIRE), all counts
     apply. Stage-aware gate profiles:
 
-    - ACQUIRE / PREPARE / TRANSCRIBE: full blockers (segments are deleted).
+    - ACQUIRE / PREPARE / TRANSCRIBE: full counts (segments are deleted).
     - DIARIZE_EMBED: segments survive, so segment-scope decisions and
-      enrichment evidence are NOT blockers; label-scope risk remains (labels
+      enrichment evidence are zero; label-scope risk remains (labels
       may shift).
-    - ENHANCE_MATCH / FINALIZE: no blockers at all (safe for all runs).
+    - ENHANCE_MATCH / FINALIZE: all zeros (safe for all runs).
+
+    Voided decisions (those with a matching REVOKE) and REVOKE rows
+    themselves are excluded from counts so runs whose decisions have
+    already been revoked report accurate active-decision counts.
     """
     from voxint.db.models import (
         AdjudicationDecision,
+        Decision,
         EnrichmentCandidateEvidence,
+        SpeakerEmbedding,
         TranscriptSegment,
     )
 
@@ -1027,7 +1061,18 @@ def restart_impact(
             label_scope_decisions=0,
             segment_scope_decisions=0,
             enrichment_evidence=0,
+            derived_embeddings=0,
         )
+
+    revoked_ids = (
+        select(AdjudicationDecision.voids_decision_id)
+        .where(
+            AdjudicationDecision.pipeline_run_id == run_id,
+            AdjudicationDecision.decision == Decision.REVOKE.value,
+            AdjudicationDecision.voids_decision_id.is_not(None),
+        )
+        .scalar_subquery()
+    )
 
     label_scope = (
         session.scalar(
@@ -1036,6 +1081,9 @@ def restart_impact(
             .where(
                 AdjudicationDecision.pipeline_run_id == run_id,
                 AdjudicationDecision.transcript_segment_id.is_(None),
+                AdjudicationDecision.decision != Decision.REVOKE.value,
+                AdjudicationDecision.id.not_in(revoked_ids),
+                AdjudicationDecision.detached_at.is_(None),
             )
         )
         or 0
@@ -1046,6 +1094,7 @@ def restart_impact(
             label_scope_decisions=label_scope,
             segment_scope_decisions=0,
             enrichment_evidence=0,
+            derived_embeddings=0,
         )
 
     segment_scope = (
@@ -1055,6 +1104,7 @@ def restart_impact(
             .where(
                 AdjudicationDecision.pipeline_run_id == run_id,
                 AdjudicationDecision.transcript_segment_id.is_not(None),
+                AdjudicationDecision.id.not_in(revoked_ids),
             )
         )
         or 0
@@ -1071,10 +1121,19 @@ def restart_impact(
         )
         or 0
     )
+    derived_embeddings = (
+        session.scalar(
+            select(func.count())
+            .select_from(SpeakerEmbedding)
+            .where(SpeakerEmbedding.source_pipeline_run_id == run_id)
+        )
+        or 0
+    )
     return RestartImpact(
         label_scope_decisions=label_scope,
         segment_scope_decisions=segment_scope,
         enrichment_evidence=evidence,
+        derived_embeddings=derived_embeddings,
     )
 
 
@@ -1084,7 +1143,7 @@ def restart_stage_profiles(
     """Derive per-stage restart profiles from a single full-restart impact.
 
     Returns one dict per STAGE_ORDER member with keys: stage, label,
-    blocked, label_risk, label_count, safe.  No DB queries -- pure
+    requires_void, label_risk, label_count, safe.  No DB queries -- pure
     projection of the counts in *full_impact*.
     """
     _LABELS = {
@@ -1104,7 +1163,7 @@ def restart_stage_profiles(
                 {
                     "stage": stage.value,
                     "label": _LABELS[stage],
-                    "blocked": False,
+                    "requires_void": False,
                     "label_risk": False,
                     "label_count": 0,
                     "safe": True,
@@ -1115,7 +1174,7 @@ def restart_stage_profiles(
                 {
                     "stage": stage.value,
                     "label": _LABELS[stage],
-                    "blocked": False,
+                    "requires_void": False,
                     "label_risk": full_impact.label_scope_decisions > 0,
                     "label_count": full_impact.label_scope_decisions,
                     "safe": full_impact.label_scope_decisions == 0,
@@ -1126,17 +1185,77 @@ def restart_stage_profiles(
                 {
                     "stage": stage.value,
                     "label": _LABELS[stage],
-                    "blocked": full_impact.has_blockers,
+                    "requires_void": full_impact.requires_void,
                     "label_risk": (
-                        not full_impact.has_blockers and full_impact.label_scope_decisions > 0
+                        not full_impact.requires_void and full_impact.label_scope_decisions > 0
                     ),
                     "label_count": full_impact.label_scope_decisions,
                     "safe": (
-                        not full_impact.has_blockers and full_impact.label_scope_decisions == 0
+                        not full_impact.requires_void and full_impact.label_scope_decisions == 0
                     ),
                 }
             )
     return profiles
+
+
+def _void_run_decisions(session: Session, run_id: uuid.UUID) -> int:
+    """Bulk-insert REVOKE rows for all unvoided decisions in this run.
+
+    Returns the count of newly voided decisions.  Idempotent: already-voided
+    decisions (from prior undo or a retried restart) are skipped.
+    """
+    from voxint.adjudication.ledger import record_decision
+    from voxint.db.models import AdjudicationDecision, Decision
+
+    voided_subq = select(AdjudicationDecision.voids_decision_id).where(
+        AdjudicationDecision.pipeline_run_id == run_id,
+        AdjudicationDecision.decision == Decision.REVOKE.value,
+        AdjudicationDecision.voids_decision_id.is_not(None),
+    )
+    targets = list(
+        session.execute(
+            select(AdjudicationDecision).where(
+                AdjudicationDecision.pipeline_run_id == run_id,
+                AdjudicationDecision.decision != Decision.REVOKE.value,
+                AdjudicationDecision.id.not_in(voided_subq),
+            )
+        ).scalars()
+    )
+    for target in targets:
+        record_decision(
+            session,
+            pipeline_run_id=run_id,
+            diarization_label=target.diarization_label,
+            decision=Decision.REVOKE,
+            operator="system:restart-void",
+            idempotency_key=f"restart-void:{run_id}:{target.id}",
+            voids_decision_id=target.id,
+        )
+    session.flush()
+    return len(targets)
+
+
+def _invalidate_run_embeddings(session: Session, run_id: uuid.UUID) -> int:
+    """Delete speaker embeddings sourced from this run's decisions.
+
+    Archive any speakers left with no embeddings and no live decisions.
+    Returns the count of deleted embeddings.
+    """
+    from voxint.adjudication.undo import _archive_if_orphaned
+    from voxint.db.models import SpeakerEmbedding
+
+    embeddings = list(
+        session.execute(
+            select(SpeakerEmbedding).where(SpeakerEmbedding.source_pipeline_run_id == run_id)
+        ).scalars()
+    )
+    affected_speaker_ids = {e.speaker_id for e in embeddings}
+    for e in embeddings:
+        session.delete(e)
+    session.flush()
+    for speaker_id in affected_speaker_ids:
+        _archive_if_orphaned(session, speaker_id)
+    return len(embeddings)
 
 
 def _eager_invalidate_downstream(
@@ -1190,10 +1309,14 @@ def _eager_invalidate_downstream(
                 .values(diarization_label=None)
             )
 
-    # TRANSCRIBE: delete segments (cascades review states, split boundaries,
-    # annotations, saved quotes, learned-correction evidence); clear run-level
-    # transcript metadata.
+    # TRANSCRIBE: void decisions, invalidate embeddings, then delete segments.
+    # Voiding inserts REVOKEs so the append-only trigger allows the ON DELETE
+    # SET NULL cascade to detach transcript_segment_id on decision and evidence
+    # rows. Segment deletion cascades review states, split boundaries,
+    # annotations, saved quotes, and learned-correction evidence.
     if segments_will_be_deleted:
+        _void_run_decisions(session, run_id)
+        _invalidate_run_embeddings(session, run_id)
         session.execute(
             delete(TranscriptSegment).where(TranscriptSegment.pipeline_run_id == run_id)
         )
@@ -1347,6 +1470,7 @@ def restart_run(
     from_stage: Stage | None = None,
     expected_revision: int | None = None,
     acknowledge_label_risk: bool = False,
+    acknowledge_void: bool = False,
 ) -> RunSnapshot:
     """CAS-restart a terminal run, optionally from a selected stage.
 
@@ -1357,11 +1481,14 @@ def restart_run(
     The caller commits then publishes via
     ``pipeline_task_for_stage(from_stage)``.
 
-    Raises :class:`RunRestartBlockedError` when segment-scope adjudication
-    decisions or enrichment evidence reference transcript segments that would be
-    deleted (both tables are append-only and cannot be purged).
+    Raises :class:`RunRestartVoidRequiredError` when segment-scope adjudication
+    decisions or enrichment evidence would be affected and *acknowledge_void*
+    is not set.  When acknowledged, all decisions are voided via REVOKE, derived
+    speaker embeddings are deleted, and the ON DELETE SET NULL cascade detaches
+    the FK references so segments can be deleted.
 
-    Raises :class:`RunRestartLabelRiskError` when label-scope decisions exist and
+    Raises :class:`RunRestartLabelRiskError` when label-scope decisions exist,
+    *acknowledge_void* is not set (voiding subsumes label risk), and
     *acknowledge_label_risk* is not set, since re-diarization may reassign labels.
 
     Raises :class:`RestartPrerequisiteError` when upstream stage outputs are
@@ -1379,9 +1506,9 @@ def restart_run(
         raise StaleRevisionError(run_id, expected_revision)
 
     impact = restart_impact(session, run_id, from_stage=from_stage)
-    if impact.has_blockers:
-        raise RunRestartBlockedError(run_id, impact)
-    if impact.label_scope_decisions > 0 and not acknowledge_label_risk:
+    if impact.requires_void and not acknowledge_void:
+        raise RunRestartVoidRequiredError(run_id, impact)
+    if impact.label_scope_decisions > 0 and not acknowledge_void and not acknowledge_label_risk:
         raise RunRestartLabelRiskError(run_id, impact.label_scope_decisions)
 
     effective_stage = from_stage if from_stage is not None else Stage.ACQUIRE
@@ -1393,7 +1520,7 @@ def restart_run(
     except IntegrityError:
         session.rollback()
         fresh_impact = restart_impact(session, run_id, from_stage=from_stage)
-        raise RunRestartBlockedError(run_id, fresh_impact) from None
+        raise RunRestartVoidRequiredError(run_id, fresh_impact) from None
 
     return cas_update_run(
         session,

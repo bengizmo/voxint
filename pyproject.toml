@@ -31,7 +31,7 @@ dependencies = [
     "numpy>=1.26",
     "scipy>=1.13",
     "pyyaml>=6.0",
-    "yt-dlp>=2024.8",
+    "yt-dlp[default]>=2026.8.19",
     # In-process text-embedding runtime for the semantic-search spine (#121):
     # MiniLM as a vendored ONNX graph via onnxruntime + the Rust tokenizers
     # lib. Deliberately NOT torch/transformers/sentence-transformers — the

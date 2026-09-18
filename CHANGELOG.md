@@ -10,6 +10,33 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - Walk mode now shows a clear visual signal: the toolbar and sticky edit
   panel tint with the accent color, and the toggle button fills solid when
   active. The cue appears only in the writable editing state (#559)
+- **Provenance-preserving reprocessing (#507).** Runs with adjudication
+  decisions or enrichment evidence can now be restarted from stages that
+  delete transcript segments (ACQUIRE, PREPARE, TRANSCRIBE). Previously these
+  runs were hard-blocked. On restart, all adjudication decisions are
+  auto-voided via the existing REVOKE mechanism, derived speaker embeddings
+  are deleted, and the FK SET NULL cascade detaches transcript-segment
+  references on decision and evidence rows. Detached rows retain their
+  original scope in `original_transcript_segment_id` and
+  `original_start_word_index`/`original_end_word_index` provenance columns
+  for audit. The append-only trigger is narrowed to allow only this specific
+  detach path, with a void-before-detach invariant enforced at the database
+  level. `restart_impact` now excludes already-voided decisions from counts.
+  The CLI gains `--acknowledge-void`; the web UI shows a void-acknowledgement
+  checkbox when restarting from a segment-deleting stage.
+
+### Changed
+- Restart-from-stage (#506) now allows ACQUIRE/PREPARE/TRANSCRIBE restarts on
+  runs with adjudication decisions: decisions are auto-voided and segment
+  references detached with provenance, replacing the previous hard block (#507)
+
+### Fixed
+- URL submissions failing with 403 on YouTube due to missing JS challenge
+  solver; dependency upgraded to `yt-dlp[default]` which includes
+  `yt-dlp-ejs`. Native installs with a JS runtime (Node/Deno) get the fix
+  immediately; container images need a runtime added separately (#557)
+- Successful single-item downloads falsely reported as failures due to yt-dlp
+  exit code 101 (`DownloadCancelled`) from `--max-downloads 1` (#557)
 
 
 ## [0.43.0] - 2026-09-18
@@ -4470,7 +4497,8 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.42.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.43.0...HEAD
+[0.43.0]: https://github.com/bengizmo/voxint/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/bengizmo/voxint/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/bengizmo/voxint/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/bengizmo/voxint/compare/v0.39.0...v0.40.0

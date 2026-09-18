@@ -1256,9 +1256,9 @@ class AdjudicationDecision(Base):
             sqlite_where=text("voids_decision_id IS NOT NULL"),
         ),
         # INHERIT is a segment-scope reset only; it is meaningless at label scope
-        # (issue #54 Phase B). A NULL transcript_segment_id is label scope.
+        # (issue #54 Phase B). Detached rows are exempt (#507).
         CheckConstraint(
-            "decision != 'inherit' OR transcript_segment_id IS NOT NULL",
+            "detached_at IS NOT NULL OR decision != 'inherit' OR transcript_segment_id IS NOT NULL",
             name="adjudication_decisions_inherit_segment_check",
         ),
         # Segment scope carries only assign or inherit; exclude/unknown are
@@ -1311,6 +1311,21 @@ class AdjudicationDecision(Base):
             "operator NOT LIKE 'system:%' OR user_id IS NULL",
             name="adjudication_decisions_system_not_user_check",
         ),
+        # Provenance columns for detached decisions (#507): detached_at and
+        # original_transcript_segment_id are set together by the trigger;
+        # original word-range only on detached rows that had a range.
+        CheckConstraint(
+            "(detached_at IS NULL) = (original_transcript_segment_id IS NULL)",
+            name="adjudication_decisions_detach_pair_check",
+        ),
+        CheckConstraint(
+            "detached_at IS NOT NULL OR original_start_word_index IS NULL",
+            name="adjudication_decisions_original_range_only_detached_check",
+        ),
+        CheckConstraint(
+            "(original_start_word_index IS NULL) = (original_end_word_index IS NULL)",
+            name="adjudication_decisions_original_range_pair_check",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -1323,7 +1338,7 @@ class AdjudicationDecision(Base):
     # segment. The writer derives diarization_label from the segment row, so the
     # two always agree (issue #54 Phase B).
     transcript_segment_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("transcript_segments.id"), nullable=True
+        ForeignKey("transcript_segments.id", ondelete="SET NULL"), nullable=True
     )
     # Word-range scope (issue #59 slice 3): a half-open ``[start, end)`` interval
     # into the parent segment's immutable ``words`` list, addressing one derived
@@ -1342,6 +1357,12 @@ class AdjudicationDecision(Base):
         ForeignKey("adjudication_decisions.id"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Provenance columns populated by the DB trigger during FK SET NULL cascade
+    # when transcript segments are deleted on restart (#507).
+    detached_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    original_transcript_segment_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    original_start_word_index: Mapped[int | None] = mapped_column(nullable=True)
+    original_end_word_index: Mapped[int | None] = mapped_column(nullable=True)
 
 
 # Length bound on operator-corrected text (issue #58): a segment is a short
@@ -1699,7 +1720,9 @@ class EnrichmentCandidateEvidence(Base):
             name="enrichment_candidate_evidence_metadata_shape_check",
         ),
         CheckConstraint(
-            "kind != 'transcript_segment' OR (transcript_segment_id IS NOT NULL"
+            "detached_at IS NOT NULL"
+            " OR kind != 'transcript_segment'"
+            " OR (transcript_segment_id IS NOT NULL"
             " AND source_metadata_id IS NULL AND source_field IS NULL"
             " AND url IS NULL AND retrieved_at IS NULL)",
             name="enrichment_candidate_evidence_transcript_shape_check",
@@ -1738,6 +1761,10 @@ class EnrichmentCandidateEvidence(Base):
             "detail IS NULL OR jsonb_typeof(detail) = 'object'",
             name="enrichment_candidate_evidence_detail_object_check",
         ),
+        CheckConstraint(
+            "(detached_at IS NULL) = (original_transcript_segment_id IS NULL)",
+            name="enrichment_candidate_evidence_detach_pair_check",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -1752,7 +1779,7 @@ class EnrichmentCandidateEvidence(Base):
     # Normalized column name or "raw.<key>" path within the metadata snapshot.
     source_field: Mapped[str | None] = mapped_column(Text)
     transcript_segment_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("transcript_segments.id")
+        ForeignKey("transcript_segments.id", ondelete="SET NULL")
     )
     timestamp_seconds: Mapped[float | None] = mapped_column(Float)
     url: Mapped[str | None] = mapped_column(Text)
@@ -1761,6 +1788,10 @@ class EnrichmentCandidateEvidence(Base):
     detail: Mapped[dict[str, Any] | None] = mapped_column()
     detail_schema_version: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Provenance columns populated by the DB trigger during FK SET NULL cascade
+    # when transcript segments are deleted on restart (#507).
+    detached_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    original_transcript_segment_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
 
     candidate: Mapped[EnrichmentCandidate] = relationship(back_populates="evidence")
 
