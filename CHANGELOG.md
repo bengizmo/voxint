@@ -6,6 +6,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- Walk mode now shows a clear visual signal: the toolbar and sticky edit
+  panel tint with the accent color, and the toggle button fills solid when
+  active. The cue appears only in the writable editing state (#559)
+
 
 ## [0.43.0] - 2026-09-18
 
