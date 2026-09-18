@@ -6,6 +6,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+
+## [0.43.0] - 2026-09-18
+
 ### Added
 - **Restart from stage (#506).** Terminal runs can now be restarted from any
   pipeline stage, not just ACQUIRE. Upstream outputs are preserved; downstream
