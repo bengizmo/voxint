@@ -236,7 +236,11 @@
     .rail-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .icon-rail .rail-link:hover { background: var(--surface-2); color: var(--ink); }
     .icon-rail .rail-link[aria-current="page"] { color: var(--accent);
-               outline: 4px solid rgba(79,192,181,.18); outline-offset: -4px; }
+               background: var(--surface-2); }
+    /* Current page uses a left bar; the outer outline is reserved for focus. */
+    .icon-rail .rail-link[aria-current="page"]::before { content: "";
+               position: absolute; left: 0; top: 4px; bottom: 4px;
+               border-left: 3px solid var(--accent); }
     .icon-rail .rail-link svg,
     .command-bar .rail-link svg { width: 18px; height: 18px; }
     /* Tooltip: CSS-only, appears on hover/focus-visible */
@@ -413,7 +417,7 @@
                border-radius: var(--r-md); background: var(--surface); color: var(--ink); }
     .lib-search-row select { padding: .35rem .5rem; font: inherit;
                border: 1px solid var(--line); border-radius: var(--r-md);
-               background: var(--surface); color: var(--ink); }
+               background: var(--surface-2); color: var(--ink); }
     .lib-search-clear { font-size: var(--t-sm); color: var(--accent); text-decoration: none; }
     .file-missing-notice { display: inline-flex; align-items: baseline; gap: var(--space-1);
                flex-wrap: wrap; min-width: 0; max-width: 100%; }
@@ -489,12 +493,25 @@
     button.secondary { background: transparent; border-color: transparent;
       color: var(--accent-ink); padding-left: .35rem; padding-right: .35rem; }
     button.secondary:hover { background: var(--accent-soft); border-color: transparent; }
+    input, select, textarea { accent-color: var(--accent); }
     input:not(:where([type=checkbox], [type=radio], [type=file], [type=hidden])),
     select, textarea {
       font: inherit; color: var(--ink); background: var(--surface);
       border: 1px solid var(--line); border-radius: var(--r-sm); padding: .3rem .45rem; }
     input:not(:where([type=checkbox], [type=radio], [type=file], [type=hidden])):focus-visible,
     select:focus-visible, textarea:focus-visible { border-color: var(--focus-ring); }
+    select, select option { background: var(--surface-2); color: var(--ink); }
+    .playback-speed { border-radius: var(--r-md); padding: var(--space-1) var(--space-2); }
+    .audio-transport { display: flex; flex-wrap: wrap; align-items: center;
+      gap: var(--space-2); padding: var(--space-2); margin: var(--space-2) 0;
+      background: var(--surface-2); color: var(--ink); border-radius: var(--r-md); }
+    .audio-transport .audio-transport-toggle { color: var(--accent-ink); min-width: 4.5rem; }
+    .audio-transport input[type="range"] { flex: 1 1 8rem; min-width: 0;
+      padding: 0; border: 0; background: transparent; cursor: pointer; }
+    .audio-transport input:disabled { cursor: not-allowed; opacity: .55; }
+    .audio-transport-time { font-family: var(--font-mono); font-size: var(--t-sm);
+      font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .audio-transport-error { flex-basis: 100%; margin: 0; }
     .label-card { border: 1px solid var(--line); border-radius: var(--r-md);
                   padding: .8rem 1rem; margin: .8rem 0; background: var(--surface); }
     .rail-summary { font-size: 1.05rem; font-weight: 600; color: var(--ink);

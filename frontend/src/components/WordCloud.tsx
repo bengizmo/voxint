@@ -67,7 +67,16 @@ export function WordCloud({
       layoutRef.current.stop();
     }
 
+    // Reset the seed for every layout, including effect replays and resizes.
+    // d3-cloud uses this generator for starting positions and spiral direction.
+    let seed = 42;
+    const random = () => {
+      seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+
     const layout = cloud()
+      .random(random)
       .size([width, height])
       .words(input)
       .padding(3)

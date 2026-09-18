@@ -15,13 +15,14 @@
       across {{ insights.recording_count }} recording{{ "s" if insights.recording_count != 1 else "" }}
     </p>
     <div class="term-bars" role="list" aria-label="Terms distinctive to {{ speaker.display_name }}">
-      {%- set max_z = insights.distinctive_terms[0].z_score if insights.distinctive_terms and insights.distinctive_terms[0].z_score else 1 -%}
-      {% for t in insights.distinctive_terms[:20] %}
+      {%- set displayed_terms = insights.distinctive_terms[:20] -%}
+      {%- set max_count = displayed_terms|map(attribute='count')|max or 1 -%}
+      {% for t in displayed_terms %}
       <a href="/explore?q={{ t.term|urlencode }}&amp;speaker={{ speaker.id }}"
          class="term-bar-row" role="listitem"
          title="{{ t.term }}: used {{ t.count }}x (z-score {{ '%.1f'|format(t.z_score) }})">
         <span class="term-bar-label">{{ t.term }}</span>
-        <span class="term-bar-fill" style="width: {{ (t.z_score / max_z * 100)|round }}%"></span>
+        <span class="term-bar-fill" aria-hidden="true" style="width: {{ t.count / max_count * 100 }}%"></span>
         <span class="term-bar-count">{{ t.count }}</span>
       </a>
       {% endfor %}
