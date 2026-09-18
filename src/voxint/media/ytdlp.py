@@ -55,6 +55,8 @@ _STDERR_LIMIT = 2000
 INFO_JSON_FILENAME = "source.info.json"
 # Grace for a SIGTERM'd process group to exit before we SIGKILL it.
 _KILL_GRACE_SECONDS = 5.0
+# yt-dlp exit code for DownloadCancelled, raised after --max-downloads 1 completes.
+_MAX_DOWNLOADS_CANCELLED = 101
 
 # PR_SET_PDEATHSIG (Linux): ask the kernel to SIGKILL the download if THIS worker
 # process dies (an OOM-kill or crash) while a download is in flight, so a killed
@@ -63,7 +65,6 @@ _KILL_GRACE_SECONDS = 5.0
 # so it stays in effect on the yt-dlp process itself. libc is loaded once here,
 # before any fork, so the post-fork hook does no dlopen in that fragile context.
 _PR_SET_PDEATHSIG = 1
-_MAX_DOWNLOADS_CANCELLED = 101
 try:
     _libc: "ctypes.CDLL | None" = ctypes.CDLL("libc.so.6", use_errno=True)
 except OSError:  # pragma: no cover - non-glibc platform; the group-kill still applies

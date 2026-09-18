@@ -324,6 +324,30 @@ def test_downloader_argv_captures_info_json_alongside_the_download(
     assert args[-2:] == ["--", "https://example.com/video"]
 
 
+def test_downloader_tolerates_exit_101(tmp_path: Path) -> None:
+    """The production downloader closure passes tolerate_exit=101 so a successful
+    single-item download (yt-dlp returns DownloadCancelled after --max-downloads 1)
+    does not raise. A different nonzero code still raises through the closure."""
+    stub = tmp_path / "stub.sh"
+    stub.write_text("#!/bin/sh\nexit 101\n")
+    stub.chmod(0o755)
+    dest = tmp_path / "out"
+    dest.mkdir()
+    downloader = build_ytdlp_downloader(
+        timeout_seconds=10, socket_timeout_seconds=7.0, ytdlp_bin=str(stub)
+    )
+    downloader("https://example.com/video", dest, 4242)
+
+    stub_fail = tmp_path / "stub_fail.sh"
+    stub_fail.write_text("#!/bin/sh\nexit 2\n")
+    stub_fail.chmod(0o755)
+    downloader_fail = build_ytdlp_downloader(
+        timeout_seconds=10, socket_timeout_seconds=7.0, ytdlp_bin=str(stub_fail)
+    )
+    with pytest.raises(AcquisitionError, match="exit 2"):
+        downloader_fail("https://example.com/video", dest, 4242)
+
+
 def test_run_download_command_scrubs_extra_secret_from_stderr() -> None:
     """A cookies path echoed as prose in stderr (no --cookies flag) is scrubbed via
     the extra_secrets channel the downloader threads through — the structural

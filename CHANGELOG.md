@@ -9,7 +9,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ### Fixed
 - URL submissions failing with 403 on YouTube due to missing JS challenge
   solver; dependency upgraded to `yt-dlp[default]` which includes
-  `yt-dlp-ejs` (#557)
+  `yt-dlp-ejs`. Native installs with a JS runtime (Node/Deno) get the fix
+  immediately; container images need a runtime added separately (#557)
 - Successful single-item downloads falsely reported as failures due to yt-dlp
   exit code 101 (`DownloadCancelled`) from `--max-downloads 1` (#557)
 
@@ -4472,7 +4473,8 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.42.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.43.0...HEAD
+[0.43.0]: https://github.com/bengizmo/voxint/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/bengizmo/voxint/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/bengizmo/voxint/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/bengizmo/voxint/compare/v0.39.0...v0.40.0
