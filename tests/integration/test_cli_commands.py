@@ -392,7 +392,7 @@ def test_export_formats_and_file_output(
 
     assert main(["export", str(run_id), "--format", "srt"]) == 0
     srt = capsys.readouterr().out
-    assert "1\n00:00:00,000 --> 00:00:01,000\nSPEAKER_00:\nhello\n" in srt
+    assert "1\n00:00:00,000 --> 00:00:01,000\nVoice 1:\nhello\n" in srt
 
     # RTTM reads the diarization turns (raw labels, run-uuid file id).
     assert main(["export", str(run_id), "--format", "rttm"]) == 0
@@ -418,7 +418,7 @@ def test_export_txt_no_timestamps(
 
     assert main(["export", str(run_id), "--format", "txt", "--no-timestamps"]) == 0
     plain = capsys.readouterr().out
-    assert plain == "SPEAKER_00: hello\nSPEAKER_01: hi\n"
+    assert plain == "Voice 1: hello\nVoice 2: hi\n"
     assert "[" not in plain
 
     assert main(["export", str(run_id), "--format", "txt"]) == 0
