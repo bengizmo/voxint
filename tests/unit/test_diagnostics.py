@@ -6,6 +6,7 @@ token, or raw exception string.
 """
 
 import httpx
+import pytest
 from sqlalchemy import create_engine
 
 from voxint.config import Settings
@@ -18,6 +19,7 @@ from voxint.diagnostics import (
     check_models,
     check_redis,
     check_state,
+    check_ytdlp_js_runtime,
     exit_code,
     run_diagnostics,
 )
@@ -512,3 +514,62 @@ def test_run_diagnostics_key_only_at_default_url_is_probed() -> None:
     by_name = {r.name: r for r in results}
     assert seen == ["https://api.openai.com/v1/models"]
     assert by_name["llm endpoint"].detail == "reachable (HTTP 200)"
+
+
+# ---- yt-dlp JS runtime advisory (#560) ----
+
+
+def test_ytdlp_js_runtime_disabled_returns_none() -> None:
+    assert check_ytdlp_js_runtime(ytdlp_enabled=False) is None
+
+
+def test_ytdlp_js_runtime_deno_present(monkeypatch: "pytest.MonkeyPatch") -> None:
+    import shutil
+
+    monkeypatch.setattr(
+        shutil, "which",
+        lambda name: "/usr/local/bin/deno" if name == "deno" else None,
+    )
+
+    import subprocess as sp
+
+    orig_run = sp.run
+
+    def fake_run(args: list[str], **kw: object) -> sp.CompletedProcess[str]:
+        if args and args[0] == "/usr/local/bin/deno" and "--version" in args:
+            return sp.CompletedProcess(args, 0, stdout="deno 2.9.7\n", stderr="")
+        return orig_run(args, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    r = check_ytdlp_js_runtime(ytdlp_enabled=True)
+    assert r is not None
+    assert r.ok is True
+    assert r.hard is False
+    assert "2.9.7" in r.detail
+
+
+def test_ytdlp_js_runtime_deno_missing(monkeypatch: "pytest.MonkeyPatch") -> None:
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    r = check_ytdlp_js_runtime(ytdlp_enabled=True)
+    assert r is not None
+    assert r.ok is False
+    assert r.hard is False
+    assert "no Deno" in r.detail
+
+
+def test_ytdlp_js_runtime_deno_timeout(monkeypatch: "pytest.MonkeyPatch") -> None:
+    import shutil
+    import subprocess as sp
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/deno" if name == "deno" else None)
+
+    def raise_timeout(*_a: object, **_kw: object) -> None:
+        raise sp.TimeoutExpired("deno", 5)
+
+    monkeypatch.setattr(sp, "run", raise_timeout)
+    r = check_ytdlp_js_runtime(ytdlp_enabled=True)
+    assert r is not None
+    assert r.ok is True
+    assert "unknown" in r.detail
