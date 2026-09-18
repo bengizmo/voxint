@@ -15,6 +15,31 @@ FROM python:3.12-slim AS base
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
+# Deno runtime for yt-dlp-ejs (issue #560): yt-dlp enables only Deno by
+# default (--no-config, no --js-runtimes), so this is the only runtime that
+# matters. Pinned version + per-arch sha256; the purge removes curl/unzip
+# (needed only for the download) to keep the runtime image lean.
+ARG DENO_VERSION=2.9.7
+ARG TARGETARCH
+ARG DENO_SHA256_AMD64=c6527f24f4b16031d3ae4fa9f658d5f11534c8d84ce7dc8502420280919c3490
+ARG DENO_SHA256_ARM64=c832298b1ad4422481334855f6003e0f54145762c5a134f20a489511d2f65bbf
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) DENO_SHA="${DENO_SHA256_AMD64}"; DENO_ARCH="x86_64" ;; \
+      arm64) DENO_SHA="${DENO_SHA256_ARM64}"; DENO_ARCH="aarch64" ;; \
+      *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    apt-get update \
+    && apt-get install -y --no-install-recommends curl unzip \
+    && curl -fsSL -o /tmp/deno.zip \
+       "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-${DENO_ARCH}-unknown-linux-gnu.zip" \
+    && printf '%s  /tmp/deno.zip\n' "${DENO_SHA}" | sha256sum -c --strict - \
+    && unzip -o /tmp/deno.zip -d /usr/local/bin \
+    && chmod 755 /usr/local/bin/deno \
+    && rm /tmp/deno.zip \
+    && apt-get purge -y curl unzip && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /usr/local/bin/uv
 
 WORKDIR /app

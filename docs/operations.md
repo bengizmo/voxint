@@ -596,8 +596,12 @@ compute `device`, e.g. `rocm`/`cpu`) are **hard** checks, and the command exits
 non-zero if any is down. The Hugging Face token (`HF_TOKEN`, validated via
 whoami) and the LLM endpoint (only when `LLM_ENABLED`) are **advisory**: reported
 but never failing the exit code, because the default install needs neither. No
-credentials, tokens, or connection URLs are printed. After the checks it prints
-an advisory hardware-telemetry section (aggregated GPU utilization, VRAM,
+credentials, tokens, or connection URLs are printed. When `YTDLP_ENABLED` is
+true (the default), doctor also checks for Deno on `PATH`: yt-dlp's JS
+challenge solver (`yt-dlp-ejs`) requires a Deno runtime, and sites like YouTube
+will reject downloads without it. Docker images bundle Deno; native installs
+should install it separately (`curl -fsSL https://deno.land/install.sh | sh`).
+After the checks it prints an advisory hardware-telemetry section (aggregated GPU utilization, VRAM,
 temperature and throttle state, plus each service's admission depth) read from
 the same `/healthz` `resources` block described under "Metrics & monitoring". A
 telemetry failure never changes the doctor verdict.
