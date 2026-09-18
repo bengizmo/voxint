@@ -436,9 +436,10 @@ class Settings(BaseSettings):
     # on subsequent sweeps. Default 8 matches the model services' default
     # MAX_PENDING_REQUESTS admission limit.
     watch_folder_batch_size: int = Field(default=8, ge=1)
-    # Maximum pipeline runs published per batch re-run confirm. Caps the
-    # publish loop after commit so a large re-run selection does not flood the
-    # model services. Remaining runs stay QUEUED for the recovery sweep.
+    # Maximum pipeline runs published per batch operation (media re-run confirm
+    # or CLI bulk restart). Caps the publish loop after commit so a large
+    # selection does not flood the model services. Remaining runs stay QUEUED
+    # for the recovery sweep.
     rerun_publish_batch_size: int = Field(default=8, ge=1)
 
     # Media operations reconciler (ADR 0007). Drives interrupted journal rows

@@ -27,6 +27,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   the batch. The `POST /media/submit` endpoint now returns JSON when the
   request includes `Accept: application/json`. The plain HTML form fallback
   (single file, POST/redirect) is unchanged.
+- **Bulk restart CLI (#508).** `voxint restart` now accepts `--all`,
+  `--status` (repeatable), and `--since` selectors for batch operations.
+  `--dry-run` previews per-run impact without mutations. Per-run error
+  isolation ensures one blocked or failed restart does not affect others.
+  Broker dispatch is capped by `RERUN_PUBLISH_BATCH_SIZE`.
 
 
 ## [0.42.0] - 2026-09-17
