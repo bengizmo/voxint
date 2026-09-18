@@ -810,7 +810,10 @@ export function MediaEditor({
 
   return (
     <>
-      <div ref={annotationRootRef}>
+      <div
+        ref={annotationRootRef}
+        className={writable && walkMode ? "walk-active" : undefined}
+      >
         {claimLost && (
           <p role="alert" className="notice text-sm">
             Your claim expired or was taken over. Everything you already saved is
@@ -876,7 +879,9 @@ export function MediaEditor({
                 type="button"
                 onClick={() => setWalkMode((on) => !on)}
                 aria-pressed={walkMode}
-                className="text-sm"
+                className={
+                  walkMode ? "me-walk-btn-active text-sm" : "text-sm"
+                }
               >
                 {walkMode ? "Exit walk mode" : "Walk mode"}{" "}
                 <kbd>{REVIEW_KEY.walkMode}</kbd>

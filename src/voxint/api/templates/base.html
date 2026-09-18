@@ -451,6 +451,10 @@
                gap: var(--space-4); align-items: start; }
     @media (max-width: 48rem) { .me-layout { grid-template-columns: 1fr; } }
     .me-segment-actions { position: sticky; top: 0; z-index: 2; background: var(--paper); padding-bottom: var(--space-2); border-bottom: 1px solid var(--line); margin-bottom: var(--space-2); }
+    .me-toolbar { border-left: .25rem solid transparent; padding-left: var(--space-2); }
+    .walk-active .me-toolbar { background: var(--accent-soft); border-left-color: var(--accent); }
+    .walk-active .me-segment-actions { background: var(--accent-soft); }
+    .me-walk-btn-active { background: var(--accent); color: var(--accent-contrast); border-radius: var(--r-md); padding: .2rem .6rem; }
     h1 { font-size: var(--t-xl); line-height: 1.2; letter-spacing: -.012em; }
     h2 { font-size: var(--t-lg); line-height: 1.2; letter-spacing: -.008em; }
     h3 { font-size: var(--t-md); line-height: 1.25; }
