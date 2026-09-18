@@ -1,3 +1,4 @@
+import { formatTime } from "../lib/format";
 import {
   forwardRef,
   memo,
@@ -264,10 +265,6 @@ export interface TranscriptPlayerHandle {
   focusCursorRow: () => void;
 }
 
-function formatTime(seconds: number): string {
-  return seconds.toFixed(2);
-}
-
 interface TranscriptRowProps {
   seg: Segment;
   index: number;
@@ -360,13 +357,13 @@ const TranscriptRow = memo(function TranscriptRow({
         }}
         disabled={!seek}
         title={seek ? "Play this line" : seekDisabledReason}
-        aria-label={`Play line at ${formatTime(seg.start)} seconds`}
+        aria-label={`Play line at ${formatTime(seg.start, { decimals: 2 })}`}
         className="mr-2"
       >
         ▶
       </button>
       <span className="opacity-60 tabular-nums mr-2">
-        [{formatTime(seg.start)}–{formatTime(seg.end)}]
+        [{formatTime(seg.start, { decimals: 2 })}–{formatTime(seg.end, { decimals: 2 })}]
       </span>
       {uncertain && (
         <span

@@ -1,3 +1,4 @@
+import { formatTime } from "../lib/format";
 import { scaleLinear } from "d3-scale";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -49,17 +50,6 @@ const BLOCK_INSET = 3;
 const AXIS_HEIGHT = 34;
 const LARGE_INTERVAL_COUNT = 1_000;
 
-function formatTime(seconds: number, long: boolean): string {
-  const rounded = Math.max(0, Math.round(seconds));
-  const hours = Math.floor(rounded / 3_600);
-  const minutes = Math.floor((rounded % 3_600) / 60);
-  const remainder = rounded % 60;
-  if (long || hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
-  }
-  return `${minutes}:${String(remainder).padStart(2, "0")}`;
-}
-
 function intervalName(lane: TimelineLane): string {
   if (lane.resolution === "human_exclude") return `${lane.label} (excluded)`;
   if (lane.speaker_name && lane.speaker_name !== lane.label) {
@@ -74,7 +64,7 @@ function intervalAriaLabel(
   long: boolean,
 ): string {
   const duration = Math.max(0, interval.end_seconds - interval.start_seconds);
-  return `${intervalName(lane)}, ${formatTime(interval.start_seconds, long)} to ${formatTime(interval.end_seconds, long)}, ${duration.toFixed(1)} seconds${interval.overlap ? ", overlapping speech" : ""}`;
+  return `${intervalName(lane)}, ${formatTime(interval.start_seconds, { long })} to ${formatTime(interval.end_seconds, { long })}, ${duration.toFixed(1)} seconds${interval.overlap ? ", overlapping speech" : ""}`;
 }
 
 export function SpeakerTimelineIsland({
@@ -168,7 +158,7 @@ export function SpeakerTimelineIsland({
           className="block w-full"
           viewBox={`0 0 ${width} ${model.height}`}
           role="img"
-          aria-label={`Speaker timeline with ${timeline.lanes.length} lanes over ${formatTime(timeline.duration_seconds, model.longTime)}`}
+          aria-label={`Speaker timeline with ${timeline.lanes.length} lanes over ${formatTime(timeline.duration_seconds, { long: model.longTime })}`}
         >
           <title>Speaker activity over the recording</title>
           <defs>
@@ -282,7 +272,7 @@ export function SpeakerTimelineIsland({
                 fill="var(--ink-3)"
                 fontSize="10"
               >
-                {formatTime(tick, model.longTime)}
+                {formatTime(tick, { long: model.longTime })}
               </text>
             </g>
           ))}
@@ -313,8 +303,8 @@ export function SpeakerTimelineIsland({
                 fill="var(--ink-3)"
                 fontSize="10"
               >
-                {formatTime(hovered.interval.start_seconds, model.longTime)} –{" "}
-                {formatTime(hovered.interval.end_seconds, model.longTime)} ·{" "}
+                {formatTime(hovered.interval.start_seconds, { long: model.longTime })} –{" "}
+                {formatTime(hovered.interval.end_seconds, { long: model.longTime })} ·{" "}
                 {(
                   hovered.interval.end_seconds - hovered.interval.start_seconds
                 ).toFixed(1)}
@@ -356,7 +346,7 @@ export function SpeakerTimelineIsland({
               aria-hidden="true"
             />
             {intervalName(lane)} ·{" "}
-            {formatTime(lane.total_seconds, model.longTime)}
+            {formatTime(lane.total_seconds, { long: model.longTime })}
           </span>
         ))}
       </div>

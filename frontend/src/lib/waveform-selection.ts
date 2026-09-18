@@ -17,12 +17,6 @@ export function normalizeRange(
   return { start, end };
 }
 
-export function formatTime(s: number): string {
-  const m = Math.floor(s / 60);
-  const sec = Math.floor(s % 60);
-  return `${m}:${sec.toString().padStart(2, "0")}`;
-}
-
 export function isDragDistance(startX: number, currentX: number): boolean {
   return Math.abs(currentX - startX) > DRAG_THRESHOLD;
 }

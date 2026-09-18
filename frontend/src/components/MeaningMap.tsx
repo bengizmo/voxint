@@ -1,3 +1,4 @@
+import { formatTime } from "../lib/format";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /** Semantic meaning map (#357): a canvas scatter of the corpus chunk
@@ -46,12 +47,6 @@ function paletteIndex(runId: string): number {
 
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
-
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 /** Screen-space projection shared by the draw loop and hit-testing: one
