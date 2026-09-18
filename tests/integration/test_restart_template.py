@@ -149,7 +149,7 @@ class TestRunDetailRestart:
         assert resp.status_code == 200
         html = resp.text
         assert "Restart" in html
-        assert "speaker ruling" not in html
+        assert 'id="restart-ack" required' not in html
 
     def test_label_risk_shows_checkbox(
         self, client: TestClient, session_factory: sessionmaker[Session]
@@ -234,7 +234,7 @@ class TestEditorRestart:
         assert resp.status_code == 200
         html = resp.text
         assert "Re-run" in html
-        assert "speaker ruling" not in html
+        assert 'id="editor-restart-ack" required' not in html
 
     def test_editor_label_risk_shows_checkbox(
         self, editor_client: TestClient, session_factory: sessionmaker[Session]
