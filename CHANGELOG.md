@@ -6,9 +6,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
-
-## [0.43.0] - 2026-09-18
-
 ### Added
 - **Provenance-preserving reprocessing (#507).** Runs with adjudication
   decisions or enrichment evidence can now be restarted from stages that
@@ -24,13 +21,30 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   level. `restart_impact` now excludes already-voided decisions from counts.
   The CLI gains `--acknowledge-void`; the web UI shows a void-acknowledgement
   checkbox when restarting from a segment-deleting stage.
+
+### Changed
+- Restart-from-stage (#506) now allows ACQUIRE/PREPARE/TRANSCRIBE restarts on
+  runs with adjudication decisions: decisions are auto-voided and segment
+  references detached with provenance, replacing the previous hard block (#507)
+
+### Fixed
+- URL submissions failing with 403 on YouTube due to missing JS challenge
+  solver; dependency upgraded to `yt-dlp[default]` which includes
+  `yt-dlp-ejs`. Native installs with a JS runtime (Node/Deno) get the fix
+  immediately; container images need a runtime added separately (#557)
+- Successful single-item downloads falsely reported as failures due to yt-dlp
+  exit code 101 (`DownloadCancelled`) from `--max-downloads 1` (#557)
+
+
+## [0.43.0] - 2026-09-18
+
+### Added
 - **Restart from stage (#506).** Terminal runs can now be restarted from any
   pipeline stage, not just ACQUIRE. Upstream outputs are preserved; downstream
   outputs are eagerly deleted in the same transaction. A stage-aware blocker
   matrix gates the restart: ENHANCE_MATCH and FINALIZE are safe for all runs
   (no blockers), DIARIZE_EMBED preserves segments but warns about label-scope
-  risk, and ACQUIRE through TRANSCRIBE require void acknowledgement when
-  adjudication decisions or enrichment evidence exist (see #507).
+  risk, and ACQUIRE through TRANSCRIBE retain full adjudication blockers.
   Prerequisite validation checks that upstream outputs exist before queuing.
   Each restart bumps `processing_cycle` so retry budgets reset. The run-detail
   and editor pages show a **stage selector dropdown** next to the restart
