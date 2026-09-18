@@ -44,25 +44,36 @@ A worker holding a stale snapshot gets `StaleRevisionError` and must re-read.
 Lost updates are structurally impossible.
 
 ```text
-queued ──▶ running ──▶ completed ──▶ queued (restart from scratch, stage=None)
+queued ──▶ running ──▶ completed ──▶ queued (restart: full or from a selected stage)
   ▲ ▲        │ ▲  │
   │ │        │ │  └──▶ awaiting_adjudication ──▶ running
   │ │        │ └──── running (stage advance)
   │ └────────┤          (lane handoff: running ──▶ queued, parked at the NEXT stage)
   │          ├──▶ paused ──▶ queued (resume) or cancelled
   │          ▼
-  └──── failed ──▶ queued (requeue at same stage, or restart from scratch)
+  └──── failed ──▶ queued (requeue at same stage, or restart)
 
-  cancelled ──▶ queued (restart from scratch, stage=None)
+  cancelled ──▶ queued (restart: full or from a selected stage)
   queued ──▶ paused (pause before dispatch)
 ```
 
 `completed`, `failed`, and `cancelled` are exit states for the normal flow,
-but none is fully terminal: `completed` and `cancelled` can transition to
-`queued` via restart-from-scratch (resets `current_stage` to `None`, so the
-run re-processes from ACQUIRE; prior `StageRun` rows are preserved as
-earlier attempts). `failed` can either requeue at its current stage (the
-existing retry path) or restart from scratch the same way.
+but none is fully terminal: all three can transition to `queued` via restart.
+`failed` can also requeue at its current stage (the existing retry path).
+
+**Restart** comes in two forms. A full restart (`from_stage=None`) resets
+`current_stage` to `None` so the run re-processes from ACQUIRE. A
+stage-selective restart (`from_stage=<stage>`) preserves upstream outputs and
+eagerly deletes downstream outputs in the same transaction, then queues the
+run at the selected stage. Both forms bump `processing_cycle`, resetting the
+retry budget for the new cycle. Prior `StageRun` rows from earlier cycles are
+preserved as history.
+
+Stage-selective restart validates prerequisites (upstream stage completed and
+its data exists) before deleting anything. A stage-aware blocker matrix
+determines which adjudication states block each restart point: ENHANCE_MATCH
+and FINALIZE are safe for all runs (no blockers), while earlier stages retain
+full adjudication guards. See `docs/operations.md` for the blocker table.
 
 **Pausing** is cooperative: a `queued` or `running` run can be driven to
 `PAUSED`. A running run finishes its current stage first (the worker observes

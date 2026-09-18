@@ -41,9 +41,7 @@ def alembic_cfg(engine: Engine) -> Iterator[Config]:
         command.upgrade(cfg, "head")
 
 
-def test_migration_0016_roundtrip_preserves_singleton(
-    alembic_cfg: Config, engine: Engine
-) -> None:
+def test_migration_0016_roundtrip_preserves_singleton(alembic_cfg: Config, engine: Engine) -> None:
     command.downgrade(alembic_cfg, "0015")
     cols = {c["name"] for c in inspect(engine).get_columns("app_settings")}
     assert "llm_api_key" not in cols
@@ -90,8 +88,7 @@ def test_migration_0016_roundtrip_preserves_singleton(
 
 def test_app_settings_model_matches_migrated_schema(engine: Engine) -> None:
     reflected = {
-        col["name"]: _pg_type(col["type"])
-        for col in inspect(engine).get_columns("app_settings")
+        col["name"]: _pg_type(col["type"]) for col in inspect(engine).get_columns("app_settings")
     }
     model = {col.name: _pg_type(col.type) for col in AppSettings.__table__.columns}
     assert reflected == model
@@ -146,4 +143,5 @@ def test_single_alembic_head() -> None:
     # 0060 = synthdetect source_content_hash column, issue #146.
     # 0063 = watch-folder pickup marker, issue #478.
     # 0064 = project archived_at, issue #477.
-    assert list(heads) == ["0064"]
+    # 0065 = processing_cycle column for restart-from-stage, issue #506.
+    assert list(heads) == ["0065"]

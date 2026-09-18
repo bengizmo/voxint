@@ -1,8 +1,8 @@
-"""Integration tests for restart label-risk template controls.
+"""Integration tests for restart template controls.
 
 Verifies that the run-detail and editor restart forms render correctly
-based on the RestartImpact state: clean (no checkbox), label-risk
-(required checkbox), or blocked (disabled button).
+based on the RestartImpact state: clean (stage selector, no label-risk
+warning), label-risk (required checkbox), or blocked (disabled button).
 """
 
 from __future__ import annotations
@@ -66,9 +66,7 @@ def editor_client(session_factory: sessionmaker[Session]) -> TestClient:
 
 @pytest.fixture()
 def client(session_factory: sessionmaker[Session]) -> TestClient:
-    settings = Settings(
-        voxint_user=CREDS[0], voxint_password=CREDS[1], csrf_secret=_CSRF_KEY
-    )
+    settings = Settings(voxint_user=CREDS[0], voxint_password=CREDS[1], csrf_secret=_CSRF_KEY)
     app = create_app(settings=settings, session_factory=session_factory)
     test_client = TestClient(app)
     test_client.auth = CREDS
@@ -100,15 +98,17 @@ def _add_speaker(session: Session) -> uuid.UUID:
 
 def _add_label_scope_decision(session: Session, run_id: uuid.UUID) -> None:
     speaker_id = _add_speaker(session)
-    session.add(AdjudicationDecision(
-        pipeline_run_id=run_id,
-        diarization_label="SPEAKER_00",
-        decision="assign",
-        speaker_id=speaker_id,
-        transcript_segment_id=None,
-        operator="test",
-        idempotency_key=str(uuid.uuid4()),
-    ))
+    session.add(
+        AdjudicationDecision(
+            pipeline_run_id=run_id,
+            diarization_label="SPEAKER_00",
+            decision="assign",
+            speaker_id=speaker_id,
+            transcript_segment_id=None,
+            operator="test",
+            idempotency_key=str(uuid.uuid4()),
+        )
+    )
     session.flush()
 
 
@@ -124,20 +124,22 @@ def _add_segment_scope_decision(session: Session, run_id: uuid.UUID) -> None:
     )
     session.add(seg)
     session.flush()
-    session.add(AdjudicationDecision(
-        pipeline_run_id=run_id,
-        diarization_label="SPEAKER_00",
-        decision="assign",
-        speaker_id=speaker_id,
-        transcript_segment_id=seg.id,
-        operator="test",
-        idempotency_key=str(uuid.uuid4()),
-    ))
+    session.add(
+        AdjudicationDecision(
+            pipeline_run_id=run_id,
+            diarization_label="SPEAKER_00",
+            decision="assign",
+            speaker_id=speaker_id,
+            transcript_segment_id=seg.id,
+            operator="test",
+            idempotency_key=str(uuid.uuid4()),
+        )
+    )
     session.flush()
 
 
 class TestRunDetailRestart:
-    def test_clean_run_shows_restart_without_checkbox(
+    def test_clean_run_shows_restart_without_required_checkbox(
         self, client: TestClient, session_factory: sessionmaker[Session]
     ) -> None:
         with session_factory() as session:
@@ -146,8 +148,8 @@ class TestRunDetailRestart:
         resp = client.get(f"/runs/{run_id}", follow_redirects=False)
         assert resp.status_code == 200
         html = resp.text
-        assert 'name="acknowledge_label_risk"' not in html
-        assert "Run again from the beginning" in html
+        assert "Restart" in html
+        assert 'id="restart-ack" required' not in html
 
     def test_label_risk_shows_checkbox(
         self, client: TestClient, session_factory: sessionmaker[Session]
@@ -222,7 +224,7 @@ class TestRestartPost:
 
 
 class TestEditorRestart:
-    def test_clean_editor_shows_restart_without_checkbox(
+    def test_clean_editor_shows_restart_without_required_checkbox(
         self, editor_client: TestClient, session_factory: sessionmaker[Session]
     ) -> None:
         with session_factory() as session:
@@ -231,8 +233,8 @@ class TestEditorRestart:
         resp = editor_client.get(f"/media/{media_id}/editor", follow_redirects=False)
         assert resp.status_code == 200
         html = resp.text
-        assert 'name="acknowledge_label_risk"' not in html
         assert "Re-run" in html
+        assert 'id="editor-restart-ack" required' not in html
 
     def test_editor_label_risk_shows_checkbox(
         self, editor_client: TestClient, session_factory: sessionmaker[Session]
@@ -258,6 +260,6 @@ class TestEditorRestart:
         resp = editor_client.get(f"/media/{media_id}/editor", follow_redirects=False)
         assert resp.status_code == 200
         html = resp.text
-        assert 'disabled>' in html
+        assert "disabled>" in html
         assert "Blocked" in html
         assert "Submit as a new run instead" in html

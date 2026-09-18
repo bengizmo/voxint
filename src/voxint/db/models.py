@@ -266,19 +266,13 @@ def _enum_values(e: type[enum.StrEnum]) -> str:
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (
-        CheckConstraint(
-            f"role IN ({_enum_values(UserRole)})", name="users_role_check"
-        ),
-        CheckConstraint(
-            "length(btrim(username)) > 0", name="users_username_nonempty_check"
-        ),
+        CheckConstraint(f"role IN ({_enum_values(UserRole)})", name="users_role_check"),
+        CheckConstraint("length(btrim(username)) > 0", name="users_username_nonempty_check"),
         CheckConstraint(
             "username ~ '^[a-z0-9][a-z0-9_.-]{0,63}$'",
             name="users_username_format_check",
         ),
-        CheckConstraint(
-            "position(':' in username) = 0", name="users_username_no_colon_check"
-        ),
+        CheckConstraint("position(':' in username) = 0", name="users_username_no_colon_check"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -286,12 +280,8 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(Text)
     role: Mapped[str] = mapped_column(Text, default=UserRole.REVIEWER.value)
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AuthSession(Base):
@@ -306,18 +296,14 @@ class AuthSession(Base):
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     token_hash: Mapped[bytes] = mapped_column(LargeBinary, unique=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class ApiKey(Base):
     __tablename__ = "api_keys"
     __table_args__ = (
-        CheckConstraint(
-            "length(btrim(name)) > 0", name="api_keys_name_nonempty_check"
-        ),
+        CheckConstraint("length(btrim(name)) > 0", name="api_keys_name_nonempty_check"),
         Index("ix_api_keys_user_id", "user_id"),
     )
 
@@ -328,9 +314,7 @@ class ApiKey(Base):
     name: Mapped[str] = mapped_column(Text)
     key_hash: Mapped[bytes] = mapped_column(LargeBinary, unique=True)
     key_prefix: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -372,9 +356,7 @@ class Project(Base):
     corrections: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -405,23 +387,21 @@ class LearnedCorrection(Base):
             name="learned_corrections_accepted_rule_id_check",
         ),
         UniqueConstraint(
-            "project_id", "match", "replace",
+            "project_id",
+            "match",
+            "replace",
             name="learned_corrections_project_match_replace_key",
         ),
         Index("ix_learned_corrections_project_id", "project_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    project_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("projects.id", ondelete="CASCADE")
-    )
+    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
     match: Mapped[str] = mapped_column(Text)
     replace: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, default="suggested")
     accepted_rule_id: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -434,9 +414,7 @@ class LearnedCorrection(Base):
 
 class LearnedCorrectionEvidence(Base):
     __tablename__ = "learned_correction_evidence"
-    __table_args__ = (
-        Index("ix_learned_correction_evidence_segment_id", "segment_id"),
-    )
+    __table_args__ = (Index("ix_learned_correction_evidence_segment_id", "segment_id"),)
 
     learned_correction_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("learned_corrections.id", ondelete="CASCADE"), primary_key=True
@@ -445,9 +423,7 @@ class LearnedCorrectionEvidence(Base):
         ForeignKey("transcript_segments.id", ondelete="CASCADE"), primary_key=True
     )
 
-    learned_correction: Mapped["LearnedCorrection"] = relationship(
-        back_populates="evidence"
-    )
+    learned_correction: Mapped["LearnedCorrection"] = relationship(back_populates="evidence")
 
 
 class MediaFolder(Base):
@@ -479,9 +455,7 @@ class MediaFolder(Base):
     watch: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -560,9 +534,7 @@ class MediaItem(Base):
     source_metadata: Mapped["MediaSourceMetadata | None"] = relationship(
         back_populates="media_item"
     )
-    media_folder: Mapped["MediaFolder | None"] = relationship(
-        back_populates="media_items"
-    )
+    media_folder: Mapped["MediaFolder | None"] = relationship(back_populates="media_items")
     operations: Mapped[list["MediaOperation"]] = relationship(back_populates="media_item")
 
 
@@ -680,9 +652,11 @@ class PipelineRun(Base):
         # is contradictory provenance (the reverse — a language with no score —
         # is the legitimate forced/fallback shape).
         CheckConstraint(
-            "detected_language_probability IS NULL"
-            " OR detected_language IS NOT NULL",
+            "detected_language_probability IS NULL OR detected_language IS NOT NULL",
             name="pipeline_runs_detected_language_pairing_check",
+        ),
+        CheckConstraint(
+            "processing_cycle >= 1", name="pipeline_runs_processing_cycle_nonneg_check"
         ),
     )
 
@@ -765,6 +739,7 @@ class PipelineRun(Base):
     # NULL, and also when the service forced a language or substituted a
     # fallback (no honest score exists for a detection that did not happen).
     detected_language_probability: Mapped[float | None] = mapped_column(Float)
+    processing_cycle: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -785,10 +760,17 @@ class StageRun(Base):
 
     __tablename__ = "stage_runs"
     __table_args__ = (
-        UniqueConstraint("pipeline_run_id", "stage", "attempt", name="stage_runs_attempt_key"),
+        UniqueConstraint(
+            "pipeline_run_id",
+            "stage",
+            "processing_cycle",
+            "attempt",
+            name="stage_runs_attempt_key",
+        ),
         CheckConstraint(f"stage IN ({_enum_values(Stage)})", name="stage_runs_stage_check"),
         CheckConstraint(f"status IN ({_enum_values(StageStatus)})", name="stage_runs_status_check"),
         CheckConstraint("attempt >= 1", name="stage_runs_attempt_positive_check"),
+        CheckConstraint("processing_cycle >= 1", name="stage_runs_processing_cycle_nonneg_check"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -796,6 +778,7 @@ class StageRun(Base):
     stage: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, default=StageStatus.RUNNING.value)
     attempt: Mapped[int] = mapped_column(Integer, default=1)
+    processing_cycle: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
     worker_id: Mapped[str | None] = mapped_column(Text)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -1172,9 +1155,7 @@ class MatchCandidate(Base):
 
     __tablename__ = "match_candidates"
     __table_args__ = (
-        UniqueConstraint(
-            "pipeline_run_id", "diarization_label", name="match_candidates_label_key"
-        ),
+        UniqueConstraint("pipeline_run_id", "diarization_label", name="match_candidates_label_key"),
         CheckConstraint(
             "decision IN ('accepted', 'rejected', 'ineligible')",
             name="match_candidates_decision_check",
@@ -1240,9 +1221,7 @@ class MatchCandidate(Base):
     eligible_turns: Mapped[int] = mapped_column(Integer, default=0)
     eligible_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     roster_size: Mapped[int | None] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AdjudicationDecision(Base):
@@ -2860,12 +2839,8 @@ class ActivityEvent(Base):
             f"kind IN ({_enum_values(ActivityKind)})",
             name="activity_events_kind_check",
         ),
-        CheckConstraint(
-            "char_length(title) <= 500", name="activity_events_title_len_check"
-        ),
-        CheckConstraint(
-            "char_length(href) <= 500", name="activity_events_href_len_check"
-        ),
+        CheckConstraint("char_length(title) <= 500", name="activity_events_title_len_check"),
+        CheckConstraint("char_length(href) <= 500", name="activity_events_href_len_check"),
         CheckConstraint(
             "char_length(occurrence_key) <= 200",
             name="activity_events_occurrence_key_len_check",
@@ -3162,9 +3137,7 @@ class MediaOperation(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    media_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("media_items.id", ondelete="CASCADE")
-    )
+    media_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("media_items.id", ondelete="CASCADE"))
     operation_type: Mapped[str] = mapped_column(Text)
     state: Mapped[str] = mapped_column(Text, default=OperationState.PLANNED.value)
     origin_path: Mapped[str | None] = mapped_column(Text)
@@ -3179,9 +3152,7 @@ class MediaOperation(Base):
     restores_operation_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("media_operations.id")
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -3260,9 +3231,7 @@ class BenchmarkRun(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     tag: Mapped[str | None] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(
-        Text, default=BenchmarkRunStatus.PENDING.value
-    )
+    status: Mapped[str] = mapped_column(Text, default=BenchmarkRunStatus.PENDING.value)
     corpus_version: Mapped[int] = mapped_column(Integer)
     protocol_hash: Mapped[str] = mapped_column(Text)
     voxint_version: Mapped[str] = mapped_column(Text)
@@ -3271,9 +3240,7 @@ class BenchmarkRun(Base):
     summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     items: Mapped[list["BenchmarkItem"]] = relationship(
         back_populates="benchmark_run", cascade="all, delete-orphan"
@@ -3288,7 +3255,8 @@ class BenchmarkItem(Base):
             name="benchmark_items_status_check",
         ),
         UniqueConstraint(
-            "benchmark_run_id", "corpus_file_id",
+            "benchmark_run_id",
+            "corpus_file_id",
             name="uq_benchmark_items_run_file",
         ),
     )
@@ -3301,9 +3269,7 @@ class BenchmarkItem(Base):
     pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("pipeline_runs.id", ondelete="SET NULL")
     )
-    status: Mapped[str] = mapped_column(
-        Text, default=BenchmarkItemStatus.PENDING.value
-    )
+    status: Mapped[str] = mapped_column(Text, default=BenchmarkItemStatus.PENDING.value)
     stage_timings: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     wer_counts: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     hallucination_words: Mapped[int | None] = mapped_column(Integer)
@@ -3420,7 +3386,8 @@ class SavedQuote(Base):
     note: Mapped[str | None] = mapped_column(Text)
     operator: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        DateTime(timezone=True),
+        server_default=func.now(),
     )
 
 
@@ -3484,6 +3451,4 @@ class AutoEnrollEvidence(Base):
     eligible_turns: Mapped[int] = mapped_column(Integer, default=0)
     eligible_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     roster_size: Mapped[int | None] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

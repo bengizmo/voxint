@@ -122,13 +122,18 @@ def submit(
     return run
 
 
-def _latest_claim(session: Session, run_id: uuid.UUID, stage: Stage) -> StageRun | None:
-    return session.execute(
+def _latest_claim(
+    session: Session, run_id: uuid.UUID, stage: Stage, *, processing_cycle: int | None = None
+) -> StageRun | None:
+    stmt = (
         select(StageRun)
         .where(StageRun.pipeline_run_id == run_id, StageRun.stage == stage.value)
         .order_by(StageRun.attempt.desc())
         .limit(1)
-    ).scalar_one_or_none()
+    )
+    if processing_cycle is not None:
+        stmt = stmt.where(StageRun.processing_cycle == processing_cycle)
+    return session.execute(stmt).scalar_one_or_none()
 
 
 def _claim_stage(
@@ -158,7 +163,8 @@ def _claim_stage(
             or run.revision != expected.revision
         ):
             return None  # the run moved on without us
-        latest = _latest_claim(session, run_id, stage)
+        cycle = run.processing_cycle
+        latest = _latest_claim(session, run_id, stage, processing_cycle=cycle)
         now = datetime.now(tz=UTC)
         if (
             latest is not None
@@ -172,6 +178,7 @@ def _claim_stage(
             stage=stage.value,
             status=StageStatus.RUNNING.value,
             attempt=(latest.attempt if latest else 0) + 1,
+            processing_cycle=cycle,
             worker_id=worker_id,
             lease_expires_at=now + timedelta(seconds=lease_seconds),
         )
@@ -213,9 +220,7 @@ def _finish_claim(
         claim.metrics = merged
 
 
-def _observe_stage_identity(
-    settings: "Settings | None", stage: Stage
-) -> dict[str, Any] | None:
+def _observe_stage_identity(settings: "Settings | None", stage: Stage) -> dict[str, Any] | None:
     """Best-effort model-identity observation for a stage. Never raises.
 
     Returns None when there is no settings context (identity is advisory, never
@@ -347,9 +352,7 @@ def execute_run(
             if stages is not None and stage not in stages:
                 return held
             try:
-                held = cas_update_run(
-                    session, held, status=RunStatus.RUNNING, current_stage=stage
-                )
+                held = cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=stage)
                 session.commit()
             except StaleRevisionError:
                 # Duplicate dispatch of the same QUEUED run (sweep + pending
@@ -488,7 +491,9 @@ def recover_interrupted_runs(
         held = snapshot(run)
         if held.current_stage is None:
             continue
-        claim = _latest_claim(session, held.id, held.current_stage)
+        claim = _latest_claim(
+            session, held.id, held.current_stage, processing_cycle=held.processing_cycle
+        )
         if (
             claim is not None
             and claim.status == StageStatus.RUNNING.value
@@ -515,9 +520,7 @@ def recover_interrupted_runs(
             )
             if max_attempts is not None and claim is not None and claim.attempt >= max_attempts:
                 continue  # budget exhausted — parked FAILED for the failure lane
-            cas_update_run(
-                session, held, status=RunStatus.QUEUED, current_stage=held.current_stage
-            )
+            cas_update_run(session, held, status=RunStatus.QUEUED, current_stage=held.current_stage)
         except StaleRevisionError:
             continue  # someone else moved it mid-sweep; their view wins
         recovered.append(held.id)
