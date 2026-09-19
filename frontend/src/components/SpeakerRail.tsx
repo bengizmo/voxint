@@ -168,10 +168,7 @@ function SpeakerCard({
         <p className="muted text-sm">
           {state.turnCount} turns, {Math.round(state.totalSeconds)}s.
           {state.llmHintName && (
-            <>
-              {" "}
-              Heard name (unverified): &ldquo;{state.llmHintName}&rdquo;.
-            </>
+            <> Heard name (unverified): &ldquo;{state.llmHintName}&rdquo;.</>
           )}
         </p>
         {onHearVoice && (
@@ -521,6 +518,10 @@ export function SpeakerRail({
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const [reviewMode, setReviewMode] = useState<boolean>(false);
+  const [reviewIndex, setReviewIndex] = useState<number>(0);
+  const [reviewComplete, setReviewComplete] = useState<boolean>(false);
+  const focusCardRef = useRef<HTMLDivElement | null>(null);
 
   const paletteMap = useRef(
     new Map(initialStates.map((s) => [s.label, s.paletteIndex])),
@@ -630,6 +631,58 @@ export function SpeakerRail({
   );
 
   const groups = partition(labelStates);
+  const reviewContext = useRef({
+    needsYou: groups.needsYou,
+    reviewIndex,
+    onHearVoice,
+  });
+
+  // Keep fresh data without restarting review when partition or callback identities change.
+  useEffect(() => {
+    reviewContext.current = {
+      needsYou: groups.needsYou,
+      reviewIndex,
+      onHearVoice,
+    };
+  });
+
+  useEffect(() => {
+    if (!reviewMode) return;
+    const {
+      needsYou,
+      reviewIndex: index,
+      onHearVoice: hearVoice,
+    } = reviewContext.current;
+    if (needsYou.length === 0) {
+      setReviewMode(false);
+      setReviewIndex(0);
+      setReviewComplete(true);
+      return;
+    }
+    const nextIndex: number = Math.max(0, Math.min(index, needsYou.length - 1));
+    setReviewIndex(nextIndex);
+    hearVoice?.(needsYou[nextIndex].label);
+  }, [groups.needsYou.length, reviewMode]);
+
+  const focusedLabel: string | undefined = groups.needsYou[reviewIndex]?.label;
+  useEffect(() => {
+    if (!reviewMode) return;
+    focusCardRef.current?.focus({ preventScroll: true });
+    focusCardRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+    });
+  }, [reviewMode, reviewIndex, focusedLabel]);
+
+  useEffect(() => {
+    if (!reviewComplete) return;
+    const timeout: number = window.setTimeout(
+      () => setReviewComplete(false),
+      3000,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [reviewComplete]);
+
   const settled = groups.needsYou.length + groups.tooShort.length === 0;
   const decideFromRow: Decide = (label, action, speakerId) => {
     void decide(label, action, speakerId);
@@ -641,27 +694,62 @@ export function SpeakerRail({
       <p className="rail-summary" aria-live="polite">
         {summary(groups, coverage(labelStates))}
       </p>
+      {reviewComplete && groups.needsYou.length === 0 && (
+        <p role="status" className="text-sm">
+          All voices identified
+        </p>
+      )}
       {groups.needsYou.length > 0 && (
         <section className="rail-group" aria-labelledby="rail-needs-you">
           <h3 id="rail-needs-you" className="rail-group-title">
-            Needs you <span className="muted">({groups.needsYou.length})</span>
+            {reviewMode ? (
+              <>Reviewing · {groups.needsYou.length} remaining</>
+            ) : (
+              <>
+                Needs you{" "}
+                <span className="muted">({groups.needsYou.length})</span>
+              </>
+            )}{" "}
+            <button
+              type="button"
+              className="text-sm secondary"
+              onClick={() => {
+                setReviewComplete(false);
+                setReviewIndex(0);
+                setReviewMode(!reviewMode);
+              }}
+            >
+              {reviewMode ? "Exit review" : "Review voices"}
+            </button>
           </h3>
-          {groups.needsYou.map((state) => (
-            <SpeakerCard
+          {groups.needsYou.map((state, index) => (
+            <div
               key={state.label}
-              state={state}
-              reviewToken={reviewToken}
-              writable={writable}
-              speakers={speakers}
-              busy={busy}
-              onDecide={decideFromRow}
-              onEnroll={enrollFromRow}
-              onHearVoice={
-                onHearVoice && hearableLabels?.has(state.label)
-                  ? onHearVoice
+              ref={
+                reviewMode && index === reviewIndex ? focusCardRef : undefined
+              }
+              className={
+                reviewMode && index === reviewIndex
+                  ? "rail-review-focus"
                   : undefined
               }
-            />
+              tabIndex={-1}
+            >
+              <SpeakerCard
+                state={state}
+                reviewToken={reviewToken}
+                writable={writable}
+                speakers={speakers}
+                busy={busy}
+                onDecide={decideFromRow}
+                onEnroll={enrollFromRow}
+                onHearVoice={
+                  onHearVoice && hearableLabels?.has(state.label)
+                    ? onHearVoice
+                    : undefined
+                }
+              />
+            </div>
           ))}
         </section>
       )}
