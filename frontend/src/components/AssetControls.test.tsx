@@ -88,9 +88,38 @@ describe("asset controls", () => {
       new Response(JSON.stringify({ started: true, error: null, created: 3 })),
     );
     expect(
-      await screen.findByText("Generation started. Reload to see results."),
+      await screen.findByText("Generated. Reload to see updated content."),
     ).toBeTruthy();
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("signals generation and restores controls when polling reports completion", async () => {
+    mockFetch({ started: true, error: null, created: 1 });
+    const onActive = vi.fn();
+    const { rerender } = render(<AssetControls {...props} onActive={onActive} />);
+    fireEvent.click(screen.getByRole("button", { name: "Generate all" }));
+    await waitFor(() => expect(onActive).toHaveBeenCalledTimes(1));
+    const polledState = {
+      ...props,
+      anyActive: true,
+      kinds: [{
+        ...props.kinds[0],
+        jobActive: true,
+        jobId: "job-1",
+        jobStatus: "RUNNING",
+      }],
+    };
+    rerender(<AssetControls {...props} polledState={polledState} onActive={onActive} />);
+    expect(screen.getByRole("status").textContent).toBe("Generating...");
+    expect(screen.getByText(/summary: RUNNING/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancel summary" })).toBeTruthy();
+    rerender(<AssetControls {...props} anyActive polledState={{
+      ...polledState,
+      anyActive: false,
+      kinds: [{ ...props.kinds[0], hasAsset: true }],
+    }} onActive={onActive} />);
+    expect((screen.getByRole("button", { name: "Regenerate all" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel summary" })).toBeNull();
   });
   it("retries the same stale kind after a JSON-level error", async () => {
     const fetch = mockFetch(
@@ -114,7 +143,7 @@ describe("asset controls", () => {
       "Worker unavailable Retry",
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await screen.findByText("Generation started. Reload to see results.");
+    await screen.findByText("Generated. Reload to see updated content.");
     for (const [, init] of fetch.mock.calls)
       expect(String(init.body)).toBe("csrf_token=generate-token&kind=topics");
   });

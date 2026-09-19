@@ -1,6 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { apiFetch, ApiError } from "../lib/api-client";
+import type { PollableAssetState } from "../lib/enrichment-polling";
 
 export interface AssetControlsProps {
   runId: string;
@@ -18,6 +19,8 @@ export interface AssetControlsProps {
   }[];
   csrfGenerate: string;
   csrfCancel: string;
+  polledState?: PollableAssetState | null;
+  onActive?: () => void;
 }
 
 type AssetPhase = "idle" | "generating" | "generated" | "error";
@@ -30,6 +33,8 @@ export function AssetControls({
   kinds,
   csrfGenerate,
   csrfCancel,
+  polledState,
+  onActive,
 }: AssetControlsProps): React.JSX.Element {
   const [phase, setPhase] = useState<AssetPhase>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +43,17 @@ export function AssetControls({
     Record<string, "pending" | "requested">
   >({});
   const [cancelErrors, setCancelErrors] = useState<Record<string, string>>({});
+
+  const displayKinds = polledState?.kinds ?? kinds;
+  const displayActive = polledState
+    ? polledState.anyActive
+    : anyActive || kinds.some((entry) => entry.jobActive);
+
+  useEffect(() => {
+    if (phase === "generated" && polledState && !polledState.anyActive) {
+      setPhase("idle");
+    }
+  }, [phase, polledState]);
 
   const generate = useCallback(
     async (kind?: string) => {
@@ -70,6 +86,7 @@ export function AssetControls({
           setPhase("error");
         } else {
           setPhase("generated");
+          onActive?.();
         }
       } catch (err) {
         setError(
@@ -78,7 +95,7 @@ export function AssetControls({
         setPhase("error");
       }
     },
-    [runId, csrfGenerate, gatesOpen, sourceProblem, phase],
+    [runId, csrfGenerate, gatesOpen, sourceProblem, phase, onActive],
   );
 
   const cancel = useCallback(
@@ -129,29 +146,30 @@ export function AssetControls({
   if (sourceProblem !== null)
     return <p className="notice text-sm">{sourceProblem}</p>;
 
-  const active = anyActive || kinds.some((entry) => entry.jobActive);
   const allHaveAssets =
-    kinds.length > 0 && kinds.every((entry) => entry.hasAsset);
+    displayKinds.length > 0 && displayKinds.every((entry) => entry.hasAsset);
 
   return (
     <section className="text-sm" aria-label="Asset controls">
       {phase === "idle" && (
         <button
           type="button"
-          disabled={active || kinds.length === 0}
+          disabled={displayActive || displayKinds.length === 0}
           onClick={() => void generate()}
         >
           {allHaveAssets ? "Regenerate all" : "Generate all"}
         </button>
       )}
-      {(phase === "generating" || (phase === "idle" && active)) && (
+      {(phase === "generating" || (phase === "idle" && displayActive)) && (
         <p className="muted" role="status">
           Generating...
         </p>
       )}
       {phase === "generated" && (
         <p className="notice" role="status">
-          Generation started. Reload to see results.
+          {displayActive
+            ? "Generating..."
+            : "Generated. Reload to see updated content."}
         </p>
       )}
       {phase === "error" && (
@@ -162,7 +180,7 @@ export function AssetControls({
           </button>
         </p>
       )}
-      {kinds.map((entry) =>
+      {displayKinds.map((entry) =>
         entry.jobActive ? (
           <p key={entry.kind}>
             {entry.title}: {entry.jobStatus || "Generating..."}{" "}

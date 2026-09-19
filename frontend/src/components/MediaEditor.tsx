@@ -16,6 +16,7 @@ import {
   useSegmentPatch,
   useWalkCursor,
 } from "../lib/editor-mutations";
+import { useEnrichmentPolling } from "../lib/enrichment-polling";
 import { makeNonce } from "../lib/nonce";
 import type { PlaybackCapability } from "../lib/playback";
 import type { Turn } from "../lib/peaks";
@@ -140,10 +141,19 @@ export function MediaEditor({
   );
   const [translateError, setTranslateError] = useState<string | null>(null);
   const translateBusyRef = useRef(false);
+  const [assetPollTrigger, setAssetPollTrigger] = useState(false);
   const [claiming, setClaiming] = useState(false);
   const claimingRef = useRef(false);
   const reviewTokenRef = useRef(reviewToken);
   reviewTokenRef.current = reviewToken;
+
+  const pollAssets =
+    !!assetControls && (assetControls.anyActive || assetPollTrigger);
+  const { assetState, translateState } = useEnrichmentPolling({
+    runId,
+    pollAssets,
+    pollTranslate: translatePhase === "started",
+  });
 
   const claimForEditing = useCallback(async () => {
     if (!claimCsrf || claimingRef.current) return;
@@ -699,6 +709,18 @@ export function MediaEditor({
     }
   }, [translate, runId]);
 
+  useEffect(() => {
+    if (translatePhase === "started" && translateState && !translateState.active) {
+      setTranslatePhase("idle");
+    }
+  }, [translatePhase, translateState]);
+
+  useEffect(() => {
+    if (assetState && !assetState.anyActive && assetPollTrigger) {
+      setAssetPollTrigger(false);
+    }
+  }, [assetState, assetPollTrigger]);
+
   const onAnnotationClaimLost = useCallback(() => setClaimLost(true), []);
 
   const {
@@ -986,7 +1008,10 @@ export function MediaEditor({
               <span className="muted text-sm">Starting translation…</span>
             ) : translatePhase === "started" ? (
               <span className="muted text-sm">
-                Translation started. The result appears on the{" "}
+                {translateState?.jobStatus
+                  ? `Translating (${translateState.jobStatus})...`
+                  : "Translation started."}{" "}
+                The result appears on the{" "}
                 <a href={translate.transcriptUrl}>transcript page</a>.
                 {translate.activeJobId && translate.csrfCancel && (
                   <>
@@ -1270,7 +1295,15 @@ export function MediaEditor({
           segments={segments}
           capability={capability}
           onJump={goTo}
-          assetControls={assetControls}
+          assetControls={
+            assetControls
+              ? {
+                  ...assetControls,
+                  polledState: assetState,
+                  onActive: () => setAssetPollTrigger(true),
+                }
+              : undefined
+          }
         />
 
         <KeymapHelp

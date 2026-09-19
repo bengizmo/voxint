@@ -1965,6 +1965,25 @@ def run_assets_fragment(
     run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
 ) -> Response:
     _run_or_404(session, run_id)
+    if _wants_island_json(request):
+        assets = _run_assets_state(session, request.app.state.settings, run_id)
+        return JSONResponse({
+            "gatesOpen": assets["gates_open"],
+            "sourceProblem": assets["source_problem"],
+            "anyActive": assets["any_active"],
+            "kinds": [
+                {
+                    "kind": entry["kind"],
+                    "title": _ASSET_KIND_TITLES[entry["kind"]],
+                    "hasAsset": entry["asset"] is not None,
+                    "stale": entry["stale"],
+                    "jobActive": entry["job_active"],
+                    "jobId": str(entry["job"].id) if entry["job"] is not None else None,
+                    "jobStatus": entry["job"].status if entry["job"] is not None else None,
+                }
+                for entry in assets["kinds"]
+            ],
+        })
     return _run_assets_response(request, session, run_id)
 
 
@@ -2048,6 +2067,18 @@ def run_translation_fragment(
     run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
 ) -> Response:
     _run_or_404(session, run_id)
+    if _wants_island_json(request):
+        state = _run_translation_state(session, request.app.state.settings, run_id)
+        return JSONResponse({
+            "active": state["job_active"],
+            "hasTranslation": bool(state["translations"]),
+            "activeJobId": (
+                str(state["job"].id)
+                if state["job"] is not None and state["job_active"]
+                else None
+            ),
+            "jobStatus": state["job"].status if state["job"] is not None else None,
+        })
     return _run_translation_response(request, session, run_id)
 
 
