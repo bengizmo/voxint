@@ -32,7 +32,9 @@ import {
   isSaveEditChord,
   REVIEW_KEY,
   SAVE_EDIT_LABEL,
+  SPEAKER_ALIAS,
 } from "./keymap";
+import { SpeakerAssignPopover } from "./SpeakerAssignPopover";
 import { SpeakerCombobox } from "./SpeakerCombobox";
 import { type LabelsResult, SpeakerRail } from "./SpeakerRail";
 import { UndoToast } from "./UndoToast";
@@ -63,6 +65,7 @@ export interface MediaEditorProps {
   tagCsrf?: string | null;
   clipCsrf?: string | null;
   claimCsrf?: string | null;
+  renameCsrf?: string | null;
   multiUser?: boolean;
   labelStates?: LabelStateShape[];
   translate?: {
@@ -100,6 +103,7 @@ export function MediaEditor({
   tagCsrf: initialTagCsrf = null,
   clipCsrf: initialClipCsrf = null,
   claimCsrf = null,
+  renameCsrf = null,
   multiUser = false,
   labelStates: initialLabelStates = [],
   translate = null,
@@ -291,12 +295,51 @@ export function MediaEditor({
   const writable = reviewToken !== null && !claimLost;
   const [undoInfo, setUndoInfo] = useState<LabelsResult["undo"] | null>(null);
   const [labelStates, setLabelStates] = useState(initialLabelStates);
+  const labelResolutions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const seg of segments) {
+      if (seg.label != null) counts.set(seg.label, (counts.get(seg.label) ?? 0) + 1);
+    }
+    return new Map(labelStates.map((ls) => [ls.label, {
+      speakerId: ls.speakerId,
+      speakerName: ls.speakerName,
+      resolved: ["human_assign", "human_exclude", "human_unknown", "grounded_cosine", "auto_enroll"].includes(ls.resolution),
+      segmentCount: counts.get(ls.label) ?? 0,
+    }]));
+  }, [labelStates, segments]);
+  const [popoverTarget, setPopoverTarget] = useState<{
+    segmentIndex: number;
+    anchorRect: DOMRect;
+  } | null>(null);
+  const closePopover = useCallback(() => setPopoverTarget(null), []);
+  const handleSpeakerClick = useCallback((segmentIndex: number, anchorRect: DOMRect) => {
+    if (busyRef.current) return;
+    setPopoverTarget((prev) =>
+      prev?.segmentIndex === segmentIndex ? null : { segmentIndex, anchorRect },
+    );
+  }, [busyRef]);
+  const popoverSegment = popoverTarget ? segments[popoverTarget.segmentIndex] : undefined;
+  const popoverResolution = labelResolutions.get(popoverSegment?.label ?? "");
+  const popoverSpeakerId = popoverSegment
+    ? popoverSegment.wordRangeSpeakerId ?? popoverResolution?.speakerId ?? null
+    : null;
+  // Hide rename when the segment's effective speaker differs from the label's
+  // resolution (a per-segment override exists). Renaming via the label's ID
+  // would silently rename a different roster speaker than the one displayed.
+  const popoverCanRename =
+    popoverSpeakerId != null &&
+    popoverResolution?.speakerId != null &&
+    popoverSegment?.speaker === popoverResolution.speakerName;
 
   const { cursor, setCursor, goTo, jumpNext, remaining } = useWalkCursor(
     segments,
     initialSegments,
     play,
   );
+  useEffect(() => {
+    setPopoverTarget(null);
+  }, [cursor, writable]);
+
   const hearableLabels = useMemo(
     () =>
       new Set(
@@ -540,10 +583,11 @@ export function MediaEditor({
   );
 
   const reassignSegment = useCallback(
-    async (speakerId: string | null) => {
+    async (speakerId: string | null, target: Segment | null = current) => {
       if (busyRef.current) return;
-      if (focusParentId === null) return;
-      if (isSplitParent) {
+      const targetParentId = target?.sourceSegmentId ?? null;
+      if (targetParentId === null) return;
+      if (siblingCount(segments, targetParentId) > 1) {
         setError(
           "This segment is split — assign speakers on each part with its own picker.",
         );
@@ -562,7 +606,7 @@ export function MediaEditor({
           segments: Segment[];
           progress: { verified: number; total: number };
         }>(
-          `/review/${runId}/segments/${focusParentId}/relabel`,
+          `/review/${runId}/segments/${targetParentId}/relabel`,
           body,
           { claimLostOnConflict: false },
         );
@@ -583,8 +627,112 @@ export function MediaEditor({
         setBusy(false);
       }
     },
-    [postForm, runId, focusParentId, isSplitParent, speakers, busyRef, setBusy],
+    [postForm, runId, current, segments, speakers, busyRef, setBusy],
   );
+
+  const handlePopoverAssign = useCallback(async (speakerId: string, scope: "segment" | "label") => {
+    if (!popoverTarget || !popoverSegment || !writable || busyRef.current) return;
+    closePopover();
+    if (scope === "segment") {
+      setCursor(popoverTarget.segmentIndex);
+      const isChild = popoverSegment.wordStart != null && popoverSegment.wordEnd != null;
+      if (isChild) {
+        await reassignChild(popoverSegment, speakerId);
+      } else {
+        await reassignSegment(speakerId, popoverSegment);
+      }
+      return;
+    }
+    if (!popoverSegment.label) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await postForm<LabelsResult>(
+        `/review/${runId}/labels/${encodeURIComponent(popoverSegment.label)}/decision`,
+        { nonce: makeNonce(), action: "assign", speaker_id: speakerId },
+        { claimLostOnConflict: false },
+      );
+      if (result) onLabelsChanged(result);
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, [popoverTarget, popoverSegment, writable, busyRef, closePopover, setCursor, reassignSegment, reassignChild, setBusy, postForm, runId, onLabelsChanged]);
+
+  const handlePopoverReset = useCallback(async (scope: "segment" | "label") => {
+    if (!popoverTarget || !popoverSegment || !writable || busyRef.current) return;
+    closePopover();
+    if (scope === "label") {
+      setError("Reset is only supported for just this segment. Choose that scope to reset.");
+      return;
+    }
+    setCursor(popoverTarget.segmentIndex);
+    const isChild = popoverSegment.wordStart != null && popoverSegment.wordEnd != null;
+    if (isChild) {
+      await reassignChild(popoverSegment, null);
+    } else {
+      await reassignSegment(null, popoverSegment);
+    }
+  }, [popoverTarget, popoverSegment, writable, busyRef, closePopover, setCursor, reassignSegment, reassignChild]);
+
+  const handlePopoverCreate = useCallback(async (name: string): Promise<boolean> => {
+    if (!popoverSegment?.label || !writable || busyRef.current) return false;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      // V1 enrollment always assigns the entire label, regardless of selected scope.
+      const result = await postForm<LabelsResult>(
+        `/review/${runId}/labels/${encodeURIComponent(popoverSegment.label)}/enroll`,
+        { nonce: makeNonce(), display_name: name },
+        { claimLostOnConflict: false },
+      );
+      if (!result) return false;
+      onLabelsChanged(result);
+      return true;
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, [popoverSegment, writable, busyRef, setBusy, postForm, runId, onLabelsChanged]);
+
+  const handlePopoverRename = useCallback(async (newName: string) => {
+    if (!popoverSpeakerId || !popoverSegment || !writable || busyRef.current) return;
+    closePopover();
+    if (!renameCsrf) {
+      setError("Could not rename speaker: reload the editor to refresh the security token.");
+      return;
+    }
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await apiFetch(`/speakers/${popoverSpeakerId}/rename`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+        body: new URLSearchParams({ display_name: newName, csrf_token: renameCsrf }).toString(),
+      });
+      const data = await res.json() as { id: string; displayName: string };
+      setSpeakers((prev) => prev.map((speaker) =>
+        speaker.id === data.id ? { ...speaker, displayName: data.displayName } : speaker));
+      const renamedLabel = popoverSegment.label;
+      setSegments((prev) => prev.map((seg) =>
+        seg.label === renamedLabel && seg.speaker === popoverSegment.speaker
+          ? { ...seg, speaker: data.displayName } : seg));
+      setLabelStates((prev) => prev.map((ls) => ({
+        ...ls,
+        speakerName: ls.speakerId === data.id ? data.displayName : ls.speakerName,
+        cosineSpeakerName: ls.cosineSpeakerId === data.id ? data.displayName : ls.cosineSpeakerName,
+        candidateSpeakerName: ls.candidateSpeakerId === data.id ? data.displayName : ls.candidateSpeakerName,
+      })));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : "Could not rename speaker.");
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, [popoverSpeakerId, popoverSegment, writable, busyRef, closePopover, renameCsrf, setBusy]);
 
   // Lazily fetch split words when split mode is engaged.
   useEffect(() => {
@@ -815,6 +963,17 @@ export function MediaEditor({
           }
           break;
         }
+        case REVIEW_KEY.speaker:
+        case SPEAKER_ALIAS: {
+          event.preventDefault();
+          const row = playerRef.current?.focusCursorRow();
+          const btn = row?.querySelector<HTMLElement>(".tp-speaker-btn");
+          if (btn) {
+            btn.focus();
+            handleSpeakerClick(cursor, btn.getBoundingClientRect());
+          }
+          break;
+        }
         case REVIEW_KEY.resetSpeaker:
           event.preventDefault();
           void reassignSegment(null);
@@ -860,6 +1019,7 @@ export function MediaEditor({
     reassignSegment,
     speakers,
     annotateHotkey,
+    handleSpeakerClick,
   ]);
 
   // Download shortcut: separate from the writable-gated handler so it works
@@ -1263,6 +1423,9 @@ export function MediaEditor({
               capability={capability}
               lowConfidenceThreshold={lowConfidenceThreshold}
               onSegmentSelect={writable ? setCursor : undefined}
+              onSpeakerClick={writable ? handleSpeakerClick : undefined}
+              popoverSegmentIndex={popoverTarget?.segmentIndex ?? null}
+              labelResolutions={labelResolutions}
               peaksUrl={peaksUrl}
               turns={turns}
               cursorIndex={writable ? cursor : undefined}
@@ -1288,6 +1451,24 @@ export function MediaEditor({
               staleLocators={annotationStaleLines}
               onTextSelect={writable ? annotationCapture : undefined}
             />
+            {writable && popoverTarget && popoverSegment && (
+              <SpeakerAssignPopover
+                key={popoverTarget.segmentIndex}
+                anchorRect={popoverTarget.anchorRect}
+                currentSpeaker={popoverSegment.speaker}
+                currentSpeakerId={popoverCanRename ? popoverSpeakerId : null}
+                currentLabel={popoverSegment.label}
+                resolved={popoverResolution?.resolved ?? false}
+                labelSegmentCount={popoverResolution?.segmentCount ?? 1}
+                speakers={speakers}
+                onAssign={handlePopoverAssign}
+                onCreate={handlePopoverCreate}
+                onReset={handlePopoverReset}
+                onRename={handlePopoverRename}
+                onClose={closePopover}
+                disabled={busy || !writable}
+              />
+            )}
             {annotationPanel}
           </div>
 

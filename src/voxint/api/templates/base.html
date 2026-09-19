@@ -770,6 +770,12 @@
     .tp-line { border-left: 3px solid var(--spk-accent, transparent);
                padding: .15rem .5rem; border-radius: 0 var(--r-sm) var(--r-sm) 0;
                scroll-margin-top: 10rem; }
+    .tp-speaker-btn { background: none; border: none; padding: 0; cursor: pointer;
+                      font: inherit; font-weight: bold; color: inherit; }
+    .tp-speaker-btn:hover { text-decoration: underline; }
+    .tp-speaker-btn[data-resolved="false"] { color: var(--ink-2);
+                                            text-decoration: underline dashed;
+                                            text-underline-offset: .15em; }
     .label-card { border-left: .35rem solid var(--spk-accent, var(--line)); }
     .spk-badge { font-size: .72rem; color: var(--ink-2); border: 1px solid var(--line);
                  border-radius: var(--r-sm); padding: 0 .35rem;

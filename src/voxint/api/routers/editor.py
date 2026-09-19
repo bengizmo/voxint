@@ -33,6 +33,8 @@ from voxint.api.csrf import (
     CSRF_CLAIM,
     CSRF_CLIP_EXTRACT,
     CSRF_NOTES,
+    CSRF_RESTART,
+    CSRF_ROSTER_RENAME,
     CSRF_TRANSLATION_CANCEL,
     CSRF_TRANSLATION_GENERATE,
     mint_csrf_token,
@@ -235,6 +237,9 @@ def media_detail_page(
 
     if island_props is not None:
         island_props["claimCsrf"] = mint_csrf_token(request.app.state.csrf_secret, CSRF_CLAIM)
+        island_props["renameCsrf"] = mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_ROSTER_RENAME
+        )
         island_props["multiUser"] = settings.voxint_multi_user
         if assets is not None:
             island_props["assetControls"] = {
