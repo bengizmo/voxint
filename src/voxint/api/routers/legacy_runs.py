@@ -101,7 +101,7 @@ from voxint.api.runs_query import (
     searchable_languages,
 )
 from voxint.api.speaker_colors import run_label_universe, speaker_palette
-from voxint.api.speaker_timeline import build_speaker_timeline
+from voxint.api.speaker_timeline import build_speaker_timeline  # noqa: F401
 from voxint.api.stats_query import (
     DEFAULT_WINDOW,
     collect_stats,
@@ -1067,7 +1067,6 @@ def build_run_detail_context(
     guided-tour banner.
     """
     run = _run_or_404(session, run_id)
-    speaker_timeline = build_speaker_timeline(session, run.id)
     # The attempt ledger, chronological — matches `voxint status`.
     stage_runs = list(
         session.execute(
@@ -1104,7 +1103,6 @@ def build_run_detail_context(
     context: dict[str, Any] = {
         "request": request,
         "run": run,
-        "speaker_timeline": speaker_timeline,
         "stage_runs": stage_runs,
         # Which model actually answered each stage, from that stage's
         # latest completed attempt (A1 provenance). "Not recorded" for
@@ -1150,23 +1148,6 @@ def build_run_detail_context(
         # None for uploads / pre-capture URL runs. Scraped metadata and
         # the operator's own notes render in separate sections.
         "source_metadata": run.media_item.source_metadata,
-        "csrf_notes": mint_csrf_token(request.app.state.csrf_secret, CSRF_NOTES),
-        # Run-level assets (issue #41): current summary/topics/entity
-        # mentions with staleness, plus generation controls.
-        "assets": _run_assets_state(session, settings, run_id),
-        "csrf_assets_generate": mint_csrf_token(
-            request.app.state.csrf_secret, CSRF_ASSETS_GENERATE
-        ),
-        "csrf_assets_cancel": mint_csrf_token(request.app.state.csrf_secret, CSRF_ASSETS_CANCEL),
-        # Transcript translation (issue #133): current generation(s)
-        # with staleness, plus generation controls.
-        "translation_state": _run_translation_state(session, settings, run_id),
-        "csrf_translation_generate": mint_csrf_token(
-            request.app.state.csrf_secret, CSRF_TRANSLATION_GENERATE
-        ),
-        "csrf_translation_cancel": mint_csrf_token(
-            request.app.state.csrf_secret, CSRF_TRANSLATION_CANCEL
-        ),
         # Some callers suppress the guided-tour banner explicitly.
         "tutorial": (
             _tutorial_banner(request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id)
@@ -1818,7 +1799,7 @@ def save_operator_notes(
         )
     run.operator_notes = cleaned or None
     session.commit()
-    return RedirectResponse(f"/runs/{run_id}", status_code=303)
+    return RedirectResponse(f"/media/{run.media_item_id}/editor?run={run_id}", status_code=303)
 
 
 @actions_router.get("/runs/{run_id}/export.json")
