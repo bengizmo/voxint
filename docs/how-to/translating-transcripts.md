@@ -36,9 +36,10 @@ instead.
 
 ## Translate a recording
 
-1. Open the recording's run page (from **Runs**, click the recording).
-2. Find the **Translation** card. Pick a language from the **Translate to**
-   list. If you set a preferred language, it is already selected.
+1. Open the recording in the editor (from **Media**, click the recording).
+2. Scroll below the transcript to the **Translation** card. Pick a language
+   from the **Translate to** list. If you set a preferred language, it is
+   already selected.
 3. Click **Translate**. The card shows the job's progress and a **Cancel**
    button while it works. Translation of a long recording can take several
    minutes, depending on your LLM.
@@ -52,8 +53,8 @@ every line on the review screen, a **Translate** action appears next to
 
 ## Read the translation
 
-Open the transcript page (from the run page, or the **Translation** card's
-link). A **Translation** switcher appears above the transcript with one entry
+Open the transcript page (from the editor's **Translation** card link, or
+the export menu). A **Translation** switcher appears above the transcript with one entry
 per translated language:
 
 - **Original only** shows the transcript as reviewed.
@@ -80,13 +81,13 @@ A translation is a snapshot of the transcript at the moment it was made. If
 you correct a line, split a segment, or edit the text afterwards, the
 translation no longer matches, and Voxint says so honestly:
 
-- The run page's **Translation** card marks it **out of date**.
+- The editor's **Translation** card marks it **out of date**.
 - The transcript page stops showing the translated lines rather than showing
   a translation of text that no longer exists.
 - The translated download links disappear, and a direct download request is
   refused rather than served stale.
 
-To fix it, click **Re-translate** on the run page's Translation card. The new
+To fix it, click **Re-translate** on the editor's Translation card. The new
 translation replaces the old one. Renaming a speaker does not make a
 translation out of date; only changes to the spoken text do.
 

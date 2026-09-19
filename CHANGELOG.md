@@ -4,6 +4,21 @@ All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog
 versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between minors).
 
 
+## [Unreleased]
+
+### Changed
+- **Run page vs editor page redesign (#567).** The run page (`/runs/{id}`) is
+  now a pure technical job record: pipeline status, stages, timing, errors,
+  restart controls, archive, and technical details. Content sections (source
+  metadata, operator notes, enrichments, speaker timeline, translation) moved
+  to the media editor page (`/media/{id}/editor`), where operators already
+  spend most of their time. The editor gained source metadata (collapsed),
+  operator notes, speaker timeline (collapsed), enrichment generation controls
+  (summary, topics, entities), and translation forms. The editor's duplicated
+  restart-from-stage form was replaced with a link to the run page. Saving
+  operator notes now redirects back to the editor instead of the run page.
+  Completed runs show a prominent "Open in editor" link on the run page.
+
 ## [0.44.0] - 2026-09-18
 
 ### Added

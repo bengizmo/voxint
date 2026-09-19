@@ -416,11 +416,12 @@ linked BEFORE the media file so a crash between publish and DB commit replays
 to a repaired row without re-downloading), and inserts the write-once
 `media_source_metadata` row. The raw info-JSON never leaves the attempt temp
 dir. Capture is **best-effort**: a missing/malformed/oversized info-JSON logs a
-warning and never fails an otherwise-valid acquisition. Surfaced on the run
-detail page, the runs browser (title), and `GET /runs/{id}/export.json`, a
+warning and never fails an otherwise-valid acquisition. Surfaced on the editor
+page (`/media/{id}/editor`), the runs browser (title), and `GET /runs/{id}/export.json`, a
 versioned object envelope (run + source_metadata + operator_notes + the same
 segment objects as the pinned bare-array `/review/{id}/export.json`, which
-stays frozen).
+stays frozen). The run page retains only the extractor/version in **Technical
+details** (#567).
 
 **Residual: needs network policy, not a userland check.** yt-dlp re-resolves the
 host *independently* when it connects, and its generic extractor follows HTTP
@@ -677,13 +678,14 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   AND-composes with status/review and the `(created_at, id)` keyset cursor;
   results stay newest-first, no relevance ranking; matching runs get one
   escaped `ts_headline` snippet (first matching segment).
-- **Media detail page** (`GET /media/{id}/editor`, issue #156): a read-only
+- **Media detail page** (`GET /media/{id}/editor`, issue #156): an
   entry point into a media item's best run. Selects the latest completed run
   by default (`?run=` overrides, validated against the media item). Renders the
   transcript with the speaker palette and a verified-progress counter, a run
-  chooser, and a metadata rail. Claim-token verification degrades to read-only
-  when the token is stale or absent. No mutations: existing
-  `/review/{run_id}/*` endpoints remain the only write surface.
+  chooser, and a metadata rail. Transcript claim-token verification degrades to
+  read-only when the token is stale or absent. The page also hosts operator notes,
+  enrichment generation controls, and translation forms (all POST; #567).
+  Existing `/review/{run_id}/*` endpoints remain the transcript mutation surface.
 - **Reviewer slot**: claim columns on `pipeline_runs`, guarded by the same CAS
   `revision` as pipeline transitions. The claim token is an opaque per-claim
   secret required on every mutation; a re-claim rotates it, so a stale tab
