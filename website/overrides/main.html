@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block tabs %}
+  {{ super() }}
+  <style>
+    .md-header__button.md-logo {
+      display: none;
+    }
+    .voxint-home-link {
+      display: flex;
+      align-items: center;
+      padding: 0 .6rem;
+      font-size: .7rem;
+      font-weight: 700;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+      color: var(--md-primary-fg-color--light);
+    }
+    .voxint-home-link:hover {
+      color: var(--md-accent-fg-color);
+    }
+  </style>
+{% endblock %}
+
+{% block announce %}
+  <a href="https://voxint.app" class="voxint-home-link">
+    &larr; voxint.app
+  </a>
+{% endblock %}

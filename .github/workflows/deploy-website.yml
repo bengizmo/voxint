@@ -1,0 +1,50 @@
+name: deploy-website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'website/**'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install MkDocs
+        run: pip install mkdocs-material
+
+      - name: Build docs
+        working-directory: website
+        run: mkdocs build --strict
+
+      - name: Assemble site
+        run: |
+          cp website/index.html website/_site/
+          cp website/style.css website/_site/
+          cp -r website/assets website/_site/
+
+      - name: Deploy to VPS
+        env:
+          DEPLOY_KEY: ${{ secrets.VOXINT_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H 129.212.241.53 >> ~/.ssh/known_hosts 2>/dev/null
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/id_deploy" \
+            website/_site/ \
+            deploy@129.212.241.53:/var/www/voxint.app/

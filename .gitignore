@@ -87,3 +87,10 @@ src/voxint/embeddings/models/*.json
 # Claude Code local worktree scratch (the committed skill under .claude/skills
 # IS tracked; this is per-session working space).
 /.claude/worktrees/
+
+# Website build output (MkDocs + assembled static site).
+website/_site/
+
+# Demo instance secrets (template .env.demo.example IS tracked).
+deploy/demo/.env.demo
+!deploy/demo/.env.demo.example
