@@ -68,11 +68,32 @@ export function OutlinePanel({
   }
 
   if (!outline.available) {
+    const hasContext =
+      outline.context.summary !== null || outline.context.topics.length > 0;
     return (
       <section className="outline-panel my-2" aria-label="Outline">
         <h2>Outline</h2>
         {assetControls && <AssetControls {...assetControls} runId={runId} key={runId} />}
-        <p className="muted">No outline was generated for this transcript.</p>
+        {hasContext ? (
+          <div className="outline-context">
+            <p className="muted text-sm">
+              Summary and topics are context only. They are not linked to specific
+              moments.
+            </p>
+            {outline.context.summary && (
+              <p className="outline-summary">{outline.context.summary}</p>
+            )}
+            {outline.context.topics.length > 0 && (
+              <ul className="outline-topics">
+                {outline.context.topics.map((topic, index) => (
+                  <li key={index}>{topic}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : (
+          <p className="muted">No outline was generated for this transcript.</p>
+        )}
       </section>
     );
   }

@@ -33,6 +33,7 @@ from voxint.api.csrf import (
     CSRF_CLAIM,
     CSRF_CLIP_EXTRACT,
     CSRF_NOTES,
+    CSRF_TRANSLATION_CANCEL,
     CSRF_TRANSLATION_GENERATE,
     mint_csrf_token,
 )
@@ -70,6 +71,7 @@ from voxint.enrichment.translation_jobs import (
     normalized_language,
     translation_gates_open,
 )
+from voxint.enrichment.translations import current_translations
 from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import active_speakers
 from voxint.tutorial.steps import TutorialPage
@@ -208,6 +210,17 @@ def media_detail_page(
                     ),
                     "active": translate_job is not None
                     and translate_job.status in _TRANSLATION_ACTIVE_STATUSES,
+                    "hasTranslation": bool(current_translations(session, run_id)),
+                    "activeJobId": str(translate_job.id)
+                    if translate_job is not None
+                    and translate_job.status in _TRANSLATION_ACTIVE_STATUSES
+                    else None,
+                    "csrfCancel": mint_csrf_token(
+                        request.app.state.csrf_secret, CSRF_TRANSLATION_CANCEL
+                    )
+                    if translate_job is not None
+                    and translate_job.status in _TRANSLATION_ACTIVE_STATUSES
+                    else None,
                     "runAnchor": f"#run-translation-{run_id}",
                     "transcriptUrl": f"/runs/{run_id}/transcript",
                     "languageOptions": [

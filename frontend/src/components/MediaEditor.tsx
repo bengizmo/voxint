@@ -69,6 +69,9 @@ export interface MediaEditorProps {
     defaultTarget: string | null;
     defaultTargetLabel: string | null;
     active: boolean;
+    hasTranslation: boolean;
+    activeJobId: string | null;
+    csrfCancel: string | null;
     runAnchor: string;
     transcriptUrl: string;
     languageOptions: { code: string; name: string }[];
@@ -131,11 +134,10 @@ export function MediaEditor({
   const [provOpen, setProvOpen] = useState(false);
   const [translatePhase, setTranslatePhase] = useState<
     "idle" | "starting" | "started" | "error"
-  >("idle");
+  >(translate?.active ? "started" : "idle");
   const [translateTarget, setTranslateTarget] = useState<string>(
     translate?.defaultTarget ?? "",
   );
-  const [hadTranslation] = useState(translate?.active ?? false);
   const [translateError, setTranslateError] = useState<string | null>(null);
   const translateBusyRef = useRef(false);
   const [claiming, setClaiming] = useState(false);
@@ -659,6 +661,44 @@ export function MediaEditor({
     }
   }, [translate, translateTarget, runId]);
 
+  const cancelTranslation = useCallback(async () => {
+    if (translateBusyRef.current) return;
+    if (!translate?.activeJobId || !translate.csrfCancel) return;
+    translateBusyRef.current = true;
+    setTranslateError(null);
+    try {
+      const body = new URLSearchParams({ csrf_token: translate.csrfCancel });
+      const res = await apiFetch(
+        `/runs/${runId}/translation/${translate.activeJobId}/cancel`,
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body,
+        },
+      );
+      const data = (await res.json()) as {
+        cancelled: boolean;
+        error?: string | null;
+      };
+      if (data.cancelled) {
+        setTranslatePhase("idle");
+      } else {
+        setTranslateError(data.error ?? "Translation could not be cancelled.");
+        setTranslatePhase("error");
+      }
+    } catch (err) {
+      setTranslateError(
+        err instanceof ApiError ? err.detail : "Translation could not be cancelled.",
+      );
+      setTranslatePhase("error");
+    } finally {
+      translateBusyRef.current = false;
+    }
+  }, [translate, runId]);
+
   const onAnnotationClaimLost = useCallback(() => setClaimLost(true), []);
 
   const {
@@ -939,7 +979,7 @@ export function MediaEditor({
                   disabled={!translateTarget}
                   className="text-sm"
                 >
-                  {hadTranslation ? "Re-translate" : "Translate"}
+                  {translate.hasTranslation ? "Re-translate" : "Translate"}
                 </button>
               </div>
             ) : translatePhase === "starting" ? (
@@ -948,6 +988,18 @@ export function MediaEditor({
               <span className="muted text-sm">
                 Translation started. The result appears on the{" "}
                 <a href={translate.transcriptUrl}>transcript page</a>.
+                {translate.activeJobId && translate.csrfCancel && (
+                  <>
+                    {" "}
+                    <button
+                      type="button"
+                      onClick={() => void cancelTranslation()}
+                      className="text-sm"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                )}
               </span>
             ) : (
               <span role="alert" className="text-sm">
