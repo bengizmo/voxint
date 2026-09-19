@@ -63,14 +63,15 @@ class TestConsole:
         monkeypatch.setattr("voxint.api.routers.legacy_runs._publish_run_asset_job", sink.append)
         return sink
 
-    def test_run_detail_includes_asset_block(self, session_factory: sessionmaker[Session]) -> None:
+    def test_run_detail_excludes_asset_block(self, session_factory: sessionmaker[Session]) -> None:
+        """Issue #567: asset controls moved to the editor page."""
         client = _build_client(session_factory)
         with session_factory() as session:
             run_id = seed_run(session)
         page = client.get(f"/runs/{run_id}")
         assert page.status_code == 200
-        assert "Run assets" in page.text
-        assert "Machine-generated" in page.text
+        assert "Run assets" not in page.text
+        assert "Open in editor" in page.text
 
     def test_gates_off_message(self, session_factory: sessionmaker[Session]) -> None:
         client = _build_client(session_factory, gates_open=False)

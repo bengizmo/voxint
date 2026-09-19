@@ -223,41 +223,20 @@ class TestRestartPost:
 
 
 class TestEditorRestart:
-    def test_clean_editor_shows_restart_without_required_checkbox(
-        self, editor_client: TestClient, session_factory: sessionmaker[Session]
-    ) -> None:
-        with session_factory() as session:
-            media_id, _run_id = _seed_editor_run(session)
-            session.commit()
-        resp = editor_client.get(f"/media/{media_id}/editor", follow_redirects=False)
-        assert resp.status_code == 200
-        html = resp.text
-        assert "Re-run" in html
-        assert 'id="editor-restart-ack" required' not in html
+    """Issue #567: the editor page no longer has a full restart form. It shows
+    a status line and a 'Run details' link to the run page, which hosts the
+    full restart controls. These tests verify the simplified editor surface."""
 
-    def test_editor_label_risk_shows_checkbox(
+    def test_editor_shows_run_details_link_instead_of_restart_form(
         self, editor_client: TestClient, session_factory: sessionmaker[Session]
     ) -> None:
         with session_factory() as session:
             media_id, run_id = _seed_editor_run(session)
-            _add_label_scope_decision(session, run_id)
             session.commit()
         resp = editor_client.get(f"/media/{media_id}/editor", follow_redirects=False)
         assert resp.status_code == 200
         html = resp.text
-        assert 'name="acknowledge_label_risk"' in html
-        assert "required" in html
-        assert "speaker ruling" in html
-
-    def test_editor_segment_scope_shows_void_acknowledgement(
-        self, editor_client: TestClient, session_factory: sessionmaker[Session]
-    ) -> None:
-        with session_factory() as session:
-            media_id, run_id = _seed_editor_run(session)
-            _add_segment_scope_decision(session, run_id)
-            session.commit()
-        resp = editor_client.get(f"/media/{media_id}/editor", follow_redirects=False)
-        assert resp.status_code == 200
-        html = resp.text
-        assert "acknowledge_void" in html
-        assert "void required" in html.lower() or "will be voided" in html
+        assert f"/runs/{run_id}" in html
+        assert "Run details" in html
+        assert 'name="acknowledge_label_risk"' not in html
+        assert 'name="acknowledge_void"' not in html
