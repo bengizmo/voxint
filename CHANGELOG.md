@@ -4,6 +4,19 @@ All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog
 versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between minors).
 
 
+## [Unreleased]
+
+### Added
+- **Inline speaker assignment popover** (#568). Clicking a speaker name in the
+  transcript opens an anchored popover with the searchable speaker combobox,
+  scope control (label vs segment), rename, and reset. Unresolved labels
+  default to label scope (name the whole voice); resolved labels default to
+  segment scope (surgical correction). Undo toast shows affected count after
+  assignment. Unresolved speaker names render with a muted dashed-underline
+  affordance. The `s` key and `@` alias open the popover from the keyboard.
+  Speaker rename works from the review console without navigating away.
+
+
 ## [0.44.0] - 2026-09-18
 
 ### Added

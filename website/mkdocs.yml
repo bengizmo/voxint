@@ -1,0 +1,102 @@
+site_name: Voxint
+site_url: https://voxint.app/docs/
+site_description: >-
+  Audio intelligence pipeline: local transcription, diarization, and speaker
+  identification — on your own hardware.
+repo_url: https://github.com/bengizmo/voxint
+repo_name: bengizmo/voxint
+
+docs_dir: ../docs
+site_dir: _site/docs
+
+theme:
+  name: material
+  custom_dir: overrides
+  palette:
+    - scheme: default
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+nav:
+  - Home: README.md
+  - Getting Started:
+      - Setup: setup.md
+      - Onboarding: onboarding.md
+  - How-To Guides:
+      - how-to/README.md
+      - Add Media & Manage Runs: how-to/add-media-and-manage-runs.md
+      - Review & Adjudicate: how-to/reviewing-and-adjudicating.md
+      - Manage Speakers & Export: how-to/managing-speakers-and-exporting.md
+      - Translate Transcripts: how-to/translating-transcripts.md
+      - Settings & Troubleshooting: how-to/settings-and-troubleshooting.md
+      - AI-Generated Speech Detection: how-to/checking-for-ai-generated-speech.md
+      - Changing Pipeline Models: how-to/changing-pipeline-models.md
+  - Reference:
+      - Architecture: architecture.md
+      - Operations: operations.md
+      - Domain Packs: domain-packs.md
+      - Plugins: plugins.md
+      - GPU Contracts: gpu-contracts.md
+      - Semantic Search: semantic-search.md
+      - Annotations: annotations.md
+      - Quality Gates: quality-gates.md
+      - Benchmark: benchmark.md
+      - Service Controls: service-controls.md
+      - Timeouts & Leases: timeouts-and-leases.md
+      - Native macOS Preview: native-macos-preview.md
+  - Architecture Decisions:
+      - adr/README.md
+      - ADR-001 Media Identity: adr/0001-media-identity-vs-location.md
+      - ADR-002 Project Membership: adr/0002-project-membership-invariant.md
+      - ADR-003 Editor Run Selection: adr/0003-editor-run-selection.md
+      - ADR-004 Claim Lifecycle: adr/0004-claim-lifecycle.md
+      - ADR-005 Speaker Provenance: adr/0005-speaker-profile-provenance.md
+      - ADR-006 Plugin Scope: adr/0006-plugin-scope-native-vs-greenfield.md
+      - ADR-007 Media Operations: adr/0007-media-operations-journal.md
+      - ADR-008 Enrichment Persistence: adr/0008-enrichment-persistence-simplification-scope.md
+
+plugins:
+  - search
+
+exclude_docs: |
+  plans/
+  reports/
+  session-prompts/
+  security/
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+  - tables
+  - attr_list
+  - md_in_html
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/bengizmo/voxint

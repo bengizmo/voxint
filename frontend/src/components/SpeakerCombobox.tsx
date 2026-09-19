@@ -27,6 +27,7 @@ interface SpeakerComboboxProps {
   label: string;
   disabled?: boolean;
   digitPrefixes?: boolean;
+  autoFocus?: boolean;
 }
 
 export function SpeakerCombobox({
@@ -40,12 +41,13 @@ export function SpeakerCombobox({
   label,
   disabled = false,
   digitPrefixes = false,
+  autoFocus = false,
 }: SpeakerComboboxProps) {
   const uid = useId();
   const listboxId = `${uid}-listbox`;
   const optionId = (idx: number) => `${uid}-opt-${idx}`;
 
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(autoFocus);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [creating, setCreating] = useState(false);
@@ -55,6 +57,10 @@ export function SpeakerCombobox({
   const listRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef(false);
+
+  useEffect(() => {
+    if (autoFocus) inputRef.current?.focus();
+  }, [autoFocus]);
 
   const filtered = rankItems(speakers, query, (s) => s.displayName);
 

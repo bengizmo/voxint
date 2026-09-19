@@ -196,6 +196,13 @@ export interface TranscriptPlayerProps {
   // segment being played, never the one under a stale cursor. Absent on the
   // read-only transcript page, which stays byte-identical (play only).
   onSegmentSelect?: (index: number) => void;
+  onSpeakerClick?: (segmentIndex: number, anchorRect: DOMRect) => void;
+  popoverSegmentIndex?: number | null;
+  highlightLabels?: ReadonlySet<string>;
+  labelResolutions?: ReadonlyMap<
+    string,
+    { speakerId: string | null; resolved: boolean; segmentCount: number }
+  >;
   // Waveform strip (issue #57). peaksUrl is server-owned truth: null/absent ⇒
   // no fetch, no strip, rendered output unchanged. turns are the diarization
   // regions the strip paints (an honest who-spoke-when map — see peaks.ts).
@@ -262,10 +269,14 @@ export interface TranscriptPlayerProps {
 // never invokes it.
 export interface TranscriptPlayerHandle {
   playSegment: (index: number) => void;
-  focusCursorRow: () => void;
+  focusCursorRow: () => HTMLElement | null;
 }
 
 interface TranscriptRowProps {
+  highlightLabels?: ReadonlySet<string>;
+  onSpeakerClick?: TranscriptPlayerProps["onSpeakerClick"];
+  popoverSegmentIndex?: number | null;
+  labelResolutions?: TranscriptPlayerProps["labelResolutions"];
   seg: Segment;
   index: number;
   active: boolean;
@@ -289,6 +300,10 @@ interface TranscriptRowProps {
 }
 
 const TranscriptRow = memo(function TranscriptRow({
+  highlightLabels,
+  onSpeakerClick,
+  popoverSegmentIndex,
+  labelResolutions,
   seg,
   index,
   active,
@@ -310,6 +325,8 @@ const TranscriptRow = memo(function TranscriptRow({
   onSplitAt,
   onReassign,
 }: TranscriptRowProps) {
+  const resolved =
+    (seg.label != null && labelResolutions?.get(seg.label)?.resolved) || false;
   // Uncertain is a NON-background cue (a dashed underline + chip): the
   // active line owns the background tint, so the two never collide.
   const uncertain =
@@ -326,6 +343,7 @@ const TranscriptRow = memo(function TranscriptRow({
   // Deep-link jump flash (issue #121): a brief fading highlight on the
   // line a ?t= jump landed on. Cleared by the mount effect's timeout.
   if (jumpFlash) classes.push("tp-jump-flash");
+  if (seg.label != null && highlightLabels?.has(seg.label)) classes.push("tp-label-flash");
 
   return (
     <p
@@ -373,7 +391,26 @@ const TranscriptRow = memo(function TranscriptRow({
           uncertain
         </span>
       )}
-      <><strong>{seg.speaker}:</strong>{" "}</>
+      {onSpeakerClick ? (
+        <>
+          <button
+            type="button"
+            className={`tp-speaker-btn${resolved ? "" : " tp-speaker-unresolved"}`}
+            data-resolved={resolved}
+            aria-haspopup="dialog"
+            aria-expanded={popoverSegmentIndex === index}
+            onClick={(e) => {
+              e.stopPropagation();
+              e.currentTarget.focus();
+              onSpeakerClick(index, e.currentTarget.getBoundingClientRect());
+            }}
+          >
+            {seg.speaker}:
+          </button>{" "}
+        </>
+      ) : (
+        <><strong>{seg.speaker}:</strong>{" "}</>
+      )}
       {splitting ? (
         // A cut lands BEFORE the clicked word, so word 0 has no legal cut
         // (its index would be 0, and the backend requires 0 < index < n);
@@ -489,6 +526,10 @@ export const TranscriptPlayer = forwardRef<
     capability,
     lowConfidenceThreshold,
     onSegmentSelect,
+    onSpeakerClick,
+    popoverSegmentIndex,
+    labelResolutions,
+    highlightLabels,
     peaksUrl,
     turns,
     cursorIndex,
@@ -771,6 +812,7 @@ export const TranscriptPlayer = forwardRef<
       },
       focusCursorRow: () => {
         cursorLineRef.current?.focus({ preventScroll: true });
+        return cursorLineRef.current;
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -840,6 +882,10 @@ export const TranscriptPlayer = forwardRef<
             // and drop its focus. Index keeps unsplit lines with equal starts
             // distinct.
             <TranscriptRow
+              onSpeakerClick={onSpeakerClick}
+              popoverSegmentIndex={popoverSegmentIndex}
+              labelResolutions={labelResolutions}
+              highlightLabels={highlightLabels}
               key={`${seg.sourceSegmentId ?? "x"}-${seg.wordStart ?? "u"}-${seg.wordEnd ?? "u"}-${seg.start}-${i}`}
               seg={seg}
               index={i}
