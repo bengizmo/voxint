@@ -147,8 +147,10 @@ export function MediaEditor({
   const reviewTokenRef = useRef(reviewToken);
   reviewTokenRef.current = reviewToken;
 
-  const pollAssets =
-    !!assetControls && (assetControls.anyActive || assetPollTrigger);
+  const [assetPollActive, setAssetPollActive] = useState(
+    () => !!assetControls?.anyActive,
+  );
+  const pollAssets = !!assetControls && (assetPollTrigger || assetPollActive);
   const { assetState, translateState } = useEnrichmentPolling({
     runId,
     pollAssets,
@@ -671,15 +673,18 @@ export function MediaEditor({
     }
   }, [translate, translateTarget, runId]);
 
+  const translateJobId =
+    translateState?.activeJobId ?? translate?.activeJobId ?? null;
+
   const cancelTranslation = useCallback(async () => {
     if (translateBusyRef.current) return;
-    if (!translate?.activeJobId || !translate.csrfCancel) return;
+    if (!translateJobId || !translate?.csrfCancel) return;
     translateBusyRef.current = true;
     setTranslateError(null);
     try {
       const body = new URLSearchParams({ csrf_token: translate.csrfCancel });
       const res = await apiFetch(
-        `/runs/${runId}/translation/${translate.activeJobId}/cancel`,
+        `/runs/${runId}/translation/${translateJobId}/cancel`,
         {
           method: "POST",
           headers: {
@@ -707,7 +712,7 @@ export function MediaEditor({
     } finally {
       translateBusyRef.current = false;
     }
-  }, [translate, runId]);
+  }, [translate, translateJobId, runId]);
 
   useEffect(() => {
     if (translatePhase === "started" && translateState && !translateState.active) {
@@ -716,10 +721,11 @@ export function MediaEditor({
   }, [translatePhase, translateState]);
 
   useEffect(() => {
-    if (assetState && !assetState.anyActive && assetPollTrigger) {
-      setAssetPollTrigger(false);
+    if (assetState && !assetState.anyActive) {
+      if (assetPollTrigger) setAssetPollTrigger(false);
+      if (assetPollActive) setAssetPollActive(false);
     }
-  }, [assetState, assetPollTrigger]);
+  }, [assetState, assetPollTrigger, assetPollActive]);
 
   const onAnnotationClaimLost = useCallback(() => setClaimLost(true), []);
 
@@ -1013,7 +1019,7 @@ export function MediaEditor({
                   : "Translation started."}{" "}
                 The result appears on the{" "}
                 <a href={translate.transcriptUrl}>transcript page</a>.
-                {translate.activeJobId && translate.csrfCancel && (
+                {translateJobId && translate.csrfCancel && (
                   <>
                     {" "}
                     <button

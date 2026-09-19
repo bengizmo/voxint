@@ -45,7 +45,10 @@ function usePollingState<T>(
   const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      setState(null);
+      return;
+    }
 
     const controller = new AbortController();
     controllerRef.current = controller;

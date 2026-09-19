@@ -23,7 +23,7 @@ export interface AssetControlsProps {
   onActive?: () => void;
 }
 
-type AssetPhase = "idle" | "generating" | "generated" | "error";
+type AssetPhase = "idle" | "generating" | "generated" | "completed" | "error";
 
 export function AssetControls({
   runId,
@@ -51,7 +51,7 @@ export function AssetControls({
 
   useEffect(() => {
     if (phase === "generated" && polledState && !polledState.anyActive) {
-      setPhase("idle");
+      setPhase("completed");
     }
   }, [phase, polledState]);
 
@@ -170,6 +170,18 @@ export function AssetControls({
           {displayActive
             ? "Generating..."
             : "Generated. Reload to see updated content."}
+        </p>
+      )}
+      {phase === "completed" && (
+        <p className="notice" role="status">
+          Generated. Reload to see updated content.{" "}
+          <button
+            type="button"
+            className="inline"
+            onClick={() => void generate()}
+          >
+            Regenerate all
+          </button>
         </p>
       )}
       {phase === "error" && (

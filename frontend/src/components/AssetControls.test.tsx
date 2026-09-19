@@ -117,8 +117,8 @@ describe("asset controls", () => {
       anyActive: false,
       kinds: [{ ...props.kinds[0], hasAsset: true }],
     }} onActive={onActive} />);
-    expect((screen.getByRole("button", { name: "Regenerate all" }) as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("Generated. Reload to see updated content.");
+    expect(screen.getByRole("button", { name: "Regenerate all" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Cancel summary" })).toBeNull();
   });
   it("retries the same stale kind after a JSON-level error", async () => {
