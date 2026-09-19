@@ -28,12 +28,13 @@ services:
       - "127.0.0.1:${API_PORT:-8180}:8080"
     environment:
       VOXINT_MULTI_USER: "true"
-      WATCH_FOLDER_ENABLED: "false"
-      YTDLP_ENABLED: "false"
       MEDIA_RETENTION_ENABLED: "false"
       VOXINT_SERVICE_CONTROL: ""
+      CONSOLE_PROJECTS_ENABLED: "true"
+      CONSOLE_MEDIA_ENABLED: "true"
       CONSOLE_SPEAKERS_ENABLED: "true"
-      CONSOLE_SETTINGS_ENABLED: "false"
+      CONSOLE_SETTINGS_ENABLED: "true"
+      CONSOLE_ACTIVITY_ENABLED: "true"
       CONSOLE_PALETTE_ENABLED: "true"
     deploy:
       resources:
