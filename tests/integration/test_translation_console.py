@@ -73,15 +73,16 @@ class TestConsole:
         monkeypatch.setattr("voxint.api.routers.legacy_runs._publish_translation_job", _sink)
         return sink
 
-    def test_run_detail_includes_translation_card(
+    def test_run_detail_excludes_translation_card(
         self, session_factory: sessionmaker[Session]
     ) -> None:
+        """Issue #567: translation controls moved to the editor page."""
         with session_factory() as session:
             run_id = seed_run(session)
         client = _build_client(session_factory)
         body = client.get(f"/runs/{run_id}").text
-        assert f"run-translation-{run_id}" in body
-        assert "Translate to" in body
+        assert f"run-translation-{run_id}" not in body
+        assert "Open in editor" in body
 
     def test_gates_off_message(self, session_factory: sessionmaker[Session]) -> None:
         with session_factory() as session:

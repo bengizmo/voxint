@@ -38,6 +38,7 @@ export function ReadOnlyTranscript({
   return (
     <>
       <OutlinePanel
+        runId={playerProps.runId}
         outline={outline}
         segments={playerProps.segments}
         capability={playerProps.capability}

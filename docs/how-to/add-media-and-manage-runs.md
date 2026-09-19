@@ -245,7 +245,7 @@ Open the collapsed **Technical details** section on the run page to find the
 **stage ledger**. It lists each attempt at each stage: when it started, when it
 finished, and any error. You rarely need it unless something went wrong.
 
-![A run's detail page with a summary card first, showing status, current stage, and the primary action. Manage, notes, run assets, and the speaker timeline follow, with a collapsed Technical details section holding the stage ledger.](../images/run-detail.png)
+![A run's detail page with a summary card showing status, current stage, and the primary action. Manage controls (restart, archive, delete derived audio) and a collapsed Technical details section follow. Content sections (notes, enrichments, speaker timeline, translation) live on the editor page.](../images/run-detail.png)
 
 The run's overall **status** tells you the headline:
 
@@ -326,10 +326,10 @@ need the audio back, you can re-run from the original source.
 
 ### Add notes
 
-Each run has an **Operator notes** box. Use it for anything you want to remember
-about the recording: who is speaking, the context, follow-ups to do later.
-Notes are yours; they are kept separate from any information Voxint scraped about
-the source, so the two are never confused.
+The editor page has a **Notes for this run** box. Use it for anything you want
+to remember about the recording: who is speaking, the context, follow-ups to do
+later. Notes are yours; they are kept separate from any information Voxint
+scraped about the source, so the two are never confused.
 
 ---
 
