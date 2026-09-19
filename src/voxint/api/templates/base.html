@@ -770,6 +770,14 @@
     .tp-line { border-left: 3px solid var(--spk-accent, transparent);
                padding: .15rem .5rem; border-radius: 0 var(--r-sm) var(--r-sm) 0;
                scroll-margin-top: 10rem; }
+    .tp-label-flash { animation: label-flash 0.3s ease-out; }
+    @keyframes label-flash {
+      from { background-color: var(--accent-soft); }
+      to { background-color: transparent; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .tp-label-flash { animation: none; background-color: var(--accent-soft); }
+    }
     .tp-speaker-btn { background: none; border: none; padding: 0; cursor: pointer;
                       font: inherit; font-weight: bold; color: inherit; }
     .tp-speaker-btn:hover { text-decoration: underline; }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
   FALLBACK_ANNOTATION_LIMITS,
@@ -21,7 +21,7 @@ import { makeNonce } from "../lib/nonce";
 import type { PlaybackCapability } from "../lib/playback";
 import type { Turn } from "../lib/peaks";
 import type { OutlineProps } from "../lib/outline";
-import type { LabelStateShape } from "../lib/speaker-bands";
+import { partition, type LabelStateShape } from "../lib/speaker-bands";
 import { useAnnotations } from "./AnnotationLayer";
 import { KeymapHelp } from "./KeymapHelp";
 import { OutlinePanel } from "./OutlinePanel";
@@ -295,6 +295,12 @@ export function MediaEditor({
   const writable = reviewToken !== null && !claimLost;
   const [undoInfo, setUndoInfo] = useState<LabelsResult["undo"] | null>(null);
   const [labelStates, setLabelStates] = useState(initialLabelStates);
+  const [highlightLabels, setHighlightLabels] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    if (highlightLabels.size === 0) return;
+    const timeout = setTimeout(() => setHighlightLabels(new Set()), 300);
+    return () => clearTimeout(timeout);
+  }, [highlightLabels]);
   const labelResolutions = useMemo(() => {
     const counts = new Map<string, number>();
     for (const seg of segments) {
@@ -307,6 +313,17 @@ export function MediaEditor({
       segmentCount: counts.get(ls.label) ?? 0,
     }]));
   }, [labelStates, segments]);
+  const { needsYouLabels, unresolvedCount, affectedSegmentCount } = useMemo(() => {
+    const { needsYou } = partition(labelStates);
+    const needsYouLabels = new Set(needsYou.map((state) => state.label));
+    let affectedSegmentCount = 0;
+    for (const [label, resolution] of labelResolutions) {
+      if (needsYouLabels.has(label)) {
+        affectedSegmentCount += resolution.segmentCount;
+      }
+    }
+    return { needsYouLabels, unresolvedCount: needsYou.length, affectedSegmentCount };
+  }, [labelStates, labelResolutions]);
   const [popoverTarget, setPopoverTarget] = useState<{
     segmentIndex: number;
     anchorRect: DOMRect;
@@ -339,6 +356,17 @@ export function MediaEditor({
   useEffect(() => {
     setPopoverTarget(null);
   }, [cursor, writable]);
+  const [pendingPopoverIndex, setPendingPopoverIndex] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (pendingPopoverIndex == null || pendingPopoverIndex !== cursor) return;
+    setPendingPopoverIndex(null);
+    const row = playerRef.current?.focusCursorRow();
+    const btn = row?.querySelector<HTMLElement>(".tp-speaker-btn");
+    if (btn) {
+      btn.focus();
+      handleSpeakerClick(pendingPopoverIndex, btn.getBoundingClientRect());
+    }
+  }, [cursor, pendingPopoverIndex, handleSpeakerClick]);
 
   const hearableLabels = useMemo(
     () =>
@@ -365,6 +393,15 @@ export function MediaEditor({
 
   const onLabelsChanged = useCallback(
     (result: LabelsResult) => {
+      const changedLabels = new Set<string>();
+      for (const newLs of result.labels) {
+        const oldLs = labelStates.find((ls) => ls.label === newLs.label);
+        if (!oldLs || oldLs.speakerId !== newLs.speakerId || oldLs.resolution !== newLs.resolution) {
+          changedLabels.add(newLs.label);
+        }
+      }
+      if (changedLabels.size > 0) setHighlightLabels(changedLabels);
+
       setSegments(result.segments);
       setProgress(result.progress);
       setLabelStates(result.labels);
@@ -386,7 +423,7 @@ export function MediaEditor({
       }
       void reloadAnnotationsRef.current?.();
     },
-    [setSegments, setProgress],
+    [setSegments, setProgress, labelStates],
   );
 
   const current =
@@ -978,6 +1015,28 @@ export function MediaEditor({
           event.preventDefault();
           void reassignSegment(null);
           break;
+        case REVIEW_KEY.sameAsPrevious: {
+          event.preventDefault();
+          if (cursor <= 0) break;
+          const prevSeg = segments[cursor - 1];
+          if (!prevSeg?.label) {
+            setAssignStatus("Previous segment has no speaker to copy.");
+            break;
+          }
+          const prevResolution = labelResolutions.get(prevSeg.label);
+          const prevSpeakerId = prevSeg.wordRangeSpeakerId ?? prevResolution?.speakerId ?? null;
+          if (!prevSpeakerId) {
+            setAssignStatus("Previous segment has no assigned speaker.");
+            break;
+          }
+          const target = segments[cursor];
+          if (target && target.wordStart != null && target.wordEnd != null) {
+            void reassignChild(target, prevSpeakerId);
+          } else {
+            void reassignSegment(prevSpeakerId);
+          }
+          break;
+        }
         case REVIEW_KEY.help:
           event.preventDefault();
           setHelpOpen(true);
@@ -1017,6 +1076,8 @@ export function MediaEditor({
     cursor,
     segments,
     reassignSegment,
+    reassignChild,
+    labelResolutions,
     speakers,
     annotateHotkey,
     handleSpeakerClick,
@@ -1215,6 +1276,47 @@ export function MediaEditor({
               </span>
             ))}
         </section>
+
+        {writable && unresolvedCount > 0 && (
+          <div
+            className="me-unresolved-banner"
+            role="status"
+            aria-live="polite"
+            style={{
+              padding: "0.5rem 0.75rem",
+              background: "var(--surface-2)",
+              color: "var(--ink-muted)",
+              fontSize: "0.875rem",
+            }}
+          >
+            {unresolvedCount} unidentified {unresolvedCount === 1 ? "voice" : "voices"},{" "}
+            {affectedSegmentCount} {affectedSegmentCount === 1 ? "segment" : "segments"} affected ·{" "}
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                if (busyRef.current) return;
+                const index = segments.findIndex(
+                  (segment) => segment.label != null && needsYouLabels.has(segment.label),
+                );
+                if (index < 0) return;
+                goTo(index);
+                setPendingPopoverIndex(index);
+              }}
+              style={{
+                padding: 0,
+                border: 0,
+                background: "none",
+                color: "var(--accent)",
+                font: "inherit",
+                textDecoration: "underline",
+                cursor: "pointer",
+              }}
+            >
+              Start reviewing
+            </button>
+          </div>
+        )}
 
         {done && (
           <div className="review-done card-actions">
@@ -1426,6 +1528,7 @@ export function MediaEditor({
               onSpeakerClick={writable ? handleSpeakerClick : undefined}
               popoverSegmentIndex={popoverTarget?.segmentIndex ?? null}
               labelResolutions={labelResolutions}
+              highlightLabels={highlightLabels}
               peaksUrl={peaksUrl}
               turns={turns}
               cursorIndex={writable ? cursor : undefined}

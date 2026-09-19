@@ -198,6 +198,7 @@ export interface TranscriptPlayerProps {
   onSegmentSelect?: (index: number) => void;
   onSpeakerClick?: (segmentIndex: number, anchorRect: DOMRect) => void;
   popoverSegmentIndex?: number | null;
+  highlightLabels?: ReadonlySet<string>;
   labelResolutions?: ReadonlyMap<
     string,
     { speakerId: string | null; resolved: boolean; segmentCount: number }
@@ -272,6 +273,7 @@ export interface TranscriptPlayerHandle {
 }
 
 interface TranscriptRowProps {
+  highlightLabels?: ReadonlySet<string>;
   onSpeakerClick?: TranscriptPlayerProps["onSpeakerClick"];
   popoverSegmentIndex?: number | null;
   labelResolutions?: TranscriptPlayerProps["labelResolutions"];
@@ -298,6 +300,7 @@ interface TranscriptRowProps {
 }
 
 const TranscriptRow = memo(function TranscriptRow({
+  highlightLabels,
   onSpeakerClick,
   popoverSegmentIndex,
   labelResolutions,
@@ -340,6 +343,7 @@ const TranscriptRow = memo(function TranscriptRow({
   // Deep-link jump flash (issue #121): a brief fading highlight on the
   // line a ?t= jump landed on. Cleared by the mount effect's timeout.
   if (jumpFlash) classes.push("tp-jump-flash");
+  if (seg.label != null && highlightLabels?.has(seg.label)) classes.push("tp-label-flash");
 
   return (
     <p
@@ -525,6 +529,7 @@ export const TranscriptPlayer = forwardRef<
     onSpeakerClick,
     popoverSegmentIndex,
     labelResolutions,
+    highlightLabels,
     peaksUrl,
     turns,
     cursorIndex,
@@ -880,6 +885,7 @@ export const TranscriptPlayer = forwardRef<
               onSpeakerClick={onSpeakerClick}
               popoverSegmentIndex={popoverSegmentIndex}
               labelResolutions={labelResolutions}
+              highlightLabels={highlightLabels}
               key={`${seg.sourceSegmentId ?? "x"}-${seg.wordStart ?? "u"}-${seg.wordEnd ?? "u"}-${seg.start}-${i}`}
               seg={seg}
               index={i}
