@@ -24,6 +24,7 @@ import type { LabelStateShape } from "../lib/speaker-bands";
 import { useAnnotations } from "./AnnotationLayer";
 import { KeymapHelp } from "./KeymapHelp";
 import { OutlinePanel } from "./OutlinePanel";
+import type { AssetControlsProps } from "./AssetControls";
 import {
   ASSIGN_DIGIT_MAX,
   ASSIGN_DIGIT_MIN,
@@ -54,6 +55,7 @@ export interface MediaEditorProps {
   turns?: Turn[];
   speakers: { id: string; displayName: string }[];
   outline?: OutlineProps;
+  assetControls?: AssetControlsProps;
   annotations?: AnnotationShape[];
   annotationTags?: AnnotationTagShape[];
   annotationLimits?: AnnotationLimits;
@@ -69,6 +71,8 @@ export interface MediaEditorProps {
     active: boolean;
     runAnchor: string;
     transcriptUrl: string;
+    languageOptions: { code: string; name: string }[];
+    detectedLanguage: string | null;
   } | null;
 }
 
@@ -95,6 +99,7 @@ export function MediaEditor({
   multiUser = false,
   labelStates: initialLabelStates = [],
   translate = null,
+  assetControls,
 }: MediaEditorProps): React.JSX.Element {
   const [segments, setSegments] = useState<Segment[]>(initialSegments);
   const [progress, setProgress] = useState(initialProgress);
@@ -126,7 +131,11 @@ export function MediaEditor({
   const [provOpen, setProvOpen] = useState(false);
   const [translatePhase, setTranslatePhase] = useState<
     "idle" | "starting" | "started" | "error"
-  >(translate?.active ? "started" : "idle");
+  >("idle");
+  const [translateTarget, setTranslateTarget] = useState<string>(
+    translate?.defaultTarget ?? "",
+  );
+  const [hadTranslation] = useState(translate?.active ?? false);
   const [translateError, setTranslateError] = useState<string | null>(null);
   const translateBusyRef = useRef(false);
   const [claiming, setClaiming] = useState(false);
@@ -613,13 +622,14 @@ export function MediaEditor({
 
   const startTranslate = useCallback(async () => {
     if (translateBusyRef.current) return;
-    if (!translate || !translate.defaultTarget) return;
+    if (!translate || !translateTarget) return;
     translateBusyRef.current = true;
+    setTranslateError(null);
     setTranslatePhase("starting");
     try {
       const body = new URLSearchParams({
         csrf_token: translate.csrf,
-        target_language: translate.defaultTarget,
+        target_language: translateTarget,
       });
       const res = await apiFetch(`/runs/${runId}/translation/generate`, {
         method: "POST",
@@ -647,7 +657,7 @@ export function MediaEditor({
     } finally {
       translateBusyRef.current = false;
     }
-  }, [translate, runId]);
+  }, [translate, translateTarget, runId]);
 
   const onAnnotationClaimLost = useCallback(() => setClaimLost(true), []);
 
@@ -907,30 +917,49 @@ export function MediaEditor({
           )}
           {translate &&
             (translatePhase === "idle" ? (
-              translate.defaultTarget ? (
+              <div className="me-actions">
+                <select
+                  aria-label="Translation language"
+                  value={translateTarget}
+                  onChange={(event) => setTranslateTarget(event.target.value)}
+                  className="text-sm"
+                >
+                  <option value="" disabled>
+                    Select a language
+                  </option>
+                  {translate.languageOptions.map(({ code, name }) => (
+                    <option key={code} value={code}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   onClick={() => void startTranslate()}
+                  disabled={!translateTarget}
                   className="text-sm"
                 >
-                  Translate to {translate.defaultTargetLabel}
+                  {hadTranslation ? "Re-translate" : "Translate"}
                 </button>
-              ) : (
-                <a href={translate.runAnchor} className="text-sm">
-                  Translate this recording
-                </a>
-              )
+              </div>
             ) : translatePhase === "starting" ? (
               <span className="muted text-sm">Starting translation…</span>
             ) : translatePhase === "started" ? (
               <span className="muted text-sm">
-                A translation is queued or running; the result appears on the{" "}
+                Translation started. The result appears on the{" "}
                 <a href={translate.transcriptUrl}>transcript page</a>.
               </span>
             ) : (
               <span role="alert" className="text-sm">
                 {translateError}{" "}
-                <a href={translate.runAnchor}>Open the run page</a>
+                <button
+                  type="button"
+                  onClick={() => setTranslatePhase("idle")}
+                  className="text-sm"
+                >
+                  Retry
+                </button>{" "}
+                <a href={`/runs/${runId}`}>Open the run page</a>
               </span>
             ))}
         </section>
@@ -1184,10 +1213,12 @@ export function MediaEditor({
         </div>
 
         <OutlinePanel
+          runId={runId}
           outline={outline}
           segments={segments}
           capability={capability}
           onJump={goTo}
+          assetControls={assetControls}
         />
 
         <KeymapHelp

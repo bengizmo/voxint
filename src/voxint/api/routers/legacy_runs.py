@@ -1985,6 +1985,12 @@ def run_assets_generate(
     _require_csrf(request, CSRF_ASSETS_GENERATE, csrf_token)
     _run_or_404(session, run_id)
     settings: Settings = request.app.state.settings
+
+    def respond(error: str | None, *, started: bool, created: int = 0) -> Response:
+        if _wants_island_json(request):
+            return JSONResponse({"started": started, "error": error, "created": created})
+        return _run_assets_response(request, session, run_id, error=error)
+
     if kind is None:
         kinds = tuple(RunAssetKind)
     else:
@@ -1998,7 +2004,7 @@ def run_assets_generate(
         )
     except RunAssetJobError as exc:
         session.rollback()
-        return _run_assets_response(request, session, run_id, error=str(exc))
+        return respond(str(exc), started=False)
     job_ids = [job.id for job in created]
     session.commit()
     deferred = sum(1 for job_id in job_ids if not _publish_run_asset_job(job_id))
@@ -2010,7 +2016,7 @@ def run_assets_generate(
         if deferred
         else None
     )
-    return _run_assets_response(request, session, run_id, error=notice)
+    return respond(notice, started=True, created=len(created))
 
 
 @tail_router.post("/runs/{run_id}/assets/{job_id}/cancel")
@@ -2032,6 +2038,8 @@ def run_assets_cancel(
     request_asset_cancel(session, job_id)
     # Commit now so the executor's post-call check sees it immediately.
     session.commit()
+    if _wants_island_json(request):
+        return JSONResponse({"cancelled": True})
     return _run_assets_response(request, session, run_id)
 
 
@@ -2124,6 +2132,8 @@ def run_translation_cancel(
     request_translation_cancel(session, job_id)
     # Commit now so the executor's post-call check sees it immediately.
     session.commit()
+    if _wants_island_json(request):
+        return JSONResponse({"cancelled": True})
     return _run_translation_response(request, session, run_id)
 
 

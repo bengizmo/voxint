@@ -183,17 +183,6 @@
 
   {{ export_menu(selected_run) }}
 
-  {# Enrichment controls (issue #567). Server-rendered OUTSIDE the React
-     island root to avoid htmx/React DOM conflicts. Plain POST forms work
-     without JS; Phase 2 moves these controls into the React island. #}
-  {% if assets %}
-  {% include "legacy_runs/run_assets.html" %}
-  {% endif %}
-
-  {% if translation_state %}
-  {% include "legacy_runs/run_translation.html" %}
-  {% endif %}
-
   {% if speaker_timeline is not none %}
   <section class="card">
     <details>
