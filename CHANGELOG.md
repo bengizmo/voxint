@@ -4,6 +4,28 @@ All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog
 versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between minors).
 
 
+## [Unreleased]
+
+### Changed
+- **Run page vs editor page redesign (#567).** The run page (`/runs/{id}`) is
+  now a pure technical job record: pipeline status, stages, timing, errors,
+  restart controls, archive, and technical details. Content sections (source
+  metadata, operator notes, enrichments, speaker timeline, translation) moved
+  to the media editor page (`/media/{id}/editor`), where operators already
+  spend most of their time. The editor gained source metadata (collapsed),
+  operator notes, speaker timeline (collapsed), and a prominent "Open in
+  editor" link on the run page. Saving operator notes now redirects back to
+  the editor instead of the run page. The editor's duplicated restart-from-stage
+  form was replaced with a link to the run page.
+- **React enrichment controls (#567).** The OutlinePanel (topics and entities)
+  now opens by default when enrichment data exists and remembers the
+  open/closed state per run in localStorage. Asset generation and cancellation
+  controls (summary, topics, entities) are now React components inside the
+  OutlinePanel, replacing the server-rendered htmx forms. Translation gained a
+  language picker with all available languages, inline generate/re-translate,
+  and retry on error. Asset and translation cancel endpoints now support JSON
+  responses for the React island.
+
 ## [0.44.0] - 2026-09-18
 
 ### Added

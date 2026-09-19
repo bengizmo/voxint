@@ -1090,12 +1090,12 @@ def test_run_detail_present_only_links(
     full_body = client.get(f"/runs/{full}").text
     assert f"/media/{full}" in full_body
     assert f"/runs/{full}/transcript" in full_body
-    assert f"/review/{full}" in full_body  # completed → adjudication link
+    # Issue #567: /review link replaced by "Open in editor" + command-bar Editor link.
+    assert "Open in editor" in full_body
 
     bare_body = client.get(f"/runs/{bare}").text
     assert f"/media/{bare}" not in bare_body
     assert f"/runs/{bare}/transcript" not in bare_body
-    assert f"/review/{bare}" not in bare_body  # failed → no adjudication link
     assert "No audio or transcript yet." in bare_body
 
 

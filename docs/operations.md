@@ -852,10 +852,13 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   no estimate is possible (#475). A **TOOK** column shows each finished run's
   processing time (summed across stage attempts, excluding queue wait and retry
   gaps); running rows show time so far as of page load.
-  **`GET /runs/{id}`** shows the run detail, with the per-stage attempt
+  **`GET /runs/{id}`** is a pure technical job record: stages, timing, errors,
+  restart, archive, and technical details, with the per-stage attempt
   ledger inside the collapsed **Technical details** section (the same data as
   `voxint status`), with
-  transcript and audio links when present. A **Pipeline models** block renders
+  transcript and audio links when present. Source metadata, operator notes,
+  enrichments/run assets, speaker timeline, and translation are on
+  `/media/{id}/editor` (#567). A **Pipeline models** block renders
   the per-attempt model identity recorded for the transcription and diarization
   stages (from each stage's latest completed attempt, so a retried stage shows
   the model that produced the result); runs that predate this provenance read
@@ -935,8 +938,9 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   with adjudication decisions. This is the common case ("I updated the roster,
   re-match").
 
-  Both the run-detail and editor pages show a **stage selector dropdown** next
-  to the restart button. Each option in the dropdown reflects the stage-aware
+  Only the run-detail page shows a **stage selector dropdown** next
+  to the restart button; the editor has a **Run details** link to that page.
+  Each option in the dropdown reflects the stage-aware
   impact: blocked stages are disabled with a "(blocked)" suffix, stages with
   label-scope risk show "(label risk)" and require a checkbox acknowledgment,
   and safe stages (ENHANCE_MATCH, FINALIZE) are always available. The default
@@ -1530,7 +1534,7 @@ exits 0 on success, 2 if the plugin is disabled or the service is unreachable.
 
 ### Run-level assets (issue #41; off by default)
 
-The run detail page can carry three machine-generated assets: a **summary**,
+The editor page can carry three machine-generated assets: a **summary**,
 a **topic list**, and **entity mentions** (grounded spans referencing the
 transcript segments they occur in). Generation is on demand via the
 configured enhancement LLM and needs (refused at startup otherwise, and
@@ -1541,10 +1545,10 @@ ENRICHMENT_RUN_ASSETS_ENABLED=true
 LLM_ENABLED=true              # + LLM_BASE_URL / LLM_MODEL / LLM_API_KEY
 ```
 
-Operate it from the run's detail page: "Generate all" or per-kind
+Operate it from the editor page (`/media/{id}/editor`): "Generate all" or per-kind
 Generate/Regenerate buttons; while a job runs the block polls every 3 s with
-a Cancel control. The three kinds succeed and fail independently: one
-failing shows its error on its own card and never blocks or retires the
+a Cancel control. The endpoints remain run-scoped. The three kinds succeed
+and fail independently: one failing shows its error on its own card and never blocks or retires the
 others. Every asset shows when it was generated, by which model, and whether
 it is **stale** (the transcript, metadata, or notes changed since, e.g.
 enhancement rewrote segment text); regeneration supersedes, never edits.
@@ -1563,7 +1567,7 @@ The mutation forms that require a CSRF token are `POST /submit`, `/fetch`,
 `/runs/{id}/requeue`, `POST /review/{id}/claim` (claiming mints the run's claim
 token, so it has none of its own to gate a forged POST), the web-research
 forms on `/speakers` (start, cancel, and per-draft accept/reject, each under
-its own token action), and the run-asset forms on `/runs/{id}` (generate and
+its own token action), and the run-asset forms on `/media/{id}/editor` (generate and
 cancel, each under its own token action). Since v0.27.0, the app auto-generates
 a CSRF secret on first start and persists it to the data directory
 (`DATA_DIR/csrf_secret`), so forms survive restarts and work across workers
@@ -1898,7 +1902,7 @@ by their per-run claim token.
 | `GET /review/{run_id}/annotations/{annotation_id}/export.zip` | One highlight's Markdown quote, JSON provenance manifest, and extracted clip in a ZIP |
 | `GET /review/{run_id}/annotations/export.zip` | ZIP for all highlights matching repeated `tag=` filters |
 | `GET /media?q={search}&status=needs_review\|failed\|reviewed` | Media library search and status filter; omit `status` for All |
-| `GET /media/{id}/editor` | Media detail page: run selection (latest completed by default, `?run=` override), claim-token verification (stale/absent = read-only), transcript with speaker palette and verified-progress counter, run chooser, media metadata rail (#156) |
+| `GET /media/{id}/editor` | Media detail page: run selection (latest completed by default, `?run=` override), transcript claim-token verification (stale/absent = read-only), transcript with speaker palette and verified-progress counter, run chooser, media metadata rail (#156), source metadata, operator notes, speaker timeline, enrichment generation controls, and translation forms (#567) |
 | `GET /media/{run_id}` | Gated media serving (Range-aware) for the workbench player |
 | `GET /login` · `POST /login` · `POST /logout` | Multi-user session auth (login form, session create, session destroy); returns 404 when `VOXINT_MULTI_USER` is false |
 | `GET /setup` · `POST /setup/{media,scan,vocabulary,llm,finish}` | First-run setup wizard; held by the onboarding gate until finished (own `CSRF_SETUP` token) |

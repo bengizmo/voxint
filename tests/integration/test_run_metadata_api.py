@@ -115,37 +115,21 @@ def _notes_for(
 
 
 class TestRunDetail:
-    def test_metadata_section_renders_escaped(
+    def test_metadata_and_notes_removed_from_run_page(
         self, client: TestClient, session_factory: sessionmaker[Session]
     ) -> None:
-        run_id = _make_run(session_factory, with_metadata=True)
-        page = client.get(f"/runs/{run_id}")
-        assert page.status_code == 200
-        assert "Source metadata" in page.text
-        # Scraped text is untrusted: autoescape must render, not execute, it.
-        assert "Episode 42 &lt;em&gt;unsafe&lt;/em&gt;" in page.text
-        assert "<em>unsafe</em>" not in page.text
-        assert "Example Uploader" in page.text
-        assert "source-reported, not measured" in page.text
-        assert "interviews, acoustics" in page.text
-        assert "https://example.com/watch?v=abc123" in page.text
-
-    def test_no_metadata_renders_notes_form_only(
-        self, client: TestClient, session_factory: sessionmaker[Session]
-    ) -> None:
-        run_id = _make_run(session_factory)
+        """Issue #567: source metadata, notes, and enrichments moved to the
+        editor page. The run page is now a pure technical job record."""
+        run_id = _make_run(session_factory, with_metadata=True, notes="some notes")
         page = client.get(f"/runs/{run_id}")
         assert page.status_code == 200
         assert "Source metadata" not in page.text
-        assert "Operator notes" in page.text  # notes apply to upload runs too
-        assert f"/runs/{run_id}/notes" in page.text
-
-    def test_existing_notes_prefill_the_form(
-        self, client: TestClient, session_factory: sessionmaker[Session]
-    ) -> None:
-        run_id = _make_run(session_factory, notes="call the <b>uploader</b>")
-        page = client.get(f"/runs/{run_id}")
-        assert "call the &lt;b&gt;uploader&lt;/b&gt;" in page.text
+        assert "Operator notes" not in page.text
+        assert "Notes for this run" not in page.text
+        assert f"/runs/{run_id}/notes" not in page.text
+        assert "Open in editor" in page.text
+        # Extractor info moved INTO Technical details on the run page.
+        assert "example" in page.text  # extractor name
 
 
 class TestSaveNotes:
@@ -159,7 +143,10 @@ class TestSaveNotes:
             follow_redirects=False,
         )
         assert response.status_code == 303
-        assert response.headers["location"] == f"/runs/{run_id}"
+        location = response.headers["location"]
+        # Issue #567: redirect now goes to the editor page.
+        assert location.startswith("/media/")
+        assert f"run={run_id}" in location
         assert _notes_for(session_factory, run_id) == "Speaker 2 sounds like Jim."
 
     def test_blank_notes_clear_to_null(

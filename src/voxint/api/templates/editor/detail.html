@@ -63,122 +63,8 @@
       </dd>
       {% endif %}
     </dl>
-    {% set restartable = selected_run.status in ('completed', 'failed', 'cancelled') and not selected_run.archived_at %}
-    {% if restartable and csrf_restart %}
-    {% set full_requires_void = restart_impact and restart_impact.requires_void %}
-    {% set full_label_risk = restart_impact and restart_impact.label_scope_decisions > 0 and not full_requires_void %}
-    <form method="post" action="/runs/{{ selected_run.id }}/restart" class="mt-2"
-          id="editor-restart-form">
-      <input type="hidden" name="revision" value="{{ selected_run.revision }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_restart }}">
-      <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap">
-        <select name="from_stage" id="editor-restart-stage" class="text-sm">
-          <option value=""
-            data-requires-void="{{ full_requires_void|tojson }}"
-            data-label-risk="{{ full_label_risk|tojson }}"
-            data-label-count="{{ restart_impact.label_scope_decisions if restart_impact else 0 }}"
-            >All stages{% if full_requires_void %} (void required){% elif full_label_risk %} (label risk){% endif %}</option>
-          {% if restart_stages %}
-          {% for sp in restart_stages %}
-          <option value="{{ sp.stage }}"
-            data-requires-void="{{ sp.requires_void|tojson }}"
-            data-label-risk="{{ sp.label_risk|tojson }}"
-            data-label-count="{{ sp.label_count }}">
-            {{ sp.label }}{% if sp.requires_void %} (void required){% elif sp.label_risk %} (label risk){% endif %}
-          </option>
-          {% endfor %}
-          {% endif %}
-        </select>
-        <button type="submit" class="text-sm" id="editor-restart-btn">
-          {% if selected_run.status == 'failed' %}Retry{% else %}Re-run{% endif %}
-        </button>
-      </div>
-      {% if full_requires_void %}
-      <div id="editor-restart-void-warn" class="notice-warn text-sm" style="margin-top: 0.25em">
-        <label>
-          <input type="checkbox" name="acknowledge_void" value="true"
-                 id="editor-restart-void-ack" required>
-          <span id="editor-restart-void-msg">All decisions will be voided,
-            {{ restart_impact.segment_scope_decisions }} segment ruling(s) and
-            {{ restart_impact.enrichment_evidence }} evidence row(s) detached,
-            {{ restart_impact.derived_embeddings }} embedding(s) deleted.</span>
-        </label>
-      </div>
-      {% else %}
-      <div id="editor-restart-void-warn" class="notice-warn text-sm" style="margin-top: 0.25em; display: none">
-        <label>
-          <input type="checkbox" name="acknowledge_void" value="true" id="editor-restart-void-ack">
-          <span id="editor-restart-void-msg"></span>
-        </label>
-      </div>
-      {% endif %}
-      {% if full_label_risk %}
-      <div id="editor-restart-warn" class="notice-warn text-sm" style="margin-top: 0.25em">
-        <label>
-          <input type="checkbox" name="acknowledge_label_risk" value="true"
-                 id="editor-restart-ack" required>
-          <span id="editor-restart-msg">{{ restart_impact.label_scope_decisions }}
-            speaker ruling(s) may apply to different voices after re-processing.</span>
-        </label>
-      </div>
-      {% else %}
-      <div id="editor-restart-warn" class="notice-warn text-sm" style="margin-top: 0.25em; display: none">
-        <label>
-          <input type="checkbox" name="acknowledge_label_risk" value="true" id="editor-restart-ack">
-          <span id="editor-restart-msg"></span>
-        </label>
-      </div>
-      {% endif %}
-    </form>
-    <script>
-    (function() {
-      var sel = document.getElementById('editor-restart-stage');
-      var btn = document.getElementById('editor-restart-btn');
-      var voidDiv = document.getElementById('editor-restart-void-warn');
-      var voidBox = document.getElementById('editor-restart-void-ack');
-      var warnDiv = document.getElementById('editor-restart-warn');
-      var ackBox = document.getElementById('editor-restart-ack');
-      var msg = document.getElementById('editor-restart-msg');
-      var form = document.getElementById('editor-restart-form');
-      function update() {
-        var opt = sel.options[sel.selectedIndex];
-        var requiresVoid = opt.dataset.requiresVoid === 'true';
-        var labelRisk = opt.dataset.labelRisk === 'true';
-        var labelCount = parseInt(opt.dataset.labelCount || '0', 10);
-        btn.disabled = false;
-        if (requiresVoid) {
-          voidDiv.style.display = '';
-          voidBox.required = true;
-          warnDiv.style.display = 'none';
-          ackBox.required = false;
-          ackBox.checked = false;
-        } else {
-          voidDiv.style.display = 'none';
-          voidBox.required = false;
-          voidBox.checked = false;
-          if (labelRisk) {
-            warnDiv.style.display = '';
-            ackBox.required = true;
-            msg.textContent = labelCount + ' speaker ruling(s) may apply to different voices after re-processing.';
-          } else {
-            warnDiv.style.display = 'none';
-            ackBox.required = false;
-            ackBox.checked = false;
-          }
-        }
-      }
-      sel.addEventListener('change', update);
-      form.addEventListener('submit', function(e) {
-        var opt = sel.options[sel.selectedIndex];
-        var label = opt.value ? opt.textContent.trim().split(' (')[0] : 'all stages';
-        if (!confirm('Restart from ' + label + '? Downstream results will be re-processed.')) {
-          e.preventDefault();
-        }
-      });
-    })();
-    </script>
-    {% endif %}
-    <p class="mt-1"><a href="/runs/{{ selected_run.id }}" class="text-sm">Run details</a></p>
+    <p class="mt-1"><a href="/runs/{{ selected_run.id }}" class="text-sm">Run details</a>
+      <span class="oc-muted text-sm">(restart, archive, technical info)</span></p>
     {% endif %}
     {% set other_runs = detail.chooser|length - (1 if selected_run else 0) %}
     {% if other_runs > 0 %}
@@ -202,6 +88,56 @@
     {% if selected_run %}
     </details>
     {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if source_metadata %}
+  <details class="card">
+    <summary>Source{% if source_metadata.title %}: {{ source_metadata.title }}{% endif %}</summary>
+    <dl class="oc-meta-list">
+      {% if source_metadata.title %}<dt>Title</dt><dd>{{ source_metadata.title }}</dd>{% endif %}
+      {% if source_metadata.uploader or source_metadata.channel %}
+      <dt>Uploader</dt>
+      <dd>
+        {{ source_metadata.uploader or source_metadata.channel }}
+        {% if source_metadata.channel and source_metadata.uploader and source_metadata.channel != source_metadata.uploader %}
+          · {{ source_metadata.channel }}
+        {% endif %}
+        {% if source_metadata.channel_url %}
+          · <a href="{{ source_metadata.channel_url }}" rel="noopener noreferrer">channel</a>
+        {% endif %}
+      </dd>
+      {% endif %}
+      {% if source_metadata.upload_date %}<dt>Uploaded</dt><dd>{{ source_metadata.upload_date.isoformat() }}</dd>{% endif %}
+      {% if source_metadata.tags %}<dt>Tags</dt><dd>{{ source_metadata.tags | join(", ") }}</dd>{% endif %}
+      {% if source_metadata.canonical_url %}
+      <dt>Page</dt><dd><a href="{{ source_metadata.canonical_url }}" rel="noopener noreferrer">{{ source_metadata.canonical_url }}</a></dd>
+      {% endif %}
+    </dl>
+    {% if source_metadata.description %}
+    <details class="mt-1">
+      <summary class="text-sm">Description</summary>
+      <p class="oc-muted">{{ source_metadata.description }}</p>
+    </details>
+    {% endif %}
+  </details>
+  {% endif %}
+
+  {% if selected_run %}
+  <div class="card">
+    <h2>Notes for this run</h2>
+    {% if shell.can_write %}
+    <form method="post" action="/runs/{{ selected_run.id }}/notes" class="notes">
+      <input type="hidden" name="csrf_token" value="{{ csrf_notes }}">
+      <textarea name="notes" rows="3" maxlength="10000"
+                placeholder="Who is speaking, context, follow-ups...">{{ operator_notes or "" }}</textarea>
+      <button type="submit" class="text-sm">Save notes</button>
+    </form>
+    {% elif operator_notes %}
+    <p>{{ operator_notes }}</p>
+    {% else %}
+    <p class="oc-muted">No notes.</p>
     {% endif %}
   </div>
   {% endif %}
@@ -246,6 +182,24 @@
   </div>
 
   {{ export_menu(selected_run) }}
+
+  {% if speaker_timeline is not none %}
+  <section class="card">
+    <details>
+      <summary>Speaker timeline</summary>
+      <div data-island="speaker-timeline"
+           data-run-id="{{ selected_run.id }}"
+           data-props='{{ speaker_timeline|tojson }}'>
+        <ul class="oc-muted">
+          {% for lane in speaker_timeline.lanes %}
+          {% set total_seconds = lane.total_seconds|int %}
+          <li>{{ lane.speaker_name or lane.label }} ({{ total_seconds // 60 }}m {{ total_seconds % 60 }}s)</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </details>
+  </section>
+  {% endif %}
 
 {% elif selected_run %}
   <div class="card">

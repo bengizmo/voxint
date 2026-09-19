@@ -4,6 +4,7 @@ import { resolveJumpIndex } from "../lib/jump";
 import { formatClock, totalDropped, type OutlineProps } from "../lib/outline";
 import type { PlaybackCapability } from "../lib/playback";
 import type { Segment } from "./TranscriptPlayer";
+import { AssetControls, type AssetControlsProps } from "./AssetControls";
 
 // Navigable outline (issue #87): grounded entity mentions become jump targets;
 // summary and topics render as inert context. A click resolves the target's
@@ -13,7 +14,9 @@ import type { Segment } from "./TranscriptPlayer";
 // are never disabled; only the affordance wording reflects capability.
 
 interface OutlinePanelProps {
+  runId: string;
   outline?: OutlineProps;
+  assetControls?: AssetControlsProps;
   // The live rendered segments (the authority on current lines; grows on split).
   segments: Segment[];
   capability: PlaybackCapability;
@@ -27,12 +30,25 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 export function OutlinePanel({
+  runId,
   outline,
   segments,
   capability,
   onJump,
+  assetControls,
 }: OutlinePanelProps): React.JSX.Element | null {
   const canSeek = capability.seekEnabled;
+  const storageKey = `voxint-outline-${runId}`;
+  const handleToggle = useCallback(
+    (event: React.SyntheticEvent<HTMLDetailsElement>) => {
+      try {
+        localStorage.setItem(storageKey, String(event.currentTarget.open));
+      } catch {
+        // Keep native toggling available when storage is inaccessible.
+      }
+    },
+    [storageKey],
+  );
 
   const jump = useCallback(
     (startSeconds: number) => {
@@ -52,10 +68,32 @@ export function OutlinePanel({
   }
 
   if (!outline.available) {
+    const hasContext =
+      outline.context.summary !== null || outline.context.topics.length > 0;
     return (
       <section className="outline-panel my-2" aria-label="Outline">
         <h2>Outline</h2>
-        <p className="muted">No outline was generated for this transcript.</p>
+        {assetControls && <AssetControls {...assetControls} runId={runId} key={runId} />}
+        {hasContext ? (
+          <div className="outline-context">
+            <p className="muted text-sm">
+              Summary and topics are context only. They are not linked to specific
+              moments.
+            </p>
+            {outline.context.summary && (
+              <p className="outline-summary">{outline.context.summary}</p>
+            )}
+            {outline.context.topics.length > 0 && (
+              <ul className="outline-topics">
+                {outline.context.topics.map((topic, index) => (
+                  <li key={index}>{topic}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : (
+          <p className="muted">No outline was generated for this transcript.</p>
+        )}
       </section>
     );
   }
@@ -64,12 +102,25 @@ export function OutlinePanel({
   const hasContext =
     outline.context.summary !== null || outline.context.topics.length > 0;
   const entityCount = outline.mentions.length;
+  let initialOpen = hasContext || entityCount > 0;
+  try {
+    const savedOpen = localStorage.getItem(storageKey);
+    if (savedOpen !== null) initialOpen = savedOpen === "true";
+  } catch {
+    // Fall back to the data-based default when storage is inaccessible.
+  }
 
   return (
-    <details className="outline-panel my-2" aria-label="Outline">
+    <details
+      className="outline-panel my-2"
+      aria-label="Outline"
+      open={initialOpen}
+      onToggle={handleToggle}
+    >
       <summary>
         Topics and entities{entityCount > 0 ? ` (${entityCount})` : ""}
       </summary>
+      {assetControls && <AssetControls {...assetControls} runId={runId} key={runId} />}
       {outline.assetStale && (
         <p className="notice text-sm" role="note">
           This outline was built from an earlier version of the transcript, so

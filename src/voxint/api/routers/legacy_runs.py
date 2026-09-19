@@ -101,7 +101,7 @@ from voxint.api.runs_query import (
     searchable_languages,
 )
 from voxint.api.speaker_colors import run_label_universe, speaker_palette
-from voxint.api.speaker_timeline import build_speaker_timeline
+from voxint.api.speaker_timeline import build_speaker_timeline  # noqa: F401
 from voxint.api.stats_query import (
     DEFAULT_WINDOW,
     collect_stats,
@@ -1067,7 +1067,6 @@ def build_run_detail_context(
     guided-tour banner.
     """
     run = _run_or_404(session, run_id)
-    speaker_timeline = build_speaker_timeline(session, run.id)
     # The attempt ledger, chronological — matches `voxint status`.
     stage_runs = list(
         session.execute(
@@ -1104,7 +1103,6 @@ def build_run_detail_context(
     context: dict[str, Any] = {
         "request": request,
         "run": run,
-        "speaker_timeline": speaker_timeline,
         "stage_runs": stage_runs,
         # Which model actually answered each stage, from that stage's
         # latest completed attempt (A1 provenance). "Not recorded" for
@@ -1150,23 +1148,6 @@ def build_run_detail_context(
         # None for uploads / pre-capture URL runs. Scraped metadata and
         # the operator's own notes render in separate sections.
         "source_metadata": run.media_item.source_metadata,
-        "csrf_notes": mint_csrf_token(request.app.state.csrf_secret, CSRF_NOTES),
-        # Run-level assets (issue #41): current summary/topics/entity
-        # mentions with staleness, plus generation controls.
-        "assets": _run_assets_state(session, settings, run_id),
-        "csrf_assets_generate": mint_csrf_token(
-            request.app.state.csrf_secret, CSRF_ASSETS_GENERATE
-        ),
-        "csrf_assets_cancel": mint_csrf_token(request.app.state.csrf_secret, CSRF_ASSETS_CANCEL),
-        # Transcript translation (issue #133): current generation(s)
-        # with staleness, plus generation controls.
-        "translation_state": _run_translation_state(session, settings, run_id),
-        "csrf_translation_generate": mint_csrf_token(
-            request.app.state.csrf_secret, CSRF_TRANSLATION_GENERATE
-        ),
-        "csrf_translation_cancel": mint_csrf_token(
-            request.app.state.csrf_secret, CSRF_TRANSLATION_CANCEL
-        ),
         # Some callers suppress the guided-tour banner explicitly.
         "tutorial": (
             _tutorial_banner(request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id)
@@ -1818,7 +1799,7 @@ def save_operator_notes(
         )
     run.operator_notes = cleaned or None
     session.commit()
-    return RedirectResponse(f"/runs/{run_id}", status_code=303)
+    return RedirectResponse(f"/media/{run.media_item_id}/editor?run={run_id}", status_code=303)
 
 
 @actions_router.get("/runs/{run_id}/export.json")
@@ -1984,6 +1965,25 @@ def run_assets_fragment(
     run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
 ) -> Response:
     _run_or_404(session, run_id)
+    if _wants_island_json(request):
+        assets = _run_assets_state(session, request.app.state.settings, run_id)
+        return JSONResponse({
+            "gatesOpen": assets["gates_open"],
+            "sourceProblem": assets["source_problem"],
+            "anyActive": assets["any_active"],
+            "kinds": [
+                {
+                    "kind": entry["kind"],
+                    "title": _ASSET_KIND_TITLES[entry["kind"]],
+                    "hasAsset": entry["asset"] is not None,
+                    "stale": entry["stale"],
+                    "jobActive": entry["job_active"],
+                    "jobId": str(entry["job"].id) if entry["job"] is not None else None,
+                    "jobStatus": entry["job"].status if entry["job"] is not None else None,
+                }
+                for entry in assets["kinds"]
+            ],
+        })
     return _run_assets_response(request, session, run_id)
 
 
@@ -2004,6 +2004,12 @@ def run_assets_generate(
     _require_csrf(request, CSRF_ASSETS_GENERATE, csrf_token)
     _run_or_404(session, run_id)
     settings: Settings = request.app.state.settings
+
+    def respond(error: str | None, *, started: bool, created: int = 0) -> Response:
+        if _wants_island_json(request):
+            return JSONResponse({"started": started, "error": error, "created": created})
+        return _run_assets_response(request, session, run_id, error=error)
+
     if kind is None:
         kinds = tuple(RunAssetKind)
     else:
@@ -2017,7 +2023,7 @@ def run_assets_generate(
         )
     except RunAssetJobError as exc:
         session.rollback()
-        return _run_assets_response(request, session, run_id, error=str(exc))
+        return respond(str(exc), started=False)
     job_ids = [job.id for job in created]
     session.commit()
     deferred = sum(1 for job_id in job_ids if not _publish_run_asset_job(job_id))
@@ -2029,7 +2035,7 @@ def run_assets_generate(
         if deferred
         else None
     )
-    return _run_assets_response(request, session, run_id, error=notice)
+    return respond(notice, started=True, created=len(created))
 
 
 @tail_router.post("/runs/{run_id}/assets/{job_id}/cancel")
@@ -2051,6 +2057,8 @@ def run_assets_cancel(
     request_asset_cancel(session, job_id)
     # Commit now so the executor's post-call check sees it immediately.
     session.commit()
+    if _wants_island_json(request):
+        return JSONResponse({"cancelled": True})
     return _run_assets_response(request, session, run_id)
 
 
@@ -2059,6 +2067,18 @@ def run_translation_fragment(
     run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
 ) -> Response:
     _run_or_404(session, run_id)
+    if _wants_island_json(request):
+        state = _run_translation_state(session, request.app.state.settings, run_id)
+        return JSONResponse({
+            "active": state["job_active"],
+            "hasTranslation": bool(state["translations"]),
+            "activeJobId": (
+                str(state["job"].id)
+                if state["job"] is not None and state["job_active"]
+                else None
+            ),
+            "jobStatus": state["job"].status if state["job"] is not None else None,
+        })
     return _run_translation_response(request, session, run_id)
 
 
@@ -2143,6 +2163,8 @@ def run_translation_cancel(
     request_translation_cancel(session, job_id)
     # Commit now so the executor's post-call check sees it immediately.
     session.commit()
+    if _wants_island_json(request):
+        return JSONResponse({"cancelled": True})
     return _run_translation_response(request, session, run_id)
 
 

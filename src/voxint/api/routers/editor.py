@@ -28,14 +28,17 @@ from voxint.adjudication.transcript import TranscriptText, attributed_transcript
 from voxint.api.annotation_view import annotation_limits, annotations_payload
 from voxint.api.csrf import (
     CSRF_ANNOTATION_TAGS,
+    CSRF_ASSETS_CANCEL,
+    CSRF_ASSETS_GENERATE,
     CSRF_CLAIM,
     CSRF_CLIP_EXTRACT,
-    CSRF_RESTART,
+    CSRF_NOTES,
+    CSRF_TRANSLATION_CANCEL,
     CSRF_TRANSLATION_GENERATE,
     mint_csrf_token,
 )
 from voxint.api.editor_query import media_detail
-from voxint.api.languages import language_label
+from voxint.api.languages import LANGUAGE_NAMES, language_label
 from voxint.api.palette import PaletteCommand, palette_actions
 from voxint.api.playback import playback_capability
 from voxint.api.presentation import friendly_media_label
@@ -50,7 +53,12 @@ from voxint.api.routers.deps import (
     require_onboarded,
     templates,
 )
+from voxint.api.routers.legacy_runs import (
+    _ASSET_KIND_TITLES,
+    _run_assets_state,
+)
 from voxint.api.speaker_colors import run_label_universe, speaker_palette
+from voxint.api.speaker_timeline import build_speaker_timeline
 from voxint.api.transcript_view import _transcript_island_props
 from voxint.api.tutorial_view import _tutorial_banner
 from voxint.app_settings import get_app_settings, resolve_effective_translation_target_language
@@ -63,7 +71,7 @@ from voxint.enrichment.translation_jobs import (
     normalized_language,
     translation_gates_open,
 )
-from voxint.ingest import restart_impact, restart_stage_profiles
+from voxint.enrichment.translations import current_translations
 from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import active_speakers
 from voxint.tutorial.steps import TutorialPage
@@ -98,6 +106,8 @@ def media_detail_page(
     total = 0
     selected_run_obj: PipelineRun | None = None
     claim_valid = False
+    speaker_timeline = None
+    assets = None
 
     if detail.selected_run is not None:
         run_id = detail.selected_run.id
@@ -106,6 +116,8 @@ def media_detail_page(
             raise HTTPException(status_code=404, detail="not found")
 
         if detail.selected_run.status == RunStatus.COMPLETED.value:
+            speaker_timeline = build_speaker_timeline(session, run_id)
+            assets = _run_assets_state(session, settings, run_id)
             if token is not None:
                 try:
                     verify_claim(session, run_id, token)
@@ -198,8 +210,25 @@ def media_detail_page(
                     ),
                     "active": translate_job is not None
                     and translate_job.status in _TRANSLATION_ACTIVE_STATUSES,
-                    "runAnchor": f"/runs/{run_id}#run-translation-{run_id}",
+                    "hasTranslation": bool(current_translations(session, run_id)),
+                    "activeJobId": str(translate_job.id)
+                    if translate_job is not None
+                    and translate_job.status in _TRANSLATION_ACTIVE_STATUSES
+                    else None,
+                    "csrfCancel": mint_csrf_token(
+                        request.app.state.csrf_secret, CSRF_TRANSLATION_CANCEL
+                    )
+                    if translate_job is not None
+                    and translate_job.status in _TRANSLATION_ACTIVE_STATUSES
+                    else None,
+                    "runAnchor": f"#run-translation-{run_id}",
                     "transcriptUrl": f"/runs/{run_id}/transcript",
+                    "languageOptions": [
+                        {"code": code, "name": name}
+                        for code, name in sorted(LANGUAGE_NAMES.items(), key=lambda item: item[1])
+                        if code != detected
+                    ],
+                    "detectedLanguage": detected,
                 }
             else:
                 island_props["translate"] = None
@@ -207,23 +236,28 @@ def media_detail_page(
     if island_props is not None:
         island_props["claimCsrf"] = mint_csrf_token(request.app.state.csrf_secret, CSRF_CLAIM)
         island_props["multiUser"] = settings.voxint_multi_user
-
-    csrf_restart = (
-        mint_csrf_token(request.app.state.csrf_secret, CSRF_RESTART)
-        if selected_run_obj is not None
-        else None
-    )
-    _TERMINAL = {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
-    _run_restartable = (
-        selected_run_obj is not None
-        and selected_run_obj.status in _TERMINAL
-        and selected_run_obj.archived_at is None
-    )
-    ri = (
-        restart_impact(session, selected_run_obj.id)
-        if selected_run_obj is not None and _run_restartable
-        else None
-    )
+        if assets is not None:
+            island_props["assetControls"] = {
+                "gatesOpen": assets["gates_open"],
+                "sourceProblem": assets["source_problem"],
+                "anyActive": assets["any_active"],
+                "kinds": [
+                    {
+                        "kind": entry["kind"],
+                        "title": _ASSET_KIND_TITLES[entry["kind"]],
+                        "hasAsset": entry["asset"] is not None,
+                        "stale": entry["stale"],
+                        "jobActive": entry["job_active"],
+                        "jobId": str(entry["job"].id) if entry["job"] is not None else None,
+                        "jobStatus": entry["job"].status if entry["job"] is not None else None,
+                    }
+                    for entry in assets["kinds"]
+                ],
+                "csrfGenerate": mint_csrf_token(
+                    request.app.state.csrf_secret, CSRF_ASSETS_GENERATE
+                ),
+                "csrfCancel": mint_csrf_token(request.app.state.csrf_secret, CSRF_ASSETS_CANCEL),
+            }
 
     run_id_for_tutorial = detail.selected_run.id if detail.selected_run else None
     tutorial = _tutorial_banner(
@@ -242,12 +276,17 @@ def media_detail_page(
             "detail": detail,
             "media_label": media_label,
             "selected_run": selected_run_obj,
+            "source_metadata": selected_run_obj.media_item.source_metadata
+            if selected_run_obj
+            else None,
+            "operator_notes": selected_run_obj.operator_notes if selected_run_obj else None,
+            "csrf_notes": mint_csrf_token(request.app.state.csrf_secret, CSRF_NOTES)
+            if selected_run_obj
+            else None,
+            "speaker_timeline": speaker_timeline,
             "island_props": island_props,
             "token": token if claim_valid else None,
             "progress": {"verified": verified_n, "total": total},
-            "csrf_restart": csrf_restart,
-            "restart_impact": ri,
-            "restart_stages": restart_stage_profiles(ri) if ri else None,
             "active_nav": "media",
             "tutorial": tutorial,
             "palette_actions": palette_actions(
