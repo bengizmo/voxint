@@ -673,8 +673,9 @@ export function MediaEditor({
     }
   }, [translate, translateTarget, runId]);
 
-  const translateJobId =
-    translateState?.activeJobId ?? translate?.activeJobId ?? null;
+  const translateJobId = translateState
+    ? translateState.activeJobId
+    : (translate?.activeJobId ?? null);
 
   const cancelTranslation = useCallback(async () => {
     if (translateBusyRef.current) return;
@@ -716,7 +717,15 @@ export function MediaEditor({
 
   useEffect(() => {
     if (translatePhase === "started" && translateState && !translateState.active) {
-      setTranslatePhase("idle");
+      const failed =
+        translateState.jobStatus === "FAILED" ||
+        translateState.jobStatus === "CANCELLED";
+      if (failed) {
+        setTranslateError("Translation failed. Reload for details, then retry.");
+        setTranslatePhase("error");
+      } else {
+        setTranslatePhase("idle");
+      }
     }
   }, [translatePhase, translateState]);
 

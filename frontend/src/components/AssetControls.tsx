@@ -51,7 +51,15 @@ export function AssetControls({
 
   useEffect(() => {
     if (phase === "generated" && polledState && !polledState.anyActive) {
-      setPhase("completed");
+      const failed = polledState.kinds.some(
+        (k) => k.jobStatus === "FAILED" || k.jobStatus === "CANCELLED",
+      );
+      if (failed) {
+        setError("One or more assets failed to generate. Reload for details, then retry.");
+        setPhase("error");
+      } else {
+        setPhase("completed");
+      }
     }
   }, [phase, polledState]);
 
