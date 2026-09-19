@@ -18,11 +18,16 @@ export const REVIEW_KEY = {
   next: "j",
   previous: "k",
   resetSpeaker: "0",
+  speaker: "s",
   annotate: "h",
   walkMode: "w",
   download: "d",
   help: "?",
 } as const;
+
+// `@` is an alias for REVIEW_KEY.speaker. It uses event.key (not event.code)
+// so it works across keyboard layouts without assuming Shift+2.
+export const SPEAKER_ALIAS = "@";
 
 // Digit-assign: 1–9 assign the focused segment to the Nth roster speaker. The bounds live
 // here so the handler's range check, the modal row, and the inline cue agree.
@@ -90,6 +95,7 @@ export const REVIEW_SHORTCUTS: readonly ReviewShortcut[] = [
         ? "Assign this segment to the 1st–9th speaker"
         : "Assign this segment to a speaker (no speakers on this run yet)",
   },
+  { keys: `${REVIEW_KEY.speaker} / ${SPEAKER_ALIAS}`, desc: "Open the speaker assignment menu for this segment" },
   { keys: REVIEW_KEY.resetSpeaker, desc: "Reset this segment to its detected speaker" },
   { keys: REVIEW_KEY.annotate, desc: "Highlight the selected transcript text" },
   { keys: REVIEW_KEY.download, desc: "Open the download menu" },

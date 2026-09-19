@@ -948,3 +948,32 @@ def test_create_speaker_requires_csrf(
     client = _make_client(session_factory, tmp_path, speakers_enabled=True)
     resp = client.post("/speakers", data={"display_name": "No Token"})
     assert resp.status_code == 403
+
+
+def test_rename_json_requires_csrf_and_reports_errors(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    with session_factory() as session:
+        speaker_id = _seed_speaker_with_activity(
+            session, "Alice", minutes_rank=1, human=True
+        )
+        _seed_speaker_with_activity(session, "Taken", minutes_rank=1, human=True)
+        session.commit()
+    url = f"/speakers/{speaker_id}/rename"
+    headers = {"accept": "application/json"}
+    denied = client.post(url, data={"display_name": "Alicia"}, headers=headers)
+    assert denied.status_code == 403
+    token = _csrf(client, "rename")
+    renamed = client.post(
+        url, data={"display_name": " Alicia ", "csrf_token": token}, headers=headers
+    )
+    assert renamed.status_code == 200
+    assert renamed.json() == {"id": str(speaker_id), "displayName": "Alicia"}
+    refused = client.post(
+        url, data={"display_name": "Taken", "csrf_token": token}, headers=headers
+    )
+    assert refused.status_code == 400
+    assert refused.json()["detail"]
+    with session_factory() as session:
+        assert session.get(Speaker, speaker_id).display_name == "Alicia"
