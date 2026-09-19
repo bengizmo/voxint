@@ -32,6 +32,10 @@ you to every contributor.
 > and back up your data before upgrading. See the
 > [changelog](CHANGELOG.md) for what changed in each version.
 
+**[Try the live demo](https://demo.voxint.app)** (read-only, sign in as
+`visitor` / `demo2026`) | **[Documentation](https://voxint.app/docs/)** |
+**[Project site](https://voxint.app)**
+
 ![Reviewing a transcript in Voxint: a waveform strip showing who spoke when, above the transcript with a verify-and-advance review loop](docs/images/transcript-review.png)
 
 ## See it in action
