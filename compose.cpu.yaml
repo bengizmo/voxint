@@ -57,7 +57,7 @@ services:
       # Separate cache for an alternate model; never shadows the baked large-v2.
       - whisper-models:/app/model-cache/whisper
     ports:
-      - "127.0.0.1:8022:8022"
+      - "127.0.0.1:18022:8022"
 
   pyannote:
     image: ghcr.io/bengizmo/voxint-pyannote:${VOXINT_IMAGE_TAG:-0.44.0}-cpu
@@ -84,7 +84,7 @@ services:
       # Cache for the optional online HF path; unused by the vendored default.
       - pyannote-models:/app/models
     ports:
-      - "127.0.0.1:8024:8024"
+      - "127.0.0.1:18024:8024"
 
   titanet:
     image: ghcr.io/bengizmo/voxint-titanet:${VOXINT_IMAGE_TAG:-0.44.0}-cpu
@@ -101,7 +101,7 @@ services:
     volumes:
       - ${MEDIA_ROOT:-./media}:/data/media:ro
     ports:
-      - "127.0.0.1:8021:8021"
+      - "127.0.0.1:18021:8021"
 
 volumes:
   pyannote-models:
