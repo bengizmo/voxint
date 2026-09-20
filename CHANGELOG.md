@@ -28,6 +28,19 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   unresolved label card, auto-advances after each decision, jumps the
   transcript to the voice, and shows a live "N remaining" counter. Auto-exits
   with a brief status when all voices are identified.
+- **Start and stop model services from the web UI (#556).** The Status page now
+  shows state-aware controls: Restart and Stop when a service is running, Start
+  when stopped. Stop gracefully shuts down the container and leaves it off until
+  manually started. The shared per-service lock prevents concurrent operations.
+  Terminal hints for unsupported backends updated with start/stop commands.
+- **Initial page inspects container state (#556).** The Status page now reads
+  each model service's Docker container state on load, showing the correct
+  buttons instead of always showing Restart.
+
+### Fixed
+- **Stopped services no longer poll forever (#556).** The health-polling row
+  endpoint now stops polling when a service is intentionally stopped, instead
+  of retrying indefinitely.
 
 ### Changed
 - **Run page vs editor page redesign (#567).** The run page (`/runs/{id}`) is

@@ -45,6 +45,8 @@ def test_noop_controller() -> None:
         assert controller.backend_name == "none"
         for key, service in SERVICES.items():
             assert controller.restart(key) == ControlResult(ControlOutcome.UNAVAILABLE, "disabled")
+            assert controller.start(key) == ControlResult(ControlOutcome.UNAVAILABLE, "disabled")
+            assert controller.stop(key) == ControlResult(ControlOutcome.UNAVAILABLE, "disabled")
             assert controller.inspect(key) == ServiceState.UNKNOWN
             expected = (
                 f"docker compose restart {service.compose_service}"
@@ -52,6 +54,21 @@ def test_noop_controller() -> None:
                 else f"launchctl kickstart -k gui/$(id -u)/{service.launchd_label}"
             )
             assert controller.terminal_hint(key) == expected
+            if kind == "docker":
+                assert controller.terminal_hint(key, "start") == (
+                    f"docker compose start {service.compose_service}"
+                )
+                assert controller.terminal_hint(key, "stop") == (
+                    f"docker compose stop {service.compose_service}"
+                )
+            elif kind == "native":
+                assert controller.terminal_hint(key, "start") == (
+                    f"launchctl bootstrap gui/$(id -u) "
+                    f"~/.voxint-metal/run/{service.launchd_label}.plist"
+                )
+                assert controller.terminal_hint(key, "stop") == (
+                    f"launchctl bootout gui/$(id -u)/{service.launchd_label}"
+                )
         assert controller.terminal_hint("invalid_key") is None
 
 
@@ -120,11 +137,75 @@ def test_docker_restart(docker, scenario: str, outcome: ControlOutcome) -> None:
     controller._locks["transcription"].release()
 
 
-def test_busy_and_invalid_restart_do_not_contact_docker(docker) -> None:
+@pytest.mark.parametrize(
+    ("scenario", "outcome"),
+    [
+        ("stopped", ControlOutcome.STARTED),
+        ("missing", ControlOutcome.ERROR),
+        ("already_running", ControlOutcome.ALREADY_RUNNING),
+        ("timeout", ControlOutcome.TIMEOUT),
+        ("rejected", ControlOutcome.ERROR),
+    ],
+)
+def test_docker_start(docker, scenario: str, outcome: ControlOutcome) -> None:
+    def handler(request):
+        if request.url.path.endswith("/containers/json"):
+            return httpx.Response(200, json=[] if scenario == "missing" else [{"Id": "abc"}])
+        assert request.method == "POST"
+        assert request.url.path == "/v1.43/containers/abc/start"
+        assert "t" not in request.url.params  # start has no graceful timeout
+        if scenario == "timeout":
+            raise httpx.ReadTimeout("timed out", request=request)
+        return httpx.Response(
+            304 if scenario == "already_running" else 500 if scenario == "rejected" else 204
+        )
+
+    controller, requests = docker(handler)
+    assert controller.start("transcription").outcome == outcome
+    assert any(r.method == "POST" for r in requests) is (scenario != "missing")
+    assert controller._locks["transcription"].acquire(blocking=False)
+    controller._locks["transcription"].release()
+
+
+@pytest.mark.parametrize(
+    ("scenario", "outcome"),
+    [
+        ("running", ControlOutcome.STOPPED),
+        ("missing", ControlOutcome.ERROR),
+        ("already_stopped", ControlOutcome.ALREADY_STOPPED),
+        ("timeout", ControlOutcome.TIMEOUT),
+        ("rejected", ControlOutcome.ERROR),
+    ],
+)
+def test_docker_stop(docker, scenario: str, outcome: ControlOutcome) -> None:
+    def handler(request):
+        if request.url.path.endswith("/containers/json"):
+            return httpx.Response(200, json=[] if scenario == "missing" else [{"Id": "abc"}])
+        assert request.method == "POST"
+        assert request.url.path == "/v1.43/containers/abc/stop"
+        assert request.url.params["t"] == "10"
+        if scenario == "timeout":
+            raise httpx.ReadTimeout("timed out", request=request)
+        return httpx.Response(
+            304 if scenario == "already_stopped" else 500 if scenario == "rejected" else 204
+        )
+
+    controller, requests = docker(handler)
+    assert controller.stop("transcription").outcome == outcome
+    assert any(r.method == "POST" for r in requests) is (scenario != "missing")
+    assert controller._locks["transcription"].acquire(blocking=False)
+    controller._locks["transcription"].release()
+
+
+def test_busy_and_invalid_do_not_contact_docker(docker) -> None:
     controller, requests = docker(lambda request: pytest.fail("unexpected Docker request"))
     with controller._locks["transcription"]:
         assert controller.restart("transcription").outcome == ControlOutcome.BUSY
+        assert controller.start("transcription").outcome == ControlOutcome.BUSY
+        assert controller.stop("transcription").outcome == ControlOutcome.BUSY
     assert controller.restart("invalid_key").outcome == ControlOutcome.ERROR
+    assert controller.start("invalid_key").outcome == ControlOutcome.ERROR
+    assert controller.stop("invalid_key").outcome == ControlOutcome.ERROR
     assert controller.inspect("invalid_key") == ServiceState.UNKNOWN
     assert requests == []
 
@@ -224,26 +305,64 @@ def test_restart_route(route_client, outcome: ControlOutcome) -> None:
     )
     assert response.status_code == 200
     assert 'id="service-transcription"' in response.text
-    assert ("hx-trigger" in response.text) is (
-        outcome in {ControlOutcome.RESTARTED, ControlOutcome.BUSY, ControlOutcome.TIMEOUT}
-    )
+    assert ("hx-trigger" in response.text) is (outcome != ControlOutcome.UNAVAILABLE)
+    if outcome == ControlOutcome.RESTARTED:
+        assert "Restarting..." in response.text
     assert "<script>" not in response.text
-    if outcome == ControlOutcome.ERROR:
+    if outcome in (ControlOutcome.ERROR, ControlOutcome.UNAVAILABLE):
         assert "&lt;script&gt;" in response.text
     assert restart_threads[0] != app.state.loop_threads[0]
+
+
+@pytest.mark.parametrize("outcome", list(ControlOutcome))
+def test_start_route(route_client, outcome: ControlOutcome) -> None:
+    app = route_client.app
+    app.state.service_controller.start.side_effect = lambda key: ControlResult(outcome, "detail")
+    token = mint_csrf_token(app.state.csrf_secret, CSRF_SERVICE_CONTROL)
+    response = route_client.post(
+        "/settings/status/services/transcription/start", data={"csrf_token": token}
+    )
+    assert response.status_code == 200
+    assert 'id="service-transcription"' in response.text
+    assert ("hx-trigger" in response.text) is (outcome != ControlOutcome.UNAVAILABLE)
+    if outcome == ControlOutcome.STARTED:
+        assert "Starting..." in response.text
+    app.state.service_controller.start.assert_called_once_with("transcription")
+
+
+@pytest.mark.parametrize("outcome", list(ControlOutcome))
+def test_stop_route(route_client, outcome: ControlOutcome) -> None:
+    app = route_client.app
+    app.state.service_controller.stop.side_effect = lambda key: ControlResult(outcome, "detail")
+    token = mint_csrf_token(app.state.csrf_secret, CSRF_SERVICE_CONTROL)
+    response = route_client.post(
+        "/settings/status/services/transcription/stop", data={"csrf_token": token}
+    )
+    assert response.status_code == 200
+    assert 'id="service-transcription"' in response.text
+    assert ("hx-trigger" in response.text) is (outcome != ControlOutcome.UNAVAILABLE)
+    if outcome == ControlOutcome.STOPPED:
+        assert "Stopping..." in response.text
+    app.state.service_controller.stop.assert_called_once_with("transcription")
 
 
 def test_routes_reject_non_admin_and_invalid_csrf(route_client) -> None:
     app = route_client.app
     path = "/settings/status/services/transcription"
     assert route_client.post(path + "/restart", data={"csrf_token": "bad"}).status_code == 403
+    assert route_client.post(path + "/start", data={"csrf_token": "bad"}).status_code == 403
+    assert route_client.post(path + "/stop", data={"csrf_token": "bad"}).status_code == 403
     app.dependency_overrides[deps._resolve_identity] = lambda: deps.AuthContext(
         user_id=None, username="viewer", role="viewer"
     )
     token = mint_csrf_token(app.state.csrf_secret, CSRF_SERVICE_CONTROL)
     assert route_client.get(path + "/row").status_code == 403
     assert route_client.post(path + "/restart", data={"csrf_token": token}).status_code == 403
+    assert route_client.post(path + "/start", data={"csrf_token": token}).status_code == 403
+    assert route_client.post(path + "/stop", data={"csrf_token": token}).status_code == 403
     app.state.service_controller.restart.assert_not_called()
+    app.state.service_controller.start.assert_not_called()
+    app.state.service_controller.stop.assert_not_called()
     app.state.service_controller.inspect.assert_not_called()
 
 
@@ -252,7 +371,11 @@ def test_routes_reject_unknown_service(route_client) -> None:
     path = "/settings/status/services/invalid_key"
     assert route_client.get(path + "/row").status_code == 404
     assert route_client.post(path + "/restart", data={"csrf_token": token}).status_code == 404
+    assert route_client.post(path + "/start", data={"csrf_token": token}).status_code == 404
+    assert route_client.post(path + "/stop", data={"csrf_token": token}).status_code == 404
     route_client.app.state.service_controller.restart.assert_not_called()
+    route_client.app.state.service_controller.start.assert_not_called()
+    route_client.app.state.service_controller.stop.assert_not_called()
     route_client.app.state.service_controller.inspect.assert_not_called()
 
 
@@ -286,11 +409,96 @@ def test_service_row_probes_health_and_controls_polling(route_client, monkeypatc
     controller.inspect.assert_called_once_with("transcription")
 
 
+def test_service_row_stopped_shows_start_button(route_client, monkeypatch) -> None:
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        routes.httpx,
+        "Client",
+        lambda **kwargs: real_client(
+            transport=httpx.MockTransport(lambda r: httpx.Response(503, json={"status": "error"})),
+            **kwargs,
+        ),
+    )
+    controller = route_client.app.state.service_controller
+    controller.controllable = True
+    controller.inspect.return_value = ServiceState.STOPPED
+    response = route_client.get("/settings/status/services/transcription/row")
+    assert response.status_code == 200
+    assert 'hx-post="/settings/status/services/transcription/start"' in response.text
+    assert 'hx-post="/settings/status/services/transcription/restart"' not in response.text
+    assert "is-off" in response.text
+    assert "hx-trigger" not in response.text
+
+
+def test_service_row_running_shows_restart_and_stop(route_client, monkeypatch) -> None:
+    real_client = httpx.Client
+    ok = {"status": "ok", "model_loaded": True}
+    monkeypatch.setattr(
+        routes.httpx,
+        "Client",
+        lambda **kwargs: real_client(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, json=ok)),
+            **kwargs,
+        ),
+    )
+    controller = route_client.app.state.service_controller
+    controller.controllable = True
+    controller.inspect.return_value = ServiceState.RUNNING
+    response = route_client.get("/settings/status/services/transcription/row")
+    assert 'hx-post="/settings/status/services/transcription/restart"' in response.text
+    assert 'hx-post="/settings/status/services/transcription/stop"' in response.text
+    assert 'hx-post="/settings/status/services/transcription/start"' not in response.text
+    assert "hx-confirm" in response.text
+
+
+def test_service_row_restarting_shows_no_buttons(route_client, monkeypatch) -> None:
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        routes.httpx,
+        "Client",
+        lambda **kwargs: real_client(
+            transport=httpx.MockTransport(lambda r: httpx.Response(503, json={"status": "error"})),
+            **kwargs,
+        ),
+    )
+    controller = route_client.app.state.service_controller
+    controller.controllable = True
+    controller.inspect.return_value = ServiceState.RESTARTING
+    response = route_client.get("/settings/status/services/transcription/row")
+    assert 'hx-post="/settings/status/services/transcription/restart"' not in response.text
+    assert 'hx-post="/settings/status/services/transcription/start"' not in response.text
+    assert 'hx-post="/settings/status/services/transcription/stop"' not in response.text
+    assert "hx-trigger" in response.text
+
+
+def test_service_row_noop_shows_hint(route_client, monkeypatch) -> None:
+    real_client = httpx.Client
+    ok = {"status": "ok", "model_loaded": True}
+    monkeypatch.setattr(
+        routes.httpx,
+        "Client",
+        lambda **kwargs: real_client(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, json=ok)),
+            **kwargs,
+        ),
+    )
+    controller = route_client.app.state.service_controller
+    controller.controllable = False
+    controller.inspect.return_value = ServiceState.UNKNOWN
+    controller.terminal_hint.return_value = "docker compose restart whisper"
+    response = route_client.get("/settings/status/services/transcription/row")
+    assert "<code>" in response.text
+    assert "docker compose restart whisper" in response.text
+    assert 'hx-post="' not in response.text
+
+
 def test_component_control_metadata_is_limited_to_model_services() -> None:
-    for controller in (
-        NoopController("disabled", install_kind="docker"),
-        DockerController("/test/docker.sock", "test-project"),
-    ):
+    noop = NoopController("disabled", install_kind="docker")
+    mock_docker = Mock(spec=DockerController)
+    mock_docker.controllable = True
+    mock_docker.inspect.return_value = ServiceState.RUNNING
+    mock_docker.terminal_hint.return_value = None
+    for controller in (noop, mock_docker):
         rows = routes._build_components(
             [
                 {"name": name, "state": "ready", "detail": "ready", "remediation": ""}
@@ -304,7 +512,29 @@ def test_component_control_metadata_is_limited_to_model_services() -> None:
             if row["is_model_service"]:
                 assert row["controllable"] is controller.controllable
                 assert row["terminal_hint"] == controller.terminal_hint(row["key"])
+                if controller.controllable:
+                    assert row["state"] == ServiceState.RUNNING
+                else:
+                    assert row["state"] is None
             else:
                 assert row["key"] is None
                 assert row["controllable"] is False
                 assert row["terminal_hint"] is None
+                assert row.get("state") is None
+
+    mock_stopped = Mock(spec=DockerController)
+    mock_stopped.controllable = True
+    mock_stopped.inspect.return_value = ServiceState.STOPPED
+    mock_stopped.terminal_hint.return_value = None
+    rows = routes._build_components(
+        [
+            {"name": name, "state": "not_ready", "detail": "unreachable", "remediation": ""}
+            for name in ("transcription", "diarization", "speaker embedding")
+        ],
+        mock_stopped,
+    )
+    for row in rows:
+        if row["is_model_service"]:
+            assert row["dot"] == "off"
+            assert row["state_text"] == "stopped"
+            assert row["state"] == ServiceState.STOPPED

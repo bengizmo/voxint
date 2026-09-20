@@ -1,11 +1,12 @@
 # Model service controls
 
-Restart Transcriber (`whisper`), Voice separation (`pyannote`), and Voice identity
-(`titanet`) from **Settings > Status** with the opt-in Docker overlay.
+Start, stop, and restart Transcriber (`whisper`), Voice separation (`pyannote`),
+and Voice identity (`titanet`) from **Settings > Status** with the opt-in Docker
+overlay.
 
 ## Deployment support
 
-| Deployment | Web restart controls |
+| Deployment | Web controls |
 |---|---|
 | Docker (GPU, CPU, ROCm) | Supported with `compose.service-controls.yaml`. |
 | Native macOS | Not yet implemented; controls are disabled and terminal hints are shown. |
@@ -33,9 +34,8 @@ docker compose -f compose.yaml -f compose.gpu.yaml \
 For CPU or ROCm, replace `compose.gpu.yaml` with `compose.cpu.yaml` or
 `compose.rocm.yaml`. Retain any other overlays your deployment uses.
 The overlay mounts `/var/run/docker.sock` into the API and sets
-`VOXINT_SERVICE_CONTROL=docker`. Open **Settings > Status** to restart a model
-service. A restart interrupts requests using that service; allow time for its
-model to load before submitting more work.
+`VOXINT_SERVICE_CONTROL=docker`. Open **Settings > Status** to control the model
+services.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -51,36 +51,80 @@ alone does not change the mount. Recreate the API with `up -d` after changing
 these settings. To disable controls, remove the overlay and leave
 `VOXINT_SERVICE_CONTROL` unset, then recreate the API.
 
+## Operations
+
+The Status page shows buttons based on each service's container state:
+
+| Container state | Available actions |
+|---|---|
+| Running | **Restart** and **Stop** |
+| Stopped | **Start** |
+| Restarting or unknown | No buttons (status shown) |
+
+**Restart** gracefully stops the container (10-second timeout) and starts it
+again. The model reloads on startup. Jobs using the service may fail and retry.
+
+**Stop** gracefully stops the container and leaves it stopped. Voxint does not
+automatically start it again; use **Start** to resume service. Active jobs that
+need a stopped service will fail.
+
+**Start** starts a stopped container. The model loads after startup; the Status
+page polls until the service reports healthy.
+
+Only one operation runs per service at a time. A second request while one is
+in progress returns "operation already in progress" and waits for the first to
+finish.
+
 ## Security
 
 The Docker socket grants the API host-equivalent power over Docker and its
 containers. Enable this only when you trust everyone who can log in to the
 console. Use a strong, unique console password and restrict console access.
 
-## Manual restarts
+Controls are admin-only and CSRF-protected. Viewer accounts see the status page
+but cannot start, stop, or restart services.
+
+## Manual commands
 
 Docker, using the same Compose files and project as your running stack:
 
 ```bash
+docker compose -f compose.yaml -f compose.gpu.yaml start whisper
+docker compose -f compose.yaml -f compose.gpu.yaml stop whisper
 docker compose -f compose.yaml -f compose.gpu.yaml restart whisper
-docker compose -f compose.yaml -f compose.gpu.yaml restart pyannote
-docker compose -f compose.yaml -f compose.gpu.yaml restart titanet
 ```
 
-Substitute your CPU or ROCm overlay as above. If your shell already selects the
-stack through `COMPOSE_FILE`, `docker compose restart whisper` is sufficient.
+Substitute `pyannote` or `titanet` for the other services. Substitute your CPU
+or ROCm overlay as above. If your shell already selects the stack through
+`COMPOSE_FILE`, `docker compose restart whisper` is sufficient.
 
 For native macOS and Metal hybrid, run these on the Mac as the user who started
 the services:
 
 ```bash
+# Start (load the job)
+launchctl bootstrap gui/$(id -u) ~/.voxint-metal/run/com.voxint.metal.whisper.plist
+
+# Stop (unload the job)
+launchctl bootout gui/$(id -u)/com.voxint.metal.whisper
+
+# Restart (in-place)
 launchctl kickstart -k gui/$(id -u)/com.voxint.metal.whisper
-launchctl kickstart -k gui/$(id -u)/com.voxint.metal.pyannote
-launchctl kickstart -k gui/$(id -u)/com.voxint.metal.titanet
 ```
 
-Both modes use the Metal launcher for model services. If the jobs are not
-loaded, start them with `scripts/metal/voxint-metal.sh up`.
+Substitute the pyannote or titanet label for the other services. If the jobs are
+not loaded, start them with `scripts/metal/voxint-metal.sh up`.
+
+## Limitations
+
+- Controls are per-process on the API instance. Multiple API workers behind a
+  load balancer share no lock state; concurrent operations on the same service
+  from different workers are not coordinated.
+- Stop does not drain in-flight jobs or establish a maintenance window. Active
+  work may fail. External orchestrators (Docker restart policies, systemd,
+  launchd) can change container state independently of the web controls.
+- A service that never becomes healthy after start or restart (e.g. crash-looping)
+  keeps polling while the Status page is open. Navigating away stops the polling.
 
 ## Troubleshooting
 
@@ -94,14 +138,12 @@ loaded, start them with `scripts/metal/voxint-metal.sh up`.
   and service labels and require exactly one matching container per service.
   Use `docker compose -f compose.yaml -f compose.gpu.yaml ps -a` to check that
   the model containers exist, substituting your deployment's files.
-- **Service does not come back:** Inspect logs with
+- **Service does not come back after start or restart:** Inspect logs with
   `docker compose -f compose.yaml -f compose.gpu.yaml logs --tail=100 whisper`
   (substitute your files and service). Check for model-loading failures, memory
-  exhaustion, or GPU errors. A successful restart request does not guarantee
-  model readiness; check Settings > Status again after startup. Web controls
-  require a running container; start a stopped one with the same Compose files
-  and `up -d whisper`. On macOS, use
-  `scripts/metal/voxint-metal.sh status` and
+  exhaustion, or GPU errors. A successful start or restart request does not
+  guarantee model readiness; check Settings > Status again after startup. On
+  macOS, use `scripts/metal/voxint-metal.sh status` and
   `scripts/metal/voxint-metal.sh logs whisper`.
 
 See [operations](operations.md) for deployment details,
