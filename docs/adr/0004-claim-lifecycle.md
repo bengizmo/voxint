@@ -78,4 +78,4 @@ preserves the token on renewal; `claim_run` rotates it on ownership change.
   a silently dropped edit. Honest failure over a masked one.
 - Undo for enroll and merge is modeled as compensating rulings on the append-only
   ledger, not row deletion, so the claim never needs to reach back into committed
-  history. Generalized undo is deferred.
+  history. Label-scope undo landed in #573; segment-scope undo is deferred.
