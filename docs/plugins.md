@@ -47,7 +47,7 @@ contains:
 - `task_names`: Celery names owned by the plugin. Greenfield names start with
   `voxint.plugin.<id>.`.
 
-[`base.py`](../src/voxint/plugins/base.py) is the canonical API reference. It
+[`base.py`](https://github.com/bengizmo/voxint/blob/main/src/voxint/plugins/base.py) is the canonical API reference. It
 defines the hook types, contribution records, and lifecycle rules. Every hook
 has a safe no-op default.
 
