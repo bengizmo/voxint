@@ -15,6 +15,19 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   assignment. Unresolved speaker names render with a muted dashed-underline
   affordance. The `s` key and `@` alias open the popover from the keyboard.
   Speaker rename works from the review console without navigating away.
+- **Unresolved speakers banner** (#568). A slim status banner above the
+  transcript shows "N unidentified voices, M segments affected" with a "Start
+  reviewing" button that jumps to the first unresolved segment and opens the
+  speaker popover.
+- **"Same as previous" key** (#568). Pressing `=` assigns the current segment
+  to the previous segment's effective speaker, with split-child support.
+  Label-scope changes flash a 300ms highlight pulse on affected segments
+  (respects `prefers-reduced-motion`).
+- **Guided rail review mode** (#568). "Review voices" in the speaker sidebar's
+  "Needs you" section enters a sequential review flow: highlights the current
+  unresolved label card, auto-advances after each decision, jumps the
+  transcript to the voice, and shows a live "N remaining" counter. Auto-exits
+  with a brief status when all voices are identified.
 
 ### Changed
 - **Run page vs editor page redesign (#567).** The run page (`/runs/{id}`) is
