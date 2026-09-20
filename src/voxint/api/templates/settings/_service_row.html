@@ -3,15 +3,33 @@
   <span class="cr-name">{{ c.label }}</span>
   <span class="cr-state">{{ c.state_text }}</span>
   <span class="cr-action">
-    {% if c.is_model_service and c.controllable %}
+    {% if c.is_model_service and c.controllable and c.state and c.state.value == 'running' %}
       <form method="post" action="/settings/status/services/{{ c.key }}/restart"
             hx-post="/settings/status/services/{{ c.key }}/restart"
             hx-target="#service-{{ c.key }}"
             hx-swap="outerHTML"
-            hx-confirm="Restart {{ c.label }}? This takes 10–20 seconds while the model reloads. Jobs using it may fail and retry."
+            hx-confirm="Restart {{ c.label }}? This takes 10-20 seconds while the model reloads. Jobs using it may fail and retry."
             style="display:inline">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="cb-btn cb-btn-secondary" hx-disabled-elt="this">Restart</button>
+      </form>
+      <form method="post" action="/settings/status/services/{{ c.key }}/stop"
+            hx-post="/settings/status/services/{{ c.key }}/stop"
+            hx-target="#service-{{ c.key }}"
+            hx-swap="outerHTML"
+            hx-confirm="Stop {{ c.label }}? It stays off until you start it again. Jobs that need it will fail."
+            style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="cb-btn cb-btn-danger" hx-disabled-elt="this">Stop</button>
+      </form>
+    {% elif c.is_model_service and c.controllable and c.state and c.state.value == 'stopped' %}
+      <form method="post" action="/settings/status/services/{{ c.key }}/start"
+            hx-post="/settings/status/services/{{ c.key }}/start"
+            hx-target="#service-{{ c.key }}"
+            hx-swap="outerHTML"
+            style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="cb-btn cb-btn-primary" hx-disabled-elt="this">Start</button>
       </form>
     {% elif c.is_model_service and c.terminal_hint %}
       <span class="oc-muted" style="font-size:var(--t-xs)">{{ c.terminal_hint }}</span>

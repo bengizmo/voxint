@@ -1180,6 +1180,22 @@
     true
   ],
   [
+    "/settings/status/services/{service_key}/start",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/status/services/{service_key}/stop",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/settings/translation",
     [
       "POST"

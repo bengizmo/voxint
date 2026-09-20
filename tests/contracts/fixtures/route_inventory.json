@@ -884,6 +884,18 @@
     ]
   ],
   [
+    "/settings/status/services/{service_key}/start",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/settings/status/services/{service_key}/stop",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/settings/translation",
     [
       "POST"
