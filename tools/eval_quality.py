@@ -1645,10 +1645,70 @@ def _probe(cmd: list[str]) -> str | None:
     return out.stdout.strip()
 
 
-def probe_fingerprint(container_prefix: str, cuda_visible: str | None) -> dict[str, Any]:
-    """Probe the running deploy host-side (docker image digests + nvidia-smi).
+def _probe_amd_gpu(sysfs_root: str = "/sys") -> dict[str, str] | None:
+    """Probe the first AMD GPU via sysfs (no rocm-smi dependency)."""
+    import glob
+    import os
+    import platform
+    from contextlib import suppress
 
-    Best-effort: any leg that cannot be observed (docker/nvidia-smi absent, a
+    for render_path in sorted(glob.glob(f"{sysfs_root}/class/drm/renderD*/device")):
+        vendor_path = os.path.join(render_path, "vendor")
+        try:
+            vendor = Path(vendor_path).read_text().strip()
+        except OSError:
+            continue
+        if vendor not in ("0x1002", "1002"):
+            continue
+
+        render_name = os.path.basename(os.path.dirname(render_path))
+
+        name = ""
+        for name_file in ("product_name", "marketing_name"):
+            try:
+                name = Path(render_path, name_file).read_text().strip()
+                if name:
+                    break
+            except OSError:
+                continue
+        if not name:
+            name = f"AMD GPU ({render_name})"
+
+        uuid = ""
+        with suppress(OSError):
+            uuid = Path(render_path, "unique_id").read_text().strip()
+        if not uuid:
+            try:
+                for line in Path(render_path, "uevent").read_text().splitlines():
+                    if line.startswith("PCI_SLOT_NAME="):
+                        uuid = line.split("=", 1)[1].strip()
+                        break
+            except OSError:
+                pass
+        if not uuid:
+            uuid = render_name
+
+        driver = ""
+        try:
+            raw = Path(sysfs_root, "module/amdgpu/version").read_text().strip()
+            driver = raw or platform.release()
+        except OSError:
+            driver = platform.release()
+
+        return {"name": name, "uuid": uuid, "driver": driver}
+    return None
+
+
+def probe_fingerprint(
+    container_prefix: str,
+    cuda_visible: str | None,
+    *,
+    compute_tier: str = "gpu",
+    sysfs_root: str = "/sys",
+) -> dict[str, Any]:
+    """Probe the running deploy host-side (docker + NVIDIA/nvidia-smi or ROCm/sysfs).
+
+    Best-effort: any leg that cannot be observed (docker/nvidia-smi/sysfs absent, a
     container not running) is recorded as ``probe_failed`` and drops the mode to
     ``degraded``. A ``degraded`` fingerprint never yields a score-ready manifest
     (the refusal is in :func:`require_verified_fingerprints`), so a partial probe
@@ -1661,26 +1721,34 @@ def probe_fingerprint(container_prefix: str, cuda_visible: str | None) -> dict[s
         digest = _probe(["docker", "inspect", "--format", "{{.Image}}", name])
         images[svc] = digest
         status[svc] = "observed" if digest else "probe_failed"
-    gpu_raw = _probe(
-        ["nvidia-smi", "--query-gpu=name,uuid,driver_version", "--format=csv,noheader"]
-    )
-    if gpu_raw:
-        first = gpu_raw.splitlines()[0].split(",")
-        gpu: dict[str, str] | None = {
-            "name": first[0].strip(),
-            "uuid": first[1].strip() if len(first) > 1 else "",
-            "driver": first[2].strip() if len(first) > 2 else "",
-        }
-        status["gpu"] = "observed"
+    if compute_tier not in ("gpu", "rocm"):
+        raise EvalError(f"unknown compute_tier {compute_tier!r} (expected 'gpu' or 'rocm')")
+    gpu: dict[str, str] | None
+    if compute_tier == "rocm":
+        gpu = _probe_amd_gpu(sysfs_root)
+        status["gpu"] = "observed" if gpu else "probe_failed"
     else:
-        gpu = None
-        status["gpu"] = "probe_failed"
+        gpu_raw = _probe(
+            ["nvidia-smi", "--query-gpu=name,uuid,driver_version", "--format=csv,noheader"]
+        )
+        if gpu_raw:
+            first = gpu_raw.splitlines()[0].split(",")
+            gpu = {
+                "name": first[0].strip(),
+                "uuid": first[1].strip() if len(first) > 1 else "",
+                "driver": first[2].strip() if len(first) > 2 else "",
+            }
+            status["gpu"] = "observed"
+        else:
+            gpu = None
+            status["gpu"] = "probe_failed"
     mode = "full" if all(v == "observed" for v in status.values()) else "degraded"
     return {
         "mode": mode,
         "images": images,
         "gpu": gpu,
         "cuda_visible_devices": cuda_visible,
+        "compute_tier": compute_tier,
         "probe_status": status,
     }
 
@@ -1865,7 +1933,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
     cohort_hash = eval_run.cohort_sha256(descriptor)
 
-    fp_before = probe_fingerprint(args.container_prefix, args.cuda_visible_devices)
+    fp_before = probe_fingerprint(
+        args.container_prefix, args.cuda_visible_devices, compute_tier=args.compute_tier
+    )
 
     out_dir = Path(args.out_dir)
     with eval_run.out_dir_lock(out_dir):
@@ -1890,7 +1960,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 interval=float(args.interval), timeout=float(args.timeout),
             )
 
-        fp_after = probe_fingerprint(args.container_prefix, args.cuda_visible_devices)
+        fp_after = probe_fingerprint(
+            args.container_prefix, args.cuda_visible_devices, compute_tier=args.compute_tier
+        )
         require_verified_fingerprints(fp_before, fp_after, pipeline_env)
 
         # All-or-nothing: score needs the full cohort, so refuse a partial bundle.
@@ -2062,6 +2134,8 @@ def _add_run_parser(sub: Any) -> None:
     run_p.add_argument("--media-subdir", default="eval", help="MEDIA_ROOT subdir for staged audio")
     run_p.add_argument("--container-prefix", default="voxint", help="docker compose project prefix")
     run_p.add_argument("--cuda-visible-devices", help="record CUDA_VISIBLE_DEVICES in fingerprint")
+    run_p.add_argument("--compute-tier", choices=["gpu", "rocm"], default="gpu",
+                       help="GPU vendor to probe (gpu=NVIDIA/nvidia-smi, rocm=AMD/sysfs)")
     run_p.add_argument("--interval", default="10", help="poll interval seconds (default 10)")
     run_p.add_argument("--timeout", default="3600", help="per-run poll timeout seconds (def 3600)")
     run_p.add_argument("--duration-tol", default="2.0", help="WAV duration tolerance seconds")

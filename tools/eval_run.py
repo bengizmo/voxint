@@ -60,7 +60,7 @@ import prepare_bakeoff_corpus as bake  # noqa: E402
 # hypothesis-streams artifact. A hard cutover (no backward migration): a stale
 # schema-1 journal/cohort fails closed rather than silently omitting cpWER.
 JOURNAL_SCHEMA_VERSION = 2
-PIPELINE_ENVIRONMENT_SCHEMA_VERSION = 1
+PIPELINE_ENVIRONMENT_SCHEMA_VERSION = 2
 COHORT_SCHEMA_VERSION = 2
 
 CORPORA = ("ami", "voxconverse")
@@ -650,7 +650,7 @@ _STR = "str"
 _BOOL = "bool"
 _INT_GE1 = "int_ge1"
 
-_PIPELINE_ENV_SPEC: dict[str, dict[str, str]] = {
+_PIPELINE_ENV_SPEC_V1: dict[str, dict[str, str]] = {
     "code": {"git_sha": _STR, "image_digest": _STR},
     "model_weights": {
         "whisper_ct2_dir_sha256": _STR,
@@ -658,6 +658,19 @@ _PIPELINE_ENV_SPEC: dict[str, dict[str, str]] = {
         "titanet_sha256": _STR,
     },
     "gpu": {"name": _STR, "driver": _STR, "cuda": _STR},
+    "runtime": {"ctranslate2": _STR, "torch": _STR, "pyannote_audio": _STR},
+    "decode": {"beam_size": _INT_GE1, "batch_size": _INT_GE1, "word_timestamps": _BOOL},
+    "flags": {"tf32": _BOOL, "deterministic": _BOOL},
+}
+
+_PIPELINE_ENV_SPEC: dict[str, dict[str, str]] = {
+    "code": {"git_sha": _STR, "image_digest": _STR},
+    "model_weights": {
+        "whisper_ct2_dir_sha256": _STR,
+        "pyannote_pipeline_sha256": _STR,
+        "titanet_sha256": _STR,
+    },
+    "gpu": {"name": _STR, "driver": _STR, "compute_api": _STR},
     "runtime": {"ctranslate2": _STR, "torch": _STR, "pyannote_audio": _STR},
     "decode": {"beam_size": _INT_GE1, "batch_size": _INT_GE1, "word_timestamps": _BOOL},
     "flags": {"tf32": _BOOL, "deterministic": _BOOL},
@@ -701,15 +714,18 @@ def validate_pipeline_environment(env: dict[str, Any]) -> dict[str, Any]:
     """
     if not isinstance(env, dict):
         raise RunError("pipeline_environment must be an object")
-    if env.get("schema_version") != PIPELINE_ENVIRONMENT_SCHEMA_VERSION:
+    version = env.get("schema_version")
+    if isinstance(version, bool) or version not in (1, PIPELINE_ENVIRONMENT_SCHEMA_VERSION):
         raise RunError(
-            f"pipeline_environment schema_version must be {PIPELINE_ENVIRONMENT_SCHEMA_VERSION}"
+            f"pipeline_environment schema_version must be 1 or "
+            f"{PIPELINE_ENVIRONMENT_SCHEMA_VERSION}"
         )
-    allowed_top = {"schema_version", *_PIPELINE_ENV_SPEC}
+    env_spec = _PIPELINE_ENV_SPEC_V1 if version == 1 else _PIPELINE_ENV_SPEC
+    allowed_top = {"schema_version", *env_spec}
     extra_top = set(env) - allowed_top
     if extra_top:
         raise RunError(f"pipeline_environment has unexpected keys: {sorted(extra_top)}")
-    for group, spec in _PIPELINE_ENV_SPEC.items():
+    for group, spec in env_spec.items():
         block = env.get(group)
         if not isinstance(block, dict):
             raise RunError(f"pipeline_environment.{group} must be an object")

@@ -46,14 +46,14 @@ def _action1(journal: dict, rec: str, *, resume: bool, retry_failed: bool) -> st
 def _env() -> dict:
     """A minimal VALID pipeline_environment identity."""
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "code": {"git_sha": "abc", "image_digest": "sha256:d"},
         "model_weights": {
             "whisper_ct2_dir_sha256": "w",
             "pyannote_pipeline_sha256": "p",
             "titanet_sha256": "t",
         },
-        "gpu": {"name": "RTX 3060", "driver": "550", "cuda": "12.4"},
+        "gpu": {"name": "RTX 3060", "driver": "550", "compute_api": "12.4"},
         "runtime": {"ctranslate2": "4.0", "torch": "2.3", "pyannote_audio": "3.1.1"},
         "decode": {"beam_size": 5, "batch_size": 4, "word_timestamps": True},
         "flags": {"tf32": False, "deterministic": True},
@@ -382,9 +382,35 @@ class TestPipelineEnvironment:
 
     def test_rejects_wrong_schema_version(self) -> None:
         env = _env()
-        env["schema_version"] = 2
+        env["schema_version"] = 99
         with pytest.raises(er.RunError):
             er.validate_pipeline_environment(env)
+
+    def test_v1_env_still_validates(self) -> None:
+        env = _env()
+        env["schema_version"] = 1
+        env["gpu"] = {"name": "RTX 3060", "driver": "550", "cuda": "12.4"}
+        er.validate_pipeline_environment(env)
+
+    def test_v2_rejects_cuda_field(self) -> None:
+        env = _env()
+        env["gpu"] = {"name": "RTX 3060", "driver": "550", "cuda": "12.4"}
+        with pytest.raises(er.RunError):
+            er.validate_pipeline_environment(env)
+
+    def test_v1_rejects_compute_api_field(self) -> None:
+        env = _env()
+        env["schema_version"] = 1
+        env["gpu"] = {"name": "RTX 3060", "driver": "550", "compute_api": "12.4"}
+        with pytest.raises(er.RunError):
+            er.validate_pipeline_environment(env)
+
+    def test_v1_and_v2_produce_different_hashes(self) -> None:
+        v2 = _env()
+        v1 = _env()
+        v1["schema_version"] = 1
+        v1["gpu"] = {"name": "RTX 3060", "driver": "550", "cuda": "12.4"}
+        assert er.pipeline_environment_hash(v1) != er.pipeline_environment_hash(v2)
 
     def test_changing_any_identity_field_changes_the_hash(self) -> None:
         base = er.pipeline_environment_hash(_env())
