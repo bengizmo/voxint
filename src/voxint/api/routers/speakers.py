@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -419,12 +419,16 @@ def speaker_rename(
 ) -> Response:
     _require_csrf(request, CSRF_ROSTER_RENAME, csrf_token)
     try:
-        rename_speaker(session, speaker_id, display_name)
+        speaker = rename_speaker(session, speaker_id, display_name)
     except RosterNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RosterError as exc:
         session.rollback()
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"detail": str(exc)}, status_code=400)
         return _roster_response(request, session, error=str(exc))
+    if "application/json" in request.headers.get("accept", ""):
+        return JSONResponse({"id": str(speaker.id), "displayName": speaker.display_name})
     return _roster_response(request, session)
 
 

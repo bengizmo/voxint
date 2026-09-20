@@ -1,0 +1,58 @@
+# Voxint demo overlay — precomputed read-only gallery.
+# No model services, no worker, no beat.
+#
+# Usage on the VPS:
+#   docker compose -f compose.yaml -f deploy/demo/compose.demo.yaml \
+#     --env-file deploy/demo/.env.demo up -d
+name: voxint-demo
+
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  redis:
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  api:
+    ports:
+      - "127.0.0.1:${API_PORT:-8180}:8080"
+    environment:
+      VOXINT_MULTI_USER: "true"
+      MEDIA_RETENTION_ENABLED: "false"
+      VOXINT_SERVICE_CONTROL: ""
+      CONSOLE_PROJECTS_ENABLED: "true"
+      CONSOLE_MEDIA_ENABLED: "true"
+      CONSOLE_SPEAKERS_ENABLED: "true"
+      CONSOLE_SETTINGS_ENABLED: "true"
+      CONSOLE_ACTIVITY_ENABLED: "true"
+      CONSOLE_PALETTE_ENABLED: "true"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  worker:
+    profiles: ["never"]
+
+  beat:
+    profiles: ["never"]
+
+  migrate:
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+volumes:
+  pgdata:
+    name: voxint-demo-pgdata
