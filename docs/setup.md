@@ -7,7 +7,7 @@ in-browser first-run walkthrough that follows (setup wizard and guided tutorial)
 is covered in [onboarding.md](onboarding.md), and running it day to day is in
 [operations.md](operations.md).
 
-If you just want the fast path, the [README quickstart](../README.md#quickstart)
+If you just want the fast path, the [README quickstart](https://github.com/bengizmo/voxint#quickstart)
 is the two-command version. This page is the full reference.
 
 ## Before you start
@@ -303,7 +303,7 @@ docker compose -f compose.yaml -f compose.build.yaml up -d
 
 Exactly one service owns each build overlay; see
 [operations.md](operations.md#release-images-vs-building-from-source). For working
-without Docker at all, see the [README's developer notes](../README.md#for-developers).
+without Docker at all, see the [README's developer notes](https://github.com/bengizmo/voxint#for-developers).
 
 ## 5. Verify it's running
 

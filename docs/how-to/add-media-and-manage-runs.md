@@ -96,7 +96,7 @@ wherever the link points. So:
 - If you need to fetch links you are unsure about, run the optional restricted
   download overlay, which pins the downloader to vetted public addresses. The
   full explanation is in
-  [operations · URL ingestion & egress security](../operations.md#url-ingestion--egress-security).
+  [operations · URL ingestion & egress security](../operations.md#url-ingestion-egress-security).
 
 If you don't want this feature available at all, you can turn **"Download media
 from a URL"** off in **Settings**; see

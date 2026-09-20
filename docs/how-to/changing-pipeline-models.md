@@ -231,4 +231,4 @@ an engine is a code change in `services/whisper/`, not an `.env` setting, and it
 carries the same rule as swapping a model: a new engine has to earn a measured
 parity verdict before it is validated. The service contracts every model service
 must satisfy are documented in [GPU service contracts](../gpu-contracts.md), and
-the contribution process is in [CONTRIBUTING.md](../../CONTRIBUTING.md).
+the contribution process is in [CONTRIBUTING.md](https://github.com/bengizmo/voxint/blob/main/CONTRIBUTING.md).

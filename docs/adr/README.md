@@ -24,7 +24,7 @@ superseded rather than edited away.
 | [`0008-enrichment-persistence-simplification-scope.md`](0008-enrichment-persistence-simplification-scope.md) | The enrichment append-only persistence model is proportionate and stays; implementation scoped to narrow transaction-choreography extraction and two translation integrity gaps (idempotency key, immutability trigger). |
 
 Records 0001-0005 back the Console 2.0 refactor (epic #149); their current-state
-contracts are tested in [`tests/contracts/test_console2_characterization.py`](../../tests/contracts/test_console2_characterization.py).
+contracts are tested in [`tests/contracts/test_console2_characterization.py`](https://github.com/bengizmo/voxint/blob/main/tests/contracts/test_console2_characterization.py).
 Record 0006 fixes the scope of the plugin architecture (epic #136). Record 0007
 covers the journaled media operations (P2c, issue #155). Record 0008 scopes the
 enrichment simplification (refactoring plan Phase 2, finding H7). The full

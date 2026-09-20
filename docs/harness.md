@@ -14,7 +14,7 @@ record. Unknown extra fields are ignored; missing/malformed required fields
 with file and line number, exit code 2. Reports are written atomically (temp
 file + rename) with deterministic key ordering, so identical inputs produce
 byte-identical outputs. A small synthetic dataset exercising all three
-commands lives in [`examples/`](../examples/README.md).
+commands lives in [`examples/`](https://github.com/bengizmo/voxint/tree/main/examples).
 
 ## Why these scorers exist
 
