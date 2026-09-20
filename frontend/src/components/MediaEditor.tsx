@@ -396,6 +396,11 @@ export function MediaEditor({
     },
     [segments, goTo],
   );
+  const hearPopoverVoice = useCallback(() => {
+    if (popoverTarget) {
+      playerRef.current?.previewSegment(popoverTarget.segmentIndex);
+    }
+  }, [popoverTarget]);
 
   const postForm = useFormPost(
     reviewToken,
@@ -1594,6 +1599,7 @@ export function MediaEditor({
                 onReset={handlePopoverReset}
                 onRename={handlePopoverRename}
                 onClose={closePopover}
+                onHearVoice={capability.seekEnabled ? hearPopoverVoice : undefined}
                 disabled={busy || !writable}
               />
             )}

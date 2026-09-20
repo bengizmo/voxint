@@ -269,6 +269,7 @@ export interface TranscriptPlayerProps {
 // never invokes it.
 export interface TranscriptPlayerHandle {
   playSegment: (index: number) => void;
+  previewSegment: (index: number) => void;
   focusCursorRow: () => HTMLElement | null;
 }
 
@@ -549,6 +550,7 @@ export const TranscriptPlayer = forwardRef<
   const audioRef = useRef<HTMLAudioElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState<number>(-1);
+  const suppressFollowOnceRef = useRef(false);
   const [rate, setRate] = useState<number>(() => getStoredRate());
   // Waveform envelope (issue #57): null until (and unless) the fetch succeeds
   // and validates — the strip is pure enhancement, absent on any failure.
@@ -682,6 +684,10 @@ export const TranscriptPlayer = forwardRef<
   // segment is rendered (progressive rendering may not have reached it yet).
   useEffect(() => {
     if (!following || activeIndex < 0) return;
+    if (suppressFollowOnceRef.current) {
+      suppressFollowOnceRef.current = false;
+      return;
+    }
     if (activeIndex >= renderedEnd) {
       ensureRendered(activeIndex);
       setPendingScrollTarget(activeIndex);
@@ -797,9 +803,9 @@ export const TranscriptPlayer = forwardRef<
     scrollActiveIntoView();
   };
 
-  // Expose only "play this segment" to a driver (the review loop, or the
-  // read-only outline jump). Bounds-guarded and capability-gated (via `play`),
-  // so a bad index or disabled seek is a no-op, never a throw.
+  // playSegment: play + reveal + scroll (for the review loop / outline jump).
+  // previewSegment: play only, no scroll or cursor change (popover preview).
+  // Both are bounds-guarded and capability-gated (via `play`).
   useImperativeHandle(
     ref,
     () => ({
@@ -808,6 +814,12 @@ export const TranscriptPlayer = forwardRef<
         if (!seg) return;
         ensureRendered(index);
         setPendingScrollTarget(index);
+        play(seg);
+      },
+      previewSegment: (index: number) => {
+        const seg = segments[index];
+        if (!seg) return;
+        suppressFollowOnceRef.current = true;
         play(seg);
       },
       focusCursorRow: () => {

@@ -145,8 +145,20 @@ describe("SpeakerAssignPopover", () => {
     expect(panel.style.top).toBe(`${window.innerHeight - 344}px`);
     expect(panel.style.left).toBe(`${window.innerWidth - 328}px`);
   });
-});
 
+  it("fires onHearVoice and keeps the popover open", () => {
+    const onHearVoice = vi.fn();
+    const { props } = setup({ onHearVoice });
+    fireEvent.click(screen.getByRole("button", { name: /Hear this voice/ }));
+    expect(onHearVoice).toHaveBeenCalledOnce();
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it("does not render the hear button when onHearVoice is omitted", () => {
+    setup();
+    expect(screen.queryByRole("button", { name: /Hear this voice/ })).toBeNull();
+  });
+});
 
 it("preserves focus moved to an outside control on unmount", () => {
   const outside = document.createElement("button");

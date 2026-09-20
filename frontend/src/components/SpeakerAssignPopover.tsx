@@ -16,6 +16,7 @@ export interface SpeakerAssignPopoverProps {
   onReset: (scope: "segment" | "label") => void;
   onRename: (newName: string) => void;
   onClose: () => void;
+  onHearVoice?: () => void;
   disabled?: boolean;
 }
 
@@ -70,6 +71,7 @@ export function SpeakerAssignPopover({
   onReset,
   onRename,
   onClose,
+  onHearVoice,
   disabled = false,
 }: SpeakerAssignPopoverProps) {
   const uid = useId();
@@ -208,6 +210,16 @@ export function SpeakerAssignPopover({
         } : undefined}
       />
       <div className="sp-actions">
+        {onHearVoice && (
+          <button
+            type="button"
+            className="sp-action"
+            disabled={busy}
+            onClick={onHearVoice}
+          >
+            ▸ Hear this voice
+          </button>
+        )}
         {currentSpeakerId !== null &&
           (renaming ? (
             <form
