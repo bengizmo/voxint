@@ -147,13 +147,34 @@ describe("MergeSuggestionToast", () => {
   );
 
   it.each(["preview", "merge"])(
-    "calls onClaimLost and onDismiss when %s returns a 409 without a conflict header",
+    "dismisses without claim loss when %s returns a non-claim 409",
     async (stage) => {
       if (stage === "merge") {
         vi.mocked(apiFetch).mockResolvedValueOnce(jsonResponse(preview));
       }
       vi.mocked(apiFetch).mockRejectedValueOnce(
         new ApiError(409, "Conflict."),
+      );
+      const { props } = setup();
+
+      fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+
+      await waitFor(() => {
+        expect(props.onDismiss).toHaveBeenCalledOnce();
+      });
+      expect(props.onClaimLost).not.toHaveBeenCalled();
+      expect(props.onMerged).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["preview", "merge"])(
+    "calls onClaimLost when %s returns a claim-conflict 409",
+    async (stage) => {
+      if (stage === "merge") {
+        vi.mocked(apiFetch).mockResolvedValueOnce(jsonResponse(preview));
+      }
+      vi.mocked(apiFetch).mockRejectedValueOnce(
+        new ApiError(409, "Claim taken.", "claim"),
       );
       const { props } = setup();
 

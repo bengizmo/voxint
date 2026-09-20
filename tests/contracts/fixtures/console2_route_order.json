@@ -714,6 +714,12 @@
     ]
   ],
   [
+    "/review/{run_id}/undo/decide",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/review",
     [
       "GET"

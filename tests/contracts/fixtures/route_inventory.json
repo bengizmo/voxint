@@ -604,6 +604,12 @@
     ]
   ],
   [
+    "/review/{run_id}/undo/decide",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/review/{run_id}/undo/enroll",
     [
       "POST"

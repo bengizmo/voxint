@@ -97,6 +97,7 @@ from voxint.adjudication.undo import (
     UndoDriftError,
     UndoError,
     UndoExpiredError,
+    undo_decision,
     undo_enrollment,
     undo_merge,
 )
@@ -635,7 +636,19 @@ def decide(
             speaker_name=speaker.display_name,
             speaker_id=speaker.id,
         )
-    return _labels_response(request, session, run)
+    undo = None
+    if not is_replay:
+        created_at = row.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        undo = {
+            "kind": "decide",
+            "decisionId": str(row.id),
+            "expiresAt": (
+                created_at + timedelta(seconds=settings.UNDO_GRACE_SECONDS)
+            ).isoformat(),
+        }
+    return _labels_response(request, session, run, undo=undo)
 
 
 @router.post("/review/{run_id}/merge/preview")
@@ -2536,6 +2549,46 @@ def undo_merge_action(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     session.commit()
     return _labels_response(request, session, run, include_speakers=True)
+
+
+@router.post("/review/{run_id}/undo/decide")
+def undo_decide(
+    run_id: uuid.UUID,
+    request: Request,
+    identity: CurrentUserDep,
+    operator: OperatorDep,
+    session: SessionDep,
+    token: Annotated[uuid.UUID, Form()],
+    csrf_token: Annotated[str, Form()],
+    decision_id: Annotated[uuid.UUID, Form()],
+    nonce: Annotated[str, Form(min_length=8, max_length=64)],
+) -> Response:
+    try:
+        run = verify_claim(session, run_id, token, for_update=True)
+    except ClaimMismatchError as exc:
+        raise HTTPException(
+            status_code=409, detail=str(exc), headers=_CLAIM_CONFLICT_HEADERS
+        ) from exc
+    _require_csrf(request, CSRF_CLAIM, csrf_token)
+    settings: Settings = request.app.state.settings
+    try:
+        undo_decision(
+            session,
+            run_id=run_id,
+            decision_id=decision_id,
+            operator=operator,
+            idempotency_key=nonce,
+            grace_seconds=settings.UNDO_GRACE_SECONDS,
+            user_id=identity.user_id,
+        )
+    except (UndoDriftError, UndoExpiredError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConflictingReplayError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except UndoError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    return _labels_response(request, session, run)
 
 
 # --- Legacy review page redirects (issue #158) ---

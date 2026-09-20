@@ -88,8 +88,11 @@ export function MergeSuggestionToast({
       const data = (await mergeRes.json()) as LabelsResult;
       onMerged(data);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
+      if (err instanceof ApiError && err.conflictKind === "claim") {
         onClaimLost();
+        onDismiss();
+      } else if (err instanceof ApiError && err.status === 409) {
+        setError("Labels changed since the suggestion was shown.");
         onDismiss();
       } else {
         setError(err instanceof ApiError ? err.detail : "Merge failed.");
