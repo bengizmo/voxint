@@ -38,6 +38,8 @@ import { SpeakerAssignPopover } from "./SpeakerAssignPopover";
 import { SpeakerCombobox } from "./SpeakerCombobox";
 import { type LabelsResult, SpeakerRail } from "./SpeakerRail";
 import { UndoToast } from "./UndoToast";
+import { findMergeCandidates, type MergeSuggestion } from "../lib/merge-candidates";
+import { MergeSuggestionToast } from "./MergeSuggestionToast";
 import {
   type Segment,
   type SplitWord,
@@ -295,6 +297,7 @@ export function MediaEditor({
 
   const writable = reviewToken !== null && !claimLost;
   const [undoInfo, setUndoInfo] = useState<LabelsResult["undo"] | null>(null);
+  const [mergeSuggestion, setMergeSuggestion] = useState<MergeSuggestion | null>(null);
   const [labelStates, setLabelStates] = useState(initialLabelStates);
   const [highlightLabels, setHighlightLabels] = useState<ReadonlySet<string>>(new Set());
   useEffect(() => {
@@ -412,6 +415,7 @@ export function MediaEditor({
 
   const onLabelsChanged = useCallback(
     (result: LabelsResult) => {
+      setMergeSuggestion(null);
       const changedLabels = new Set<string>();
       for (const newLs of result.labels) {
         const oldLs = labelStates.find((ls) => ls.label === newLs.label);
@@ -458,6 +462,7 @@ export function MediaEditor({
     setEditText(current?.text ?? "");
     setConfirmDiscard(false);
     setAssignStatus(null);
+    setMergeSuggestion(null);
     setProvOpen(false);
   }, [current?.segmentId, current?.text]);
 
@@ -714,12 +719,31 @@ export function MediaEditor({
         const name = speakers.find((speaker) => speaker.id === speakerId)?.displayName;
         const count = popoverResolution?.segmentCount ?? 0;
         setAssignStatus(`Assigned ${count} ${count === 1 ? "segment" : "segments"} to ${name ?? "speaker"}.`);
+        const suggestion = findMergeCandidates(result.labels, popoverSegment.label, speakerId);
+        setMergeSuggestion(suggestion);
       }
     } finally {
       busyRef.current = false;
       setBusy(false);
     }
   }, [popoverTarget, popoverSegment, writable, busyRef, closePopover, setCursor, reassignSegment, reassignChild, setBusy, postForm, runId, onLabelsChanged, speakers, popoverResolution]);
+
+  const handleRailAssignment = useCallback(
+    (label: string, speakerId: string, freshLabels: LabelStateShape[]) => {
+      const suggestion = findMergeCandidates(freshLabels, label, speakerId);
+      setMergeSuggestion(suggestion);
+    },
+    [],
+  );
+
+  const dismissMergeSuggestion = useCallback(() => setMergeSuggestion(null), []);
+  const handleMergeSuggestionMerged = useCallback(
+    (data: LabelsResult) => {
+      setMergeSuggestion(null);
+      onLabelsChanged(data);
+    },
+    [onLabelsChanged],
+  );
 
   const handlePopoverReset = useCallback(async (scope: "segment" | "label") => {
     if (!popoverTarget || !popoverSegment || !writable || busyRef.current) return;
@@ -1614,6 +1638,7 @@ export function MediaEditor({
             speakers={speakers}
             onClaimLost={onAnnotationClaimLost}
             onLabelsChanged={onLabelsChanged}
+            onAssignment={handleRailAssignment}
             onHearVoice={capability.seekEnabled ? hearVoice : undefined}
             hearableLabels={hearableLabels}
           />
@@ -1660,6 +1685,18 @@ export function MediaEditor({
             onLabelsChanged(data);
           }}
           onDismiss={() => setUndoInfo(null)}
+        />
+      )}
+      {mergeSuggestion && reviewToken && (
+        <MergeSuggestionToast
+          key={`${mergeSuggestion.assignedLabel}:${mergeSuggestion.targetSpeakerId}`}
+          suggestion={mergeSuggestion}
+          runId={runId}
+          reviewToken={reviewToken}
+          onClaimLost={onAnnotationClaimLost}
+          onMerged={handleMergeSuggestionMerged}
+          onDismiss={dismissMergeSuggestion}
+          stacked={!!undoInfo}
         />
       )}
     </>
