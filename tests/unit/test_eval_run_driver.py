@@ -329,9 +329,10 @@ class TestReconcile:
 # --------------------------------------------------------------------------- #
 # Fingerprint refusal logic (pure)
 # --------------------------------------------------------------------------- #
-def _fp(mode="full", whisper="sha256:img", gpu_name="RTX 3060"):
+def _fp(mode="full", whisper="sha256:img", gpu_name="RTX 3060", compute_tier="gpu"):
     return {
         "mode": mode,
+        "compute_tier": compute_tier,
         "images": {"whisper": whisper},
         "gpu": {"name": gpu_name, "uuid": "GPU-x", "driver": "550"},
         "cuda_visible_devices": "0",
@@ -366,17 +367,112 @@ class TestFingerprintRefusal:
         with pytest.raises(eq.EvalError, match=r"gpu\.name"):
             eq.require_verified_fingerprints(gpu4090, gpu4090, _static_env(gpu="RTX 3060"))
 
+    def test_rocm_full_consistent_passes(self) -> None:
+        fp = _fp(compute_tier="rocm")
+        eq.require_verified_fingerprints(fp, fp, _static_env())
+
+    def test_rocm_degraded_refuses(self) -> None:
+        fp = _fp(mode="degraded", compute_tier="rocm")
+        with pytest.raises(eq.EvalError, match="degraded before"):
+            eq.require_verified_fingerprints(fp, _fp(compute_tier="rocm"), _static_env())
+
+
+class TestAmdGpuProbe:
+    """Unit tests for _probe_amd_gpu() with synthetic sysfs trees."""
+
+    @staticmethod
+    def _make_amd_sysfs(
+        tmp_path: Path,
+        *,
+        vendor: str = "0x1002",
+        product_name: str | None = "Navi 10",
+        unique_id: str | None = "0x1234abcd",
+        pci_slot: str = "0000:03:00.0",
+        driver_version: str | None = None,
+    ) -> str:
+        device = tmp_path / "class" / "drm" / "renderD128" / "device"
+        device.mkdir(parents=True)
+        (device / "vendor").write_text(vendor + "\n")
+        (device / "uevent").write_text(
+            f"DRIVER=amdgpu\nPCI_SLOT_NAME={pci_slot}\n"
+        )
+        if product_name is not None:
+            (device / "product_name").write_text(product_name + "\n")
+        if unique_id is not None:
+            (device / "unique_id").write_text(unique_id + "\n")
+        if driver_version is not None:
+            mod = tmp_path / "module" / "amdgpu"
+            mod.mkdir(parents=True)
+            (mod / "version").write_text(driver_version + "\n")
+        return str(tmp_path)
+
+    def test_finds_amd_device(self, tmp_path: Path) -> None:
+        root = self._make_amd_sysfs(tmp_path)
+        result = eq._probe_amd_gpu(root)
+        assert result is not None
+        assert result["name"] == "Navi 10"
+        assert result["uuid"] == "0x1234abcd"
+
+    def test_no_amd_device(self, tmp_path: Path) -> None:
+        (tmp_path / "class" / "drm").mkdir(parents=True)
+        assert eq._probe_amd_gpu(str(tmp_path)) is None
+
+    def test_nvidia_device_skipped(self, tmp_path: Path) -> None:
+        root = self._make_amd_sysfs(tmp_path, vendor="0x10de")
+        assert eq._probe_amd_gpu(root) is None
+
+    def test_fallback_name(self, tmp_path: Path) -> None:
+        root = self._make_amd_sysfs(tmp_path, product_name=None)
+        result = eq._probe_amd_gpu(root)
+        assert result is not None
+        assert result["name"] == "AMD GPU (renderD128)"
+
+    def test_fallback_uuid_to_pci_slot(self, tmp_path: Path) -> None:
+        root = self._make_amd_sysfs(tmp_path, unique_id=None, pci_slot="0000:c5:00.0")
+        result = eq._probe_amd_gpu(root)
+        assert result is not None
+        assert result["uuid"] == "0000:c5:00.0"
+
+    def test_fallback_driver_to_kernel_version(self, tmp_path: Path) -> None:
+        import platform
+
+        root = self._make_amd_sysfs(tmp_path)
+        result = eq._probe_amd_gpu(root)
+        assert result is not None
+        assert result["driver"] == platform.release()
+
+    def test_uses_explicit_driver_version(self, tmp_path: Path) -> None:
+        root = self._make_amd_sysfs(tmp_path, driver_version="6.7.1")
+        result = eq._probe_amd_gpu(root)
+        assert result is not None
+        assert result["driver"] == "6.7.1"
+
+    def test_probe_fingerprint_rocm_routes_to_sysfs(self, tmp_path: Path) -> None:
+        root = self._make_amd_sysfs(tmp_path)
+        fp = eq.probe_fingerprint("noprefix", None, compute_tier="rocm", sysfs_root=root)
+        assert fp["compute_tier"] == "rocm"
+        assert fp["gpu"]["name"] == "Navi 10"
+        assert fp["probe_status"]["gpu"] == "observed"
+        assert fp["mode"] == "degraded"
+
+    def test_probe_fingerprint_rocm_no_amd_gpu_degrades(self, tmp_path: Path) -> None:
+        (tmp_path / "class" / "drm").mkdir(parents=True)
+        fp = eq.probe_fingerprint("noprefix", None, compute_tier="rocm", sysfs_root=str(tmp_path))
+        assert fp["gpu"] is None
+        assert fp["probe_status"]["gpu"] == "probe_failed"
+        assert fp["mode"] == "degraded"
+
 
 # --------------------------------------------------------------------------- #
 # Write-ahead journal drives crash-safe resume at each boundary
 # --------------------------------------------------------------------------- #
 def _env() -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "code": {"git_sha": "abc", "image_digest": "sha256:d"},
         "model_weights": {"whisper_ct2_dir_sha256": "w", "pyannote_pipeline_sha256": "p",
                           "titanet_sha256": "t"},
-        "gpu": {"name": "RTX 3060", "driver": "550", "cuda": "12.4"},
+        "gpu": {"name": "RTX 3060", "driver": "550", "compute_api": "12.4"},
         "runtime": {"ctranslate2": "4.0", "torch": "2.3", "pyannote_audio": "3.1.1"},
         "decode": {"beam_size": 5, "batch_size": 4, "word_timestamps": True},
         "flags": {"tf32": False, "deterministic": True},
