@@ -806,6 +806,14 @@
     true
   ],
   [
+    "/review/{run_id}/undo/decide",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/review/{run_id}/undo/enroll",
     [
       "POST"

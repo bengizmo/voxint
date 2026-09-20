@@ -163,6 +163,45 @@ person.**, or **Could not tell** with **Your ruling.**
 Each row has **Change**. Press it to reveal the same actions with a **Reassign
 to…** picker. Press **Hide** to close the actions again.
 
+### Hear a voice before assigning (popover preview)
+
+When the speaker assignment popover is open (click a speaker name in the
+transcript, or press `s`), each speaker option shows a **Hear this voice**
+button. Clicking it plays a representative segment of that speaker without moving
+the review cursor or closing the popover. Listen, then pick the right person.
+
+The button only appears when audio playback is available. Playback stops
+automatically when you close the popover or make your choice.
+
+### Undo a ruling
+
+After assigning a speaker, excluding a voice, or ruling "can't tell," an **undo
+toast** appears at the bottom of the screen. Click **Undo** within five minutes
+to reverse the ruling and restore the label to its previous state.
+
+The undo window is enforced on the server: if the label was re-ruled by another
+action before you click Undo, the toast tells you so. Closing the toast, waiting
+past the deadline, or making another ruling dismisses it.
+
+Undo is available for label-scope rulings only. Segment-scope corrections
+(reassigning a single line) do not offer undo yet.
+
+### Merge suggestions
+
+After you assign a speaker to a label, the console checks whether other
+unresolved labels have voices that match the same person. If it finds any, a
+**merge suggestion toast** appears (stacked above the undo toast if both are
+showing).
+
+The toast names the suggested speaker and offers two choices:
+
+- **Merge** opens a preview of the exact change (how many labels move), then
+  confirms.
+- **Dismiss** (the x button, or wait for it to expire) skips the suggestion.
+
+The suggestion only appears for labels that have no human ruling and no grounded
+match, so it will not override your earlier decisions.
+
 ### One person split across two labels ("same speaker")
 
 Diarization sometimes splits **one** person into two labels: you'll see
@@ -354,6 +393,8 @@ player.](../images/keyboard-shortcuts.png)
 | **j** / **k** | Go to and play the next / previous line |
 | **1**–**9** | Assign this line to the 1st–9th speaker on your roster |
 | **0** | Reset this line to its detected speaker |
+| **=** | Assign this line to the previous line's speaker |
+| **s** / **@** | Open the speaker assignment popover |
 | **d** | Toggle the download transcript panel and focus it |
 | **?** | Show the cheat-sheet |
 | **Ctrl/⌘+Enter** | Save an edit (while typing in the edit box) |
