@@ -669,7 +669,7 @@ export function SpeakerRail({
     if (!reviewMode) return;
     focusCardRef.current?.focus({ preventScroll: true });
     focusCardRef.current?.scrollIntoView({
-      behavior: "smooth",
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
       block: "nearest",
     });
   }, [reviewMode, reviewIndex, focusedLabel]);

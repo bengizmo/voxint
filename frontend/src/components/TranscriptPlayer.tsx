@@ -395,7 +395,7 @@ const TranscriptRow = memo(function TranscriptRow({
         <>
           <button
             type="button"
-            className={`tp-speaker-btn${resolved ? "" : " tp-speaker-unresolved"}`}
+            className="tp-speaker-btn"
             data-resolved={resolved}
             aria-haspopup="dialog"
             aria-expanded={popoverSegmentIndex === index}

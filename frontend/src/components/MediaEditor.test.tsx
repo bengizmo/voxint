@@ -91,6 +91,7 @@ it("encodes label-scope assignment paths", async () => {
   await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
   expect(vi.mocked(apiFetch).mock.calls[0][0]).toBe("/review/run/labels/VOICE%2FA/decision");
   expect(body().get("action")).toBe("assign");
+  expect(await screen.findByText("Assigned 2 segments to Bob.")).toBeTruthy();
 });
 
 it("enrolls at label scope and hides Create in segment scope", async () => {
@@ -117,13 +118,15 @@ it("sends rename CSRF and adopts the server's normalized name", async () => {
   vi.mocked(apiFetch).mockResolvedValue({
     json: async () => ({ id: "alice", displayName: "Alicia" }),
   } as Response);
-  setup();
+  setup({ segments: segments.map((seg, index) =>
+    index === 0 ? { ...seg, label: "VOICE/B" } : seg) });
   fireEvent.click(screen.getByRole("button", { name: /Rename/ }));
   fireEvent.change(screen.getByLabelText("Rename “Alice”"), { target: { value: " Alicia " } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await screen.findByRole("button", { name: "Speaker 0: Alicia" });
   expect(vi.mocked(apiFetch).mock.calls[0][0]).toBe("/speakers/alice/rename");
   expect(body().get("csrf_token")).toBe("rename-token");
+  expect(screen.getByText("Renamed speaker to Alicia.")).toBeTruthy();
 });
 
 it("explains unsupported label reset without sending a mutation", () => {
@@ -132,4 +135,21 @@ it("explains unsupported label reset without sending a mutation", () => {
   fireEvent.click(screen.getByRole("button", { name: /Reset to detected speaker/ }));
   expect(apiFetch).not.toHaveBeenCalled();
   expect(screen.getByRole("alert").textContent).toContain("only supported for just this segment");
+});
+
+
+it("blocks global assignment and review shortcuts while the popover is open", () => {
+  setup();
+  const panel = screen.getByRole("dialog");
+  for (const key of ["1", "=", "v"]) fireEvent.keyDown(panel, { key });
+  expect(apiFetch).not.toHaveBeenCalled();
+  expect(screen.getByRole("dialog")).toBe(panel);
+});
+
+it("explains copying the previous speaker at the first segment", () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  fireEvent.keyDown(document.body, { key: "=" });
+  expect(screen.getByText("No previous segment to copy from.")).toBeTruthy();
+  expect(apiFetch).not.toHaveBeenCalled();
 });

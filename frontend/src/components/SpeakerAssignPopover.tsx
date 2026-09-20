@@ -91,10 +91,14 @@ export function SpeakerAssignPopover({
     if (!triggerRef.current && document.activeElement instanceof HTMLElement) {
       triggerRef.current = document.activeElement;
     }
-    panelRef.current?.focus({ preventScroll: true });
+    const panel = panelRef.current;
+    panel?.focus({ preventScroll: true });
     return () => {
       mountedRef.current = false;
-      triggerRef.current?.focus({ preventScroll: true });
+      const active = document.activeElement;
+      if (panel?.contains(active) || active === document.body) {
+        triggerRef.current?.focus({ preventScroll: true });
+      }
     };
     // Capture the opener once, before the combobox focuses its input.
   }, []);
@@ -122,6 +126,19 @@ export function SpeakerAssignPopover({
   }, [anchorRect]);
 
   useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const onFocusOut = () => {
+      requestAnimationFrame(() => {
+        if (!mountedRef.current) return;
+        if (!panelRef.current?.contains(document.activeElement)) onClose();
+      });
+    };
+    panel.addEventListener("focusout", onFocusOut);
+    return () => panel.removeEventListener("focusout", onFocusOut);
+  }, [onClose]);
+
+  useEffect(() => {
     const onClick = (event: MouseEvent) => {
       if (
         event.target instanceof Node &&
@@ -136,9 +153,12 @@ export function SpeakerAssignPopover({
         onClose();
       }
     };
+    const onScroll = () => onClose();
+    window.addEventListener("scroll", onScroll, { capture: true, passive: true });
     document.addEventListener("click", onClick);
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
+      window.removeEventListener("scroll", onScroll, { capture: true });
       document.removeEventListener("click", onClick);
       document.removeEventListener("keydown", onKeyDown, true);
     };

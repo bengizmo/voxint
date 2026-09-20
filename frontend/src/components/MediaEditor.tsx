@@ -133,6 +133,7 @@ export function MediaEditor({
     words: SplitWord[];
   } | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  const pendingOpenRef = useRef(false);
   const helpOpenRef = useRef(false);
   helpOpenRef.current = helpOpen;
   const [assignStatus, setAssignStatus] = useState<string | null>(null);
@@ -328,6 +329,10 @@ export function MediaEditor({
     segmentIndex: number;
     anchorRect: DOMRect;
   } | null>(null);
+  const popoverOpenRef = useRef(false);
+  useEffect(() => {
+    popoverOpenRef.current = popoverTarget != null;
+  }, [popoverTarget]);
   const closePopover = useCallback(() => setPopoverTarget(null), []);
   const handleSpeakerClick = useCallback((segmentIndex: number, anchorRect: DOMRect) => {
     if (busyRef.current) return;
@@ -354,16 +359,25 @@ export function MediaEditor({
     play,
   );
   useEffect(() => {
+    if (pendingOpenRef.current) {
+      pendingOpenRef.current = false;
+      return;
+    }
     setPopoverTarget(null);
   }, [cursor, writable]);
   const [pendingPopoverIndex, setPendingPopoverIndex] = useState<number | null>(null);
   useLayoutEffect(() => {
-    if (pendingPopoverIndex == null || pendingPopoverIndex !== cursor) return;
+    if (pendingPopoverIndex == null) return;
+    if (pendingPopoverIndex !== cursor) {
+      setPendingPopoverIndex(null);
+      return;
+    }
     setPendingPopoverIndex(null);
     const row = playerRef.current?.focusCursorRow();
     const btn = row?.querySelector<HTMLElement>(".tp-speaker-btn");
     if (btn) {
       btn.focus();
+      pendingOpenRef.current = true;
       handleSpeakerClick(pendingPopoverIndex, btn.getBoundingClientRect());
     }
   }, [cursor, pendingPopoverIndex, handleSpeakerClick]);
@@ -690,12 +704,17 @@ export function MediaEditor({
         { nonce: makeNonce(), action: "assign", speaker_id: speakerId },
         { claimLostOnConflict: false },
       );
-      if (result) onLabelsChanged(result);
+      if (result) {
+        onLabelsChanged(result);
+        const name = speakers.find((speaker) => speaker.id === speakerId)?.displayName;
+        const count = popoverResolution?.segmentCount ?? 0;
+        setAssignStatus(`Assigned ${count} ${count === 1 ? "segment" : "segments"} to ${name ?? "speaker"}.`);
+      }
     } finally {
       busyRef.current = false;
       setBusy(false);
     }
-  }, [popoverTarget, popoverSegment, writable, busyRef, closePopover, setCursor, reassignSegment, reassignChild, setBusy, postForm, runId, onLabelsChanged]);
+  }, [popoverTarget, popoverSegment, writable, busyRef, closePopover, setCursor, reassignSegment, reassignChild, setBusy, postForm, runId, onLabelsChanged, speakers, popoverResolution]);
 
   const handlePopoverReset = useCallback(async (scope: "segment" | "label") => {
     if (!popoverTarget || !popoverSegment || !writable || busyRef.current) return;
@@ -753,9 +772,8 @@ export function MediaEditor({
       const data = await res.json() as { id: string; displayName: string };
       setSpeakers((prev) => prev.map((speaker) =>
         speaker.id === data.id ? { ...speaker, displayName: data.displayName } : speaker));
-      const renamedLabel = popoverSegment.label;
       setSegments((prev) => prev.map((seg) =>
-        seg.label === renamedLabel && seg.speaker === popoverSegment.speaker
+        seg.speaker === popoverSegment.speaker
           ? { ...seg, speaker: data.displayName } : seg));
       setLabelStates((prev) => prev.map((ls) => ({
         ...ls,
@@ -763,6 +781,7 @@ export function MediaEditor({
         cosineSpeakerName: ls.cosineSpeakerId === data.id ? data.displayName : ls.cosineSpeakerName,
         candidateSpeakerName: ls.candidateSpeakerId === data.id ? data.displayName : ls.candidateSpeakerName,
       })));
+      setAssignStatus(`Renamed speaker to ${data.displayName}.`);
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : "Could not rename speaker.");
     } finally {
@@ -954,6 +973,7 @@ export function MediaEditor({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (helpOpenRef.current) return;
+      if (popoverOpenRef.current) return;
       const el = event.target as HTMLElement | null;
       const tag = el?.tagName;
       if (
@@ -1017,7 +1037,10 @@ export function MediaEditor({
           break;
         case REVIEW_KEY.sameAsPrevious: {
           event.preventDefault();
-          if (cursor <= 0) break;
+          if (cursor <= 0) {
+            setAssignStatus("No previous segment to copy from.");
+            break;
+          }
           const prevSeg = segments[cursor - 1];
           if (!prevSeg?.label) {
             setAssignStatus("Previous segment has no speaker to copy.");
@@ -1280,8 +1303,8 @@ export function MediaEditor({
         {writable && unresolvedCount > 0 && (
           <div
             className="me-unresolved-banner"
-            role="status"
-            aria-live="polite"
+            role="region"
+            aria-label="Unresolved voices"
             style={{
               padding: "0.5rem 0.75rem",
               background: "var(--surface-2)",
@@ -1289,8 +1312,10 @@ export function MediaEditor({
               fontSize: "0.875rem",
             }}
           >
-            {unresolvedCount} unidentified {unresolvedCount === 1 ? "voice" : "voices"},{" "}
-            {affectedSegmentCount} {affectedSegmentCount === 1 ? "segment" : "segments"} affected ·{" "}
+            <span aria-live="polite">
+              {unresolvedCount} unidentified {unresolvedCount === 1 ? "voice" : "voices"},{" "}
+              {affectedSegmentCount} {affectedSegmentCount === 1 ? "segment" : "segments"} affected
+            </span>{" · "}
             <button
               type="button"
               disabled={busy}
