@@ -14,6 +14,6 @@
 #   ship no setuptools at all, so the pin must be explicit here
 #   (84.x confirmed broken, 80.10.2 verified working).
 -r requirements.txt
-torch==2.5.0
+torch==2.14.0
 torchaudio==2.5.0
 setuptools>=70,<81
