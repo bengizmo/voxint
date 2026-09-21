@@ -3,7 +3,7 @@
 # pyproject.toml's `parity` extra: the parity verdict that keeps
 # titanet-large-v2 on the ONNX engine was measured against exactly this
 # chain, so version skew here is embedding-space drift.
-numpy==1.24.3
+numpy==2.5.3
 
 librosa==0.10.1
 soundfile==0.12.1
