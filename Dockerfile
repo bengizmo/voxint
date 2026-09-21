@@ -1,7 +1,7 @@
 # Voxint api/worker image (CPU). GPU model services have their own images under services/.
 
 # --- frontend build (Node exists ONLY at image-build time, never at runtime) ---
-FROM node:22-slim AS frontend
+FROM node:25-slim AS frontend
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci                              # --frozen semantics via the committed lockfile; never npm install
