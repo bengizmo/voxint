@@ -24,6 +24,7 @@ export function UndoToast({
   onUndone,
   onDismiss,
 }: UndoToastProps) {
+  const busyRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -41,7 +42,8 @@ export function UndoToast({
   }, [undo.expiresAt, onDismiss]);
 
   const doUndo = useCallback(async () => {
-    if (busy || !claimCsrf) return;
+    if (busyRef.current || !claimCsrf) return;
+    busyRef.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -52,6 +54,18 @@ export function UndoToast({
         body.append("decision_id", undo.decisionId);
         body.append("nonce", `undo:${undo.decisionId}`);
         const res = await apiFetch(`/review/${runId}/undo/enroll`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            accept: "application/json",
+          },
+          body: body.toString(),
+        });
+        onUndone((await res.json()) as LabelsResult);
+      } else if (undo.kind === "decide") {
+        body.append("decision_id", undo.decisionId);
+        body.append("nonce", `undo:${undo.decisionId}`);
+        const res = await apiFetch(`/review/${runId}/undo/decide`, {
           method: "POST",
           headers: {
             "content-type": "application/x-www-form-urlencoded",
@@ -78,17 +92,27 @@ export function UndoToast({
         onClaimLost();
         onDismiss();
       } else if (err instanceof ApiError && err.status === 409) {
-        setError("Too late to undo — the attribution was changed since.");
+        const expired = Date.now() >= new Date(undo.expiresAt).getTime();
+        setError(
+          expired
+            ? "Undo window expired."
+            : "Too late to undo — the attribution was changed since.",
+        );
       } else {
         setError(err instanceof ApiError ? err.detail : "Undo failed.");
       }
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
-  }, [busy, claimCsrf, reviewToken, undo, runId, onUndone, onClaimLost, onDismiss]);
+  }, [claimCsrf, reviewToken, undo, runId, onUndone, onClaimLost, onDismiss]);
 
   const label =
-    undo.kind === "enroll" ? "Enrollment applied." : "Labels merged.";
+    undo.kind === "enroll"
+      ? "Enrollment applied."
+      : undo.kind === "decide"
+        ? "Decision applied."
+        : "Labels merged.";
 
   return (
     <div

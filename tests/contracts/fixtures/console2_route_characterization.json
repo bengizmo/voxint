@@ -806,6 +806,14 @@
     true
   ],
   [
+    "/review/{run_id}/undo/decide",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/review/{run_id}/undo/enroll",
     [
       "POST"
@@ -1175,6 +1183,22 @@
     "/settings/status/services/{service_key}/row",
     [
       "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/status/services/{service_key}/start",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/status/services/{service_key}/stop",
+    [
+      "POST"
     ],
     "onboarding",
     true

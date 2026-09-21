@@ -1,6 +1,6 @@
 """Model-service lifecycle control (#556).
 
-Lets the console restart model services (whisper, pyannote, titanet) from the
+Lets the console start, stop, and restart model services (whisper, pyannote, titanet) from the
 Status page. The controller dispatches to the right backend based on the
 ``VOXINT_SERVICE_CONTROL`` setting:
 
@@ -80,6 +80,9 @@ SERVICES: dict[str, ServiceDef] = {
 
 class ControlOutcome(enum.Enum):
     RESTARTED = "restarted"
+    STARTED = "started"
+    STOPPED = "stopped"
+    ALREADY_RUNNING = "already_running"
     ALREADY_STOPPED = "already_stopped"
     UNAVAILABLE = "unavailable"
     TIMEOUT = "timeout"
@@ -112,11 +115,15 @@ class ServiceController(Protocol):
     @property
     def backend_name(self) -> str: ...
 
+    def start(self, service_key: str) -> ControlResult: ...
+
+    def stop(self, service_key: str) -> ControlResult: ...
+
     def restart(self, service_key: str) -> ControlResult: ...
 
     def inspect(self, service_key: str) -> ServiceState: ...
 
-    def terminal_hint(self, service_key: str) -> str | None: ...
+    def terminal_hint(self, service_key: str, action: str = "restart") -> str | None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -139,21 +146,32 @@ class NoopController:
     def backend_name(self) -> str:
         return "none"
 
+    def start(self, service_key: str) -> ControlResult:
+        return ControlResult(ControlOutcome.UNAVAILABLE, self._reason)
+
+    def stop(self, service_key: str) -> ControlResult:
+        return ControlResult(ControlOutcome.UNAVAILABLE, self._reason)
+
     def restart(self, service_key: str) -> ControlResult:
         return ControlResult(ControlOutcome.UNAVAILABLE, self._reason)
 
     def inspect(self, service_key: str) -> ServiceState:
         return ServiceState.UNKNOWN
 
-    def terminal_hint(self, service_key: str) -> str | None:
+    def terminal_hint(self, service_key: str, action: str = "restart") -> str | None:
         svc = SERVICES.get(service_key)
         if svc is None:
             return None
-        if self._install_kind == "docker":
-            return f"docker compose restart {svc.compose_service}"
         if self._install_kind == "native":
+            if action == "start":
+                return (
+                    f"launchctl bootstrap gui/$(id -u) "
+                    f"~/.voxint-metal/run/{svc.launchd_label}.plist"
+                )
+            if action == "stop":
+                return f"launchctl bootout gui/$(id -u)/{svc.launchd_label}"
             return f"launchctl kickstart -k gui/$(id -u)/{svc.launchd_label}"
-        return f"docker compose restart {svc.compose_service}"
+        return f"docker compose {action} {svc.compose_service}"
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +179,8 @@ class NoopController:
 # ---------------------------------------------------------------------------
 
 _DOCKER_API_VERSION = "v1.43"
-_RESTART_GRACEFUL_SECONDS = 10
-_RESTART_TIMEOUT_SECONDS = 30
+_GRACEFUL_SECONDS = 10
+_CONTROL_TIMEOUT_SECONDS = 30
 
 
 class DockerController:
@@ -224,6 +242,32 @@ class DockerController:
             return ServiceState.RUNNING
         return ServiceState.STOPPED
 
+    def start(self, service_key: str) -> ControlResult:
+        if service_key not in SERVICE_KEYS:
+            return ControlResult(ControlOutcome.ERROR, f"unknown service: {service_key}")
+
+        svc = SERVICES[service_key]
+        lock = self._locks[service_key]
+        if not lock.acquire(blocking=False):
+            return ControlResult(ControlOutcome.BUSY, f"{svc.label} operation already in progress")
+        try:
+            return self._do_start(svc)
+        finally:
+            lock.release()
+
+    def stop(self, service_key: str) -> ControlResult:
+        if service_key not in SERVICE_KEYS:
+            return ControlResult(ControlOutcome.ERROR, f"unknown service: {service_key}")
+
+        svc = SERVICES[service_key]
+        lock = self._locks[service_key]
+        if not lock.acquire(blocking=False):
+            return ControlResult(ControlOutcome.BUSY, f"{svc.label} operation already in progress")
+        try:
+            return self._do_stop(svc)
+        finally:
+            lock.release()
+
     def restart(self, service_key: str) -> ControlResult:
         if service_key not in SERVICE_KEYS:
             return ControlResult(ControlOutcome.ERROR, f"unknown service: {service_key}")
@@ -231,15 +275,92 @@ class DockerController:
         svc = SERVICES[service_key]
         lock = self._locks[service_key]
         if not lock.acquire(blocking=False):
-            return ControlResult(ControlOutcome.BUSY, f"{svc.label} restart already in progress")
+            return ControlResult(ControlOutcome.BUSY, f"{svc.label} operation already in progress")
         try:
             return self._do_restart(svc)
         finally:
             lock.release()
 
+    def _do_start(self, svc: ServiceDef) -> ControlResult:
+        try:
+            with self._client(timeout=_CONTROL_TIMEOUT_SECONDS) as client:
+                container_id = self._find_container(client, svc.compose_service)
+                if container_id is None:
+                    return ControlResult(
+                        ControlOutcome.ERROR,
+                        f"could not find a unique {svc.compose_service} container "
+                        f"in project {self._compose_project}",
+                    )
+
+                resp = client.post(f"/containers/{container_id}/start")
+                if resp.status_code == 204:
+                    logger.info(
+                        "service_start service=%s container=%s outcome=started",
+                        svc.key,
+                        container_id[:12],
+                    )
+                    return ControlResult(ControlOutcome.STARTED, f"{svc.label} started")
+                if resp.status_code == 304:
+                    return ControlResult(
+                        ControlOutcome.ALREADY_RUNNING, f"{svc.label} is already running"
+                    )
+                return ControlResult(
+                    ControlOutcome.ERROR,
+                    f"Docker API returned {resp.status_code}: {resp.text[:200]}",
+                )
+        except httpx.TimeoutException:
+            return ControlResult(
+                ControlOutcome.TIMEOUT,
+                f"{svc.label} start timed out after {_CONTROL_TIMEOUT_SECONDS}s",
+            )
+        except httpx.HTTPError as exc:
+            return ControlResult(ControlOutcome.ERROR, f"Docker API error: {exc}")
+        except (OSError, ValueError, KeyError) as exc:
+            return ControlResult(ControlOutcome.ERROR, f"cannot reach Docker socket: {exc}")
+
+    def _do_stop(self, svc: ServiceDef) -> ControlResult:
+        try:
+            with self._client(timeout=_CONTROL_TIMEOUT_SECONDS) as client:
+                container_id = self._find_container(client, svc.compose_service)
+                if container_id is None:
+                    return ControlResult(
+                        ControlOutcome.ERROR,
+                        f"could not find a unique {svc.compose_service} container "
+                        f"in project {self._compose_project}",
+                    )
+
+                resp = client.post(
+                    f"/containers/{container_id}/stop",
+                    params={"t": str(_GRACEFUL_SECONDS)},
+                )
+                if resp.status_code == 204:
+                    logger.info(
+                        "service_stop service=%s container=%s outcome=stopped",
+                        svc.key,
+                        container_id[:12],
+                    )
+                    return ControlResult(ControlOutcome.STOPPED, f"{svc.label} stopped")
+                if resp.status_code == 304:
+                    return ControlResult(
+                        ControlOutcome.ALREADY_STOPPED, f"{svc.label} is already stopped"
+                    )
+                return ControlResult(
+                    ControlOutcome.ERROR,
+                    f"Docker API returned {resp.status_code}: {resp.text[:200]}",
+                )
+        except httpx.TimeoutException:
+            return ControlResult(
+                ControlOutcome.TIMEOUT,
+                f"{svc.label} stop timed out after {_CONTROL_TIMEOUT_SECONDS}s",
+            )
+        except httpx.HTTPError as exc:
+            return ControlResult(ControlOutcome.ERROR, f"Docker API error: {exc}")
+        except (OSError, ValueError, KeyError) as exc:
+            return ControlResult(ControlOutcome.ERROR, f"cannot reach Docker socket: {exc}")
+
     def _do_restart(self, svc: ServiceDef) -> ControlResult:
         try:
-            with self._client(timeout=_RESTART_TIMEOUT_SECONDS) as client:
+            with self._client(timeout=_CONTROL_TIMEOUT_SECONDS) as client:
                 container_id = self._find_container(client, svc.compose_service)
                 if container_id is None:
                     return ControlResult(
@@ -250,7 +371,7 @@ class DockerController:
 
                 resp = client.post(
                     f"/containers/{container_id}/restart",
-                    params={"t": str(_RESTART_GRACEFUL_SECONDS)},
+                    params={"t": str(_GRACEFUL_SECONDS)},
                 )
                 if resp.status_code == 204:
                     logger.info(
@@ -266,7 +387,7 @@ class DockerController:
         except httpx.TimeoutException:
             return ControlResult(
                 ControlOutcome.TIMEOUT,
-                f"{svc.label} restart timed out after {_RESTART_TIMEOUT_SECONDS}s",
+                f"{svc.label} restart timed out after {_CONTROL_TIMEOUT_SECONDS}s",
             )
         except httpx.HTTPError as exc:
             return ControlResult(ControlOutcome.ERROR, f"Docker API error: {exc}")
@@ -286,7 +407,7 @@ class DockerController:
         except (httpx.HTTPError, OSError, ValueError, KeyError):
             return ServiceState.UNKNOWN
 
-    def terminal_hint(self, service_key: str) -> str | None:
+    def terminal_hint(self, service_key: str, action: str = "restart") -> str | None:
         return None
 
 

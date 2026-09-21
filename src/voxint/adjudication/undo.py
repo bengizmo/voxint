@@ -32,7 +32,7 @@ class UndoDriftError(UndoError):
 
 
 class UndoExpiredError(UndoError):
-    """The merge undo grace window has passed."""
+    """The undo grace window has passed."""
 
 
 def _revoke_for(
@@ -124,6 +124,8 @@ def undo_enrollment(
         or original.decision != Decision.ASSIGN.value
     ):
         raise UndoError("only a label-scope enrollment assignment from this run can be undone")
+    if original.idempotency_key.startswith("merge:"):
+        raise UndoError("use the merge undo endpoint")
 
     existing = _revoke_for(session, decision_id)
     if existing is not None:
@@ -172,6 +174,73 @@ def undo_enrollment(
         "voided_decision_id": decision_id,
         "speaker_id": original.speaker_id,
         "speaker_archived": archived,
+        "is_replay": False,
+    }
+
+
+def undo_decision(
+    session: Session,
+    run_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    operator: str,
+    idempotency_key: str,
+    grace_seconds: float,
+    user_id: uuid.UUID | None = None,
+) -> dict[str, object]:
+    """Undo a plain label-scope decision; the caller owns the transaction."""
+    original = session.get(AdjudicationDecision, decision_id)
+    if original is None:
+        raise UndoError(f"no adjudication decision {decision_id}")
+    if (
+        original.pipeline_run_id != run_id
+        or original.transcript_segment_id is not None
+        or original.decision not in (
+            Decision.ASSIGN.value, Decision.EXCLUDE.value, Decision.UNKNOWN.value
+        )
+    ):
+        raise UndoError("only a plain label-scope decision from this run can be undone")
+
+    if original.idempotency_key.startswith("merge:"):
+        raise UndoError("use the merge undo endpoint")
+    embedding = session.execute(
+        select(SpeakerEmbedding).where(
+            SpeakerEmbedding.source_adjudication_decision_id == decision_id
+        )
+    ).scalar_one_or_none()
+    if embedding is not None:
+        raise UndoError("use the enrollment undo endpoint")
+
+    existing = _revoke_for(session, decision_id)
+    if existing is not None:
+        return {
+            "revoke_decision_id": existing.id,
+            "voided_decision_id": decision_id,
+            "is_replay": True,
+        }
+
+    created_at = original.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    if created_at + timedelta(seconds=grace_seconds) <= datetime.now(UTC):
+        raise UndoExpiredError("the undo grace window has passed")
+
+    current = effective_decisions(session, run_id).get(original.diarization_label)
+    if current is None or current.id != original.id:
+        raise UndoDriftError(
+            f"label {original.diarization_label!r} was re-ruled after this decision"
+        )
+
+    revoke = _append_revoke(
+        session,
+        original=original,
+        operator=operator,
+        idempotency_key=idempotency_key,
+        user_id=user_id,
+    )
+    session.flush()
+    return {
+        "revoke_decision_id": revoke.id,
+        "voided_decision_id": decision_id,
         "is_replay": False,
     }
 

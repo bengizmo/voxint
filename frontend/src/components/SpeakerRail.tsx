@@ -26,7 +26,8 @@ export interface LabelsResult {
 
 export type UndoPayload =
   | { kind: "enroll"; decisionId: string; expiresAt: string }
-  | { kind: "merge"; mergeNonce: string; expiresAt: string };
+  | { kind: "merge"; mergeNonce: string; expiresAt: string }
+  | { kind: "decide"; decisionId: string; expiresAt: string };
 
 interface SpeakerRailProps {
   runId: string;
@@ -36,6 +37,7 @@ interface SpeakerRailProps {
   speakers: { id: string; displayName: string }[];
   onClaimLost: () => void;
   onLabelsChanged: (result: LabelsResult) => void;
+  onAssignment?: (label: string, speakerId: string, freshLabels: LabelStateShape[]) => void;
   onHearVoice?: (label: string) => void;
   hearableLabels?: ReadonlySet<string>;
 }
@@ -510,6 +512,7 @@ export function SpeakerRail({
   speakers,
   onClaimLost,
   onLabelsChanged,
+  onAssignment,
   onHearVoice,
   hearableLabels,
 }: SpeakerRailProps) {
@@ -575,6 +578,9 @@ export function SpeakerRail({
         );
         const data = (await res.json()) as LabelsResult;
         adoptResult(data);
+        if (action === "assign" && speakerId) {
+          onAssignment?.(label, speakerId, data.labels);
+        }
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
           onClaimLost();
@@ -586,7 +592,7 @@ export function SpeakerRail({
         setBusy(false);
       }
     },
-    [reviewToken, runId, onClaimLost, adoptResult],
+    [reviewToken, runId, onClaimLost, adoptResult, onAssignment],
   );
 
   const enroll = useCallback(

@@ -28,6 +28,38 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   unresolved label card, auto-advances after each decision, jumps the
   transcript to the voice, and shows a live "N remaining" counter. Auto-exits
   with a brief status when all voices are identified.
+- **Start and stop model services from the web UI (#556).** The Status page now
+  shows state-aware controls: Restart and Stop when a service is running, Start
+  when stopped. Stop gracefully shuts down the container and leaves it off until
+  manually started. The shared per-service lock prevents concurrent operations.
+  Terminal hints for unsupported backends updated with start/stop commands.
+- **Initial page inspects container state (#556).** The Status page now reads
+  each model service's Docker container state on load, showing the correct
+  buttons instead of always showing Restart.
+- **Hear-this-voice preview in popover** (#571). The speaker assignment popover
+  now includes a "Hear this voice" button next to each speaker option: clicking
+  it plays a representative segment of that speaker's voice without moving the
+  review cursor, so you can listen before you assign. The preview is
+  capability-gated and suppresses auto-scroll so the popover stays in place.
+- **Merge suggestions after speaker assignment** (#572). After assigning a
+  speaker to a label, the console now detects other unresolved labels whose
+  voice matches the same speaker and shows a stacked toast offering a one-click
+  merge. Dismiss the toast to skip, or press "Merge" to preview and confirm.
+  The suggestion only appears for labels without a human ruling and without a
+  grounded cosine match.
+- **Undo for label decisions** (#573). Assign, exclude, and "can't tell" rulings
+  now show an undo toast with a five-minute grace window. Clicking Undo appends
+  a compensating REVOKE decision on the ledger, restoring the label to its
+  prior state. The undo is server-side enforced (drift detection, grace expiry)
+  and idempotent on retry. Segment-scope undo is deferred to a follow-up.
+
+### Fixed
+- **Stopped services no longer poll forever (#556).** The health-polling row
+  endpoint now stops polling when a service is intentionally stopped, instead
+  of retrying indefinitely.
+- **Merge suggestion toast claim handling** (#572). Non-claim 409 responses
+  (merge drift, conflicting replay) no longer falsely tear down the editing
+  session; only a genuine claim-conflict header triggers claim loss.
 
 ### Changed
 - **Run page vs editor page redesign (#567).** The run page (`/runs/{id}`) is

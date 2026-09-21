@@ -604,6 +604,12 @@
     ]
   ],
   [
+    "/review/{run_id}/undo/decide",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/review/{run_id}/undo/enroll",
     [
       "POST"
@@ -881,6 +887,18 @@
     "/settings/status/services/{service_key}/row",
     [
       "GET"
+    ]
+  ],
+  [
+    "/settings/status/services/{service_key}/start",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/settings/status/services/{service_key}/stop",
+    [
+      "POST"
     ]
   ],
   [

@@ -989,11 +989,20 @@ def _build_components(
             "diarization": "diarization",
             "speaker embedding": "speaker_embedding",
         }.get(key)
+        container_state = (
+            controller.inspect(service_key)
+            if (controller.controllable and service_key)
+            else None
+        )
+        if container_state == ServiceState.STOPPED:
+            dot = "off"
+            state_text = "stopped"
         rows.append(
             {
                 "label": label,
                 "key": service_key,
                 "controllable": controller.controllable if service_key else False,
+                "state": container_state,
                 "terminal_hint": controller.terminal_hint(service_key) if service_key else None,
                 "is_model_service": service_key is not None,
                 "dot": dot,
@@ -2506,6 +2515,71 @@ def _service_row_html(
     )
 
 
+async def _service_control_action(
+    action: str,
+    service_key: str,
+    request: Request,
+    operator: Any,
+    csrf_token: str,
+) -> HTMLResponse:
+    if service_key not in SERVICE_KEYS:
+        raise HTTPException(status_code=404, detail="Unknown service")
+    _require_csrf(request, CSRF_SERVICE_CONTROL, csrf_token)
+    controller: ServiceController = request.app.state.service_controller
+    method = {"start": controller.start, "stop": controller.stop, "restart": controller.restart}[
+        action
+    ]
+    result = await asyncio.get_running_loop().run_in_executor(None, method, service_key)
+    logger.info(
+        "service_control action=%s actor=%s service_key=%s outcome=%s",
+        action,
+        operator,
+        service_key,
+        result.outcome.value,
+    )
+    polling = True
+    if result.outcome in (
+        ControlOutcome.STARTED,
+        ControlOutcome.ALREADY_RUNNING,
+        ControlOutcome.RESTARTED,
+    ):
+        state_text = "Restarting..." if action == "restart" else "Starting..."
+    elif result.outcome in (ControlOutcome.STOPPED, ControlOutcome.ALREADY_STOPPED):
+        state_text = "Stopping..."
+    elif result.outcome == ControlOutcome.TIMEOUT:
+        state_text = result.detail
+    elif result.outcome == ControlOutcome.BUSY:
+        state_text = "Operation already in progress"
+    elif result.outcome == ControlOutcome.ERROR:
+        state_text = result.detail
+    else:
+        state_text = result.detail
+        polling = False
+    return HTMLResponse(_service_row_html(service_key, state_text, "warn", polling=polling))
+
+
+@router.post("/settings/status/services/{service_key}/start")
+async def settings_service_start(
+    service_key: str,
+    request: Request,
+    admin: AdminDep,
+    operator: OperatorDep,
+    csrf_token: str = Form(...),
+) -> HTMLResponse:
+    return await _service_control_action("start", service_key, request, operator, csrf_token)
+
+
+@router.post("/settings/status/services/{service_key}/stop")
+async def settings_service_stop(
+    service_key: str,
+    request: Request,
+    admin: AdminDep,
+    operator: OperatorDep,
+    csrf_token: str = Form(...),
+) -> HTMLResponse:
+    return await _service_control_action("stop", service_key, request, operator, csrf_token)
+
+
 @router.post("/settings/status/services/{service_key}/restart")
 async def settings_service_restart(
     service_key: str,
@@ -2514,24 +2588,7 @@ async def settings_service_restart(
     operator: OperatorDep,
     csrf_token: str = Form(...),
 ) -> HTMLResponse:
-    if service_key not in SERVICE_KEYS:
-        raise HTTPException(status_code=404, detail="Unknown service")
-    _require_csrf(request, CSRF_SERVICE_CONTROL, csrf_token)
-    controller: ServiceController = request.app.state.service_controller
-    result = await asyncio.get_running_loop().run_in_executor(None, controller.restart, service_key)
-    logger.info(
-        "service_restart actor=%s service_key=%s outcome=%s",
-        operator,
-        service_key,
-        result.outcome.value,
-    )
-    if result.outcome in (ControlOutcome.RESTARTED, ControlOutcome.TIMEOUT):
-        return HTMLResponse(_service_row_html(service_key, "Restarting...", "warn", polling=True))
-    if result.outcome == ControlOutcome.BUSY:
-        return HTMLResponse(
-            _service_row_html(service_key, "Restart already in progress", "warn", polling=True),
-        )
-    return HTMLResponse(_service_row_html(service_key, result.detail, "warn"))
+    return await _service_control_action("restart", service_key, request, operator, csrf_token)
 
 
 @router.get("/settings/status/services/{service_key}/row")
@@ -2547,25 +2604,49 @@ def settings_service_row(service_key: str, request: Request, admin: AdminDep) ->
     state = controller.inspect(service_key) if controller.controllable else ServiceState.UNKNOWN
     dot = "ok" if health.up else "off" if state == ServiceState.STOPPED else "warn"
     action = ""
-    if controller.controllable and state == ServiceState.RUNNING:
+    if controller.controllable and state in (ServiceState.RUNNING, ServiceState.STOPPED):
         token = mint_csrf_token(request.app.state.csrf_secret, CSRF_SERVICE_CONTROL)
-        confirmation = (
-            f"Restart {service.label}? This takes 10-20 seconds while the model reloads. "
-            "Jobs using it may fail and retry."
+        controls = (
+            (
+                (
+                    "restart",
+                    "secondary",
+                    f"Restart {service.label}? This takes 10-20 seconds while the model reloads. "
+                    "Jobs using it may fail and retry.",
+                ),
+                (
+                    "stop",
+                    "danger",
+                    f"Stop {service.label}? It stays off until you start it again. "
+                    "Jobs that need it will fail.",
+                ),
+            )
+            if state == ServiceState.RUNNING
+            else (("start", "primary", ""),)
         )
-        action = (
-            "<form>"
-            f'<input type="hidden" name="csrf_token" value="{escape(token)}">'
-            f'<button type="button" hx-post="/settings/status/services/{service_key}/restart"'
-            f' hx-target="#service-{service_key}" hx-swap="outerHTML"'
-            f' hx-confirm="{escape(confirmation)}">Restart</button></form>'
-        )
+        for control, style, confirmation in controls:
+            confirm_attr = f' hx-confirm="{escape(confirmation)}"' if confirmation else ""
+            action += (
+                f'<form style="display:inline"'
+                f' hx-post="/settings/status/services/{service_key}/{control}"'
+                f' hx-target="#service-{service_key}" hx-swap="outerHTML"'
+                f' hx-disabled-elt="this"{confirm_attr}>'
+                f'<input type="hidden" name="csrf_token" value="{escape(token)}">'
+                f'<button type="submit" class="cb-btn cb-btn-{style}">'
+                f"{control.capitalize()}</button></form>"
+            )
     elif not controller.controllable:
         hint = controller.terminal_hint(service_key)
         if hint:
             action = f"<code>{escape(hint)}</code>"
     response = HTMLResponse(
-        _service_row_html(service_key, health.detail, dot, action=action, polling=not health.up)
+        _service_row_html(
+            service_key,
+            health.detail,
+            dot,
+            action=action,
+            polling=not health.up and state != ServiceState.STOPPED,
+        )
     )
     response.headers["Cache-Control"] = "no-store"
     return response
