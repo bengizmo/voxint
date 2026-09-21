@@ -19,7 +19,7 @@ noisereduce==2.0.1
 # titanet-large-v2 verdict binding for this image; a contract test pins the
 # three together. provenance.json's onnxruntime_version records the
 # EXPORT-time ORT (graph fidelity), which may lag this runtime pin.
-onnxruntime==1.28.0
+onnxruntime==1.30.0
 
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
