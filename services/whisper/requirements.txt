@@ -18,4 +18,4 @@ torchaudio==2.8.0
 # (temperature + throttle reasons, which torch alone cannot report). Fail-soft:
 # absent/older bindings degrade telemetry to "unsupported", never affect
 # readiness. NVIDIA CUDA images only; the cpu/rocm/metal flavors omit it.
-nvidia-ml-py==12.560.30
+nvidia-ml-py==13.610.43
