@@ -88,7 +88,7 @@ parity = [
     # (click, rapidfuzz). Mirror any bump in the vendored provenance.json.
     "jiwer==4.0.0",
     "more-itertools==11.1.0",
-    "regex==2026.7.19",
+    "regex==2026.9.10",
 ]
 # Diarization/ASR quality harness (tools/eval_quality.py, issue #97): scores
 # hypothesis RTTM against public ground truth (AMI + VoxConverse). Maintainer
