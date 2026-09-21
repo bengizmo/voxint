@@ -73,7 +73,7 @@ parity = [
     # Exact pins mirroring services/titanet/requirements.txt — the in-process
     # ONNX chain must run the same preprocessing stack as the shipped image,
     # or preprocess version skew masquerades as engine drift.
-    "librosa==0.10.1",
+    "librosa==0.11.0",
     "soundfile==0.12.1",
     "noisereduce==2.0.1",
     "pyloudnorm==0.1.0",
