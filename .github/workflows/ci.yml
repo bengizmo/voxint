@@ -53,7 +53,10 @@ jobs:
       - name: Audit Python dependencies
         run: |
           uv pip install pip-audit
-          .venv/bin/pip-audit
+          # Audit locked production dependencies, excluding dev/parity tooling
+          # (including the parity-only setuptools compatibility pin).
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file "$RUNNER_TEMP/production-requirements.txt"
+          .venv/bin/pip-audit --strict --requirement "$RUNNER_TEMP/production-requirements.txt"
       - name: Install ffmpeg (normalize-stage tests)
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Ruff

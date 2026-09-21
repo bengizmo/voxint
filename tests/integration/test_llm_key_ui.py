@@ -23,7 +23,8 @@ from voxint.app_settings import get_app_settings, get_or_create
 from voxint.config import DEFAULT_LLM_BASE_URL, Settings
 from voxint.db.models import AppSettings
 
-CREDS = ("reviewer", "s3cret")
+# Single-user Basic auth resolves to an admin for both setup and settings.
+CREDS = ("admin", "s3cret")
 _CSRF_KEY = "llm-key-ui-test-csrf-key"
 
 STORED_SENTINEL = "sk-STORED-do-not-render-123"
@@ -44,6 +45,7 @@ def make_client(
 ) -> TestClient:
     settings = Settings(
         _env_file=None,  # type: ignore[call-arg]
+        voxint_multi_user=False,
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         csrf_secret=_CSRF_KEY,

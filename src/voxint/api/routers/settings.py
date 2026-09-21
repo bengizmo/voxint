@@ -574,15 +574,9 @@ def _persist_llm_settings(
     elif new_key is not None:
         candidate_key = new_key
     else:
-        # Credential-endpoint binding: when the effective base URL changes and
-        # no new key was explicitly submitted, clear the stored key so
-        # credentials never silently follow a redirected endpoint.
-        prior_effective = (row.llm_base_url or "") or settings.llm_base_url
-        new_effective = (base_url or "") or settings.llm_base_url
-        if row.llm_api_key and prior_effective != new_effective:
-            candidate_key = None
-        else:
-            candidate_key = row.llm_api_key
+        # Both callers require admin access; blank means keep the stored key,
+        # including when the admin changes the endpoint.
+        candidate_key = row.llm_api_key
     # Effective key from the CANDIDATE (row-wins-over-env), matching how a run/job
     # will resolve it post-save, so the enable guard reflects the saved state.
     effective_key = (candidate_key or "").strip() or settings.llm_api_key.strip()
