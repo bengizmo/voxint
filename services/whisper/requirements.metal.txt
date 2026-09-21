@@ -14,7 +14,7 @@
 # >=4.0,<5 range. 4.8.1 is what the Phase 0 spike verified resolving as a
 # native arm64 macOS wheel under uv.
 fastapi==0.104.1
-uvicorn[standard]==0.24.0
+uvicorn[standard]==0.53.0
 pydantic==2.5.0
 
 # faster-whisper 1.2.x: BatchedInferencePipeline + built-in Silero VAD
