@@ -6,6 +6,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-09-19
+
 ### Added
 - **Inline speaker assignment popover** (#568). Clicking a speaker name in the
   transcript opens an anchored popover with the searchable speaker combobox,
@@ -52,6 +54,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   a compensating REVOKE decision on the ledger, restoring the label to its
   prior state. The undo is server-side enforced (drift detection, grace expiry)
   and idempotent on retry. Segment-scope undo is deferred to a follow-up.
+- **ROCm-lane fingerprint probe** (#119). The eval harness can now attest
+  AMD/ROCm hosts via sysfs, so `voxint run` produces scoreable manifests on
+  AMD hardware without `rocm-smi`. Pipeline-env schema bumped to v2
+  (`gpu.cuda` renamed to `gpu.compute_api`); v1 backward compatibility
+  retained for stored manifests.
 
 ### Fixed
 - **Stopped services no longer poll forever (#556).** The health-polling row
