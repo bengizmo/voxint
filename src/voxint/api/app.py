@@ -295,7 +295,8 @@ def _apply_security_headers(headers: MutableHeaders, *, token_path: bool) -> Non
     # Jinja2 templates require inline scripts and styles.
     headers.setdefault(
         "content-security-policy",
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "default-src 'self'; base-uri 'self'; form-action 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline'; media-src blob: 'self'; "
         "connect-src 'self'; img-src 'self' data:; font-src 'self'; "
         "frame-ancestors 'none'",
@@ -667,7 +668,9 @@ def _register_routes(app: FastAPI) -> None:
     # always registered so the route inventory is stable; the handler 404s until
     # console_activity_enabled is on.
     console.include_router(activity_router)
-    console.include_router(activity_stream_router)
+    # activity_stream_router is registered on the app directly (below), NOT on
+    # the console, so it does not inherit viewer_write_guard's _resolve_identity
+    # → SessionDep chain. The stream does its own short-lived auth internally.
 
     # ---- Run assets, translation, media streaming: moved to
     # routers/legacy_runs.py; included here to keep registration order.
@@ -752,6 +755,10 @@ def _register_routes(app: FastAPI) -> None:
         console.include_router(gated_plugins)
 
     app.include_router(console)
+
+    # SSE stream lives outside the console so it does not inherit
+    # viewer_write_guard → SessionDep (N5 fix).
+    app.include_router(activity_stream_router)
 
     # Public REST API: separate sub-app with its own OpenAPI, bearer auth, and
     # JSON-only exception handlers. Mounted before the area-flag stamps so it

@@ -128,10 +128,10 @@ def test_timeout_removes_partial_output(
                 return subprocess.CompletedProcess(cmd, 0, "", "")
         else:
             assert timeout_seconds == 30
-        raise subprocess.TimeoutExpired(cmd, timeout_seconds)
+        raise NormalizationError(f"ffmpeg/ffprobe timed out after {timeout_seconds}s")
 
     monkeypatch.setattr(normalize, "_run", fake_run)
-    with pytest.raises(subprocess.TimeoutExpired):
+    with pytest.raises(NormalizationError, match="timed out"):
         normalize_to_wav(tmp_path / "source.wav", dest)
     assert dest.read_bytes() == b"previous output"
     assert not list(tmp_path.glob("*.tmp"))
@@ -162,7 +162,7 @@ def test_subprocess_timeout() -> None:
 
     from voxint.media.normalize import _run
 
-    with pytest.raises(subprocess.TimeoutExpired):
+    with pytest.raises(NormalizationError, match="timed out after 0.1s"):
         _run([sys.executable, "-c", "import time; time.sleep(60)"], timeout_seconds=0.1)
 
 

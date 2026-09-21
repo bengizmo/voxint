@@ -1423,7 +1423,6 @@ def _validate_prerequisites(
     *from_stage* because an upstream stage's outputs are missing.
     """
     from voxint.db.models import (
-        SpeakerAssignment,
         StageRun,
         StageStatus,
         TranscriptSegment,
@@ -1491,7 +1490,8 @@ def _validate_prerequisites(
                 earliest_viable=Stage.PREPARE,
             )
 
-    if from_stage == Stage.DIARIZE_EMBED:
+    # DIARIZE_EMBED labels these segments; ENHANCE_MATCH creates assignments.
+    if from_stage in (Stage.DIARIZE_EMBED, Stage.ENHANCE_MATCH):
         has_segments = (
             session.scalar(
                 select(func.count())
@@ -1508,19 +1508,7 @@ def _validate_prerequisites(
                 earliest_viable=Stage.TRANSCRIBE,
             )
 
-    if from_stage in (Stage.ENHANCE_MATCH, Stage.FINALIZE):
-        has_assignments = session.scalar(
-            select(func.count())
-            .select_from(SpeakerAssignment)
-            .where(SpeakerAssignment.pipeline_run_id == run_id)
-        )
-        if not has_assignments:
-            raise RestartPrerequisiteError(
-                run_id,
-                from_stage,
-                "no speaker assignments exist",
-                earliest_viable=Stage.DIARIZE_EMBED,
-            )
+    # FINALIZE is a completion checkpoint; zero matching proposals is valid.
 
 
 def _find_earliest_viable(session: Session, run_id: uuid.UUID) -> Stage:

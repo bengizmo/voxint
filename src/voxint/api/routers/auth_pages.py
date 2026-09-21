@@ -22,13 +22,12 @@ from voxint.api.auth import (
     load_session_user,
 )
 from voxint.api.csrf import CSRF_LOGIN, CSRF_LOGOUT, mint_csrf_token, verify_csrf_token
-from voxint.api.login_throttle import LoginThrottle
+from voxint.api.login_throttle import login_throttle
 from voxint.api.routers.deps import SessionDep, templates
 from voxint.config import Settings
 from voxint.users import authenticate
 
 router = APIRouter()
-login_throttle = LoginThrottle()
 argon2_slots = asyncio.Semaphore(3)
 
 

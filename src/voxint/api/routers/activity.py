@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json as json_mod
 import logging
+import time
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from typing import Any
@@ -33,6 +34,7 @@ from starlette.concurrency import run_in_threadpool
 
 from voxint.activity import ACTIVITY_POLL_LIMIT, events_since, high_water, retained_floor
 from voxint.api.jobs_query import jobs_badge_count
+from voxint.api.login_throttle import login_throttle
 from voxint.api.routers.deps import (
     OperatorDep,
     get_session_factory,
@@ -134,7 +136,22 @@ def _authenticate_stream(request: Request, factory: sessionmaker[Session]) -> st
                     detail="invalid credentials",
                     headers={"WWW-Authenticate": 'Basic realm="voxint-review"'},
                 ) from None
-            if not verify_basic_credentials(settings, username, password):
+            account = username.strip().lower()
+            source = request.client.host if request.client else "unknown"
+            retry_after = login_throttle.start(account, source)
+            if retry_after:
+                raise HTTPException(
+                    429, "Too many login attempts. Try again later.",
+                    headers={"Retry-After": str(retry_after)},
+                )
+            success = None
+            try:
+                success = verify_basic_credentials(settings, username, password)
+            finally:
+                delay = login_throttle.finish(account, source, success=success)
+            if delay:
+                time.sleep(delay)
+            if not success:
                 raise HTTPException(
                     status_code=401,
                     detail="invalid credentials",
@@ -144,7 +161,7 @@ def _authenticate_stream(request: Request, factory: sessionmaker[Session]) -> st
         if not is_onboarded(session):
             raise HTTPException(status_code=404, detail="not found")
 
-    return username
+    return username.strip().lower()
 
 
 def _revalidate_session(request: Request, factory: sessionmaker[Session]) -> bool:

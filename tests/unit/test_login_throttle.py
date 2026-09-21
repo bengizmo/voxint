@@ -57,6 +57,21 @@ def test_login_reservations_and_errors_are_not_failures():
     assert throttle.finish("alice", "ip", success=False) == 0
 
 
+def test_login_key_cap_evicts_oldest_last_failure(monkeypatch):
+    now = [0.0]
+    throttle = LoginThrottle(clock=lambda: now[0])
+    monkeypatch.setattr(throttle, "MAX_KEYS", 4)
+    for timestamp, account in enumerate(["alice", "bob", "alice", "carol", "dave"]):
+        now[0] = float(timestamp)
+        assert throttle.start(account, "ip") == 0
+        throttle.finish(account, "ip", success=False)
+        assert len(throttle._failures) <= throttle.MAX_KEYS
+    assert ("account", "bob") not in throttle._failures
+    assert ("account", "alice") in throttle._failures
+    assert ("source", "ip") in throttle._failures
+    assert not throttle._pending
+
+
 @pytest.fixture
 def login_env(monkeypatch):
     throttle = LoginThrottle(clock=lambda: 0)
@@ -161,3 +176,89 @@ async def test_login_auth_error_releases_capacity(login_env, monkeypatch):
         with pytest.raises(RuntimeError, match="db error"):
             await auth_pages.login_submit(request, Mock(), "alice", "pw", csrf, "/")
     assert not auth_pages.argon2_slots.locked()
+
+
+@pytest.fixture
+def stream_env(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from voxint.api import auth
+    from voxint.api.routers import activity
+
+    assert activity.login_throttle is auth_pages.login_throttle
+    throttle = LoginThrottle(clock=lambda: 0)
+    monkeypatch.setattr(activity, "login_throttle", throttle)
+    monkeypatch.setattr(auth_pages, "login_throttle", throttle)
+    verifier = Mock(return_value=False)
+    monkeypatch.setattr(auth, "verify_basic_credentials", verifier)
+    monkeypatch.setattr("voxint.app_settings.is_onboarded", Mock(return_value=True))
+    sleep = Mock()
+    monkeypatch.setattr(activity, "time", SimpleNamespace(sleep=sleep))
+    app = FastAPI()
+    app.state.settings = Settings(voxint_multi_user=False, console_activity_enabled=True)
+    factory = MagicMock()
+    monkeypatch.setattr(activity, "get_session_factory", lambda request: factory)
+    app.include_router(activity.stream_router)
+    return app, factory, verifier, sleep
+
+
+async def test_stream_basic_failures_throttled_before_verification(stream_env):
+    from voxint.api.routers import activity
+
+    app, _, verifier, sleep = stream_env
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        for username in [" Alice ", "alice", "ALICE", "alice", "alice"]:
+            response = await client.get("/activity/stream", auth=(username, "wrong"))
+            assert response.status_code == 401
+        response = await client.get("/activity/stream", auth=("alice", "wrong"))
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "300"
+    assert verifier.call_count == 5
+    assert [call.args[0] for call in sleep.call_args_list] == [1, 2, 4]
+    assert auth_pages.login_throttle.start("alice", "another-ip") == 300
+    assert activity.login_throttle is auth_pages.login_throttle
+
+
+@pytest.mark.parametrize("success", [True, None])
+def test_stream_basic_success_or_error_releases_reservation(stream_env, success):
+    import base64
+
+    from voxint.api.routers import activity
+
+    app, factory, verifier, _ = stream_env
+    request = Request({
+        "type": "http", "app": app, "client": ("ip", 123),
+        "headers": [(b"authorization", b"Basic " + base64.b64encode(b"alice:pw"))],
+    })
+    throttle = activity.login_throttle
+    for _ in range(2):
+        throttle.start("alice", "ip")
+        throttle.finish("alice", "ip", success=False)
+    if success:
+        verifier.return_value = True
+        assert activity._authenticate_stream(request, factory) == "alice"
+        assert ("account", "alice") not in throttle._failures
+    else:
+        verifier.side_effect = RuntimeError("verification error")
+        for _ in range(6):
+            with pytest.raises(RuntimeError, match="verification error"):
+                activity._authenticate_stream(request, factory)
+        assert len(throttle._failures[("account", "alice")]) == 2
+    assert not throttle._pending
+
+
+def test_login_threaded_reservations_obey_account_limit():
+    from concurrent.futures import ThreadPoolExecutor
+
+    throttle = LoginThrottle(clock=lambda: 0)
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        results = list(pool.map(lambda _: throttle.start("alice", "ip"), range(50)))
+        assert results.count(0) == throttle.ACCOUNT_LIMIT
+        list(pool.map(
+            lambda _: throttle.finish("alice", "ip", success=False),
+            range(throttle.ACCOUNT_LIMIT),
+        ))
+    assert not throttle._pending
+    assert throttle.start("alice", "other-ip") == 300

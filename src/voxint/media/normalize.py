@@ -22,7 +22,10 @@ _NORMALIZE_TIMEOUT_SECONDS = 3600.0
 _MAX_DURATION_SECONDS = 86400
 _MAX_OUTPUT_BYTES = 53687091200
 # Demuxer names, not extensions: excludes HLS, concat and other playlists.
-_INPUT_FORMATS = "wav,mp3,flac,ogg,mov,mp4,m4a,3gp,3g2,mj2,aac,asf,matroska,webm,avi,mpegts"
+_INPUT_FORMATS = (
+    "wav,mp3,flac,ogg,mov,mp4,m4a,3gp,3g2,mj2,aac,asf,"
+    "matroska,webm,avi,mpegts,aiff,mpeg"
+)
 
 
 class NormalizationError(Exception):
@@ -73,6 +76,10 @@ def _run(cmd: list[str], *, timeout_seconds: float) -> subprocess.CompletedProce
                 stdout.decode("utf-8", errors="replace"),
                 stderr.decode("utf-8", errors="replace"),
             )
+    except subprocess.TimeoutExpired:
+        raise NormalizationError(
+            f"{cmd[0]} timed out after {timeout_seconds}s"
+        ) from None
     except OSError as exc:  # missing binary, permissions
         raise NormalizationError(f"failed to execute {cmd[0]}: {exc}") from exc
 
@@ -82,8 +89,8 @@ def probe_audio(
 ) -> AudioInfo:
     """Inspect the first audio stream; raises if the file has none.
 
-    ``timeout_seconds`` overrides the 30-second default. TimeoutExpired
-    propagates to the caller; None also uses the bounded default.
+    ``timeout_seconds`` overrides the 30-second default. Timeouts raise
+    NormalizationError; None also uses the bounded default.
     """
     proc = _run(
         [

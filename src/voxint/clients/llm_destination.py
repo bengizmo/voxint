@@ -23,6 +23,8 @@ def _blocked_reason(
 ) -> str | None:
     if ip in _METADATA_ADDRESSES:
         return "cloud metadata"
+    if ip.is_unspecified:
+        return "unspecified address"
     if ip.is_link_local:
         return "link-local"
     if block_loopback and ip.is_loopback:

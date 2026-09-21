@@ -285,19 +285,25 @@ class TestValidatePrerequisites:
                     _validate_prerequisites(session, uuid.uuid4(), Stage.PREPARE)
                 assert exc.value.earliest_viable == Stage.ACQUIRE
 
-    @pytest.mark.parametrize("stage", [Stage.ENHANCE_MATCH, Stage.FINALIZE])
-    @pytest.mark.parametrize("assignments", [0, 1])
-    def test_later_restart_requires_speaker_assignments(
-        self, stage: Stage, assignments: int
-    ) -> None:
+    @pytest.mark.parametrize("segments", [0, 1])
+    def test_enhance_restart_requires_segments_not_assignments(self, segments: int) -> None:
         session = MagicMock()
-        session.scalar.side_effect = [1, assignments]
-        if assignments:
-            _validate_prerequisites(session, uuid.uuid4(), stage)
+        session.scalar.side_effect = [1, segments]
+        if segments:
+            _validate_prerequisites(session, uuid.uuid4(), Stage.ENHANCE_MATCH)
         else:
-            with pytest.raises(RestartPrerequisiteError, match="speaker assignments") as exc:
-                _validate_prerequisites(session, uuid.uuid4(), stage)
-            assert exc.value.earliest_viable == Stage.DIARIZE_EMBED
+            with pytest.raises(RestartPrerequisiteError, match="transcript segments") as exc:
+                _validate_prerequisites(session, uuid.uuid4(), Stage.ENHANCE_MATCH)
+            assert exc.value.earliest_viable == Stage.TRANSCRIBE
+        query = str(session.scalar.call_args.args[0])
+        assert "transcript_segments" in query
+        assert "speaker_assignments" not in query
+
+    def test_finalize_restart_allows_zero_proposals(self) -> None:
+        session = MagicMock()
+        session.scalar.side_effect = [1]  # only upstream completion is required
+        _validate_prerequisites(session, uuid.uuid4(), Stage.FINALIZE)
+        session.scalar.assert_called_once()
 
     def test_diarize_embed_requires_segments(self) -> None:
         session = MagicMock()
