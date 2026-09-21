@@ -1,6 +1,6 @@
 # Pinned, known-good with the cu128 base image (CUDA 12.8.1, Blackwell-ready).
 # torch is installed separately from the cu128 index in the Dockerfile.
-fastapi==0.104.1
+fastapi==0.141.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 
