@@ -75,7 +75,7 @@ parity = [
     # or preprocess version skew masquerades as engine drift.
     "librosa==0.10.1",
     "soundfile==0.12.1",
-    "noisereduce==2.0.1",
+    "noisereduce==3.0.3",
     "pyloudnorm==0.1.0",
     # librosa 0.10.1 imports pkg_resources, which setuptools removed in 81.
     "setuptools>=70,<81",
