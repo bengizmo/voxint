@@ -26,4 +26,4 @@ uvicorn[standard]==0.24.0
 pydantic==2.5.0
 
 # librosa 0.10.1 imports pkg_resources, removed in setuptools 81.
-setuptools>=70,<81
+setuptools>=84.0.0,<85
