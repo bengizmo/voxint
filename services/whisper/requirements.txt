@@ -7,7 +7,7 @@ pydantic==2.5.0
 # faster-whisper 1.2.x: BatchedInferencePipeline + built-in Silero VAD
 faster-whisper==1.2.1
 numpy==1.24.3
-soundfile==0.12.1
+soundfile==0.14.0
 
 # torch is required by the Silero VAD inside faster-whisper (cu128 wheels
 # installed separately in the Dockerfile builder stage).

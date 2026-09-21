@@ -23,4 +23,4 @@ ctranslate2==4.8.1
 # Same numpy as the CUDA/CPU images — the rocm flavor's 1.26.4 exemption is
 # py3.12-only and does not apply to this py3.11 venv.
 numpy==1.24.3
-soundfile==0.12.1
+soundfile==0.14.0
