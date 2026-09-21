@@ -7,7 +7,7 @@ soundfile==0.12.1
 scipy==1.11.4
 numba==0.58.1
 
-speechbrain==0.5.16
+speechbrain==1.1.1
 asteroid-filterbanks==0.4.0
 torch-audiomentations==0.11.0
 pytorch-metric-learning==2.3.0
