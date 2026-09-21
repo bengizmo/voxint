@@ -162,7 +162,7 @@ def test_subprocess_timeout() -> None:
 
     from voxint.media.normalize import _run
 
-    with pytest.raises(NormalizationError, match="timed out after 0.1s"):
+    with pytest.raises(NormalizationError, match=r"timed out after 0\.1s"):
         _run([sys.executable, "-c", "import time; time.sleep(60)"], timeout_seconds=0.1)
 
 
