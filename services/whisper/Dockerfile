@@ -7,7 +7,7 @@
 # PTX only, which the driver JIT-compiles for sm_120 — CUDA_CACHE_PATH keeps
 # that JIT result across restarts. CT2 4.8.x links no cuDNN.
 
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:13.3.1-cudnn-devel-ubuntu22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -33,7 +33,7 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
 ARG WHISPER_HF_REVISION=f0fe81560cb8b68660e564f55dd99207059c092e
 RUN python3.10 -c "from faster_whisper import WhisperModel; WhisperModel('Systran/faster-whisper-large-v2', device='cpu', download_root='/opt/whisper_models', revision='${WHISPER_HF_REVISION}')"
 
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04 AS runtime
+FROM nvidia/cuda:13.3.1-cudnn-runtime-ubuntu22.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
