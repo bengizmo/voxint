@@ -23,7 +23,7 @@ onnxruntime==1.28.0
 
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-pydantic==2.5.0
+pydantic==2.13.5
 
 # librosa 0.10.1 imports pkg_resources, removed in setuptools 81.
 setuptools>=70,<81
