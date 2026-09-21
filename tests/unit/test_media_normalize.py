@@ -60,9 +60,7 @@ def test_normalize_produces_conforming_wav(stereo_source: Path, tmp_path: Path) 
     assert (probed.sample_rate, probed.channels) == (TARGET_SAMPLE_RATE, TARGET_CHANNELS)
 
 
-def test_normalize_is_idempotent_over_partial_output(
-    stereo_source: Path, tmp_path: Path
-) -> None:
+def test_normalize_is_idempotent_over_partial_output(stereo_source: Path, tmp_path: Path) -> None:
     dest = tmp_path / "normalized.wav"
     # Simulate a crashed earlier attempt: garbage at dest and a stale tmp file.
     dest.write_bytes(b"not a wav")
@@ -90,3 +88,102 @@ def test_missing_binary_raises(stereo_source: Path, tmp_path: Path) -> None:
 def test_probe_missing_file_raises(tmp_path: Path) -> None:
     with pytest.raises(NormalizationError):
         probe_audio(tmp_path / "absent.wav")
+
+
+@pytest.mark.parametrize("kind", ["concat", "hls"])
+@pytest.mark.parametrize("disguised", [False, True])
+def test_playlist_disguised_as_wav_is_rejected(
+    kind: str, disguised: bool, stereo_source: Path, tmp_path: Path
+) -> None:
+    extension = "wav" if disguised else ("ffconcat" if kind == "concat" else "m3u8")
+    source = tmp_path / f"playlist.{extension}"
+    if kind == "concat":
+        source.write_text(f"ffconcat version 1.0\nfile '{stereo_source}'\n")
+    else:
+        source.write_text(
+            f"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\n{stereo_source}\n#EXT-X-ENDLIST\n"
+        )
+    rejection = "whitelist|Invalid data" if disguised else "whitelist"
+    with pytest.raises(NormalizationError, match=rejection):
+        probe_audio(source)
+    with pytest.raises(NormalizationError, match=rejection):
+        normalize_to_wav(source, tmp_path / "normalized.wav")
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("stage", ["normalize", "probe"])
+def test_timeout_removes_partial_output(
+    stage: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import voxint.media.normalize as normalize
+
+    dest = tmp_path / "normalized.wav"
+    dest.write_bytes(b"previous output")
+
+    def fake_run(cmd, *, timeout_seconds):
+        if cmd[0] == "ffmpeg":
+            assert timeout_seconds == 3600
+            Path(cmd[-1]).write_bytes(b"partial")
+            if stage == "probe":
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+        else:
+            assert timeout_seconds == 30
+        raise subprocess.TimeoutExpired(cmd, timeout_seconds)
+
+    monkeypatch.setattr(normalize, "_run", fake_run)
+    with pytest.raises(subprocess.TimeoutExpired):
+        normalize_to_wav(tmp_path / "source.wav", dest)
+    assert dest.read_bytes() == b"previous output"
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_subprocess_capture_is_bounded_and_stdin_closed() -> None:
+    import sys
+
+    from voxint.media.normalize import _STDERR_LIMIT, _run
+
+    proc = _run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; assert not sys.stdin.read(); "
+            "sys.stderr.write('x' * 1000000 + 'tail'); sys.stdout.write('ok')",
+        ],
+        timeout_seconds=10,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == "ok"
+    assert len(proc.stderr) == _STDERR_LIMIT
+    assert proc.stderr.endswith("tail")
+
+
+def test_subprocess_timeout() -> None:
+    import sys
+
+    from voxint.media.normalize import _run
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run([sys.executable, "-c", "import time; time.sleep(60)"], timeout_seconds=0.1)
+
+
+def test_decoded_duration_cap(
+    stereo_source: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import voxint.media.normalize as normalize
+
+    monkeypatch.setattr(normalize, "_MAX_DURATION_SECONDS", 1)
+    info = normalize_to_wav(stereo_source, tmp_path / "normalized.wav")
+    assert info.duration_seconds == pytest.approx(1.0, abs=0.01)
+
+
+def test_decoded_size_cap(
+    stereo_source: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import voxint.media.normalize as normalize
+
+    monkeypatch.setattr(normalize, "_MAX_OUTPUT_BYTES", 16000)
+    dest = tmp_path / "normalized.wav"
+    info = normalize_to_wav(stereo_source, dest)
+    # ffmpeg may exceed -fs by the final encoded packet.
+    assert dest.stat().st_size < 32000
+    assert info.duration_seconds < 1

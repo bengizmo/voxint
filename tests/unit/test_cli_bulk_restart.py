@@ -114,12 +114,13 @@ def test_selection_filters_and_closes_before_preview(monkeypatch, bulk):
     monkeypatch.setattr(db_session, "build_engine", lambda: engine)
     monkeypatch.setattr(db_session, "build_session_factory", lambda _: lambda: selection)
 
-    def preview(candidates, factory, stage, acknowledge, acknowledge_void):
+    def preview(candidates, factory, stage, acknowledge, acknowledge_void, acknowledge_editorial):
         selection.close.assert_called_once()
         assert candidates == bulk.candidates
         assert stage == Stage.FINALIZE
         assert not acknowledge
         assert not acknowledge_void
+        assert not acknowledge_editorial
         return 0
 
     monkeypatch.setattr(cli, "_restart_bulk_dry_run", preview)
@@ -190,3 +191,24 @@ def test_confirmation_eof_returns_2(monkeypatch, bulk):
     monkeypatch.setattr("builtins.input", MagicMock(side_effect=EOFError))
     assert cli.main(["restart", "--all"]) == 2
     bulk.restart.assert_not_called()
+
+
+@pytest.mark.parametrize("acknowledge", [False, True])
+@pytest.mark.parametrize("preview", [False, True])
+def test_editorial_work_requires_separate_acknowledgement(bulk, capsys, acknowledge, preview):
+    bulk.impact.return_value = RestartImpact(0, 0, 0, corrections=2, verifications=1)
+    handler = cli._restart_bulk_dry_run if preview else cli._restart_bulk_execute
+    assert handler(bulk.candidates, bulk.factory, None, True, True, acknowledge) == 0
+    output = capsys.readouterr()
+    if preview:
+        assert ("4 restart-ready" if acknowledge else "4 editorial-loss") in output.out
+        bulk.restart.assert_not_called()
+        bulk.publish.assert_not_called()
+    elif acknowledge:
+        assert bulk.restart.call_count == 4
+        assert all(call.kwargs["acknowledge_editorial"] for call in bulk.restart.call_args_list)
+    else:
+        bulk.restart.assert_not_called()
+        bulk.publish.assert_not_called()
+        assert "4 editorial-loss" in output.out
+        assert "--acknowledge-editorial" in output.err

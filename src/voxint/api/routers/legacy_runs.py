@@ -172,6 +172,7 @@ from voxint.ingest import (
     RunNotPausedError,
     RunNotRestartableError,
     RunRestartBlockedError,
+    RunRestartEditorialLossError,
     RunRestartLabelRiskError,
     RunRestartVoidRequiredError,
     UploadConflictError,
@@ -1641,6 +1642,7 @@ def restart_run_route(
     csrf_token: Annotated[str | None, Form()] = None,
     acknowledge_label_risk: Annotated[bool, Form()] = False,
     acknowledge_void: Annotated[bool, Form()] = False,
+    acknowledge_editorial: Annotated[bool, Form()] = False,
     from_stage: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
     """Restart a terminal run, optionally from a selected pipeline stage.
@@ -1673,11 +1675,13 @@ def restart_run_route(
             expected_revision=revision,
             acknowledge_label_risk=acknowledge_label_risk,
             acknowledge_void=acknowledge_void,
+            acknowledge_editorial=acknowledge_editorial,
         )
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (
         RunRestartBlockedError,
+        RunRestartEditorialLossError,
         RunRestartLabelRiskError,
         RunRestartVoidRequiredError,
         RestartPrerequisiteError,

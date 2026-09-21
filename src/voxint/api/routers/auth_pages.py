@@ -6,9 +6,11 @@ and ``setup_router``. When ``voxint_multi_user`` is false, both routes return
 404 so the route inventory is stable but the form is unreachable.
 """
 
+import asyncio
 from typing import Annotated, Any
 from urllib.parse import urlparse
 
+from anyio import to_thread
 from fastapi import APIRouter, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 
@@ -20,11 +22,14 @@ from voxint.api.auth import (
     load_session_user,
 )
 from voxint.api.csrf import CSRF_LOGIN, CSRF_LOGOUT, mint_csrf_token, verify_csrf_token
+from voxint.api.login_throttle import LoginThrottle
 from voxint.api.routers.deps import SessionDep, templates
 from voxint.config import Settings
 from voxint.users import authenticate
 
 router = APIRouter()
+login_throttle = LoginThrottle()
+argon2_slots = asyncio.Semaphore(3)
 
 
 def _login_context(
@@ -80,7 +85,7 @@ def login_page(request: Request) -> Response:
 
 
 @router.post("/login")
-def login_submit(
+async def login_submit(
     request: Request,
     session: SessionDep,
     username: Annotated[str, Form()],
@@ -106,7 +111,43 @@ def login_submit(
             status_code=403,
         )
 
-    user = authenticate(session, username=username.strip().lower(), password=password)
+    account = username.strip().lower()
+    # Forwarded addresses are accepted only through the server's trusted-proxy
+    # configuration, never by reading arbitrary forwarded headers here.
+    source = request.client.host if request.client else "unknown"
+    if argon2_slots.locked():
+        raise HTTPException(
+            429, "Too many login attempts. Try again later.", headers={"Retry-After": "1"}
+        )
+    retry_after = login_throttle.start(account, source)
+    if retry_after:
+        raise HTTPException(
+            429, "Too many login attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    success = None
+    try:
+        async with argon2_slots:
+            # Keep the slot until the worker finishes even if the request is
+            # cancelled: cancelling an await cannot stop an Argon2 thread.
+            worker = asyncio.create_task(to_thread.run_sync(
+                lambda: authenticate(session, username=account, password=password)
+            ))
+            cancelled = False
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    cancelled = True
+            user = worker.result()
+            success = user is not None
+            if cancelled:
+                raise asyncio.CancelledError
+    finally:
+        delay = login_throttle.finish(account, source, success=success)
+    if delay:
+        await asyncio.sleep(delay)
     if user is None:
         return templates.TemplateResponse(
             request,

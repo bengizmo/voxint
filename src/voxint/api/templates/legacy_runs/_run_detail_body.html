@@ -127,6 +127,7 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
 {% if not run_archived %}
 {% set full_requires_void = restart_impact and restart_impact.requires_void %}
 {% set full_label_risk = restart_impact and restart_impact.label_scope_decisions > 0 and not full_requires_void %}
+{% set full_editorial = restart_impact and restart_impact.has_editorial_work %}
 <form method="post" action="/runs/{{ run.id }}/restart" class="restart action-row"
       id="restart-form">
   <input type="hidden" name="revision" value="{{ run.revision }}">
@@ -138,14 +139,18 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
         data-requires-void="{{ full_requires_void|tojson }}"
         data-label-risk="{{ full_label_risk|tojson }}"
         data-label-count="{{ restart_impact.label_scope_decisions if restart_impact else 0 }}"
-        >The beginning (all stages){% if full_requires_void %} (void required){% elif full_label_risk %} (label risk){% endif %}</option>
+        data-corrections="{{ restart_impact.corrections if restart_impact else 0 }}"
+        data-verifications="{{ restart_impact.verifications if restart_impact else 0 }}"
+        >The beginning (all stages){% if full_requires_void %} (void required){% elif full_label_risk %} (label risk){% elif full_editorial %} (editorial loss){% endif %}</option>
       {% if restart_stages %}
       {% for sp in restart_stages %}
       <option value="{{ sp.stage }}"
         data-requires-void="{{ sp.requires_void|tojson }}"
         data-label-risk="{{ sp.label_risk|tojson }}"
-        data-label-count="{{ sp.label_count }}">
-        {{ sp.label }}{% if sp.requires_void %} (void required){% elif sp.label_risk %} (label risk){% endif %}
+        data-label-count="{{ sp.label_count }}"
+        data-corrections="{{ sp.corrections }}"
+        data-verifications="{{ sp.verifications }}">
+        {{ sp.label }}{% if sp.requires_void %} (void required){% elif sp.label_risk %} (label risk){% elif sp.corrections > 0 or sp.verifications > 0 %} (editorial loss){% endif %}
       </option>
       {% endfor %}
       {% endif %}
@@ -188,6 +193,24 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
     </label>
   </div>
   {% endif %}
+  {% if full_editorial %}
+  <div id="restart-editorial-warn" class="notice-warn" style="margin-top: 0.5em">
+    <label>
+      <input type="checkbox" name="acknowledge_editorial" value="true"
+             id="restart-editorial-ack" required>
+      <span id="restart-editorial-msg">{{ restart_impact.corrections }}
+        text correction(s) and {{ restart_impact.verifications }}
+        verification(s) will be permanently lost.</span>
+    </label>
+  </div>
+  {% else %}
+  <div id="restart-editorial-warn" class="notice-warn" style="margin-top: 0.5em; display: none">
+    <label>
+      <input type="checkbox" name="acknowledge_editorial" value="true" id="restart-editorial-ack">
+      <span id="restart-editorial-msg"></span>
+    </label>
+  </div>
+  {% endif %}
   <span class="oc-muted" id="restart-hint">Prior stage results are kept in the ledger
     as earlier attempts.</span>
 </form>
@@ -201,12 +224,18 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
   var warnDiv = document.getElementById('restart-label-warn');
   var ackBox = document.getElementById('restart-ack');
   var labelMsg = document.getElementById('restart-label-msg');
+  var editDiv = document.getElementById('restart-editorial-warn');
+  var editBox = document.getElementById('restart-editorial-ack');
+  var editMsg = document.getElementById('restart-editorial-msg');
   var form = document.getElementById('restart-form');
   function update() {
     var opt = sel.options[sel.selectedIndex];
     var requiresVoid = opt.dataset.requiresVoid === 'true';
     var labelRisk = opt.dataset.labelRisk === 'true';
     var labelCount = parseInt(opt.dataset.labelCount || '0', 10);
+    var corrections = parseInt(opt.dataset.corrections || '0', 10);
+    var verifications = parseInt(opt.dataset.verifications || '0', 10);
+    var hasEditorial = corrections > 0 || verifications > 0;
     btn.disabled = false;
     if (requiresVoid) {
       voidDiv.style.display = '';
@@ -227,6 +256,15 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
         ackBox.required = false;
         ackBox.checked = false;
       }
+    }
+    if (hasEditorial) {
+      editDiv.style.display = '';
+      editBox.required = true;
+      editMsg.textContent = corrections + ' text correction(s) and ' + verifications + ' verification(s) will be permanently lost.';
+    } else {
+      editDiv.style.display = 'none';
+      editBox.required = false;
+      editBox.checked = false;
     }
   }
   sel.addEventListener('change', update);

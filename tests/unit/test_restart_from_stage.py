@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -40,6 +41,8 @@ class TestRestartImpactStageAware:
         segment_scope: int = 0,
         evidence: int = 0,
         derived_embeddings: int = 0,
+        corrections: int = 0,
+        verifications: int = 0,
     ) -> MagicMock:
         """Return a mock session whose scalar() returns the given counts in
         the order restart_impact queries them."""
@@ -49,6 +52,8 @@ class TestRestartImpactStageAware:
             segment_scope,
             evidence,
             derived_embeddings,
+            corrections,
+            verifications,
         ]
         return session
 
@@ -241,10 +246,58 @@ class TestValidatePrerequisites:
         with pytest.raises(RestartPrerequisiteError, match="preprocessed audio"):
             _validate_prerequisites(session, uuid.uuid4(), Stage.TRANSCRIBE)
 
-    def test_transcribe_passes_with_audio(self) -> None:
+    def test_transcribe_passes_with_audio(self, tmp_path: Path) -> None:
         session = MagicMock()
-        session.scalar.side_effect = [1, 1]  # upstream completed + audio exists
-        _validate_prerequisites(session, uuid.uuid4(), Stage.TRANSCRIBE)
+        (tmp_path / "normalized.wav").touch()
+        session.scalar.side_effect = [1, "normalized.wav"]
+        with patch("voxint.ingest.service.get_settings") as settings:
+            settings.return_value.media_root = tmp_path
+            _validate_prerequisites(session, uuid.uuid4(), Stage.TRANSCRIBE)
+
+    def test_transcribe_rejects_deleted_audio_file(self, tmp_path: Path) -> None:
+        session = MagicMock()
+        session.scalar.side_effect = [1, "normalized.wav"]
+        with patch("voxint.ingest.service.get_settings") as settings:
+            settings.return_value.media_root = tmp_path
+            with pytest.raises(RestartPrerequisiteError, match="preprocessed audio") as exc:
+                _validate_prerequisites(session, uuid.uuid4(), Stage.TRANSCRIBE)
+        assert exc.value.earliest_viable == Stage.PREPARE
+
+    @pytest.mark.parametrize("exists", [False, True])
+    @pytest.mark.parametrize("current_path", [None, "moved.wav"])
+    def test_prepare_requires_media_file(
+        self, tmp_path: Path, exists: bool, current_path: str | None
+    ) -> None:
+        session = MagicMock()
+        session.scalar.return_value = 1  # historical ACQUIRE completion
+        session.get.side_effect = [
+            MagicMock(media_item_id=uuid.uuid4()),
+            MagicMock(current_path=current_path, source_path="source.wav"),
+        ]
+        if exists:
+            (tmp_path / (current_path or "source.wav")).touch()
+        with patch("voxint.ingest.service.get_settings") as settings:
+            settings.return_value.media_root = tmp_path
+            if exists:
+                _validate_prerequisites(session, uuid.uuid4(), Stage.PREPARE)
+            else:
+                with pytest.raises(RestartPrerequisiteError, match="media file") as exc:
+                    _validate_prerequisites(session, uuid.uuid4(), Stage.PREPARE)
+                assert exc.value.earliest_viable == Stage.ACQUIRE
+
+    @pytest.mark.parametrize("stage", [Stage.ENHANCE_MATCH, Stage.FINALIZE])
+    @pytest.mark.parametrize("assignments", [0, 1])
+    def test_later_restart_requires_speaker_assignments(
+        self, stage: Stage, assignments: int
+    ) -> None:
+        session = MagicMock()
+        session.scalar.side_effect = [1, assignments]
+        if assignments:
+            _validate_prerequisites(session, uuid.uuid4(), stage)
+        else:
+            with pytest.raises(RestartPrerequisiteError, match="speaker assignments") as exc:
+                _validate_prerequisites(session, uuid.uuid4(), stage)
+            assert exc.value.earliest_viable == Stage.DIARIZE_EMBED
 
     def test_diarize_embed_requires_segments(self) -> None:
         session = MagicMock()
@@ -617,13 +670,15 @@ def test_post_segment_stages_have_no_blockers(from_stage: Stage) -> None:
 )
 def test_pre_diarize_stages_query_all_counts(from_stage: Stage) -> None:
     session = MagicMock()
-    session.scalar.side_effect = [1, 2, 3, 4]
+    session.scalar.side_effect = [1, 2, 3, 4, 5, 6]
     impact = restart_impact(session, uuid.uuid4(), from_stage=from_stage)
     assert impact.label_scope_decisions == 1
     assert impact.segment_scope_decisions == 2
     assert impact.enrichment_evidence == 3
     assert impact.derived_embeddings == 4
-    assert session.scalar.call_count == 4
+    assert impact.corrections == 5
+    assert impact.verifications == 6
+    assert session.scalar.call_count == 6
 
 
 # ---------------------------------------------------------------------------
@@ -689,6 +744,8 @@ class TestRestartStageProfiles:
                 "requires_void",
                 "label_risk",
                 "label_count",
+                "corrections",
+                "verifications",
                 "safe",
             }
             assert isinstance(profile["label"], str)
@@ -825,6 +882,7 @@ class TestRestartCLI:
             expected_revision=1,
             acknowledge_label_risk=False,
             acknowledge_void=False,
+            acknowledge_editorial=False,
         )
         mock_publish.assert_called_once_with(run_id, stage=None)
 
@@ -864,6 +922,7 @@ class TestRestartCLI:
             expected_revision=1,
             acknowledge_label_risk=False,
             acknowledge_void=False,
+            acknowledge_editorial=False,
         )
         mock_publish.assert_called_once_with(run_id, stage=Stage.ENHANCE_MATCH)
 
@@ -961,5 +1020,49 @@ class TestRestartCLI:
             expected_revision=1,
             acknowledge_label_risk=True,
             acknowledge_void=False,
+            acknowledge_editorial=False,
         )
         mock_publish.assert_called_once_with(run_id, stage=None)
+
+
+@pytest.mark.parametrize(
+    "flags, answers, expected",
+    [
+        (["--yes"], [], 2),
+        (["--yes", "--acknowledge-editorial"], [], 0),
+        ([], ["yes", "yes"], 0),
+        ([], ["no"], 2),
+        ([], [EOFError()], 2),
+    ],
+)
+def test_cli_editorial_acknowledgement(monkeypatch, flags, answers, expected):
+    import voxint.cli as cli
+    import voxint.db.session as db_session
+    import voxint.ingest as ingest
+
+    run_id = uuid.uuid4()
+    scope = MagicMock()
+    scope.return_value.__enter__.return_value.get.return_value = MagicMock(
+        revision=1, status="completed", archived_at=None
+    )
+    monkeypatch.setattr(db_session, "build_engine", MagicMock())
+    monkeypatch.setattr(db_session, "build_session_factory", MagicMock())
+    monkeypatch.setattr(db_session, "session_scope", scope)
+    monkeypatch.setattr(
+        ingest, "restart_impact", MagicMock(return_value=RestartImpact(0, 0, 0, corrections=1))
+    )
+    restart = MagicMock()
+    publish = MagicMock()
+    monkeypatch.setattr(ingest, "restart_run", restart)
+    monkeypatch.setattr(cli, "_publish_or_defer", publish)
+    prompt = MagicMock(side_effect=answers)
+    monkeypatch.setattr("builtins.input", prompt)
+
+    assert cli.main(["restart", str(run_id), *flags]) == expected
+    if expected == 0:
+        assert restart.call_args.kwargs["acknowledge_editorial"] is True
+        publish.assert_called_once()
+    else:
+        restart.assert_not_called()
+        publish.assert_not_called()
+    assert prompt.call_count == len(answers)

@@ -50,6 +50,10 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: uv sync --frozen --extra dev --extra parity
+      - name: Audit Python dependencies
+        run: |
+          uv pip install pip-audit
+          .venv/bin/pip-audit
       - name: Install ffmpeg (normalize-stage tests)
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Ruff

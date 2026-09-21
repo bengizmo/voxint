@@ -36,8 +36,8 @@
     [
       "GET"
     ],
-    "onboarding",
-    true
+    "exempt",
+    false
   ],
   [
     "/annotations/tags",

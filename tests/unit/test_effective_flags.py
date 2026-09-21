@@ -476,7 +476,16 @@ def test_byo_llm_configured_row_override_wins() -> None:
     assert byo_llm_configured(row, env_default) is True
 
 
-def test_build_bundled_llm_client_keyless_greedy() -> None:
+def test_build_bundled_llm_client_keyless_greedy(monkeypatch) -> None:
+    # Model the Compose service DNS without requiring a running Docker network.
+    import socket
+
+    monkeypatch.setattr(
+        "voxint.clients.llm_destination.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("172.18.0.2", 8080))
+        ],
+    )
     # The bundled endpoint is product-owned and local: NO api key, and the pinned
     # greedy SamplingProfile (byte-identical default) — never a leaked BYO key or
     # a Qwen-specific sampler on an arbitrary endpoint.

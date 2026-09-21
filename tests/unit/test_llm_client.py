@@ -1,11 +1,14 @@
 """HttpLLMClient against httpx.MockTransport — contract validation, no network."""
 
+import gzip
 import json
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
 import pytest
 
+from voxint.clients import llm
 from voxint.clients.base import EnhancementRequestSegment
 from voxint.clients.llm import MAX_CHAT_REPLY_CHARS, ChatMessage, HttpLLMClient, LLMError
 
@@ -13,6 +16,70 @@ SEGMENTS = (
     EnhancementRequestSegment(segment_index=0, text="hello there", diarization_label="SPEAKER_00"),
     EnhancementRequestSegment(segment_index=1, text="im jane", diarization_label="SPEAKER_01"),
 )
+
+
+class TrackedLLMStream(httpx.SyncByteStream):
+    def __init__(self, chunks: Iterator[bytes]) -> None:
+        self.chunks = chunks
+        self.closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield from self.chunks
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.parametrize("method", ["chat_json", "enhance_segments"])
+@pytest.mark.parametrize("status", [200, 500])
+@pytest.mark.parametrize("mode", ["declared", "chunked", "compressed", "deadline"])
+def test_llm_stream_bounds(
+    method: str, status: int, mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = [0.0]
+    monkeypatch.setattr(llm, "monotonic", lambda: clock[0])
+    headers = {}
+    if mode == "declared":
+        headers["content-length"] = str(llm.MAX_RESPONSE_BYTES + 1)
+    elif mode == "compressed":
+        headers["content-encoding"] = "gzip"
+
+    def chunks() -> Iterator[bytes]:
+        if mode == "declared":
+            pytest.fail("oversized Content-Length must be rejected before reading")
+        elif mode == "deadline":
+            yield b"a"
+            clock[0] = llm.MAX_RESPONSE_SECONDS + 1
+            yield b"b"
+        elif mode == "compressed":
+            yield gzip.compress(b"x" * (llm.MAX_RESPONSE_BYTES + 1))
+        else:
+            yield b"x" * llm.MAX_RESPONSE_BYTES
+            yield b"x"
+        pytest.fail("must stop reading immediately when a bound is exceeded")
+
+    stream = TrackedLLMStream(chunks())
+    client = make_client(lambda r: httpx.Response(status, headers=headers, stream=stream))
+    with pytest.raises(LLMError, match="deadline" if mode == "deadline" else "byte bound"):
+        if method == "chat_json":
+            client.chat_json([ChatMessage("user", "go")])
+        else:
+            client.enhance_segments(SEGMENTS, "")
+    assert stream.closed
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_llm_stream_accepts_exact_decoded_limit(compressed: bool) -> None:
+    body = completion({"ok": True}).content
+    body += b" " * (llm.MAX_RESPONSE_BYTES - len(body))
+    headers = {}
+    if compressed:
+        body = gzip.compress(body)
+        headers["content-encoding"] = "gzip"
+    stream = TrackedLLMStream(iter([body[:10], body[10:]]))
+    client = make_client(lambda r: httpx.Response(200, headers=headers, stream=stream))
+    assert client.chat_json([ChatMessage("user", "go")]) == {"ok": True}
+    assert stream.closed
 
 
 def make_client(handler: Any, api_key: str = "sk-test") -> HttpLLMClient:

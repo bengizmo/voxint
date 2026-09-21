@@ -151,7 +151,7 @@ from voxint.tutorial.seed import seed_tutorial_run
 
 logger = logging.getLogger(__name__)
 
-setup_router = APIRouter(dependencies=[Depends(viewer_write_guard)])
+setup_router = APIRouter(dependencies=[Depends(viewer_write_guard), Depends(_require_admin)])
 router = APIRouter(dependencies=[Depends(require_onboarded), Depends(_require_admin)])
 
 # Bounded, non-secret operator guidance for a failed UI-triggered tutorial seed
@@ -536,7 +536,7 @@ def _persist_llm_settings(
     it is never prefilled). The key is a credential: it is never rendered, and the
     returned message is a fixed string that never interpolates it.
     """
-    base_url = normalize_llm_base_url(raw_base_url)
+    base_url = normalize_llm_base_url(raw_base_url, multi_user=settings.voxint_multi_user)
     model = normalize_llm_model(raw_model)
     # Tri-state "revert to installation setting" (issue #46): a blank field already
     # normalizes to None, but a submission that merely echoes the env default (the
@@ -574,7 +574,15 @@ def _persist_llm_settings(
     elif new_key is not None:
         candidate_key = new_key
     else:
-        candidate_key = row.llm_api_key
+        # Credential-endpoint binding: when the effective base URL changes and
+        # no new key was explicitly submitted, clear the stored key so
+        # credentials never silently follow a redirected endpoint.
+        prior_effective = (row.llm_base_url or "") or settings.llm_base_url
+        new_effective = (base_url or "") or settings.llm_base_url
+        if row.llm_api_key and prior_effective != new_effective:
+            candidate_key = None
+        else:
+            candidate_key = row.llm_api_key
     # Effective key from the CANDIDATE (row-wins-over-env), matching how a run/job
     # will resolve it post-save, so the enable guard reflects the saved state.
     effective_key = (candidate_key or "").strip() or settings.llm_api_key.strip()

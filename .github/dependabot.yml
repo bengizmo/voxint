@@ -1,6 +1,5 @@
-# Keeps the SHA-pinned GitHub Actions (audit F1) from rotting: without an
-# update path, pinned commits silently miss upstream security fixes.
-# One grouped PR per month, no automerge -> low noise for a solo maintainer.
+# Keeps GitHub Actions, Python, npm, and Docker dependencies updated (audit N24).
+# Weekly updates; GitHub Actions stay grouped to reduce maintainer noise.
 # Dependabot understands SHA pins and bumps the same-line `# vX.Y.Z` comment.
 # GitHub-only; the Forgejo Actions mirror does not run Dependabot.
 version: 2
@@ -8,7 +7,80 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
+    open-pull-requests-limit: 10
     groups:
       actions:
         patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: pip
+    directory: /services/whisper
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: pip
+    directory: /services/pyannote
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: pip
+    directory: /services/titanet
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: pip
+    directory: /services/synthdetect
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: docker
+    directory: /services/whisper
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: docker
+    directory: /services/pyannote
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: docker
+    directory: /services/titanet
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: docker
+    directory: /services/llama-cpp
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: docker
+    directory: /services/synthdetect
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
