@@ -6,7 +6,7 @@
 # resolves (it is absent from PyPI), and faster-whisper's `ctranslate2>=4.0,<5`
 # range is satisfied by it.
 fastapi==0.104.1
-uvicorn[standard]==0.24.0
+uvicorn[standard]==0.53.0
 pydantic==2.5.0
 
 # faster-whisper 1.2.x: BatchedInferencePipeline + built-in Silero VAD
