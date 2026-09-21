@@ -4,8 +4,6 @@ All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog
 versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between minors).
 
 
-## [Unreleased]
-
 ## [0.45.0] - 2026-09-21
 
 ### Added
