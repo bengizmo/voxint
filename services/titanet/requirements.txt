@@ -10,7 +10,7 @@ numpy==1.24.3
 librosa==0.10.1
 soundfile==0.12.1
 scipy==1.11.4
-numba==0.58.1
+numba==0.67.0
 
 # Embedding-space preprocessing (part of the titanet-large-v2 definition)
 pyloudnorm==0.1.0
