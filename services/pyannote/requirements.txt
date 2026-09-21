@@ -20,7 +20,7 @@ huggingface_hub==0.23.4
 pyannote.audio==3.1.1
 pyannote.core==5.0.0
 pyannote.database==5.0.1
-pyannote.pipeline==3.0.1
+pyannote.pipeline==4.0.0
 
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
