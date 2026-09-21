@@ -22,7 +22,7 @@
 # Run the stack with COMPUTE_TIER=rocm (compose.rocm.yaml) so stage leases
 # scale for the still-CPU stages — see docs/timeouts-and-leases.md.
 
-FROM ubuntu:24.04 AS rocm-base
+FROM ubuntu:25.10 AS rocm-base
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
