@@ -2,7 +2,7 @@
 # torch is installed separately from the cu128 index in the Dockerfile.
 numpy==1.24.3
 
-librosa==0.10.1
+librosa==1.0.0
 soundfile==0.12.1
 scipy==1.11.4
 numba==0.58.1
