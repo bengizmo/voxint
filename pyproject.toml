@@ -74,7 +74,7 @@ parity = [
     # ONNX chain must run the same preprocessing stack as the shipped image,
     # or preprocess version skew masquerades as engine drift.
     "librosa==0.10.1",
-    "soundfile==0.12.1",
+    "soundfile==0.14.0",
     "noisereduce==2.0.1",
     "pyloudnorm==0.1.0",
     # librosa 0.10.1 imports pkg_resources, which setuptools removed in 81.
