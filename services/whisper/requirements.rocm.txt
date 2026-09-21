@@ -7,7 +7,7 @@
 # range is satisfied by it.
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-pydantic==2.5.0
+pydantic==2.13.5
 
 # faster-whisper 1.2.x: BatchedInferencePipeline + built-in Silero VAD
 faster-whisper==1.2.1
