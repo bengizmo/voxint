@@ -353,18 +353,13 @@ class TestRunsApi:
 # ---------------------------------------------------------------------------
 
 class TestOpenApi:
-    def test_openapi_json(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/openapi.json")
-        assert resp.status_code == 200
-        schema = resp.json()
-        assert "paths" in schema
-        assert "/keys" in schema["paths"]
-        assert "/runs" in schema["paths"]
-
-    def test_docs_page(self, client: TestClient) -> None:
-        resp = client.get("/api/v1/docs")
-        assert resp.status_code == 200
-        assert "swagger" in resp.text.lower() or "openapi" in resp.text.lower()
+    @pytest.mark.parametrize(
+        "path", ["/docs", "/openapi.json", "/redoc", "/docs/oauth2-redirect"]
+    )
+    def test_api_docs_disabled(self, client: TestClient, path: str) -> None:
+        resp = client.get(f"/api/v1{path}")
+        assert resp.status_code == 404
+        assert resp.json()["error"]["code"] == "not_found"
 
     def test_console_docs_still_disabled(self, client: TestClient) -> None:
         resp = client.get("/docs")

@@ -508,6 +508,20 @@ def _restart(args: argparse.Namespace) -> int:
                 except EOFError:
                     return 2
                 args.acknowledge_label_risk = True
+            if impact.has_editorial_work and not args.acknowledge_editorial:
+                print(
+                    f"warning: restart will permanently delete {impact.corrections} text"
+                    f" correction(s) and {impact.verifications} verification(s)."
+                )
+                if args.yes:
+                    print("error: pass --acknowledge-editorial to acknowledge this loss")
+                    return 2
+                try:
+                    if input("Proceed? [y/N] ").strip().lower() not in {"y", "yes"}:
+                        return 2
+                except EOFError:
+                    return 2
+                args.acknowledge_editorial = True
             if not args.yes:
                 effective_stage = parsed_stage if parsed_stage is not None else Stage.ACQUIRE
                 stages = STAGE_ORDER[STAGE_ORDER.index(effective_stage) :]
@@ -525,6 +539,7 @@ def _restart(args: argparse.Namespace) -> int:
                 expected_revision=run.revision,
                 acknowledge_label_risk=args.acknowledge_label_risk,
                 acknowledge_void=args.acknowledge_void,
+                acknowledge_editorial=args.acknowledge_editorial,
             )
     except (
         IngestError,
@@ -597,6 +612,7 @@ def _restart_bulk(args: argparse.Namespace) -> int:
                 parsed_stage,
                 args.acknowledge_label_risk,
                 args.acknowledge_void,
+                args.acknowledge_editorial,
             )
         if not args.yes:
             desc = f"from {stage_label}" if parsed_stage else "(full restart)"
@@ -614,6 +630,7 @@ def _restart_bulk(args: argparse.Namespace) -> int:
             parsed_stage,
             args.acknowledge_label_risk,
             args.acknowledge_void,
+            args.acknowledge_editorial,
         )
     finally:
         engine.dispose()
@@ -625,6 +642,7 @@ def _restart_bulk_dry_run(
     from_stage: "Stage | None",
     acknowledge_label_risk: bool,
     acknowledge_void: bool,
+    acknowledge_editorial: bool = False,
 ) -> int:
     from voxint.db.models import PipelineRun, RunStatus
     from voxint.db.session import session_scope
@@ -632,7 +650,13 @@ def _restart_bulk_dry_run(
 
     _RESTART_OK = {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}
     stage_label = from_stage.value if from_stage else "acquire"
-    counts = {"restart_ready": 0, "void_required": 0, "label_risk": 0, "ineligible": 0}
+    counts = {
+        "restart_ready": 0,
+        "void_required": 0,
+        "label_risk": 0,
+        "ineligible": 0,
+        "editorial_loss": 0,
+    }
     for run_id, _revision in candidates:
         with session_scope(factory) as session:
             run = session.get(PipelineRun, run_id)
@@ -653,12 +677,19 @@ def _restart_bulk_dry_run(
         ):
             print(f"{run_id}: label-risk ({impact.label_scope_decisions} label decisions)")
             counts["label_risk"] += 1
+        elif impact.has_editorial_work and not acknowledge_editorial:
+            print(
+                f"{run_id}: editorial-loss ({impact.corrections} text corrections,"
+                f" {impact.verifications} verifications)"
+            )
+            counts["editorial_loss"] += 1
         else:
             print(f"{run_id}: restart-ready (from {stage_label})")
             counts["restart_ready"] += 1
     print(
         f"\n{counts['restart_ready']} restart-ready, {counts['void_required']} void-required,"
-        f" {counts['label_risk']} label-risk, {counts['ineligible']} ineligible"
+        f" {counts['label_risk']} label-risk, {counts['ineligible']} ineligible,"
+        f" {counts['editorial_loss']} editorial-loss"
     )
     return 0
 
@@ -669,6 +700,7 @@ def _restart_bulk_execute(
     from_stage: "Stage | None",
     acknowledge_label_risk: bool,
     acknowledge_void: bool,
+    acknowledge_editorial: bool = False,
 ) -> int:
     from sqlalchemy.exc import SQLAlchemyError
 
@@ -688,6 +720,7 @@ def _restart_bulk_execute(
     restarted_ids: list[uuid.UUID] = []
     blocked = 0
     label_risk_skipped = 0
+    editorial_loss_skipped = 0
     stale = 0
     errors = 0
     for run_id, revision in candidates:
@@ -717,6 +750,13 @@ def _restart_bulk_execute(
                         file=sys.stderr,
                     )
                     continue
+                if impact.has_editorial_work and not acknowledge_editorial:
+                    editorial_loss_skipped += 1
+                    print(
+                        f"{run_id}: skipped (editorial-loss, pass --acknowledge-editorial)",
+                        file=sys.stderr,
+                    )
+                    continue
                 restart_run(
                     session,
                     run_id,
@@ -724,6 +764,7 @@ def _restart_bulk_execute(
                     expected_revision=revision,
                     acknowledge_label_risk=acknowledge_label_risk,
                     acknowledge_void=acknowledge_void,
+                    acknowledge_editorial=acknowledge_editorial,
                 )
             restarted_ids.append(run_id)
         except StaleRevisionError:
@@ -748,11 +789,11 @@ def _restart_bulk_execute(
             broker_down = True
             deferred += 1
 
-    total_skipped = blocked + label_risk_skipped + stale + errors
+    total_skipped = blocked + label_risk_skipped + editorial_loss_skipped + stale + errors
     print(
         f"restarted {len(restarted_ids)}, skipped {total_skipped}"
         f" ({blocked} blocked, {label_risk_skipped} label-risk,"
-        f" {stale} stale, {errors} errors),"
+        f" {editorial_loss_skipped} editorial-loss, {stale} stale, {errors} errors),"
         f" published {published}, deferred {deferred}"
     )
     return 1 if errors else 0
@@ -2839,6 +2880,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--acknowledge-void",
         action="store_true",
         help="acknowledge voiding all adjudication decisions and detaching evidence",
+    )
+    restart_p.add_argument(
+        "--acknowledge-editorial",
+        action="store_true",
+        help="acknowledge permanent loss of text corrections and verifications",
     )
     restart_p.add_argument("--yes", "-y", action="store_true", help="skip the confirmation prompt")
     restart_p.set_defaults(fn=_restart)

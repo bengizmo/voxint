@@ -8,6 +8,7 @@ covered end to end in tests/integration/test_run_preferences_live.py.
 """
 
 import logging
+import socket
 from pathlib import Path
 
 import httpx
@@ -25,6 +26,17 @@ from voxint.pipeline.stages.context import (
     resolve_run_preferences,
 )
 from voxint.pipeline.stages.transcribe import INITIAL_PROMPT_MAX_CHARS, _initial_prompt
+
+
+@pytest.fixture(autouse=True)
+def llm_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Fake endpoint names resolve to a LAN service, without external DNS.
+    monkeypatch.setattr(
+        "voxint.clients.llm_destination.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("198.51.100.10", 80))
+        ],
+    )
 
 
 def make_settings(

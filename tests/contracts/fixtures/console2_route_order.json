@@ -1050,12 +1050,6 @@
     ]
   ],
   [
-    "/activity/stream",
-    [
-      "GET"
-    ]
-  ],
-  [
     "/runs/{run_id}/assets",
     [
       "GET"
@@ -1139,6 +1133,12 @@
     "/synthdetect/settings",
     [
       "POST"
+    ]
+  ],
+  [
+    "/activity/stream",
+    [
+      "GET"
     ]
   ]
 ]

@@ -22,6 +22,20 @@ from voxint.db.models import Base
 TEST_DB_URL = os.environ.get("VOXINT_TEST_DATABASE_URL")
 
 
+@pytest.fixture(autouse=True)
+def _bypass_llm_destination_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Integration tests don't need DNS resolution for fake LLM URLs."""
+    monkeypatch.setattr(
+        "voxint.clients.llm_destination.validate_llm_destination", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "voxint.api.setup_wizard.validate_llm_destination", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "voxint.clients.llm.validate_llm_destination", lambda *a, **kw: None
+    )
+
+
 def seed_onboarded(
     session_factory: sessionmaker[Session], *, llm_enabled: bool = False
 ) -> None:

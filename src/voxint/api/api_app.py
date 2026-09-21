@@ -168,9 +168,9 @@ def create_api_app() -> FastAPI:
             "Public REST API for the Voxint audio-intelligence pipeline. "
             f"Application version {__version__}."
         ),
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url="/openapi.json",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
     api.add_exception_handler(
         StarletteHTTPException, _api_exception_handler  # type: ignore[arg-type]

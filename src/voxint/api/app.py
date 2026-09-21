@@ -38,6 +38,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from voxint import __version__
 from voxint.api.routers.account import router as account_router
 from voxint.api.routers.activity import router as activity_router
+from voxint.api.routers.activity import stream_router as activity_stream_router
 from voxint.api.routers.adjudication_api import (
     redirect_transcript_router as adjudication_transcript_redirect_router,
 )
@@ -291,6 +292,15 @@ def _apply_security_headers(headers: MutableHeaders, *, token_path: bool) -> Non
     """
     headers.setdefault("referrer-policy", "no-referrer")
     headers.setdefault("x-content-type-options", "nosniff")
+    # Jinja2 templates require inline scripts and styles.
+    headers.setdefault(
+        "content-security-policy",
+        "default-src 'self'; base-uri 'self'; form-action 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; media-src blob: 'self'; "
+        "connect-src 'self'; img-src 'self' data:; font-src 'self'; "
+        "frame-ancestors 'none'",
+    )
     if token_path:
         headers.setdefault("cache-control", "no-store")
 
@@ -658,6 +668,9 @@ def _register_routes(app: FastAPI) -> None:
     # always registered so the route inventory is stable; the handler 404s until
     # console_activity_enabled is on.
     console.include_router(activity_router)
+    # activity_stream_router is registered on the app directly (below), NOT on
+    # the console, so it does not inherit viewer_write_guard's _resolve_identity
+    # → SessionDep chain. The stream does its own short-lived auth internally.
 
     # ---- Run assets, translation, media streaming: moved to
     # routers/legacy_runs.py; included here to keep registration order.
@@ -742,6 +755,10 @@ def _register_routes(app: FastAPI) -> None:
         console.include_router(gated_plugins)
 
     app.include_router(console)
+
+    # SSE stream lives outside the console so it does not inherit
+    # viewer_write_guard → SessionDep (N5 fix).
+    app.include_router(activity_stream_router)
 
     # Public REST API: separate sub-app with its own OpenAPI, bearer auth, and
     # JSON-only exception handlers. Mounted before the area-flag stamps so it

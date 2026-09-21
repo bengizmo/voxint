@@ -12,6 +12,7 @@ import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from time import monotonic
 from types import TracebackType
 
 import httpx
@@ -21,9 +22,12 @@ from voxint.clients.base import (
     EnhancementRequestSegment,
     SpeakerNameHint,
 )
+from voxint.clients.llm_destination import validate_llm_destination
 from voxint.media.redaction import redact
 
 CONNECT_TIMEOUT_SECONDS = 10.0
+MAX_RESPONSE_BYTES = 2_097_152
+MAX_RESPONSE_SECONDS = 300.0
 HINT_KINDS = frozenset({"self", "other"})
 # Enhancement fixes punctuation/casing — output should track input size. A
 # reply blowing far past the source text is garbage or injection, not editing.
@@ -195,6 +199,11 @@ class HttpLLMClient:
         self._api_key = api_key
         # Per-request auth (not client-level) so injected clients get it too.
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        if client is None:
+            try:
+                validate_llm_destination(base_url)
+            except ValueError as exc:
+                raise LLMError(str(exc)) from exc
         self._client = client or httpx.Client(
             base_url=base_url,
             timeout=httpx.Timeout(
@@ -217,6 +226,48 @@ class HttpLLMClient:
         """
         body = redact(response.text, extra_secrets=(self._api_key,))
         return LLMError(f"HTTP {response.status_code}: {body[:500]}")
+
+    def _post_completion(self, payload: dict[str, object]) -> httpx.Response:
+        """Bound decoded success and error bodies before parsing or logging them."""
+        deadline = monotonic() + MAX_RESPONSE_SECONDS
+
+        def check_deadline() -> None:
+            if monotonic() >= deadline:
+                raise LLMError(f"LLM response exceeded {MAX_RESPONSE_SECONDS:g}-second deadline")
+
+        try:
+            with self._client.stream(
+                "POST", "/chat/completions", json=payload, headers=self._headers
+            ) as response:
+                check_deadline()
+                content_length = response.headers.get("content-length")
+                try:
+                    declared_size = int(content_length) if content_length is not None else 0
+                except ValueError:
+                    declared_size = 0  # Untrusted/missing lengths still get the streaming bound.
+                if declared_size > MAX_RESPONSE_BYTES:
+                    raise LLMError(f"LLM response exceeds {MAX_RESPONSE_BYTES}-byte bound")
+                body = bytearray()
+                # iter_bytes counts decoded bytes (including compressed responses).
+                # Do not coalesce chunks: a trickling body must hit the clock check.
+                chunks = response.iter_bytes()
+                while True:
+                    check_deadline()
+                    chunk = next(chunks, None)
+                    check_deadline()
+                    if chunk is None:
+                        break
+                    if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
+                        raise LLMError(f"LLM response exceeds {MAX_RESPONSE_BYTES}-byte bound")
+                    body.extend(chunk)
+                # Preserve the existing JSON/text parsing API without re-decoding
+                # content that iter_bytes has already decompressed.
+                headers = response.headers.copy()
+                headers.pop("content-encoding", None)
+                headers.pop("content-length", None)
+                return httpx.Response(response.status_code, headers=headers, content=bytes(body))
+        except httpx.HTTPError as exc:
+            raise LLMError(f"transport failure: {type(exc).__name__}: {exc}") from exc
 
     def enhance_segments(
         self,
@@ -256,10 +307,7 @@ class HttpLLMClient:
                 },
             ],
         }
-        try:
-            response = self._client.post("/chat/completions", json=payload, headers=self._headers)
-        except httpx.HTTPError as exc:
-            raise LLMError(f"transport failure: {type(exc).__name__}: {exc}") from exc
+        response = self._post_completion(payload)
         if response.status_code >= 400:
             raise self._http_error(response)
         try:
@@ -288,10 +336,7 @@ class HttpLLMClient:
             **self._extra_body,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
         }
-        try:
-            response = self._client.post("/chat/completions", json=payload, headers=self._headers)
-        except httpx.HTTPError as exc:
-            raise LLMError(f"transport failure: {type(exc).__name__}: {exc}") from exc
+        response = self._post_completion(payload)
         if response.status_code >= 400:
             raise self._http_error(response)
         try:

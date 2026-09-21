@@ -32,6 +32,8 @@ _ZERO = uuid.UUID(int=0)
 # ungated route under /setup would still fail this guard.
 EXEMPT_PATHS = {
     "/healthz",
+    # SSE checks auth + onboarding internally with a short-lived DB session.
+    "/activity/stream",
     # Account self-service (#364): on `app`, not the console router, so viewer
     # password changes bypass viewer_write_guard. Auth-gated by CurrentUserDep.
     "/account/password",

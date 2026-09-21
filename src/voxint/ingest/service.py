@@ -213,11 +213,18 @@ class RestartImpact:
     segment_scope_decisions: int
     enrichment_evidence: int
     derived_embeddings: int = 0
+    corrections: int = 0
+    verifications: int = 0
 
     @property
     def requires_void(self) -> bool:
         """Restart requires voiding decisions to unblock segment deletion."""
         return self.segment_scope_decisions > 0 or self.enrichment_evidence > 0
+
+    @property
+    def has_editorial_work(self) -> bool:
+        """Restart would destroy operator corrections or verifications."""
+        return self.corrections > 0 or self.verifications > 0
 
 
 class RunRestartBlockedError(IngestError):
@@ -282,6 +289,27 @@ class RunRestartLabelRiskError(IngestError):
         )
         self.run_id = run_id
         self.count = count
+
+
+class RunRestartEditorialLossError(IngestError):
+    """Restart would destroy operator corrections or verifications."""
+
+    def __init__(
+        self, run_id: uuid.UUID, corrections: int, verifications: int
+    ) -> None:
+        parts: list[str] = []
+        if corrections > 0:
+            parts.append(f"{corrections} text correction(s)")
+        if verifications > 0:
+            parts.append(f"{verifications} verification(s)")
+        detail = " and ".join(parts)
+        super().__init__(
+            f"this run has {detail} that will be permanently lost."
+            " Acknowledge this to proceed."
+        )
+        self.run_id = run_id
+        self.corrections = corrections
+        self.verifications = verifications
 
 
 class RestartPrerequisiteError(IngestError):
@@ -1048,6 +1076,7 @@ def restart_impact(
         AdjudicationDecision,
         Decision,
         EnrichmentCandidateEvidence,
+        SegmentReviewState,
         SpeakerEmbedding,
         TranscriptSegment,
     )
@@ -1129,11 +1158,35 @@ def restart_impact(
         )
         or 0
     )
+    corrections = (
+        session.scalar(
+            select(func.count())
+            .select_from(SegmentReviewState)
+            .where(
+                SegmentReviewState.pipeline_run_id == run_id,
+                SegmentReviewState.corrected_text.is_not(None),
+            )
+        )
+        or 0
+    )
+    verifications = (
+        session.scalar(
+            select(func.count())
+            .select_from(SegmentReviewState)
+            .where(
+                SegmentReviewState.pipeline_run_id == run_id,
+                SegmentReviewState.verified_at.is_not(None),
+            )
+        )
+        or 0
+    )
     return RestartImpact(
         label_scope_decisions=label_scope,
         segment_scope_decisions=segment_scope,
         enrichment_evidence=evidence,
         derived_embeddings=derived_embeddings,
+        corrections=corrections,
+        verifications=verifications,
     )
 
 
@@ -1166,6 +1219,8 @@ def restart_stage_profiles(
                     "requires_void": False,
                     "label_risk": False,
                     "label_count": 0,
+                    "corrections": 0,
+                    "verifications": 0,
                     "safe": True,
                 }
             )
@@ -1177,6 +1232,8 @@ def restart_stage_profiles(
                     "requires_void": False,
                     "label_risk": full_impact.label_scope_decisions > 0,
                     "label_count": full_impact.label_scope_decisions,
+                    "corrections": 0,
+                    "verifications": 0,
                     "safe": full_impact.label_scope_decisions == 0,
                 }
             )
@@ -1190,8 +1247,12 @@ def restart_stage_profiles(
                         not full_impact.requires_void and full_impact.label_scope_decisions > 0
                     ),
                     "label_count": full_impact.label_scope_decisions,
+                    "corrections": full_impact.corrections,
+                    "verifications": full_impact.verifications,
                     "safe": (
-                        not full_impact.requires_void and full_impact.label_scope_decisions == 0
+                        not full_impact.requires_void
+                        and full_impact.label_scope_decisions == 0
+                        and not full_impact.has_editorial_work
                     ),
                 }
             )
@@ -1366,6 +1427,7 @@ def _validate_prerequisites(
         StageStatus,
         TranscriptSegment,
     )
+    from voxint.media.integrity import openable_current, openable_path
 
     stage_idx = STAGE_ORDER.index(from_stage)
     if stage_idx == 0:
@@ -1399,20 +1461,28 @@ def _validate_prerequisites(
             earliest_viable=_find_earliest_viable(session, run_id),
         )
 
-    if from_stage == Stage.TRANSCRIBE:
-        has_audio = (
-            session.scalar(
-                select(func.count())
-                .select_from(AudioArtifact)
-                .where(
-                    AudioArtifact.pipeline_run_id == run_id,
-                    AudioArtifact.kind == "preprocessed_audio",
-                    AudioArtifact.reclaimed_at.is_(None),
-                )
+    if from_stage == Stage.PREPARE:
+        run = session.get(PipelineRun, run_id)
+        if run is None:
+            raise RunNotFoundError(run_id)
+        item = session.get(MediaItem, run.media_item_id)
+        if item is None or openable_current(get_settings().media_root, item) is None:
+            raise RestartPrerequisiteError(
+                run_id,
+                from_stage,
+                "acquired media file is missing",
+                earliest_viable=Stage.ACQUIRE,
             )
-            or 0
+
+    if from_stage == Stage.TRANSCRIBE:
+        audio_path = session.scalar(
+            select(AudioArtifact.path).where(
+                AudioArtifact.pipeline_run_id == run_id,
+                AudioArtifact.kind == "preprocessed_audio",
+                AudioArtifact.reclaimed_at.is_(None),
+            )
         )
-        if has_audio == 0:
+        if not audio_path or openable_path(get_settings().media_root, audio_path) is None:
             raise RestartPrerequisiteError(
                 run_id,
                 from_stage,
@@ -1420,7 +1490,8 @@ def _validate_prerequisites(
                 earliest_viable=Stage.PREPARE,
             )
 
-    if from_stage == Stage.DIARIZE_EMBED:
+    # DIARIZE_EMBED labels these segments; ENHANCE_MATCH creates assignments.
+    if from_stage in (Stage.DIARIZE_EMBED, Stage.ENHANCE_MATCH):
         has_segments = (
             session.scalar(
                 select(func.count())
@@ -1436,6 +1507,8 @@ def _validate_prerequisites(
                 "no transcript segments exist",
                 earliest_viable=Stage.TRANSCRIBE,
             )
+
+    # FINALIZE is a completion checkpoint; zero matching proposals is valid.
 
 
 def _find_earliest_viable(session: Session, run_id: uuid.UUID) -> Stage:
@@ -1471,6 +1544,7 @@ def restart_run(
     expected_revision: int | None = None,
     acknowledge_label_risk: bool = False,
     acknowledge_void: bool = False,
+    acknowledge_editorial: bool = False,
 ) -> RunSnapshot:
     """CAS-restart a terminal run, optionally from a selected stage.
 
@@ -1497,6 +1571,7 @@ def restart_run(
     run = session.get(PipelineRun, run_id)
     if run is None:
         raise RunNotFoundError(run_id)
+    session.refresh(run, with_for_update=True)
     if run.archived_at is not None:
         raise RunArchivedError(run_id)
     held = snapshot(run)
@@ -1510,6 +1585,10 @@ def restart_run(
         raise RunRestartVoidRequiredError(run_id, impact)
     if impact.label_scope_decisions > 0 and not acknowledge_void and not acknowledge_label_risk:
         raise RunRestartLabelRiskError(run_id, impact.label_scope_decisions)
+    if impact.has_editorial_work and not acknowledge_editorial:
+        raise RunRestartEditorialLossError(
+            run_id, impact.corrections, impact.verifications
+        )
 
     effective_stage = from_stage if from_stage is not None else Stage.ACQUIRE
 
@@ -2010,11 +2089,20 @@ def reconcile_orphaned_incoming(
     Called once at app startup (before any new submissions) so there are no
     concurrent writers to race with. Returns the list of relative paths removed.
     """
+    media_root = media_root.resolve()
     incoming = media_root / "incoming"
+    if incoming.is_symlink():
+        logger.warning("incoming is a symlink, refusing orphan cleanup")
+        return []
+    incoming = incoming.resolve()
+    if not incoming.is_relative_to(media_root):
+        return []
     if not incoming.is_dir():
         return []
     removed: list[str] = []
     for path in sorted(incoming.rglob("*")):
+        if not path.resolve().is_relative_to(media_root):
+            continue
         if not path.is_file():
             continue
         try:
@@ -2029,6 +2117,8 @@ def reconcile_orphaned_incoming(
             removed.append(rel)
             logger.info("removed orphaned incoming file: %s", rel)
     for dirpath in sorted(incoming.rglob("*"), reverse=True):
+        if not dirpath.resolve().is_relative_to(media_root):
+            continue
         if dirpath.is_dir():
             with contextlib.suppress(OSError):
                 dirpath.rmdir()

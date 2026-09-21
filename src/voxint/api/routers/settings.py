@@ -151,7 +151,7 @@ from voxint.tutorial.seed import seed_tutorial_run
 
 logger = logging.getLogger(__name__)
 
-setup_router = APIRouter(dependencies=[Depends(viewer_write_guard)])
+setup_router = APIRouter(dependencies=[Depends(viewer_write_guard), Depends(_require_admin)])
 router = APIRouter(dependencies=[Depends(require_onboarded), Depends(_require_admin)])
 
 # Bounded, non-secret operator guidance for a failed UI-triggered tutorial seed
@@ -536,7 +536,7 @@ def _persist_llm_settings(
     it is never prefilled). The key is a credential: it is never rendered, and the
     returned message is a fixed string that never interpolates it.
     """
-    base_url = normalize_llm_base_url(raw_base_url)
+    base_url = normalize_llm_base_url(raw_base_url, multi_user=settings.voxint_multi_user)
     model = normalize_llm_model(raw_model)
     # Tri-state "revert to installation setting" (issue #46): a blank field already
     # normalizes to None, but a submission that merely echoes the env default (the
@@ -574,6 +574,8 @@ def _persist_llm_settings(
     elif new_key is not None:
         candidate_key = new_key
     else:
+        # Both callers require admin access; blank means keep the stored key,
+        # including when the admin changes the endpoint.
         candidate_key = row.llm_api_key
     # Effective key from the CANDIDATE (row-wins-over-env), matching how a run/job
     # will resolve it post-save, so the enable guard reflects the saved state.

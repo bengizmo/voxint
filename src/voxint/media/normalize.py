@@ -8,13 +8,24 @@ a half-written file where downstream stages will look for it.
 
 import json
 import subprocess
+import threading
 import uuid
 from dataclasses import dataclass
+from io import BufferedReader
 from pathlib import Path
 
 TARGET_SAMPLE_RATE = 16000
 TARGET_CHANNELS = 1
-_STDERR_LIMIT = 2000
+_STDERR_LIMIT = 10 * 1024
+_PROBE_TIMEOUT_SECONDS = 30.0
+_NORMALIZE_TIMEOUT_SECONDS = 3600.0
+_MAX_DURATION_SECONDS = 86400
+_MAX_OUTPUT_BYTES = 53687091200
+# Demuxer names, not extensions: excludes HLS, concat and other playlists.
+_INPUT_FORMATS = (
+    "wav,mp3,flac,ogg,mov,mp4,m4a,3gp,3g2,mj2,aac,asf,"
+    "matroska,webm,avi,mpegts,aiff,mpeg"
+)
 
 
 class NormalizationError(Exception):
@@ -30,13 +41,45 @@ class AudioInfo:
     codec: str
 
 
-def _run(
-    cmd: list[str], *, timeout_seconds: float | None = None
-) -> subprocess.CompletedProcess[str]:
+def _run(cmd: list[str], *, timeout_seconds: float) -> subprocess.CompletedProcess[str]:
+    # Drain continuously and retain bounded tails, including on failure/timeout.
+    stdout = bytearray()
+    stderr = bytearray()
+
+    def drain(pipe: BufferedReader, tail: bytearray) -> None:
+        with pipe:
+            while chunk := pipe.read(4096):
+                tail.extend(chunk)
+                del tail[:-_STDERR_LIMIT]
+
     try:
-        return subprocess.run(
-            cmd, capture_output=True, text=True, check=False, timeout=timeout_seconds
-        )
+        with subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        ) as proc:
+            readers = [
+                threading.Thread(target=drain, args=(proc.stdout, stdout)),
+                threading.Thread(target=drain, args=(proc.stderr, stderr)),
+            ]
+            for reader in readers:
+                reader.start()
+            try:
+                proc.wait(timeout=timeout_seconds)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.wait()
+                for reader in readers:
+                    reader.join()
+            return subprocess.CompletedProcess(
+                cmd,
+                proc.returncode,
+                stdout.decode("utf-8", errors="replace"),
+                stderr.decode("utf-8", errors="replace"),
+            )
+    except subprocess.TimeoutExpired:
+        raise NormalizationError(
+            f"{cmd[0]} timed out after {timeout_seconds}s"
+        ) from None
     except OSError as exc:  # missing binary, permissions
         raise NormalizationError(f"failed to execute {cmd[0]}: {exc}") from exc
 
@@ -46,12 +89,17 @@ def probe_audio(
 ) -> AudioInfo:
     """Inspect the first audio stream; raises if the file has none.
 
-    ``timeout_seconds`` bounds the probe (request-path callers must set it;
-    pipeline callers may block). TimeoutExpired propagates to the caller.
+    ``timeout_seconds`` overrides the 30-second default. Timeouts raise
+    NormalizationError; None also uses the bounded default.
     """
     proc = _run(
         [
             ffprobe_bin,
+            # ffprobe has no -nostdin option; _run disconnects stdin instead.
+            "-protocol_whitelist",
+            "file",
+            "-format_whitelist",
+            _INPUT_FORMATS,
             "-v",
             "error",
             "-select_streams",
@@ -64,12 +112,10 @@ def probe_audio(
             "json",
             str(path),
         ],
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=(_PROBE_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds),
     )
     if proc.returncode != 0:
-        raise NormalizationError(
-            f"ffprobe failed on {path}: {proc.stderr[-_STDERR_LIMIT:]}"
-        )
+        raise NormalizationError(f"ffprobe failed on {path}: {proc.stderr[-_STDERR_LIMIT:]}")
     try:
         data = json.loads(proc.stdout)
         stream = data["streams"][0]
@@ -101,29 +147,39 @@ def normalize_to_wav(
     # Unique per attempt: two overlapping attempts (lease expiry edge) must
     # never share a temp file. A crashed attempt's litter is bounded and inert.
     tmp = dest.with_name(f"{dest.name}.{uuid.uuid4().hex}.tmp")
-    proc = _run(
-        [
-            ffmpeg_bin,
-            "-y",
-            "-i",
-            str(source),
-            "-vn",
-            "-ac",
-            str(TARGET_CHANNELS),
-            "-ar",
-            str(TARGET_SAMPLE_RATE),
-            "-c:a",
-            "pcm_s16le",
-            "-f",
-            "wav",
-            str(tmp),
-        ]
-    )
     try:
+        proc = _run(
+            [
+                ffmpeg_bin,
+                "-y",
+                "-nostdin",
+                "-v",
+                "error",
+                "-protocol_whitelist",
+                "file",
+                "-format_whitelist",
+                _INPUT_FORMATS,
+                "-i",
+                str(source),
+                "-vn",
+                "-ac",
+                str(TARGET_CHANNELS),
+                "-ar",
+                str(TARGET_SAMPLE_RATE),
+                "-c:a",
+                "pcm_s16le",
+                "-t",
+                str(_MAX_DURATION_SECONDS),
+                "-fs",
+                str(_MAX_OUTPUT_BYTES),
+                "-f",
+                "wav",
+                str(tmp),
+            ],
+            timeout_seconds=_NORMALIZE_TIMEOUT_SECONDS,
+        )
         if proc.returncode != 0:
-            raise NormalizationError(
-                f"ffmpeg failed on {source}: {proc.stderr[-_STDERR_LIMIT:]}"
-            )
+            raise NormalizationError(f"ffmpeg failed on {source}: {proc.stderr[-_STDERR_LIMIT:]}")
         info = probe_audio(tmp, ffprobe_bin=ffprobe_bin)
         if info.sample_rate != TARGET_SAMPLE_RATE or info.channels != TARGET_CHANNELS:
             raise NormalizationError(

@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from voxint.ingest.service import reconcile_orphaned_incoming
 
 
@@ -64,3 +66,37 @@ def test_empty_incoming_dir(tmp_path: Path) -> None:
     session = MagicMock()
     removed = reconcile_orphaned_incoming(session, tmp_path)
     assert removed == []
+
+
+@pytest.mark.parametrize("target_inside_root", [False, True])
+def test_rejects_symlinked_incoming(tmp_path: Path, target_inside_root: bool) -> None:
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    target = (media_root if target_inside_root else tmp_path) / "target"
+    target.mkdir()
+    orphan = target / "audio.wav"
+    orphan.write_bytes(b"keep")
+    (media_root / "incoming").symlink_to(target, target_is_directory=True)
+    session = _session_all_orphaned()
+
+    assert reconcile_orphaned_incoming(session, media_root) == []
+
+    assert orphan.read_bytes() == b"keep"
+    session.execute.assert_not_called()
+
+
+def test_preserves_incoming_symlink_to_external_file(tmp_path: Path) -> None:
+    media_root = tmp_path / "media"
+    incoming = media_root / "incoming"
+    incoming.mkdir(parents=True)
+    external = tmp_path / "audio.wav"
+    external.write_bytes(b"keep")
+    link = incoming / "audio.wav"
+    link.symlink_to(external)
+    session = _session_all_orphaned()
+
+    assert reconcile_orphaned_incoming(session, media_root) == []
+
+    assert link.is_symlink()
+    assert external.read_bytes() == b"keep"
+    session.execute.assert_not_called()

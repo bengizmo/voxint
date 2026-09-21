@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from voxint.clients.llm_destination import validate_llm_destination
 from voxint.config import Settings, llm_budget_fits_stage_lease, llm_endpoint_explicitly_set
 from voxint.db.models import MediaItem
 from voxint.media.suffixes import MEDIA_SUFFIXES
@@ -181,12 +182,12 @@ def normalize_vocabulary(raw_text: str) -> list[str]:
     return out
 
 
-def normalize_llm_base_url(raw: str) -> str | None:
+def normalize_llm_base_url(raw: str, *, multi_user: bool | None = None) -> str | None:
     """Validate an optional LLM base URL override. Blank ⇒ None (env fallback).
 
     An absolute http/https URL with a plain host and no embedded credentials. No
-    SSRF/public-address restriction — a local inference endpoint (localhost) is a
-    legitimate target, unlike the ingest URL path. Raises
+    link-local or metadata destinations. LAN inference is allowed; changed
+    loopback endpoints are rejected in multi-user mode. Raises
     :class:`SetupValidationError` otherwise.
     """
     value = raw.strip()
@@ -211,6 +212,10 @@ def normalize_llm_base_url(raw: str) -> str | None:
         raise SetupValidationError("LLM base URL has no host")
     if parts.username is not None or parts.password is not None:
         raise SetupValidationError("LLM base URL must not embed credentials")
+    try:
+        validate_llm_destination(value, multi_user=multi_user)
+    except ValueError as exc:
+        raise SetupValidationError(str(exc)) from exc
     return value
 
 

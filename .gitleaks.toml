@@ -28,6 +28,12 @@ regexes = [
     '''^\s*-\s*172\.16\.0\.0/12\s*$''',
     '''^\s*-\s*192\.168\.0\.0/16\s*$''',
 ]
+# N8 SSRF destination policy tests: RFC1918 addresses are the subject under test
+# (verifying they pass the LLM destination policy for local LLM deployments).
+# These are fake test IPs, not internal infrastructure references.
+paths = [
+    '''(^|/)tests/unit/test_llm_destination\.py$''',
+]
 
 [[rules]]
 id = "voxint-internal-hostname"
@@ -145,4 +151,9 @@ commits = [
     "4f6040f63d374a575767c7c0f689902173de832c",
     "52ec056815cc7796765fe1d7c486c361f2b3d070",
     "f253b00be52b71e97e42871637735f0a6ffd18c9",
+    # edc27bb: N8 SSRF destination policy tests used RFC1918 addresses as
+    # mock DNS responses. Scrubbed to RFC 5737 TEST-NET addresses in a
+    # follow-up; the historical commit is allowlisted because published
+    # history is never rewritten.
+    "edc27bba76c864a4d89998fcdcc424539f1fdf39",
 ]
