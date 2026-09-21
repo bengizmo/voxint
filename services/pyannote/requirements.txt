@@ -24,7 +24,7 @@ pyannote.pipeline==3.0.1
 
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-pydantic==2.5.0
+pydantic==2.13.5
 
 # Pure-ctypes NVML bindings for the /healthz hardware-telemetry sampler
 # (temperature + throttle reasons, which torch alone cannot report). Fail-soft:
