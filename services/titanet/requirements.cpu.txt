@@ -21,7 +21,7 @@ noisereduce==2.0.1
 # EXPORT-time ORT (graph fidelity), which may lag this runtime pin.
 onnxruntime==1.28.0
 
-fastapi==0.104.1
+fastapi==0.141.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 

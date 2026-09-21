@@ -20,7 +20,7 @@ noisereduce==2.0.1
 # from Microsoft's CUDA 12 feed (not on PyPI). The ONNX graph is the same
 # sha-pinned export used by the CPU image.
 
-fastapi==0.104.1
+fastapi==0.141.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 
