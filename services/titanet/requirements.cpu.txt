@@ -12,7 +12,7 @@ numba==0.58.1
 
 # Embedding-space preprocessing (part of the titanet-large-v2 definition)
 pyloudnorm==0.1.0
-noisereduce==2.0.1
+noisereduce==3.0.3
 
 # Inference engine — MUST match the version the parity harness actually
 # measured (pyproject's parity extra / uv.lock), which is what keeps the
