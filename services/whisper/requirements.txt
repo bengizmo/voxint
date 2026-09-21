@@ -11,7 +11,7 @@ soundfile==0.12.1
 
 # torch is required by the Silero VAD inside faster-whisper (cu128 wheels
 # installed separately in the Dockerfile builder stage).
-torch==2.8.0
+torch==2.14.0
 torchaudio==2.8.0
 
 # Pure-ctypes NVML bindings for the /healthz hardware-telemetry sampler
