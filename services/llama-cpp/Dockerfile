@@ -19,7 +19,7 @@
 # The base image is digest-pinned: the serving engine is part of the numerics
 # contract, so it may not float. Regenerate/refresh only via a new asset
 # release + provenance bump (docs/release-process.md).
-FROM ghcr.io/ggml-org/llama.cpp:server@sha256:092d1291f2bcf59ff727fa3af855fb9bd4759d6bff860f6fbfd5e3e377e12625
+FROM ghcr.io/ggml-org/llama.cpp:server@sha256:9dc0a0f4080b7817c9592b19c03a4f4b0be92fd701076b9da259ff941dc5bf91
 
 # Attribution + provenance travel inside the image (Apache-2.0 redistribution).
 COPY provenance.json /app/provenance.json
