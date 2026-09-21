@@ -13,7 +13,7 @@
 # comes from PyPI and would otherwise float inside faster-whisper's
 # >=4.0,<5 range. 4.8.1 is what the Phase 0 spike verified resolving as a
 # native arm64 macOS wheel under uv.
-fastapi==0.104.1
+fastapi==0.141.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 

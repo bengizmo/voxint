@@ -5,7 +5,7 @@
 # build installs from a sha256-pinned GitHub release wheel BEFORE this file
 # resolves (it is absent from PyPI), and faster-whisper's `ctranslate2>=4.0,<5`
 # range is satisfied by it.
-fastapi==0.104.1
+fastapi==0.141.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 
