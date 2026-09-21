@@ -38,7 +38,7 @@ dependencies = [
     # "NO torch/TF/CUDA" dep-closure boundary holds. onnxruntime is exact-pinned
     # to the version the titanet -cpu parity harness measures (single repo-wide
     # pin; a contract test binds it to services/titanet/requirements.cpu.txt).
-    "onnxruntime==1.28.0",
+    "onnxruntime==1.30.0",
     "tokenizers>=0.20",
     "argon2-cffi>=23.1",
 ]
