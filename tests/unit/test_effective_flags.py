@@ -483,7 +483,7 @@ def test_build_bundled_llm_client_keyless_greedy(monkeypatch) -> None:
     monkeypatch.setattr(
         "voxint.clients.llm_destination.socket.getaddrinfo",
         lambda *args, **kwargs: [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("172.18.0.2", 8080))
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("198.51.100.2", 8080))
         ],
     )
     # The bundled endpoint is product-owned and local: NO api key, and the pinned

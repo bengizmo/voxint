@@ -34,7 +34,7 @@ def llm_dns(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "voxint.clients.llm_destination.socket.getaddrinfo",
         lambda *args, **kwargs: [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.168.1.10", 80))
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("198.51.100.10", 80))
         ],
     )
 
