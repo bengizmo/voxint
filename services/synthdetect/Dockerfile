@@ -7,7 +7,7 @@
 # Run:   docker run --gpus device=0 -v /path/to/media:/data/media:ro \
 #            -p 8025:8025 voxint-synthdetect:dev
 
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
