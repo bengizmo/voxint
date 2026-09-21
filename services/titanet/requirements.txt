@@ -21,7 +21,7 @@ noisereduce==2.0.1
 # sha-pinned export used by the CPU image.
 
 fastapi==0.104.1
-uvicorn[standard]==0.24.0
+uvicorn[standard]==0.53.0
 pydantic==2.5.0
 
 # Pure-ctypes NVML bindings for the /healthz hardware-telemetry sampler.
