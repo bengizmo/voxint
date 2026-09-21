@@ -78,7 +78,7 @@ parity = [
     "noisereduce==2.0.1",
     "pyloudnorm==0.1.0",
     # librosa 0.10.1 imports pkg_resources, which setuptools removed in 81.
-    "setuptools>=70,<81",
+    "setuptools>=70,<85",
     # Whisper Metal ASR bakeoff (issue #33): the frozen WER/CER stack.
     # jiwer is the edit-distance implementation only; the text normalizer is
     # the sha-pinned vendored Whisper EnglishTextNormalizer
