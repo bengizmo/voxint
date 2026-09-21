@@ -4,7 +4,7 @@ All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog
 versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between minors).
 
 
-## [Unreleased]
+## [0.45.0] - 2026-09-21
 
 ### Added
 - **Inline speaker assignment popover** (#568). Clicking a speaker name in the
@@ -52,6 +52,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   a compensating REVOKE decision on the ledger, restoring the label to its
   prior state. The undo is server-side enforced (drift detection, grace expiry)
   and idempotent on retry. Segment-scope undo is deferred to a follow-up.
+- **ROCm-lane fingerprint probe** (#119). The eval harness now attests AMD/ROCm
+  hosts via sysfs (GPU identity, PCI slot, driver version) so `voxint run
+  --compute-tier rocm` produces scoreable manifests on AMD hardware without
+  rocm-smi. Pipeline-env schema bumped to v2 (`gpu.compute_api` replaces
+  `gpu.cuda`); v1 manifests remain scoreable.
 
 ### Fixed
 - **Stopped services no longer poll forever (#556).** The health-polling row
@@ -80,6 +85,45 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   language picker with all available languages, inline generate/re-translate,
   and retry on error. Asset and translation cancel endpoints now support JSON
   responses for the React island.
+
+### Security
+- **Delta security audit** (25 findings: 5 High, 10 Medium, 10 Low). Full
+  report: `docs/security/audit-2026-09-20.md`. 17 fixed, 6 accepted with
+  rationale, 2 deferred.
+- **Setup wizard admin gate.** Setup-phase routes now require admin credentials,
+  closing a path where non-admin users could reach wizard endpoints after
+  onboarding.
+- **SSE stream hardening.** Activity streams release DB sessions before streaming
+  and enforce per-user and global connection limits, with periodic session
+  revalidation on long-lived connections.
+- **Restart editorial acknowledgment.** Restarting from stages that delete
+  transcript segments now correctly accounts for corrections and verifications
+  in the impact preview, and requires explicit acknowledgment.
+- **ffmpeg input hardening.** Media normalization restricts input to a demuxer
+  allowlist, blocks non-file protocols, passes `-nostdin`, and enforces
+  subprocess timeouts with bounded decoded-output caps.
+- **LLM destination SSRF policy.** A validation layer blocks link-local, cloud
+  metadata, and unspecified addresses from the configured LLM base URL.
+  RFC1918 (LAN inference) remains allowed. Loopback is allowed for
+  single-operator deployments.
+- **LLM streaming response bounds.** Streaming LLM responses are capped at 2 MB
+  with a 300-second deadline.
+- **Login rate limiting.** Authentication attempts are throttled with an
+  in-memory sliding-window rate limiter and an Argon2 concurrency cap.
+- **Restart race condition.** Concurrent restart requests on the same run are
+  now serialized with `SELECT ... FOR UPDATE` locking.
+- **Restart prerequisite validation.** Restart-from-stage validates that upstream
+  stage outputs exist before queuing.
+- **API docs disabled.** Built-in FastAPI docs endpoints (Swagger, ReDoc,
+  OpenAPI schema) are no longer exposed.
+- **Symlink rejection.** Symlinked files in the incoming media directory are
+  rejected, closing a path-traversal vector.
+- **Dependabot extended.** Automated dependency updates now cover pip, npm, and
+  Docker ecosystems.
+- **CSP header.** A Content-Security-Policy header with `default-src 'self'`
+  baseline is now set on all responses.
+- **pip-audit in CI.** Production dependencies are audited for known
+  vulnerabilities on every push.
 
 ## [0.44.0] - 2026-09-18
 
