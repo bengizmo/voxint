@@ -9,7 +9,7 @@
 # The build FAILS unless their sha256s match the ARGs below. HF_TOKEN is no
 # longer needed for the default pipeline; DIARIZER_MODEL_NAME + HF_TOKEN at
 # runtime restore the online Hugging Face path.
-FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
+FROM nvidia/cuda:13.3.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
