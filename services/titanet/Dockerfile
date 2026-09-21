@@ -10,7 +10,7 @@
 # unless its sha256 matches TITANET_ONNX_SHA256, which must equal
 # "onnx_sha256" in tests/parity/fixtures/onnx/provenance.json (a contract
 # test pins the two together).
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:13.3.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
