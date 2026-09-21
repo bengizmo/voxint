@@ -76,7 +76,7 @@ parity = [
     "librosa==0.10.1",
     "soundfile==0.12.1",
     "noisereduce==2.0.1",
-    "pyloudnorm==0.1.0",
+    "pyloudnorm==0.2.0",
     # librosa 0.10.1 imports pkg_resources, which setuptools removed in 81.
     "setuptools>=70,<81",
     # Whisper Metal ASR bakeoff (issue #33): the frozen WER/CER stack.
