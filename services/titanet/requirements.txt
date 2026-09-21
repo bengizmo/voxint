@@ -27,7 +27,7 @@ pydantic==2.5.0
 # Pure-ctypes NVML bindings for the /healthz hardware-telemetry sampler.
 # Fail-soft: absent/older bindings degrade telemetry to "unsupported",
 # never affect readiness. NVIDIA CUDA images only.
-nvidia-ml-py==12.560.30
+nvidia-ml-py==13.610.43
 
 # librosa 0.10.1 imports pkg_resources, removed in setuptools 81.
 setuptools>=70,<81
