@@ -11,7 +11,7 @@
 # unless its sha256 matches TITANET_ONNX_SHA256, which must equal
 # "onnx_sha256" in tests/parity/fixtures/onnx/provenance.json (a contract
 # test pins the two together).
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 ENV PYTHONUNBUFFERED=1
 
