@@ -10,7 +10,7 @@ RUN npm run build                       # tsc --noEmit && vite build && check-no
 RUN test -f dist/.vite/manifest.json    # fail fast if the manifest the Python route needs is missing
 
 # --- python api/worker image (no Node) ---
-FROM python:3.12-slim AS base
+FROM python:3.14-slim AS base
 
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
