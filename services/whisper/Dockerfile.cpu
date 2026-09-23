@@ -7,7 +7,7 @@
 # with COMPUTE_TIER=cpu (compose.cpu.yaml) so stage leases / visibility
 # timeouts scale accordingly — see docs/timeouts-and-leases.md.
 
-FROM python:3.11-slim AS builder
+FROM python:3.14-slim AS builder
 
 ENV PYTHONUNBUFFERED=1
 
@@ -34,7 +34,7 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
 ARG WHISPER_HF_REVISION=f0fe81560cb8b68660e564f55dd99207059c092e
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('Systran/faster-whisper-large-v2', device='cpu', download_root='/opt/whisper_models', revision='${WHISPER_HF_REVISION}')"
 
-FROM python:3.11-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/app/.cache/huggingface
