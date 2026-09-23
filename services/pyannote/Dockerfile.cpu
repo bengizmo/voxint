@@ -15,7 +15,7 @@
 #
 # Expect CPU-tier speed: run the stack with COMPUTE_TIER=cpu
 # (compose.cpu.yaml) so stage leases scale — see docs/timeouts-and-leases.md.
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 ENV PYTHONUNBUFFERED=1
 
