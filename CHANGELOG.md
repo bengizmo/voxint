@@ -33,6 +33,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - The browser acceptance lane's seed writes the recording's original file, so
   the Media library no longer flags it as missing and trash and restore can be
   exercised.
+- **The Metal parity lane runs again** (#647). The repo-wide test conftest
+  imported the app at module level, so pytest could not collect any parity test
+  from the model services' own environments, and the scheduled `metal-lane`
+  workflow had failed every run since 2026-08-27. The conftest now loads without
+  the app installed, and a contract test in `lint-test` rebuilds that situation
+  so the regression fails CI instead of only the macOS schedule.
 
 ### Changed
 - **The Media library is on by default** (`CONSOLE_MEDIA_ENABLED=true`). Media is
