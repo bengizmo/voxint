@@ -92,7 +92,10 @@ def test_metal_lane_modules_collect_without_voxint() -> None:
 
 
 def test_autouse_fixture_is_a_noop_without_voxint(tmp_path: Path) -> None:
-    (tmp_path / "test_probe.py").write_text("def test_probe():\n    pass\n")
+    # Requesting the fixture by name makes a renamed or unregistered fixture an
+    # error, so a pass shows it ran and did nothing, not that it never ran.
+    probe = "def test_probe(_isolate_template_loader):\n    pass\n"
+    (tmp_path / "test_probe.py").write_text(probe)
     args = [str(tmp_path), "-p", "tests.conftest", "-p", "no:cacheprovider"]
     args += ["--rootdir", str(tmp_path)]
     proc = _python(
