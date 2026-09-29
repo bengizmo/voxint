@@ -6,6 +6,7 @@ and row actions.
 """
 
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -238,9 +239,26 @@ class TestRowActions:
         self, client: TestClient, session_factory: sessionmaker[Session]
     ) -> None:
         with session_factory() as s:
-            _make_run(s, status=RunStatus.COMPLETED, labels=("A",))
+            run_id = _make_run(s, status=RunStatus.COMPLETED, labels=("A",))
         resp = client.get("/runs")
-        assert "Review →" in resp.text
+        # The link opens THIS run in the editor, not the unfiltered library (#646).
+        assert f'<a href="/review/{run_id}">Review →</a>' in resp.text
+
+    def test_archived_unresolved_shows_view_not_review(
+        self, client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        # Archived runs are read-only (rulings 409), so the row must not offer a
+        # review that the editor would then refuse.
+        with session_factory() as s:
+            run_id = _make_run(s, status=RunStatus.COMPLETED, labels=("A",))
+            run = s.get(PipelineRun, run_id)
+            assert run is not None
+            run.archived_at = datetime.now(UTC)
+            s.commit()
+        resp = client.get("/runs?archived=1")
+        assert resp.status_code == 200
+        assert f'href="/review/{run_id}"' not in resp.text
+        assert f'<a href="/runs/{run_id}">View →</a>' in resp.text
 
     def test_failed_shows_retry(
         self, client: TestClient, session_factory: sessionmaker[Session]

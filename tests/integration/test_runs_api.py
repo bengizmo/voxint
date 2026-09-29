@@ -6,6 +6,7 @@ rendering + error mapping.
 """
 
 import html
+import os
 import re
 import uuid
 from collections.abc import Iterable
@@ -61,12 +62,20 @@ def unit(dim: int) -> list[float]:
 
 
 @pytest.fixture()
-def client(session_factory: sessionmaker[Session], tmp_path: Path) -> TestClient:
+def client(
+    session_factory: sessionmaker[Session], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    # Shipped defaults: no .env file and no CONSOLE_* flag from the process
+    # environment, so default-path assertions track the code default (#646).
+    for name in list(os.environ):
+        if name.upper().startswith("CONSOLE_"):
+            monkeypatch.delenv(name)
     settings = Settings(
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=tmp_path,
         runs_page_size=2,
+        _env_file=None,
     )
     test_client = TestClient(create_app(settings=settings, session_factory=session_factory))
     test_client.auth = CREDS
@@ -1382,11 +1391,41 @@ def _add_media_section(body: str) -> str:
     return body[start:end]
 
 
-def test_runs_add_media_section_wraps_upload_and_url_fetch(client: TestClient) -> None:
-    """Phase C (issue #117): the Runs header exposes a named "Add media" section —
-    the dashboard "Add audio" card's link target — holding both ways in, so
-    elevating the upload never demotes the URL/video workflow."""
+def _legacy_runs_client(
+    session_factory: sessionmaker[Session], tmp_path: Path, *, ytdlp_enabled: bool = True
+) -> TestClient:
+    """A client with the media area off: the only config where the Runs page
+    still carries its own "Add media" forms (on by default since #646)."""
+    settings = Settings(
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+        media_root=tmp_path,
+        ytdlp_enabled=ytdlp_enabled,
+        console_media_enabled=False,
+    )
+    test_client = TestClient(create_app(settings=settings, session_factory=session_factory))
+    test_client.auth = CREDS
+    seed_onboarded(session_factory)
+    return test_client
+
+
+def test_runs_add_media_points_at_media_library_by_default(client: TestClient) -> None:
+    """On a default install (#646) media is added on /media: the Runs page's
+    "+ Add media" action links there and the legacy forms are not rendered."""
     body = client.get("/runs").text
+    assert '<a class="cb-btn cb-btn-primary" href="/media">+ Add media</a>' in body
+    assert 'id="add-media"' not in body
+    assert 'action="/submit"' not in body
+    assert 'action="/fetch"' not in body
+
+
+def test_runs_add_media_section_wraps_upload_and_url_fetch(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """Phase C (issue #117): with the media area off, the Runs header exposes a
+    named "Add media" section, holding both ways in, so elevating the upload
+    never demotes the URL/video workflow."""
+    body = _legacy_runs_client(session_factory, tmp_path).get("/runs").text
     # The anchor the dashboard task card points at (/runs#add-media).
     assert 'id="add-media"' in body
     section = _add_media_section(body)
@@ -1403,15 +1442,7 @@ def test_runs_add_media_section_holds_upload_when_url_fetch_disabled(
 ) -> None:
     """With URL ingestion off the section still holds the upload; the fetch form is
     gone but its honest disabled notice stays inside the section (issue #117)."""
-    settings = Settings(
-        voxint_user=CREDS[0],
-        voxint_password=CREDS[1],
-        media_root=tmp_path,
-        ytdlp_enabled=False,
-    )
-    test_client = TestClient(create_app(settings=settings, session_factory=session_factory))
-    test_client.auth = CREDS
-    seed_onboarded(session_factory)
+    test_client = _legacy_runs_client(session_factory, tmp_path, ytdlp_enabled=False)
     section = _add_media_section(test_client.get("/runs").text)
     assert 'action="/submit"' in section
     assert 'action="/fetch"' not in section

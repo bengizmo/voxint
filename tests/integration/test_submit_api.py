@@ -64,6 +64,9 @@ def make_client(
         media_root=media_root,
         upload_max_bytes=max_bytes,
         csrf_secret=_CSRF_KEY,
+        # The legacy Runs-page handlers process only while the media area is off;
+        # with it on (the default since #646) they 303 to /media untouched.
+        console_media_enabled=False,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
     client.auth = CREDS

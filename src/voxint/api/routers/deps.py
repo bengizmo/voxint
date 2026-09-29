@@ -326,10 +326,12 @@ def require_media_enabled(request: Request) -> None:
     The ``/media`` routes are always registered so the route inventory is stable
     across the dark-ship flip (codex: conditional registration would destabilize
     the inventory contract). Access is gated here instead: when
-    ``console_media_enabled`` is off — the default until the area's release — the
-    page is indistinguishable from an unbuilt route (404, no hint that a hidden
-    area exists). Wired as a router-level dependency on the media router, after
-    ``require_onboarded`` so an un-onboarded operator is still sent to setup.
+    ``console_media_enabled`` is off (on by default since #646; off only when an
+    operator turns it off) the page is indistinguishable from an unbuilt route
+    (404, no hint that a hidden area exists). The media editor is the only review
+    surface, so turning it off also makes review unreachable. Wired as a
+    router-level dependency on the media router, after ``require_onboarded`` so
+    an un-onboarded operator is still sent to setup.
     """
     settings: Settings = request.app.state.settings
     if not settings.console_media_enabled:
