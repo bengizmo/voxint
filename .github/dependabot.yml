@@ -9,6 +9,10 @@
 # bumps are deliberate, measured changes made by hand. Ignores that use
 # `update-types` do not apply to security updates, which is why the rules below
 # use them rather than `versions`.
+#
+# A security PR against a frozen pin (a model-service package, onnxruntime, the
+# parity-extra preprocessing chain) is a signal, not a merge candidate: do the
+# coordinated, measured bump by hand, then close the Dependabot PR.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -75,6 +79,8 @@ updates:
       frontend-dev:
         dependency-type: development
         update-types: [minor, patch]
+        # The react group above owns these; keep them out of this one.
+        exclude-patterns: ["@types/react", "@types/react-dom"]
     ignore:
       # Majors (vite, vitest, TypeScript, Tailwind, plugin-react, ...) are
       # deliberate migrations, done by hand.
