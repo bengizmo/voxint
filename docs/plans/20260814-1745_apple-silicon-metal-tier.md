@@ -1,6 +1,7 @@
 # Plan: Bare-metal Apple Silicon ("metal") compute tier, v1
 
-> Status: approved 2026-08-14. Phase 0 (MPS spike) completed same day: **GO**.
+> Status: done. The Metal tier shipped in v0.9.0 to v0.15.0 (see CHANGELOG).
+> Approved 2026-08-14. Phase 0 (MPS spike) completed same day: **GO**.
 > On maintainer Apple Silicon hardware (M1 Pro 16 GB, macOS 26.4.1, torch
 > 2.5.0): pyannote warm inference ~5× faster on MPS than native CPU (rtf
 > ~0.065 vs ~0.33), DER/speaker-counts/turns identical to CPU on all three

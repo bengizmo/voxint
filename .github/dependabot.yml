@@ -1,86 +1,124 @@
 # Keeps GitHub Actions, Python, npm, and Docker dependencies updated (audit N24).
-# Weekly updates; GitHub Actions stay grouped to reduce maintainer noise.
 # Dependabot understands SHA pins and bumps the same-line `# vX.Y.Z` comment.
 # GitHub-only; the Forgejo Actions mirror does not run Dependabot.
+#
+# Model-service stacks (services/*) are frozen by the numerics doctrine: their
+# pins are part of measured parity verdicts and GPU-validated images, and PR CI
+# never builds those images or installs those files, so a green check on a
+# version bump there carries no signal. They get security updates only; version
+# bumps are deliberate, measured changes made by hand. Ignores that use
+# `update-types` do not apply to security updates, which is why the rules below
+# use them rather than `versions`.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
     groups:
       actions:
         patterns: ["*"]
 
-  - package-ecosystem: pip
+  # App + test-harness deps. `uv` (not `pip`) so a PR updates uv.lock together
+  # with pyproject.toml: CI installs with `uv sync --frozen`, so a
+  # pyproject-only bump never reaches the test run.
+  - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
+    groups:
+      python:
+        update-types: [minor, patch]
+    ignore:
+      # One repo-wide pin shared with the titanet images and uv.lock
+      # (test_cpu_onnxruntime_matches_parity_harness); bump by hand with the
+      # titanet and text-embedding parity evidence.
+      - dependency-name: onnxruntime
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      # parity extra: mirrors the titanet preprocessing chain that defines the
+      # titanet-large-v2 embedding space.
+      - dependency-name: librosa
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: soundfile
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: noisereduce
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: pyloudnorm
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      # librosa 0.10.1 imports pkg_resources, removed in setuptools 81.
+      - dependency-name: setuptools
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      # Frozen WER stack (tests/parity/bakeoff, vendored provenance.json) and
+      # the eval-quality instrument pins.
+      - dependency-name: jiwer
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: more-itertools
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: regex
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "pyannote*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: meeteval
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
 
   - package-ecosystem: npm
     directory: /frontend
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
+    groups:
+      # react, react-dom and their types move together; a split bump fails
+      # `npm ci` on the @types peer range.
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+      frontend-dev:
+        dependency-type: development
+        update-types: [minor, patch]
+    ignore:
+      # Majors (vite, vitest, TypeScript, Tailwind, plugin-react, ...) are
+      # deliberate migrations, done by hand.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
+  # Model-service Python stacks: security updates only (see header).
   - package-ecosystem: pip
-    directory: /services/whisper
+    directories:
+      - /services/whisper
+      - /services/pyannote
+      - /services/titanet
+      - /services/synthdetect
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
 
-  - package-ecosystem: pip
-    directory: /services/pyannote
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
-
-  - package-ecosystem: pip
-    directory: /services/titanet
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
-
-  - package-ecosystem: pip
-    directory: /services/synthdetect
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
-
+  # App image. Node stays on the 22 LTS line (contract-tested against ci.yml
+  # and frontend/.nvmrc); the Python interpreter moves deliberately, together
+  # with the pyproject classifiers and the CI python-version.
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    ignore:
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
+  # Model-service and LLM-sidecar bases (CUDA, ROCm/Ubuntu, Python, llama.cpp
+  # digest) are part of GPU-validated, parity- or qualification-gated images.
+  # Docker images get no Dependabot security updates, and digest-only bumps are
+  # not semver-typed, so this is a plain ignore.
   - package-ecosystem: docker
-    directory: /services/whisper
+    directories:
+      - /services/whisper
+      - /services/pyannote
+      - /services/titanet
+      - /services/synthdetect
+      - /services/llama-cpp
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
-
-  - package-ecosystem: docker
-    directory: /services/pyannote
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
-
-  - package-ecosystem: docker
-    directory: /services/titanet
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
-
-  - package-ecosystem: docker
-    directory: /services/llama-cpp
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
-
-  - package-ecosystem: docker
-    directory: /services/synthdetect
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
+    ignore:
+      - dependency-name: "*"

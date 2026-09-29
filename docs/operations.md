@@ -1569,9 +1569,11 @@ token, so it has none of its own to gate a forged POST), the web-research
 forms on `/speakers` (start, cancel, and per-draft accept/reject, each under
 its own token action), and the run-asset forms on `/media/{id}/editor` (generate and
 cancel, each under its own token action). Since v0.27.0, the app auto-generates
-a CSRF secret on first start and persists it to the data directory
-(`DATA_DIR/csrf_secret`), so forms survive restarts and work across workers
-without manual configuration. Set `CSRF_SECRET` explicitly to override the
+a CSRF secret on first start and persists it to `.csrf_secret` in the media
+root (`MEDIA_ROOT`, `/data/media` inside the container), created with 0600
+permissions, so forms survive restarts and work across workers without manual
+configuration. To rotate it, delete that file and restart the app; open forms
+then need a page reload. Set `CSRF_SECRET` explicitly to override the
 auto-generated value (useful when multiple app instances share no filesystem).
 
 ### LLM endpoint timeouts: local models and proxies

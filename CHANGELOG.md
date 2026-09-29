@@ -10,8 +10,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ### Security
 - **Delta security audit** (25 findings: 5 High, 10 Medium, 10 Low). Full
-  report: `docs/security/audit-2026-09-20.md`. 17 fixed, 6 accepted with
-  rationale, 2 deferred.
+  report: `docs/security/audit-2026-09-20.md`. 14 fixed, 8 accepted with
+  rationale, 3 deferred (N14, N15, N25).
 - **Setup wizard admin gate.** Setup-phase routes now require admin credentials,
   closing a path where non-admin users could reach wizard endpoints after
   onboarding.
@@ -80,9 +80,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   each model service's Docker container state on load, showing the correct
   buttons instead of always showing Restart.
 - **Hear-this-voice preview in popover** (#571). The speaker assignment popover
-  now includes a "Hear this voice" button next to each speaker option: clicking
-  it plays a representative segment of that speaker's voice without moving the
-  review cursor, so you can listen before you assign. The preview is
+  now includes a "Hear this voice" button: clicking it plays the segment the
+  popover was opened on without moving the review cursor, so you can listen
+  before you assign. (Corrected entry: per-option exemplars for each speaker in
+  the list are not built yet; #571 tracks them.) The preview is
   capability-gated and suppresses auto-scroll so the popover stays in place.
 - **Merge suggestions after speaker assignment** (#572). After assigning a
   speaker to a label, the console now detects other unresolved labels whose

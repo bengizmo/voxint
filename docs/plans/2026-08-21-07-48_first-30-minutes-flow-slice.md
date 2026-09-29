@@ -1,6 +1,6 @@
 # Plan: the "first 30 minutes" flow slice
 
-> **Status:** implementation plan (no production code yet). Converts the accepted
+> **Status:** done (shipped in v0.22.0, #117). Originally an implementation plan. Converts the accepted
 > subset of [ux-ui-gap-analysis-2026-08-21.md](../reports/ux-ui-gap-analysis-2026-08-21.md)
 > into a phased, reviewable build. Tracked as #117. Scope: three console moves
 > for the non-technical first-run operator. Native packaging (#73) is a noted
