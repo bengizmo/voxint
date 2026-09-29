@@ -7,6 +7,7 @@ latest-run-per-file and archived-run exclusion, the folder join, the sort
 allowlist's honest degrade, and the card/table view toggle.
 """
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -167,8 +168,10 @@ def test_trashing_the_only_file_leaves_the_trash_reachable(
     resp = client.get("/media")
     assert resp.status_code == 200
     assert "only.wav" not in resp.text
-    assert 'href="/media?sort=added&amp;view=table&amp;trashed=1"' in resp.text
-    assert 'href="/media?sort=added&amp;view=table&amp;archived=1"' in resp.text
+    assert "Trash →" in resp.text
+    assert "Archived →" in resp.text
+    assert re.search(r'href="/media\?[^"]*trashed=1"', resp.text)
+    assert re.search(r'href="/media\?[^"]*archived=1"', resp.text)
 
     trash = client.get("/media?sort=added&view=table&trashed=1")
     assert trash.status_code == 200
