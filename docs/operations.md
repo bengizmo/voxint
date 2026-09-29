@@ -882,23 +882,21 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   `unavailable` (the embedding weights are not installed), or `indexing` (on, but
   nothing indexed yet, pointing at `voxint embed backfill`). See
   [semantic-search.md](semantic-search.md).
-- **`GET /review`**: the adjudication queue of completed runs with at least one
-  voice still needing a human ruling. Each row shows a **friendly title**, the
-  recording **duration** and **age**, and a **resolved-of-total** progress bar,
-  so it is clear at a glance both what a recording is and how much is left to
-  adjudicate. `?sort=` chooses the order: `oldest` (default, FIFO) or
-  `unresolved` ("Most voices to resolve"). The **Review** button claims the run
-  and opens the workbench.
+- **`GET /review`**: redirects (303) to the Media library (`/media`).
+  `GET /review/{run_id}` and `GET /review/{run_id}/transcript` redirect (302)
+  into that run's media editor (`/media/{media_id}/editor?run=…`), where review
+  happens. Both targets need `console_media_enabled`, which is on by default;
+  turning it off makes every review entry point end in a 404 (#646).
 - **`POST /submit`**: a bounded **file upload**. `UPLOAD_MAX_BYTES` (default
   5 GiB) is enforced *while streaming* (never a single unbounded read); the file
   lands under a server-issued, uuid-namespaced `incoming/{submission_id}/…` path,
   so re-uploading a name yields a distinct immutable media item and never
   overwrites history. A hidden `submission_id` makes form replay idempotent.
-  When `console_media_enabled` is on, this route redirects to `/media` (303)
-  without processing; uploads go through `/media/submit` instead.
+  With `console_media_enabled` on (the default), this route redirects to
+  `/media` (303) without processing; uploads go through `/media/submit` instead.
 - **`POST /fetch`**: the browser equivalent of `voxint fetch` (URL ingestion).
-  When `console_media_enabled` is on, this route redirects to `/media` (303);
-  URL fetches go through `/media/fetch` instead.
+  With `console_media_enabled` on (the default), this route redirects to
+  `/media` (303); URL fetches go through `/media/fetch` instead.
 - **`POST /runs/{id}/requeue`**: an exact-revision (CAS) requeue of a FAILED run,
   the browser equivalent of `voxint requeue` (covers failed downloads).
 - **`POST /runs/{id}/pause`**: an exact-revision (CAS) pause of a `QUEUED` or
@@ -1000,7 +998,7 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   finds its file already gone).
 
 **Media library file management** (`/media`, behind `console_media_enabled`,
-ADR 0007). The library page offers three file operations through a journaled
+on by default; ADR 0007). The library page offers three file operations through a journaled
 operations system that survives crashes at any filesystem boundary:
 
 - **Trash** (`POST /media/trash`): bulk-moves selected files into a managed
@@ -1032,8 +1030,8 @@ ledger), and there is no speaker-roster editing from these pages (roster changes
 happen only through adjudication). The pipeline-state surface (`/runs*`) and the
 adjudication surface (`/review*`) stay separate.
 
-**Verify-and-advance transcript review** (`GET /review/{id}/transcript`, reached
-from the claimed workbench). A keyboard-first loop for confirming the transcript
+**Verify-and-advance transcript review** (in the media editor; the old
+`GET /review/{id}/transcript` URL redirects there). A keyboard-first loop for confirming the transcript
 one segment at a time: **`v`** verifies the current segment and jumps to the next
 unverified one (segments faster-whisper was uncertain about carry an "uncertain"
 chip so they draw the eye first), **`e`** edits its words in an inline box (save
@@ -1106,8 +1104,8 @@ selects the segment, never seeks, and no playhead is shown. If the amplitude
 data cannot be computed (e.g. the media file is gone and nothing was cached)
 the strip simply does not appear; the transcript list is unaffected.
 
-**Broker-degraded submission.** `/submit` (or `/media/submit` when the Media
-library is enabled), `/fetch` (or `/media/fetch`), and `/runs/{id}/requeue`
+**Broker-degraded submission.** `/media/submit` (or the legacy `/submit` when the
+Media library is turned off), `/media/fetch` (or `/fetch`), and `/runs/{id}/requeue`
 commit the durable run *before* publishing the Celery task. If Redis is down at
 that moment the mutation still succeeds: the run stays `QUEUED` (never `FAILED`)
 with a clear linked note, and the recovery sweep re-enqueues it once the broker
@@ -1753,12 +1751,13 @@ authenticated page to the first-run setup wizard (`/setup`) until setup is
 finished, so `/review` below becomes reachable only after onboarding completes
 (see [onboarding.md](onboarding.md)):
 
-1. **Queue** (`/review`): runs that finished matching and await human
-   review.
+1. **Queue**: the Media library (`/media`; the old `/review` queue URL
+   redirects there) lists recordings, including runs awaiting human review.
 2. **Claim**: claiming a run gives you an exclusive slot for
    `REVIEW_CLAIM_TTL_SECONDS` (default 30 min); a closed tab self-releases
    when the TTL lapses, so the queue never dams.
-3. **Workbench** (`/review/{run_id}`): per-label transcript previews and
+3. **Workbench**: the media editor (`/media/{media_id}/editor?run=…`;
+   `/review/{run_id}` redirects there): per-label transcript previews and
    audio playback; record a **decision** per diarization label (confirm /
    correct / reject the machine proposal) or **enroll** a label's audio as a
    new speaker in the roster. Human rulings are an immutable ledger kept
@@ -1889,13 +1888,13 @@ by their per-run claim token.
 | `GET /jobs`, `GET /jobs/{run_id}` | Compatibility routes; 303 redirects to `/runs` or `/runs/{run_id}` |
 | `GET /runs/{run_id}` | Run detail; the per-stage attempt ledger is in the collapsed Technical details section |
 | `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML); `&read=1&timestamps=false` renders the on-screen read-mode prose view |
-| `POST /submit` | Bounded browser file upload → immutable uuid-namespaced media item (redirects to `/media` when `console_media_enabled` is on) |
-| `POST /fetch` | yt-dlp URL ingestion (redirects to `/media` when `console_media_enabled` is on) |
+| `POST /submit` | Legacy browser file upload; redirects (303) to `/media` without processing while `console_media_enabled` is on (the default). Use `POST /media/submit` |
+| `POST /fetch` | Legacy yt-dlp URL ingestion; redirects (303) to `/media` while `console_media_enabled` is on (the default). Use `POST /media/fetch` |
 | `POST /runs/{run_id}/requeue` | Exact-revision (CAS) requeue of a FAILED run |
 | `POST /runs/bulk-retry` | Bulk retry for a grouped failure on the Failed tab; each item carries its expected revision |
-| `GET /review` | Review queue |
+| `GET /review` | 303 redirect to `/media` |
 | `POST /review/{run_id}/claim` · `/release` | Claim / release an exclusive review slot |
-| `GET /review/{run_id}` | Adjudication workbench |
+| `GET /review/{run_id}` | 302 redirect into the run's media editor (`/media/{media_id}/editor?run=…`) |
 | `POST /review/{run_id}/labels/{label}/decision` | Record a human ruling for a label |
 | `POST /review/{run_id}/labels/{label}/enroll` | Enroll a label's audio as a roster speaker |
 | `GET /review/{run_id}/export.{txt,md,srt,vtt,json}?text=corrected\|raw\|enhanced` | Speaker-attributed transcript export (plain text, Markdown, SubRip, WebVTT, JSON); `txt`/`md` accept `&timestamps=false` for the reading copy |

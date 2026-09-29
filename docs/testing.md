@@ -320,7 +320,7 @@ It is built in lanes; **landed so far:**
   proves the install: `/healthz` 200, `doctor` PASS, `/setup` references the hashed
   island bundles, and every bundle in the Vite manifest serves 200. The **full
   usage** lane then submits `media/diarize-3speaker.wav` over the real HTTP surface
-  (mint CSRF from `state.env` → onboard → `/submit` → poll `export.json`), so it
+  (mint CSRF from `state.env` → onboard → `/media/submit` → poll `export.json`), so it
   exercises the API→enqueue→**Celery worker** path the in-process pipeline lane
   above never touches, and reads back the durable invariants (run + all six stages
   `completed`, non-empty ASR text, diarization turns embedded in `titanet-large-v2`
