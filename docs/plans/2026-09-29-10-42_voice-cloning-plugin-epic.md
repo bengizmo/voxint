@@ -190,7 +190,7 @@ its own small PR. V8 closes the epic.
 | Unit | Gate, invariants, CAS claim, bounds, picker gates, fit arithmetic |
 | Integration | Routes, CSRF, admin gate, consent refusal, revocation, GC exclusion, cancellation, serialization, re-identification report shape |
 | Browser lane | Plugin page, panel, badge, non-dismissible caveat |
-| Maintainer CUDA gate | Live end-to-end on the reporting host before tagging. The only CUDA card available during the current maintainer window is a 32 GB card shared with another project and borrowed in short exclusive windows through that project's controller; peak VRAM is reported as measured, and the 12 GB lane claim stays unverified until a 12 GB card is back |
+| Maintainer CUDA gate | Live end-to-end on the reporting host before tagging. The only CUDA card available during the current maintainer window is a 32 GB card shared with another project and borrowed in short exclusive windows through that project's controller; peak VRAM is reported as measured on that card, and smaller-card support is a follow-up (#671) |
 
 ## Rollout / risks / open questions
 
