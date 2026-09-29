@@ -1,6 +1,7 @@
 # Transcript text correction — raw-vs-corrected provenance (issue #58)
 
-**Status:** design decision, settling the provenance model before code.
+**Status:** done. Settled here, then implemented in v0.17.0 (#58) and v0.18.0 to
+v0.19.0 (#83). Originally a design decision, settling the provenance model before code.
 **Context:** implemented alongside the #53 verify-and-advance triage loop, so the
 loop's "fix" can edit words, not only relabel speakers. Gated by the doctrine
 rule "#58 raw-vs-corrected provenance must be settled in a `docs/` note first —

@@ -454,7 +454,7 @@ and `/media/fetch` routes carry their own CSRF actions. `/claim` needs its own
 because claiming is what *mints* the run's claim token: it has no unguessable
 token of its own yet. The remaining review-workbench mutations (release, decision,
 enroll) are instead gated by that per-run claim token. Since v0.27.0 the CSRF
-secret is auto-generated and persisted to `DATA_DIR/csrf_secret` on first start,
+secret is auto-generated and persisted to `.csrf_secret` in the media root on first start,
 so forms survive restarts without manual configuration; an explicit `CSRF_SECRET`
 env var overrides the persisted value.
 

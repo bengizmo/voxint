@@ -1,6 +1,6 @@
 # Plan: persist and surface faster-whisper's detected language (issue #124)
 
-Status: DRAFT for review. Codex second opinion folded in (see Review notes).
+Status: done (shipped in v0.23.0 to v0.24.0, #124). Originally a draft for review. Codex second opinion folded in (see Review notes).
 Target branch: `feat/124-detected-language` off `main` @ `81f149c`.
 
 ## Goal

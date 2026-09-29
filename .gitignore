@@ -94,3 +94,5 @@ website/_site/
 # Demo instance secrets (template .env.demo.example IS tracked).
 deploy/demo/.env.demo
 !deploy/demo/.env.demo.example
+# A vitest run from the repo root writes a cache here; frontend deps live in frontend/.
+/node_modules/

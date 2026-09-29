@@ -1858,18 +1858,25 @@ there. The extraction has zero runtime dependencies on voxint app code.
 
 ### Model limitations and coverage
 
-**Chatterbox evasion (#252).** The baseline w2v2-aasist checkpoint achieves
-only 37.77% EER on Chatterbox-generated speech (eval subset). M2 fine-tuning
-(#268) reduced this to 25.90% EER, a 11.87 pp improvement but still well
-above the sub-5% range for other generators (Piper 8.04%, ElevenLabs 11.20%,
-Google 10.28%). Progressive XLS-R unfreezing (Phase 3) is available if
+**Chatterbox evasion (#252).** Chatterbox-generated speech is the weakest
+generator for the detector. Under the original provisional protocol, the
+baseline w2v2-aasist checkpoint measured 37.77% EER and M2 fine-tuning (#268)
+25.90%. Re-measured under the repaired protocol ("M2 re-baselining
+measurement (2026-08-30)" below), M2 scores Chatterbox EER 10.37% on eval
+(95% CI 2.52% to 12.26%), still above the other core generators (Piper 1.84%,
+ElevenLabs 3.28%, Google TTS 4.69%). The challenge-cohort acceptance probe
+failed (19.54%), so that cohort is retired and a fresh one is required before
+any ship decision. Progressive XLS-R unfreezing (Phase 3) is available if
 further improvement is needed.
 
 **VoxConverse channel confound (#253).** The VoxConverse bona-fide corpus
 occupies a distinct score region from AMI bona-fide speech, inflating false
-positive rates when both are mixed. At the EER threshold (2.66), AMI BF FPR
-is 1.1% while the blended eval BF FPR is 23.6% (driven primarily by
-ASVspoof DF anchor clips at 42.4%). Calibration targets in-domain corpora
+positive rates when both are mixed. Under the original protocol, at the EER
+threshold (2.66), AMI BF FPR was 1.1% while the blended eval BF FPR was 23.6%
+(driven primarily by ASVspoof DF anchor clips at 42.4%). The repaired protocol
+reports false-positive rates per source instead: at the frozen 5%-FPR
+operating point, AMI is 2.23% and VoxConverse 4.95%, and the ASVspoof DF
+anchor is reported but feeds no gate. Calibration targets in-domain corpora
 (AMI + VoxConverse), not the ASVspoof anchor.
 
 ### M2 fine-tuning outcomes

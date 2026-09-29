@@ -1,6 +1,7 @@
 # UX audit remediation plan
 
-> **Status:** APPROVED 2026-08-31. Execution is sliced across sessions; each
+> **Status:** done. Epic #369 and all slices (#370 to #386) are closed.
+> Approved 2026-08-31. Execution is sliced across sessions; each
 > slice is a GitHub issue under the remediation epic and lands as one PR.
 
 ## 1. Background
