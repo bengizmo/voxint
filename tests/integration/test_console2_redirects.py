@@ -9,6 +9,7 @@ end-to-end assertion for free by adding a row to the table.
 
 from __future__ import annotations
 
+import os
 import uuid
 from pathlib import Path
 
@@ -28,7 +29,12 @@ CREDS = ("operator", "pw")
 
 
 @pytest.fixture()
-def settings(tmp_path: Path) -> Settings:
+def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    # Shipped defaults only: no .env file, and no CONSOLE_* flag leaking in from
+    # the process environment (which would mask a default regressing, #646).
+    for name in list(os.environ):
+        if name.upper().startswith("CONSOLE_"):
+            monkeypatch.delenv(name)
     return Settings(
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
@@ -94,7 +100,11 @@ def test_review_entry_points_reach_the_editor_on_a_default_install_646(
     run_id, media_id = _seed_run(session_factory)
     editor = f"/media/{media_id}/editor"
 
-    for source in (f"/review/{run_id}", f"/review/{run_id}/transcript"):
+    for source in (
+        f"/review/{run_id}",
+        f"/review/{run_id}/transcript",
+        f"/runs/{run_id}/transcript",
+    ):
         hop = client.get(source, follow_redirects=False)
         assert hop.status_code == 302, source
         assert hop.headers["location"].split("?")[0] == editor, source

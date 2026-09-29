@@ -6,6 +6,7 @@ rendering + error mapping.
 """
 
 import html
+import os
 import re
 import uuid
 from collections.abc import Iterable
@@ -61,12 +62,20 @@ def unit(dim: int) -> list[float]:
 
 
 @pytest.fixture()
-def client(session_factory: sessionmaker[Session], tmp_path: Path) -> TestClient:
+def client(
+    session_factory: sessionmaker[Session], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    # Shipped defaults: no .env file and no CONSOLE_* flag from the process
+    # environment, so default-path assertions track the code default (#646).
+    for name in list(os.environ):
+        if name.upper().startswith("CONSOLE_"):
+            monkeypatch.delenv(name)
     settings = Settings(
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=tmp_path,
         runs_page_size=2,
+        _env_file=None,
     )
     test_client = TestClient(create_app(settings=settings, session_factory=session_factory))
     test_client.auth = CREDS

@@ -1748,7 +1748,7 @@ The review console is served by the API at `http://127.0.0.1:8080/` (or your
 in single-operator mode, or session-based login in multi-user mode (see
 "Multi-user authentication" below). On a **fresh install** the onboarding gate redirects every
 authenticated page to the first-run setup wizard (`/setup`) until setup is
-finished, so `/review` below becomes reachable only after onboarding completes
+finished, so the review flow below becomes reachable only after onboarding completes
 (see [onboarding.md](onboarding.md)):
 
 1. **Queue**: the Media library (`/media`; the old `/review` queue URL
@@ -1887,7 +1887,7 @@ by their per-run claim token.
 | `GET /runs` | Canonical lifecycle browser: `view=needs_attention\|active\|failed\|all` tabs, collapsible filters, and a pipeline health summary |
 | `GET /jobs`, `GET /jobs/{run_id}` | Compatibility routes; 303 redirects to `/runs` or `/runs/{run_id}` |
 | `GET /runs/{run_id}` | Run detail; the per-stage attempt ledger is in the collapsed Technical details section |
-| `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML); `&read=1&timestamps=false` renders the on-screen read-mode prose view |
+| `GET /runs/{run_id}/transcript?read=1&text=raw\|enhanced` | Read-mode transcript (HTML); add `&timestamps=false` for the prose view. Without `read=1` it redirects (302) into the run's media editor |
 | `POST /submit` | Legacy browser file upload; redirects (303) to `/media` without processing while `console_media_enabled` is on (the default). Use `POST /media/submit` |
 | `POST /fetch` | Legacy yt-dlp URL ingestion; redirects (303) to `/media` while `console_media_enabled` is on (the default). Use `POST /media/fetch` |
 | `POST /runs/{run_id}/requeue` | Exact-revision (CAS) requeue of a FAILED run |
