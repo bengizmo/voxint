@@ -16,6 +16,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   the Runs page opens that run in the editor instead of the whole Media library,
   and the retired `/review` queue URL (the Home page's "runs to review" arrow)
   lands on the Media library's **Needs review** filter.
+- **The tutorial recording no longer shows "Original file not found".** The
+  bundled tutorial wrote only its processed audio, so the Media library flagged
+  its original as missing and could not move it to the trash. Seeding now writes
+  the original too, and re-seeding repairs it where the item currently lives
+  (a permanently deleted tutorial stays deleted).
 - **Emptying the trash asks first.** **Empty trash permanently** deleted every
   trashed file from disk on one click; it now asks for confirmation.
 - **The trash stays reachable.** Trashing the last file in the Media library

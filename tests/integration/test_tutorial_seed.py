@@ -32,7 +32,7 @@ from voxint.db.models import (
 )
 from voxint.db.session import session_scope
 from voxint.tutorial import resources
-from voxint.tutorial.seed import seed_tutorial_run
+from voxint.tutorial.seed import TUTORIAL_SOURCE_PATH, seed_tutorial_run
 
 CREDS = ("reviewer", "s3cret")
 _CSRF_KEY = "tutorial-seed-test-csrf-key"
@@ -201,6 +201,57 @@ def test_reseed_repairs_missing_wav(
         assert _count(session, PipelineRun) == 1
 
 
+def test_seed_writes_the_original_the_media_library_checks(
+    session_factory: sessionmaker[Session], settings: Settings, media_root: Path
+) -> None:
+    # #646: the Media library (now the default page) flags any item whose live
+    # file is absent, and trash/restore move that file. The tutorial item must
+    # have real bytes at its source_path, and a wiped media_root is repaired.
+    _seed(session_factory, settings)
+    original = media_root / TUTORIAL_SOURCE_PATH
+    assert original.read_bytes() == resources.load_sample_wav_bytes()
+
+    original.unlink()
+    _seed(session_factory, settings)
+    assert original.read_bytes() == resources.load_sample_wav_bytes()
+
+
+def test_reseed_repairs_the_original_where_it_was_moved(
+    session_factory: sessionmaker[Session], settings: Settings, media_root: Path
+) -> None:
+    # A trashed or archived item's file lives at current_path; the repair follows
+    # the pointer instead of resurrecting a copy at the old source_path.
+    _seed(session_factory, settings)
+    moved = "trash/tutorial/sample-3speaker.wav"
+    with session_scope(session_factory) as session:
+        media = session.execute(
+            select(MediaItem).where(MediaItem.source_path == TUTORIAL_SOURCE_PATH)
+        ).scalar_one()
+        media.current_path = moved
+    (media_root / TUTORIAL_SOURCE_PATH).unlink()
+
+    _seed(session_factory, settings)
+    assert (media_root / moved).read_bytes() == resources.load_sample_wav_bytes()
+    assert not (media_root / TUTORIAL_SOURCE_PATH).exists()
+
+
+def test_reseed_leaves_a_purged_original_deleted(
+    session_factory: sessionmaker[Session], settings: Settings, media_root: Path
+) -> None:
+    # "Delete permanently" is final: re-seeding must not bring the file back.
+    _seed(session_factory, settings)
+    with session_scope(session_factory) as session:
+        media = session.execute(
+            select(MediaItem).where(MediaItem.source_path == TUTORIAL_SOURCE_PATH)
+        ).scalar_one()
+        media.purged_at = func.now()
+        media.current_path = None
+    (media_root / TUTORIAL_SOURCE_PATH).unlink()
+
+    _seed(session_factory, settings)
+    assert not (media_root / TUTORIAL_SOURCE_PATH).exists()
+
+
 def test_seed_does_not_disturb_existing_roster(
     session_factory: sessionmaker[Session], settings: Settings
 ) -> None:
@@ -270,6 +321,16 @@ def test_media_serves_seeded_wav(
     assert full.status_code == 200
     assert full.content[:4] == b"RIFF"
     assert len(full.content) == size
+
+
+def test_media_library_finds_the_tutorial_original(
+    client_and_run: tuple[TestClient, uuid.UUID],
+) -> None:
+    client, _ = client_and_run
+    library = client.get("/media")
+    assert library.status_code == 200
+    assert "sample-3speaker" in library.text
+    assert "Original file not found" not in library.text
 
 
 def test_export_attributes_grounded_but_not_heard_name(
