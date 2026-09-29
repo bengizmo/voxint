@@ -6,6 +6,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-09-29
+
 ### Fixed
 - **Review is reachable on a default install** (#646). Every review entry point
   (`/review/{id}`, the run page's **Open in editor** button, claiming a run)
@@ -4681,7 +4683,11 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.43.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.47.0...HEAD
+[0.47.0]: https://github.com/bengizmo/voxint/compare/v0.46.0...v0.47.0
+[0.46.0]: https://github.com/bengizmo/voxint/compare/v0.45.0...v0.46.0
+[0.45.0]: https://github.com/bengizmo/voxint/compare/v0.44.0...v0.45.0
+[0.44.0]: https://github.com/bengizmo/voxint/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/bengizmo/voxint/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/bengizmo/voxint/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/bengizmo/voxint/compare/v0.40.0...v0.41.0

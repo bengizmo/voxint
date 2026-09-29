@@ -1190,6 +1190,93 @@ That triggers the browser acceptance lane and not the pipeline lane.
   browser-verified at the landing commit `af60c45`, which is the release
   content minus version pins, changelog, docs, and screenshots.
 
+#### Verdict: v0.47.0 (catch-up for v0.43.0 to v0.46.0), Gate E pipeline and LLM lanes run fresh on CUDA (PASS), Gate E browser lane run fresh (PASS), Gate M run fresh (PASS), Gates A/R carry (2026-09-29)
+
+v0.47.0 makes review reachable on a default install (#646: the Media library
+ships on, and every review entry point lands on a working page), restores the
+Metal parity lane (#647), and lets the real-pipeline E2E lane run on any
+shipped overlay (`VOXINT_E2E_LANE`). It also settles gate debt. v0.43.0 through
+v0.46.0 recorded no verdict block here, and two gates in that stretch had no
+run behind them:
+
+- **Gate E pipeline lane.** Its last fresh run was v0.26.0. From v0.33.0 on it
+  was deferred, skipped, left pending, blocked, or carried at every release,
+  because `tests/e2e/test_real_pipeline.py` hardcoded the ROCm device
+  identities and no AMD host was available. **v0.43.0 through v0.46.0 shipped without a Gate E
+  pipeline run**, while pipeline and DB code changed under them (#506, #507,
+  #578; `git diff v0.42.0..v0.47.0 --stat -- src/voxint/pipeline/
+  src/voxint/clients/ src/voxint/db/` is 5 files, +268/-131).
+- **Gate M.** `tests/conftest.py` began importing the app at module level on
+  2026-08-26 (`7e0bc74`, #144). The Metal lane runs pytest inside each model
+  service's own environment, which does not install the app, so collection
+  failed before any parity test ran. The scheduled `metal-lane` workflow failed
+  on every run from 2026-08-27 until #647. **Every Gate M carry from v0.26.0
+  through v0.46.0 rested on the committed per-chip verdict with no green lane
+  run behind it.** The failure was in test collection, not in a parity
+  assertion.
+
+`git diff v0.42.0..v0.47.0 -- services/` is empty, so the model services are
+byte-identical to v0.42.0.
+
+- **Gate A (CUDA)**: **carries** from the v0.42.0 fresh run on RTX 5090.
+- **Gate R (ROCm)**: **carries**, standing since v0.33.0. No AMD hardware
+  available.
+- **Gate E (whole-pipeline E2E)**: the pipeline-aware diff is non-empty, so
+  every lane ran fresh.
+  - **Pipeline lane: PASS** on the new `cuda` lane
+    (`VOXINT_E2E_LANE=cuda`), maintainer hardware, RTX 5090, serial,
+    disposable `voxint_e2e` database. The tested commit `1512b1c` is
+    tree-equal to the merged `main` (`ac1aa71`); the release commit adds only
+    version pins, the changelog, and this record. The published 0.46.0 CUDA
+    service images stood in for 0.47.0 (the `services/` diff between them is
+    empty). `/healthz`, asserted live before the run and again by the lane:
+
+    | Service | device | model | engine | runtime |
+    |---|---|---|---|---|
+    | whisper | `cuda` | `large-v2` | faster-whisper 1.2.1 | ctranslate2 4.8.2 |
+    | pyannote | `cuda` | `pyannote/speaker-diarization-3.1` | pyannote.audio 3.1.1 | torch 2.8.0+cu128 |
+    | titanet | `cuda` | `nvidia/speakerverification_en_titanet_large` | onnxruntime 1.28.0 | onnxruntime 1.28.0 |
+
+    All report `contract_version=v1` and `model_loaded=true`; titanet reports
+    `embedding_space=titanet-large-v2`. `test_real_pipeline_persists_invariants`
+    and `test_real_pipeline_repeats_cleanly`: **2 passed** in 44.55 s, zero
+    service restarts.
+  - **Real-LLM enrichment sub-lane: PASS** against a local OpenAI-compatible
+    endpoint serving Qwen3.8-27B (NVFP4). `test_real_llm_summary_chain` and
+    the three malformed-reply cases of
+    `test_malformed_summary_reply_is_honest_failure`: **4 passed** in 31.97 s.
+    The lane did not need `response_format: json_object`.
+  - **Browser review lane**: **PASS**, run fresh on `ac1aa71` with the
+    shipped defaults (no `.env`; `CONSOLE_MEDIA_ENABLED` unset, so its `true`
+    default applies), maintainer hardware, serial, Playwright over
+    `tools/e2e_browser_lifecycle.py`. The #646 surfaces: the Runs page
+    **Review →** link targets `/review/{run_id}`, which redirects into the
+    media editor (200) and claims the run; `GET /review` returns 303 to
+    `/media?status=needs_review`; the editor mounts from five entry points
+    (`/review/{id}`, `/review/{id}/transcript`, the run page's **Open in
+    editor** and **Transcript** links, and the library's **Open →**); move to
+    trash and restore both complete, with **Trash** still linked from the
+    emptied library; **Empty trash permanently** sends nothing when its
+    confirm is dismissed and exactly one POST when accepted. The standard
+    `voxint-e2e-review` sequence also passed: two uncertain chips,
+    verify-and-advance (one `POST /verify` 200, counter 0 to 1 of 5), replay
+    on the same audio element, skip with no network, click-to-edit, the
+    discard warning, edit and save (one `POST /text` 200), keymap suppression
+    on a focused select, the shortcuts dialog (opened, then dismissed by
+    Escape, close control, and backdrop), domain-pack provenance, and the
+    waveform strip (one `/peaks` fetch, region click, playhead sync).
+    **RECONCILE PASS** (1 of 5 verified, both corrections matched), and again
+    after the trash round trip.
+- **Gate M (Metal)**: **run fresh, PASS.** `metal-lane` `workflow_dispatch` on
+  `4cafcb1`, the #647 fix (`4cafcb1..ac1aa71` changes only documentation):
+  <https://github.com/bengizmo/voxint/actions/runs/36615360539>. Junit guard:
+  whisper 3 collected, 0 skipped, 3 ran; titanet 7, 0, 7; pyannote 7, 0, 7
+  with MPS available. These are the modules and counts the lane ran before
+  the regression. #647 stays open until a scheduled run on `main` is green.
+
+Gates E and M ran fresh and green on the release content; A and R carried on
+an empty `services/` diff. Clear to tag v0.47.0.
+
 #### Verdict: v0.42.0, Gate A run fresh (PASS), Gates R/E-pipeline carry, Gate E browser lane deferred, Gate M carries (2026-09-17)
 
 v0.42.0 ships progressive transcript rendering (#495), keyset pagination (#494),
