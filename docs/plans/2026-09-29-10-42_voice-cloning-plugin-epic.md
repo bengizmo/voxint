@@ -190,7 +190,7 @@ its own small PR. V8 closes the epic.
 | Unit | Gate, invariants, CAS claim, bounds, picker gates, fit arithmetic |
 | Integration | Routes, CSRF, admin gate, consent refusal, revocation, GC exclusion, cancellation, serialization, re-identification report shape |
 | Browser lane | Plugin page, panel, badge, non-dismissible caveat |
-| Maintainer CUDA gate | Live end-to-end on the reporting host before tagging |
+| Maintainer CUDA gate | Live end-to-end on the reporting host before tagging. The only CUDA card available during the current maintainer window is a 32 GB card shared with another project and borrowed in short exclusive windows through that project's controller; peak VRAM is reported as measured, and the 12 GB lane claim stays unverified until a 12 GB card is back |
 
 ## Rollout / risks / open questions
 
@@ -207,6 +207,11 @@ its own small PR. V8 closes the epic.
   merge; a deleted speaker's profiles are revoked. Specified in V4.
 - **Open:** where the watermark is embedded (native rate then resample vs at
   16 kHz) is decided by a V1 arm.
+- **Hardware window.** The shared 32 GB card is on loan to the maintainer's
+  workstation for a limited period; V1 and the V3 build must fit borrow
+  windows measured in hours, not days. The service's published host port must
+  not collide with the other project's audio ports (Voxint's model services
+  already publish on a separate range there).
 
 ## Review notes
 

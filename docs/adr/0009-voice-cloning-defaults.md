@@ -115,7 +115,9 @@ gate (every dependency and weight sha-pinned into a reproducible image, no
 network at build or run) and a falsification gate on Voxint-realistic audio
 (similarity on 3 s phone-quality references measured with Voxint's own TitaNet
 embedder, word error rate with faster-whisper large-v2, watermark survival
-through the 16 kHz chain, peak VRAM on a 12 GB card). A license allowlist
+through the 16 kHz chain, peak VRAM measured on maintainer hardware). The
+12 GB lane is documented as supported only once it has been measured on a
+12 GB card. A license allowlist
 constant (engine, license, weights sha) is checked at boot.
 
 *Engine selection: to be recorded here after the gates report.*
