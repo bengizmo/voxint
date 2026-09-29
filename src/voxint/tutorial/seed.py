@@ -82,10 +82,10 @@ logger = logging.getLogger(__name__)
 
 # Stable identity of the bundled sample under MEDIA_ROOT — a reserved sentinel,
 # reused across rebuilds so its UNIQUE source_path never collides after a run
-# deletion. No physical file is ever written here: the seeded run is already
-# COMPLETED, so ACQUIRE/PREPARE never run and never read source_path; only the
-# normalized artifact (copied below) is served. A future "reprocess from source"
-# on a completed run would be the only thing to change that.
+# deletion. The seeded run is already COMPLETED, so ACQUIRE/PREPARE never read it,
+# but the Media library does (#646): it flags an item whose live file is absent,
+# and trash/restore/archive move that file. So the bundled WAV is written here as
+# well as to the normalized artifact below (see _ensure_source_present).
 TUTORIAL_SOURCE_PATH = "tutorial/sample-3speaker.wav"
 # Mirrors pipeline.stages.prepare._ARTIFACT_TEMPLATE so the tutorial run's artifact
 # looks identical to a real prepared run; only this row and the physical copy must
@@ -413,6 +413,24 @@ def _ensure_wav_present(session: Session, run_id: uuid.UUID, media_root: Path) -
         _atomic_copy(resources.load_sample_wav_bytes(), path)
 
 
+def _ensure_source_present(media: MediaItem, media_root: Path) -> None:
+    """Write the tutorial item's original where the Media library looks for it.
+
+    Follows the live pointer (``current_path``, else ``source_path``), so a
+    trashed or archived tutorial is repaired in place rather than resurrected at
+    its old path. A purged item stays deleted: "Delete permanently" is final.
+    """
+    if media.purged_at is not None:
+        return
+    live = media.current_path if media.current_path is not None else media.source_path
+    root = media_root.resolve()
+    dest = (media_root / live).resolve()
+    if not dest.is_relative_to(root):
+        raise TutorialSeedError(f"tutorial media path escapes MEDIA_ROOT: {live!r}")
+    if not dest.is_file():
+        _atomic_copy(resources.load_sample_wav_bytes(), dest)
+
+
 def seed_tutorial_run(
     session: Session, *, media_root: Path, settings: Settings
 ) -> uuid.UUID:
@@ -438,6 +456,7 @@ def seed_tutorial_run(
         run = session.get(PipelineRun, existing.tutorial_run_id)
         if run is not None:
             _ensure_wav_present(session, run.id, media_root)
+            _ensure_source_present(run.media_item, media_root)
             return run.id
 
     wav_bytes = resources.load_sample_wav_bytes()
@@ -455,4 +474,7 @@ def seed_tutorial_run(
     row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
     row.tutorial_run_id = run_id
     session.flush()
+    # Last, after every step that can fail: a rolled-back seed must not leave the
+    # original behind with no MediaItem row, where a folder scan would ingest it.
+    _ensure_source_present(media, media_root)
     return run_id

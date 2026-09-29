@@ -6,6 +6,45 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **Review is reachable on a default install** (#646). Every review entry point
+  (`/review/{id}`, the run page's **Open in editor** button, claiming a run)
+  redirects into the media editor, which returned 404 because the Media library
+  shipped turned off. A regression test now follows each redirect to a 200 page
+  with the shipped defaults.
+- **Review links open the right place.** A finished run's **Review →** link on
+  the Runs page opens that run in the editor instead of the whole Media library,
+  and the retired `/review` queue URL (the Home page's "runs to review" arrow)
+  lands on the Media library's **Needs review** filter. An archived run, which
+  cannot be reviewed until it is restored, shows **View →** instead.
+- **The tutorial recording no longer shows "Original file not found".** The
+  bundled tutorial wrote only its processed audio, so the Media library flagged
+  its original as missing and could not move it to the trash. Seeding now writes
+  the original too, and re-seeding repairs it where the item currently lives
+  (a permanently deleted tutorial stays deleted).
+- **The Exit walk mode button is readable.** Its accent fill was overridden by
+  the plain button style, leaving white text on a near-white button in the light
+  theme and dark text on a dark button in the dark theme.
+- **Emptying the trash asks first.** **Empty trash permanently** deleted every
+  trashed file from disk on one click; it now asks for confirmation.
+- **The trash stays reachable.** Trashing the last file in the Media library
+  hid the **Trash** and **Archived** links, leaving no way back to restore it.
+  They now show on the empty library too.
+- The browser acceptance lane's seed writes the recording's original file, so
+  the Media library no longer flags it as missing and trash and restore can be
+  exercised.
+
+### Changed
+- **The Media library is on by default** (`CONSOLE_MEDIA_ENABLED=true`). Media is
+  added from the **Media** page; the sidebar **Media** link and the Home
+  **+ Add media** action open it. The legacy upload and URL-fetch boxes on the
+  Runs page appear only when the flag is turned off, and turning it off makes
+  review unreachable again. The legacy `POST /submit` and `POST /fetch` redirect
+  to `/media` without processing while the flag is on.
+- The native install lane (`tools/native_e2e_lifecycle.py`) submits through
+  `POST /media/submit`, and the browser acceptance lane runs the shipped default
+  instead of forcing the flag on.
+
 ## [0.46.0] - 2026-09-21
 
 ### Security

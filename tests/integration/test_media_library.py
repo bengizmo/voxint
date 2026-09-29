@@ -7,6 +7,7 @@ latest-run-per-file and archived-run exclusion, the folder join, the sort
 allowlist's honest degrade, and the card/table view toggle.
 """
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -152,6 +153,46 @@ def test_empty_library_states_it_honestly(client: TestClient) -> None:
     resp = client.get("/media")
     assert resp.status_code == 200
     assert "No media yet" in resp.text
+
+
+def test_trashing_the_only_file_leaves_the_trash_reachable(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # With every file trashed the active view is empty. The Trash and Archived
+    # links must still render, or the operator has no way back to restore.
+    with session_factory() as session:
+        media = _add_media(session, source_path="incoming/only.wav")
+        media.trashed_at = datetime.now(UTC)
+        session.commit()
+
+    resp = client.get("/media")
+    assert resp.status_code == 200
+    assert "only.wav" not in resp.text
+    assert "Trash →" in resp.text
+    assert "Archived →" in resp.text
+    assert re.search(r'href="/media\?[^"]*trashed=1"', resp.text)
+    assert re.search(r'href="/media\?[^"]*archived=1"', resp.text)
+
+    trash = client.get("/media?sort=added&view=table&trashed=1")
+    assert trash.status_code == 200
+    assert "only.wav" in trash.text
+
+
+def test_empty_trash_asks_before_deleting_permanently(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        media = _add_media(session, source_path="incoming/doomed.wav")
+        media.trashed_at = datetime.now(UTC)
+        session.commit()
+
+    resp = client.get("/media?trashed=1")
+    assert resp.status_code == 200
+    action = resp.text.index('action="/media/empty-trash"')
+    form_tag = resp.text[resp.text.rindex("<form", 0, action) : resp.text.index(">", action)]
+    # A permanent delete needs a confirm step, like the run page's derived-audio delete.
+    assert 'onsubmit="return confirm(' in form_tag
+    assert "cannot be undone" in form_tag
 
 
 def test_library_lists_a_file_with_folder_and_status(

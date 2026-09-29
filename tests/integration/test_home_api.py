@@ -10,6 +10,7 @@ bad value, that Home and ``/metrics`` agree on one seed, the activity feed's
 content and ordering, and the retired ``/dashboard`` redirect.
 """
 
+import os
 import re
 import uuid
 from collections.abc import Iterable
@@ -40,11 +41,19 @@ CREDS = ("reviewer", "s3cret")
 
 
 @pytest.fixture()
-def client(session_factory: sessionmaker[Session], tmp_path: Path) -> TestClient:
+def client(
+    session_factory: sessionmaker[Session], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    # Shipped defaults: no .env file and no CONSOLE_* flag from the process
+    # environment, so default-path assertions track the code default (#646).
+    for name in list(os.environ):
+        if name.upper().startswith("CONSOLE_"):
+            monkeypatch.delenv(name)
     settings = Settings(
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=tmp_path,
+        _env_file=None,
     )
     test_client = TestClient(create_app(settings=settings, session_factory=session_factory))
     test_client.auth = CREDS
@@ -204,13 +213,33 @@ def test_home_empty_states_are_quiet_not_links(client: TestClient) -> None:
 def test_home_quick_actions(client: TestClient) -> None:
     body = client.get("/").text
     # Add media is the primary command-bar action; start actions row below.
-    assert 'cb-btn-primary' in body
-    assert 'href="/runs#add-media"' in body
-    assert "Upload a recording" in body
+    # Both lead to the Media library, where media is added by default (#646).
+    assert '<a class="cb-btn cb-btn-primary" href="/media">+ Add media</a>' in body
+    assert '<a class="start-btn" href="/media">Upload a recording</a>' in body
+    assert "/runs#add-media" not in body
     assert "Review speakers" in body
     # Projects ships dark: no New-project action while the flag is off.
     assert "New project" not in body
     assert 'href="/projects"' not in body
+
+
+def test_home_quick_actions_media_off_use_runs_forms(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """With the media area off, the add-media actions fall back to the Runs
+    page forms (the only way in on that config)."""
+    settings = Settings(
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+        media_root=tmp_path,
+        console_media_enabled=False,
+    )
+    test_client = TestClient(create_app(settings=settings, session_factory=session_factory))
+    test_client.auth = CREDS
+    seed_onboarded(session_factory)
+    body = test_client.get("/").text
+    assert '<a class="cb-btn cb-btn-primary" href="/runs#add-media">+ Add media</a>' in body
+    assert '<a class="start-btn" href="/runs#add-media">Upload a recording</a>' in body
 
 
 def test_home_window_switch_changes_counts(

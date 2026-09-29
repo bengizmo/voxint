@@ -41,9 +41,7 @@ one out of sight, free up disk space, and jot down notes.
 This is the most direct way, and it needs nothing but the files on your computer.
 You can upload one file or a whole batch at once.
 
-1. Open **Media** in the sidebar. If your Voxint has the Media library turned
-   on, this takes you to the **Media** page. Otherwise it opens the **Runs**
-   page.
+1. Open **Media** in the sidebar.
 2. Click **+ Add media**, then **Upload from this computer**.
 3. Pick one or more audio or video files. You can also drag files from your
    file manager and drop them on the upload area.
@@ -58,6 +56,11 @@ show the reason and offer a **Retry** button.
 
 When the batch is done, you see a summary ("5 of 5 queued for transcription").
 Reload the page to see the new recordings in the library.
+
+> If **Media** in the sidebar opens the **Runs** page instead, whoever set up
+> your Voxint turned the Media library off (`CONSOLE_MEDIA_ENABLED=false`). You
+> can still upload from the boxes at the top of the Runs page, but you cannot
+> open finished transcripts for review until the Media library is turned back on.
 
 On the **Media** page, use the search box to find a recording by name or folder.
 The status filter offers **Needs review**, **Failed**, **Reviewed**, and **All**.
@@ -80,10 +83,8 @@ A few honest notes:
 If your recording lives on a web page, you can give Voxint the link and let it
 fetch the file. This uses a tool called yt-dlp as the run's first stage.
 
-1. On the same page where you upload files (the **Media** page if the Media
-   library is on, or the **Runs** page otherwise), find the **Fetch from URL**
-   box.
-2. Paste the link and click **Fetch & transcribe**.
+1. On the **Media** page, click **+ Add media**, then **Fetch from a link**.
+2. Paste the link into **Media URL** and click **Fetch and transcribe**.
 
 Voxint downloads the media, then processes it exactly like an uploaded file.
 
@@ -101,7 +102,7 @@ wherever the link points. So:
 If you don't want this feature available at all, you can turn **"Download media
 from a URL"** off in **Settings**; see
 [settings and troubleshooting](settings-and-troubleshooting.md). When it is off,
-the Runs page simply says URL ingestion is disabled and the box does not appear.
+the link box is greyed out and says fetching from a URL is turned off.
 
 ### 3. A local file or a watched folder
 
@@ -226,10 +227,11 @@ ground.
 
 ## Watch a run
 
-Every run has its own page (open it from the **Runs** list, then click **open** on
-a row). The page shows where the run is and what has happened.
+Every run has its own page. On the **Runs** page, click a recording's name, or
+the **View →** link at the end of its row. The page shows where the run is and
+what has happened.
 
-![The Runs page with Needs attention, Active, Failed, and All tabs, a collapsed Filter, and title-first rows with a short run ID underneath. When the Media library is off, Upload media and Fetch from URL boxes appear at the top.](../images/runs-list.png)
+![The Runs list with Needs attention, Active, Failed, and All tabs, Exact and Meaning search, a collapsed Filter, and title-first rows with a short run ID underneath, a status chip, a review chip, and a Review link at the end of each row.](../images/runs-list.png)
 
 A run moves through **six stages**, in order:
 

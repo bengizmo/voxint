@@ -65,8 +65,8 @@ a product bug):
 
 1. `browser_navigate http://admin:e2epass@127.0.0.1:8099/` then
    `browser_navigate http://127.0.0.1:8099/runs`.
-2. Open the seeded run's workbench (`/runs/<RUN_ID>`), click **Review** — it
-   auto-claims the run and lands directly on the media editor page at
+2. Open the seeded run's workbench (`/runs/<RUN_ID>`), click **Open in editor**:
+   it auto-claims the run and lands directly on the media editor page at
    `/media/<MEDIA_ID>/editor?run=<RUN_ID>&token=…`. The `MediaEditor` island
    handles the transcript walk, verify/edit/skip/replay controls, speaker rail,
    waveform strip, and provenance all in one page.
@@ -83,7 +83,8 @@ touch the network:
 
 - **verify-and-advance (`v`):** click the page heading (move focus off any form
   control), press `v` → exactly one `POST …/verify` (200); the counter
-  (`p[aria-live="polite"]` in `.review-stepper`) advances by one and the cursor
+  ("N of 5 segments verified", the first `p` in `[aria-label="Editor controls"]`)
+  advances by one and the cursor
   moves to the next unverified segment. **Then press `p` (replay)** and confirm
   the instrumented `play()` fires and `currentTime` moves — a verify patches the
   `segments` array, and a regression that tore down the `<audio>` element on that
@@ -116,11 +117,12 @@ touch the network:
   (a focused `<select>`/`<textarea>`/`<input>` suppresses the single-key keymap).
 - **cheat-sheet modal (#51) — open both ways, dismiss, and suppress:** move focus
   off any form control, then press `?` → a `[role="dialog"][aria-modal="true"]`
-  titled "Keyboard shortcuts" appears (the eight-row `<dl>` renders from the shared
-  `REVIEW_SHORTCUTS` source of truth). While it is open, press `v` → **no** new
+  titled "Keyboard shortcuts" appears (its `<dl>` renders from the shared
+  `REVIEW_SHORTCUTS` source of truth; the media editor lists 14 rows). While it is open, press `v` → **no** new
   `/verify` (the `helpOpenRef` guard suppresses the global keymap behind the modal).
-  Press **Escape** → the dialog is gone. Reopen via the **"⌨ Shortcuts ?"** button
-  (`button[aria-haspopup="dialog"]`) instead of the key, then dismiss with the ✕
+  Press **Escape** → the dialog is gone. Reopen via the **"Shortcuts ?"** button
+  (`getByRole('button', { name: 'Shortcuts ?' })`; `button[aria-haspopup="dialog"]`
+  also matches the palette and speaker buttons) instead of the key, then dismiss with the ✕
   close control (`aria-label="Close keyboard shortcuts"`); reopen once more and
   dismiss with a **backdrop click** (mousedown+click on the fixed overlay, not the
   panel). Each dismiss returns focus to the opener. (The seed has a roster, so the
@@ -148,6 +150,9 @@ tests stay green without this, so assert it in the browser:
   (200), and the `.tp-corrected-chip` marker is now **gone** from the header (the
   operator's text supersedes the pipeline trace — no stale spans). Restore/leave as
   appropriate for the reconcile expectation (this counts segment 0 as corrected).
+  Saving text on an already-verified segment clears its verification, so if
+  segment 0 was verified earlier it leaves `verified_segment_indexes` and the
+  counter drops by one.
 
 Note: `aria-current` on `p.tp-line` tracks the audio **playback** highlight, not
 the review cursor — assert the review cursor via the edit box's value and the
@@ -194,7 +199,7 @@ on its accessibility tree, only `data-*` attributes, the canvas, and network.
 ### Speaker rail (#115)
 
 Seed with `--fixture rail` (12 segments, labels S0..S5, a four-person roster
-including the auto-saved `Voice 1`). Open `/runs/<RUN_ID>` and click **Review**:
+including the auto-saved `Voice 1`). Open `/runs/<RUN_ID>` and click **Open in editor**:
 it claims the run and lands on `/media/<MEDIA_ID>/editor?run=…&token=…`, where
 the rail mounts as `[aria-label="Speaker rail"]`. Assert, in order:
 
@@ -241,6 +246,31 @@ Reconcile with the rulings you made, for example:
   "S4":{"decision":"exclude","speaker":null},"S2":{"decision":"unknown","speaker":null}}}'
 # → ok: 0 of 12 verified; corrections match; 5 label ruling(s) match / RECONCILE PASS
 ```
+
+### Media library on the shipped default (#646)
+
+The lane serves the shipped default (`console_media_enabled` on, nothing forced),
+so every review entry point must reach the editor. Run the trash checks **after**
+the step-3 reconcile: emptying the trash purges the seeded run.
+
+- **Review entry points.** `/review/<RUN_ID>` and `/review/<RUN_ID>/transcript`
+  land on `/media/<MEDIA_ID>/editor?run=…`, the island mounts (wait for the edit
+  textarea) and claims (`&token=` appears). On `/runs/<RUN_ID>`, **Open in
+  editor** and **Transcript** do the same. `/review` lands on `/media` (200).
+- **Add media.** On `/media`, **+ Add media** opens a menu; **Upload from this
+  computer** shows the upload panel (drop zone, file input, folder picker,
+  disabled **Submit for transcription**), and **Fetch from a link** shows the URL
+  input and **Fetch and transcribe**.
+- **No missing-file chip.** The seeded row carries no "Original file not found"
+  chip (the seed writes the original).
+- **Trash and restore.** Select the row, **Delete...** → "Moved 1 file to trash."
+  With the library now empty, **Trash →** must still render; follow it, select the
+  row, **Restore selected** → "Restored 1 file from trash." and the row is back.
+- **Empty trash asks first.** Trash the row again, open the trash view, click
+  **Empty trash permanently** with a dialog handler that **dismisses** → one
+  `confirm` dialog, **no** `POST /media/empty-trash`, the row still listed. Click
+  again and **accept** → exactly one POST, "Permanently deleted 1 file.", and
+  "Trash is empty."
 
 ## 3. Reconcile durable state, then always clean up
 

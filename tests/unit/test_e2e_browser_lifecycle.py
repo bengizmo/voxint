@@ -215,6 +215,26 @@ def test_parser_wires_each_subcommand(argv: list[str], func: object) -> None:
     assert args.func is func
 
 
+def test_cmd_serve_runs_the_shipped_media_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#646: the lane serves the shipped default, so a host-exported
+    CONSOLE_MEDIA_ENABLED never reaches the served instance."""
+    monkeypatch.setenv("CONSOLE_MEDIA_ENABLED", "false")
+    captured: dict[str, dict[str, str]] = {}
+
+    def fake_exec(file: str, argv: list[str], env: dict[str, str]) -> None:
+        captured["env"] = env
+
+    monkeypatch.setattr("tools.e2e_browser_lifecycle.os.execvpe", fake_exec)
+    args = build_parser().parse_args(
+        ["serve", "--database-url", _DISPOSABLE, "--media-root", str(tmp_path / "m")]
+    )
+    cmd_serve(args)
+    assert "CONSOLE_MEDIA_ENABLED" not in captured["env"]
+    assert captured["env"]["DATABASE_URL"] == _DISPOSABLE
+
+
 def test_parser_requires_a_subcommand() -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args([])

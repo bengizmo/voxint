@@ -2617,8 +2617,10 @@ def _preserve_query(request: Request, base: str) -> str:
 def review_queue_redirect(
     request: Request, operator: OperatorDep
 ) -> RedirectResponse:
-    """Retired review queue → media library."""
-    return RedirectResponse(_preserve_query(request, "/media"), status_code=303)
+    """Retired review queue → the media library's "Needs review" filter."""
+    return RedirectResponse(
+        _preserve_query(request, "/media?status=needs_review"), status_code=303
+    )
 
 
 @router.get("/review/{run_id}", name="workbench_redirect")

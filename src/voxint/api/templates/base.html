@@ -454,7 +454,15 @@
     .me-toolbar { border-left: .25rem solid transparent; padding-left: var(--space-2); }
     .walk-active .me-toolbar { background: var(--accent-soft); border-left-color: var(--accent); }
     .walk-active .me-segment-actions { background: var(--accent-soft); }
-    .me-walk-btn-active { background: var(--accent); color: var(--accent-contrast); border-radius: var(--r-md); padding: .2rem .6rem; }
+    /* (0,1,1) like button.primary: at (0,1,0) the typed-button tie-break below
+       (a later source) replaced this fill with --surface, leaving the dark
+       --accent-contrast ink unreadable on a dark button. */
+    button.me-walk-btn-active { background: var(--accent); border-color: var(--accent);
+      color: var(--accent-contrast); border-radius: var(--r-md); padding: .2rem .6rem; }
+    button.me-walk-btn-active:hover:not(:disabled) { background: var(--accent-strong);
+      border-color: var(--accent-strong); }
+    button.me-walk-btn-active kbd { background: var(--kbd-overlay); border-color: transparent;
+      color: inherit; }
     h1 { font-size: var(--t-xl); line-height: 1.2; letter-spacing: -.012em; }
     h2 { font-size: var(--t-lg); line-height: 1.2; letter-spacing: -.008em; }
     h3 { font-size: var(--t-md); line-height: 1.25; }

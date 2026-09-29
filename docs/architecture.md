@@ -447,9 +447,9 @@ routable network, still wants a host-level egress firewall. See
 **CSRF.** Four mutation forms (`POST /submit`, `/fetch`, `/runs/{id}/requeue`,
 and `POST /review/{id}/claim`) carry a stateless, action-bound HMAC token
 (`api.csrf`, keyed by `csrf_secret`, independent of the Basic-auth password); a
-missing/mis-signed token is refused before any state change. When
-`console_media_enabled` is on, `POST /submit` and `POST /fetch` redirect to
-`/media` (303) before reaching the CSRF-protected handler; the `/media/submit`
+missing/mis-signed token is refused before any state change. While
+`console_media_enabled` is on (the default), `POST /submit` and `POST /fetch`
+redirect to `/media` (303) before reaching the CSRF-protected handler; the `/media/submit`
 and `/media/fetch` routes carry their own CSRF actions. `/claim` needs its own
 because claiming is what *mints* the run's claim token: it has no unguessable
 token of its own yet. The remaining review-workbench mutations (release, decision,
@@ -651,9 +651,11 @@ baseline and act on that exact run, skipping on drift, so a double-submit is
 idempotent rather than sliding onto the next-older run. The archived view
 (`/media?archived=1`) lists files whose latest run is archived so bulk unarchive
 has a target. All routes are always registered (the
-route inventory is stable across the flag flip) and 404 until the flag is on;
-flipping it also points the sidebar Media link and the Home "Add media" action at
+route inventory is stable across the flag flip) and 404 while the flag is off;
+the flag also points the sidebar Media link and the Home "Add media" action at
 `/media` instead of the legacy `/runs` upload. No schema migration ships in P2b.
+The flag has defaulted on since #646: the media editor had by then become the
+only review surface, so with the flag off every review entry point ended in a 404.
 
 ## Review console
 

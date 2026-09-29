@@ -4,26 +4,27 @@
 voices, then check and correct the words.*
 
 Voxint listens to your recording and makes its best guesses about who spoke,
-when, and what they said. This guide walks you through the review console, where
-you have the final say: you confirm the matches Voxint is unsure about, rule on
-the voices it could not match, and change any automatic match that is wrong.
+when, and what they said. This guide walks you through the editor, where you
+have the final say: you confirm the matches Voxint is unsure about, rule on the
+voices it could not match, and change any automatic match that is wrong.
 
-Review has two steps: start with the people, then check the words.
+Review has two parts, and both happen on one page, the **editor**:
 
 - **Step 1, [Identify the voices](#workflow-a-identify-the-voices):** decide who
-  each detected voice really is (or that they should be left out). Opening a run
-  takes you here.
+  each detected voice really is (or that they should be left out). This work
+  lives in the speaker rail beside the transcript.
 - **Step 2, [Verify and correct the transcript](#workflow-b-verify-and-correct-the-transcript):**
   read through the words, confirm the ones that are right, and fix the ones that
   are wrong.
 
-The console leads you from Step 1 to Step 2, and you can go back to the people at
-any time. Checking the words is recommended, not required. Voice matches and
-your speaker rulings determine when a run leaves Review.
+You can switch between the two at any time. Settling the voices first means
+every line shows the right name while you check the words. Checking the words is
+recommended but optional: voice matches and your speaker rulings decide when a
+recording stops showing as needing review.
 
 New to Voxint? The bundled [guided tutorial](../onboarding.md#3-guided-tutorial)
-walks this whole loop on a sample recording before you use your own audio; a
-good place to start. This guide is the fuller reference for the same work.
+walks this whole loop on a sample recording before you use your own audio, so it
+is a good place to start. This guide is the fuller reference for the same work.
 
 **Related how-to guides:** [Add media and manage
 runs](add-media-and-manage-runs.md) · [Managing speakers and
@@ -45,45 +46,59 @@ Everything lives on your own machine. Open the console at
 during install (`VOXINT_USER`, default `admin`, and `VOXINT_PASSWORD`). Nothing
 leaves your computer.
 
-### 1. Open Review and choose a run
+### 1. Open a recording from the Media page
 
-Click **Review** in the sidebar. The **Review** page lists every
-completed run that still has voices needing a human ruling. Each row shows:
+Click **Media** in the sidebar. The Media page lists every recording you have
+added, and its **REVIEW** column tells you where each one stands:
 
-- a **friendly title** (the recording's own title when it has one, otherwise a
-  cleaned-up filename) with the folder name beneath it when the file came from
-  a registered folder,
-- the recording's **duration** and its **age** ("3 hours ago"; hover for the
-  exact time),
-- a **progress bar** that fills as you resolve voices ("2 of 4 resolved"), and
-- a **Review** button.
+- A chip such as **2 voices need review** means processing finished and some
+  voices are waiting for your ruling.
+- **Reviewed** means every voice has a ruling or a strong voice match.
+- Anything else shows the run's current state, for example a recording that is
+  still being transcribed or one whose run failed.
 
-You can sort **Oldest first** (the default) or **Most voices to resolve**.
+To see only the recordings that are waiting for you, choose **Needs review** in
+the status menu next to the search box. The list updates as soon as you pick it.
 
-![The Voxint adjudication queue: a table of completed runs, each row showing a
-recording name with its folder and date, duration, age, a progress bar reading
-"N of M resolved," and a Review button.](../images/review-queue.png)
+![The Media page filtered to Needs review: a table of recordings with name,
+length, and a REVIEW column showing a "voices need review" chip on each
+row.](../images/media-needs-review.png)
 
-Press **Review** on the run you want. In the default single-operator mode, the
-workbench claims the run for this browser tab as it opens. The transcript editor
-does the same when you open it. There is no separate claiming step.
+Each row ends with a link that opens the recording in the editor. It reads
+**Review →** while the run is waiting on your speaker decisions, **Retry →**
+when the last run failed, and **Open →** otherwise. The **Home** page also
+counts your **runs to review**, and its arrow brings you to the Media page with
+**Needs review** already chosen. On the **Runs** page, a finished run that still
+needs you has a **Review →** link that opens it in the editor.
 
-> In multi-user mode, the queue adds a **Claimed by** column and you claim work
-> manually with **Claim for review**. Use **Release claim** when you want to hand
-> it to someone else.
+Opening the editor claims the run for this browser tab, so there is no separate
+claiming step. A few related messages you may see:
+
+- **Read-only view** with a **Claim for editing** button: the editor is showing
+  the run without a claim. Press the button to start making changes.
+- **Your claim expired or was taken over.** Everything you already saved is
+  safe. Copy any unsaved text from the edit box, then press **re-claim to
+  continue editing**.
+
+If a recording has been processed more than once, the **Run** card at the top
+of the editor lists the others under **Other runs**. The **Run details** link on
+that card opens the technical page where you can restart or archive a run.
 
 ---
 
 ## Workflow A: Identify the voices
 
-Opening a run shows the editor with the speaker rail beside the transcript.
-Voxint separated the recording into voices and gave each one a label such as
-`SPEAKER_00`. The sentence at the top tells you how much work remains, for
-example "2 voices need you, 1 with very little speech. 3 matched
-automatically." When you are done it reads "Every voice has a ruling." If
-matching never ran on the recording, or you had not added any people yet when
-it ran, the sentence says that instead, so an empty result is never mistaken
-for a clean one.
+The editor shows the speaker rail beside the transcript. Voxint separated the
+recording into voices and gave each one a label such as `SPEAKER_00`. The
+sentence at the top of the rail tells you how much work remains, for example "2
+voices need you, 1 with very little speech. 3 matched automatically." When you
+are done it reads "Every voice has a ruling." If matching never ran on the
+recording, or you had not added any people yet when it ran, the sentence says
+that instead, so an empty result is never mistaken for a clean one.
+
+Above the transcript, a line such as "2 unidentified voices, 5 segments
+affected" offers a **Start reviewing** link. It jumps to the first line spoken
+by a voice that needs you and opens the speaker menu for that line.
 
 The rail puts voices into these groups:
 
@@ -165,13 +180,13 @@ to…** picker. Press **Hide** to close the actions again.
 
 ### Hear a voice before assigning (popover preview)
 
-When the speaker assignment popover is open (click a speaker name in the
-transcript, or press `s`), each speaker option shows a **Hear this voice**
-button. Clicking it plays a representative segment of that speaker without moving
-the review cursor or closing the popover. Listen, then pick the right person.
+When the speaker menu is open (click a speaker name in the transcript, or press
+`s`), each speaker option shows a **Hear this voice** button. Clicking it plays
+a representative segment of that speaker without moving your place in the
+transcript or closing the menu. Listen, then pick the right person.
 
 The button only appears when audio playback is available. Playback stops
-automatically when you close the popover or make your choice.
+automatically when you close the menu or make your choice.
 
 ### Undo a ruling
 
@@ -188,7 +203,7 @@ Undo is available for label-scope rulings only. Segment-scope corrections
 
 ### Merge suggestions
 
-After you assign a speaker to a label, the console checks whether other
+After you assign a speaker to a label, the editor checks whether other
 unresolved labels have voices that match the same person. If it finds any, a
 **merge suggestion toast** appears (stacked above the undo toast if both are
 showing).
@@ -206,13 +221,14 @@ match, so it will not override your earlier decisions.
 
 Diarization sometimes splits **one** person into two labels: you'll see
 `SPEAKER_00` and `SPEAKER_03` that are clearly the same voice. Fix it right here
-with the **"Same speaker across labels?"** panel:
+with the **Same speaker across labels?** panel in the rail:
 
 1. **Tick** the labels that are the same person in this recording.
-2. Choose **who they are**: an existing speaker, or **Add a new person…**.
+2. Under **Who are they?**, pick an existing speaker, or type a new name and
+   choose **Create "[name]"**.
 3. Press **Preview merge…** to see the **exact change** Voxint will make (how
    many turns and transcript segments move) before anything happens.
-4. **Confirm**.
+4. Press **Confirm merge**.
 
 This is **run-local**: it records one ruling per label within *this* recording.
 It does **not** merge identities across your whole roster; that stays a
@@ -230,30 +246,39 @@ afterward.
 
 ## Workflow B: Verify and correct the transcript
 
-From the workbench, follow **Continue to checking the words →** to open the
-transcript review page (`/review/{id}/transcript`). This is where you read the
-words, mark the right ones as checked, and fix the wrong ones. It works as a
-steady loop: **read a line → confirm it → move to the next.** When you have been
-through every line, the page says so and offers to export or go back to Review.
-To return to the speakers, use **← Back to the people** at the top.
+The transcript sits beside the speaker rail on the same page. This is where you
+read the words, mark the right ones as checked, and fix the wrong ones. It works
+as a steady loop: **read a line, confirm it, move to the next.**
 
-At the top you'll always see a live count, **"7 of 32 segments verified"**, so
-you know how far you are.
+A counter at the top keeps score, for example **"7 of 32 segments verified · 25
+left"**. When every line is checked it reads "You have checked every line.", and
+two buttons appear: **Download transcript** and **Back to the library**.
 
-![The transcript review page: a stepper with a verify-and-advance count, an edit
-box for the current line, a colored per-speaker waveform strip under the audio
-player, and transcript lines with dashed "uncertain" chips on the low-confidence
-ones.](../images/transcript-review.png)
+![The editor in walk mode: a counter reading "0 of 10 segments verified", the
+Exit walk mode, Split and Shortcuts buttons, a line counting the unidentified
+voices with a Start reviewing link, an edit box for the current line with
+Verify & next, Save edit, Skip and Replay, a colored per-speaker waveform strip
+under the audio player, and the transcript lines
+below.](../images/transcript-review.png)
+
+### Walk mode
+
+While any line is still unchecked, the editor opens in **walk mode**, which runs
+the loop for you: verifying a line takes you to the next unchecked line and
+plays it. Press **Exit walk mode** (or `w`) when you would rather move around
+freely. **Verify** then marks the current line and stays on it. Press **Walk
+mode** to turn the loop back on.
 
 ### The verify-and-advance loop
 
-The page starts on the first line that hasn't been checked yet. For each line:
+The editor starts on the first line that hasn't been checked yet. Its words sit
+in the edit box above the transcript. For each line:
 
-- Listen to it (it plays as you land on it; **replay** any time).
-- If the words are right, **Verify** it, and Voxint marks it checked and jumps
-  you to the next unchecked line.
-- If the words are wrong, **edit** them (below), then verify.
-- **Skip** a line to come back later.
+- Listen to it. A line plays when you move to it, and **Replay** plays it again.
+- If the words are right, press **Verify & next**. Voxint marks the line checked
+  and takes you to the next unchecked line.
+- If the words are wrong, fix them first (below), then verify.
+- **Skip** leaves a line for later and moves to the next unchecked one.
 
 You can drive this entirely with the keyboard (see [Keyboard
 shortcuts](#keyboard-shortcuts)) or entirely with the on-screen buttons,
@@ -261,24 +286,26 @@ whichever you prefer.
 
 ### Lines the model was unsure about
 
-Some lines carry a small dashed **"uncertain"** chip. That means the transcriber
-reported **low confidence** on that line; it's flagging the parts most worth a
-listen, so you don't have to re-read everything. The label is deliberately
-honest: **uncertain is not the same as wrong.** It's a nudge to check, not a
-claim of an error, and Voxint never puts a percentage on it. (Older runs made
-before this feature simply won't show the chip.)
+Some lines carry a small dashed **"uncertain"** chip. The transcriber reported
+**low confidence** on that line, so the chip points you at the parts most worth
+a listen and you don't have to re-read everything. Uncertain lines are often
+correct: the chip is a nudge to check, and Voxint never puts a percentage on it.
+(Older runs made before this feature simply won't show the chip.)
 
 ### Fix a line's words
 
-Click a line to bring it into the **edit box**, correct the text, and save with
-**Ctrl+Enter** (**⌘+Enter** on a Mac). A few things to know:
+Click any line in the transcript to make it the current line. Its words appear
+in the **edit box**. Correct the text and press **Save edit** (or **Ctrl+Enter**,
+**⌘+Enter** on a Mac). A few things to know:
 
 - Voxint keeps your correction **beside** the original; it never overwrites what
   the model actually heard. Exports show your corrected wording by default, and
-  the raw version is always still available.
+  the model's exact words stay available under **Other text variants** in the
+  **Download transcript** menu.
 - **Editing a line clears its "verified" mark**: corrected words should be
-  re-checked, so the line rejoins the queue for a fresh confirm.
-- Clearing the box (reverting to the model's wording) removes your correction.
+  re-checked, so the line rejoins the loop for a fresh confirm.
+- Saving an empty box, or the model's original wording, removes your
+  correction.
 - **Unsaved-edit warning:** if you have unsaved text in the box and try to
   verify or move on, Voxint warns you once rather than silently throwing the
   edit away. Save it (Ctrl/⌘+Enter), or repeat the action to discard and
@@ -289,21 +316,19 @@ Click a line to bring it into the **edit box**, correct the text, and save with
 If you run with a [domain pack](../domain-packs.md) that declares corrections, some
 lines are fixed **automatically** before you ever see them: a recurring
 mishearing turned into the right spelling every time. When that happened on the
-current line, you'll see a **"corrected by domain pack"** marker next to the line,
-kept deliberately separate from the **"edited"** badge, which means a change *you*
-made. Expand the marker to see exactly which rule fired: the phrase it matched and
-what it became.
+current line, a **corrected by domain pack** marker appears next to it, kept
+separate from the **edited** badge, which means a change *you* made. Press the
+marker to see exactly which rule fired: the phrase it matched, what it became,
+and the pack and rule it came from.
 
-![A reviewed transcript line carrying a "corrected by domain pack" marker, expanded
-to show the rule that fired (match → replace), with the run-level "Correction rules"
-panel above reconciling which declared rules applied and which never
-fired.](../images/correction-provenance.png)
+![The current line carrying a "corrected by domain pack" marker, expanded to
+show the rule that fired (match → replace) with its pack and rule
+name.](../images/correction-provenance.png)
 
-- **Compare against the original.** Open **Original (raw) transcript** to see the
-  exact words the model first heard, next to the corrected version. You can **copy**
-  the raw text, or **Reset edit to raw** to drop it back into the edit box.
-- **Reset doesn't save.** "Reset edit to raw" only fills the box; nothing is stored
-  until you Save, so you stay in control (and the unsaved-edit warning still applies).
+- **Compare against the original.** Open the **Download transcript** menu, then
+  **Read on screen**. The reading view has a tab for each version of the text:
+  **raw** is the exact words the model first heard, and **corrected** is the
+  reviewed version.
 - **Your edit wins.** The moment you save your own wording for a line, the
   "corrected by domain pack" marker goes away; from then on the line shows *your*
   text, not the pack's automatic edit.
@@ -311,12 +336,10 @@ fired.](../images/correction-provenance.png)
   off once a correction has fired on it; Voxint tells you why rather than offering a
   cut that wouldn't work.
 
-At the top of the page, **Correction rules** summarizes how the pack's rules did
-across the whole run: how many **applied**, and which ones **never fired**. A rule
-that never fired usually means the recording didn't contain that term, or the term
-was split across a pause. For terms that get broken across pauses, add them to the
-pack's **vocabulary** (which nudges the transcriber up front) instead of relying on
-a correction after the fact.
+If a rule you expected never shows up, the recording may not contain the term,
+or the term was broken across a pause. For terms that get broken across pauses,
+add them to the pack's **vocabulary** (which nudges the transcriber up front)
+instead of relying on a correction after the fact.
 
 ### The waveform strip
 
@@ -327,7 +350,7 @@ to that moment and select the matching line (overlapping speech is marked, and
 stretches that were spoken but not transcribed still show up, so the picture
 stays honest). If you click a spot with no transcript there, whether a silent
 gap or speech that was never transcribed, the strip says so instead of doing
-nothing. A marker tracks playback and shows where your review cursor is.
+nothing. A marker tracks playback and shows which line is current.
 
 You can also **click and drag** across the strip to select a time range. The
 selected region gets an accent-colored overlay, and a **Play selection** button
@@ -341,7 +364,8 @@ as before and clears any prior selection.
 Sometimes one transcript segment actually contains **two speakers**: the
 diarizer drew the boundary in the wrong place. You can cut it at the right word:
 
-1. Press **Split at a word** to turn on split mode.
+1. Press **Split** to turn on split mode. The editor confirms with "Split mode
+   on", and the button changes to **Exit split mode**.
 2. The current line's words become clickable. **Click the word where the new
    speaker starts**, and Voxint cuts the segment just before it.
 
@@ -354,19 +378,19 @@ more, in this release.
 
 ### Reassign a segment (or half of one) to another speaker
 
-Each line has a **speaker picker** so you can hand it to the right person
-without leaving the transcript. The picker is a searchable combobox: type to
-filter by name, use arrow keys to navigate, and press Enter to select. If you
-need a new speaker, type their name and choose **Create "[name]"** to add them
-to the roster on the fly.
+You can hand any line to the right person without leaving the transcript. The
+pickers are searchable: type to filter by name, use arrow keys to navigate, and
+press Enter to select. If you need a new speaker, type their name and choose
+**Create "[name]"** to add them to the roster on the fly.
 
-- **A whole segment:** with a line focused, open the **Assign speaker** picker,
-  or press a number key **1–9** to assign it to the 1st–9th speaker on your
-  roster. Press **0** to reset the line to its **detected** speaker (undo your
-  override).
+- **A whole segment:** use the **Assign speaker** picker under the edit box, or
+  press a number key **1–9** to assign the current line to the 1st–9th speaker
+  on your roster. Press **0** to reset the line to its **detected** speaker
+  (undo your override). Clicking the speaker name on a line (or pressing `s`)
+  opens the same choice as a menu next to the line.
 - **Half of a split segment:** after you split a segment, **each part gets its
-  own picker**. Choose the speaker for each half independently, or pick
-  **inherit** to send it back to following its label.
+  own speaker picker** in the transcript. Choose the speaker for each half
+  independently, or pick **inherit** to send it back to following its label.
 
 Reassigning changes *attribution only* (it never rewrites the words), and it
 flows through to your exports.
@@ -375,60 +399,60 @@ flows through to your exports.
 
 ## Keyboard shortcuts
 
-The transcript review page is built to run from the keyboard. Press **?** at any
-time, or click the **Shortcuts** button (it shows the `?` accelerator), for the
-same cheat-sheet built into the console.
+The editor is built to run from the keyboard. Press **?** at any time, or click
+the **Shortcuts** button (it shows the `?` accelerator), for the same
+cheat-sheet built into the console.
 
-![The keyboard-shortcuts cheat-sheet: a modal dialog titled "Keyboard shortcuts"
-listing v, n, p, e, j/k, 1–9, 0, and ? with a plain-language description of each,
-and a note that Space and the arrow keys stay with the audio
-player.](../images/keyboard-shortcuts.png)
+![The keyboard-shortcuts cheat-sheet: a dialog titled "Keyboard shortcuts"
+listing each key with a plain-language description, and a note that Space and
+the arrow keys stay with the audio player.](../images/keyboard-shortcuts.png)
 
 | Key | Action |
 |---|---|
-| **v** | Verify this line and go to the next unchecked one |
+| **v** | Verify this line (and, in walk mode, go to the next unchecked one) |
 | **n** | Skip to the next unchecked line |
 | **p** | Replay the current line |
 | **e** | Edit the current line's text |
 | **j** / **k** | Go to and play the next / previous line |
 | **1**–**9** | Assign this line to the 1st–9th speaker on your roster |
+| **s** / **@** | Open the speaker menu for this line |
 | **0** | Reset this line to its detected speaker |
 | **=** | Assign this line to the previous line's speaker |
-| **s** / **@** | Open the speaker assignment popover |
-| **d** | Toggle the download transcript panel and focus it |
+| **h** | Highlight the transcript text you have selected |
+| **d** | Open the **Download transcript** menu |
+| **w** | Turn walk mode on or off |
 | **?** | Show the cheat-sheet |
 | **Ctrl/⌘+Enter** | Save an edit (while typing in the edit box) |
 
 A few deliberate rules:
 
 - **Shortcuts never fire while you're typing** in a text box or menu, so `v`
-  types a "v" in the edit box, it doesn't verify.
+  types a "v" in the edit box instead of verifying.
 - **Space** (play/pause) and the **arrow keys** (scroll) stay with the audio
   player, as you'd expect.
 - **Every shortcut also has a visible, clickable control** on the page; the
   keyboard is a shortcut, never the only way in. The digit keys mirror the
-  on-screen **Assign speaker** menu; `1`–`9` do nothing on a run that has no
+  on-screen **Assign speaker** picker; `1`–`9` do nothing on a run that has no
   speakers yet, and the cheat-sheet says so.
 
 ---
 
 ## Finishing a run
 
-A run leaves the **Review** list once every voice has your ruling or a strong
-voice match. A voice with very little speech still needs a ruling; **Not a
-person** and **Can't tell** both settle it. Checking the words in Step 2 is
-recommended, and it is how you get a transcript you can fully trust, but it is
-not what removes the run from Review. A run can drop off the list with some lines
-still unchecked. To keep checking or to export it afterwards, reopen it from
-the **Runs** page (**Media** in the sidebar).
+A recording drops out of the **Needs review** filter on the Media page once
+every voice has your ruling or a strong voice match. A voice with very little
+speech still needs a ruling; **Not a person** and **Can't tell** both settle it.
+Its **REVIEW** chip then reads **Reviewed**. Checking the words in Step 2 is how
+you get a transcript you can fully trust, but it does not affect this chip: a
+recording can show as reviewed with some lines still unchecked. To keep checking
+or to export it later, open it again from the Media page.
 
-Now read or export it. The **Download transcript** menu on either the workbench
-or the transcript page offers plain text, Markdown, subtitles (SubRip / WebVTT),
-JSON, and RTTM, with your corrections and speaker names baked in. The same menu
-has a **Read on screen** link that opens a clean reading view of the transcript,
-no download needed. See [Managing speakers and
-exporting](managing-speakers-and-exporting.md) for the formats, the reading view,
-and when to use each.
+Now read or export it. The **Download transcript** menu in the editor offers
+plain text, Markdown, subtitles (SubRip / WebVTT), JSON, and RTTM, with your
+corrections and speaker names baked in. The same menu has a **Read on screen**
+link that opens a clean reading view of the transcript, no download needed. See
+[Managing speakers and exporting](managing-speakers-and-exporting.md) for the
+formats, the reading view, and when to use each.
 
 ## Related guides
 

@@ -32,7 +32,7 @@ you to every contributor.
 `visitor` / `demo2026`) | **[Documentation](https://voxint.app/docs/)** |
 **[Project site](https://voxint.app)**
 
-![Reviewing a transcript in Voxint: a waveform strip showing who spoke when, above the transcript with a verify-and-advance review loop](docs/images/transcript-review.png)
+![Reviewing a transcript in Voxint: the editor in walk mode, with verify-and-advance controls above a waveform strip showing who spoke when, and the transcript below](docs/images/transcript-review.png)
 
 ## See it in action
 
@@ -40,8 +40,8 @@ you to every contributor.
 
 | | |
 |---|---|
-| ![The adjudication queue: completed runs with voices still needing a decision](docs/images/review-queue.png) | ![The editor with the speaker rail: a summary of how many voices need you, then one card per voice with a possible match to confirm, a Hear this voice button, and plain-language actions](docs/images/review-workbench.png) |
-| **Your review queue**: completed recordings waiting for your decisions. | **Review only the uncertain voices**: strong matches are shown automatically; you confirm the possible ones and rule on the rest. |
+| ![The Media page filtered to Needs review: recordings with a chip saying how many voices still need a decision](docs/images/media-needs-review.png) | ![The editor with the speaker rail: a summary of how many voices need you, then one card per voice with a possible match to confirm, a Hear this voice button, and plain-language actions](docs/images/review-workbench.png) |
+| **Your review queue**: the Media page's **Needs review** filter shows recordings waiting for your decisions. | **Review only the uncertain voices**: strong matches are shown automatically; you confirm the possible ones and rule on the rest. |
 | ![The guided setup wizard's readiness checks, each dependency shown as ready, failed, or unverified](docs/images/setup-wizard.png) | ![Home: needs-attention cards, quick actions, windowed activity counts, and recent activity](docs/images/home.png) |
 | **Guided setup in the browser**: honest readiness checks, plain-language fixes. | **Home** shows what needs your attention and how to add a recording. |
 | ![The Explore page: search across all transcripts, word cloud, term frequencies, and corpus stats](docs/images/explore-search.png) | ![The speaker roster: every voice Voxint has seen, with names, merge tools, and embedding counts](docs/images/speakers.png) |
