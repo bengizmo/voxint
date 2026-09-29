@@ -85,6 +85,17 @@ def test_focus_ring_and_responsive_css_shipped(client: TestClient) -> None:
     assert re.search(
         r"\[type='submit'\][^{]*\{[^}]*background-color:\s*var\(--surface\)", body
     )
+    # The active walk-mode toggle puts --accent-contrast ink on an accent fill. At
+    # (0,1,0) the tie-break above (same specificity, later source) swapped the
+    # fill for --surface and left dark ink on a dark button, so the fill must be
+    # declared at (0,1,1) like button.primary, and hover must keep an accent fill.
+    assert not re.search(r"(?<!button)\.me-walk-btn-active\s*\{", body)
+    assert re.search(r"button\.me-walk-btn-active\s*\{[^}]*background:\s*var\(--accent\)", body)
+    assert re.search(
+        r"button\.me-walk-btn-active:hover:not\(:disabled\)\s*\{[^}]*"
+        r"background:\s*var\(--accent-strong\)",
+        body,
+    )
 
 
 def test_light_dark_and_forced_colors_preserved(client: TestClient) -> None:

@@ -21,6 +21,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   its original as missing and could not move it to the trash. Seeding now writes
   the original too, and re-seeding repairs it where the item currently lives
   (a permanently deleted tutorial stays deleted).
+- **The Exit walk mode button is readable.** Its accent fill was overridden by
+  the plain button style, leaving white text on a near-white button in the light
+  theme and dark text on a dark button in the dark theme.
 - **Emptying the trash asks first.** **Empty trash permanently** deleted every
   trashed file from disk on one click; it now asks for confirmation.
 - **The trash stays reachable.** Trashing the last file in the Media library
