@@ -53,6 +53,10 @@ updates:
       # librosa 0.10.1 imports pkg_resources, removed in setuptools 81.
       - dependency-name: setuptools
         update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      # `update-types` does not stop a security update or a range widening;
+      # no setuptools from 81 on can satisfy this stack, so ignore them all.
+      - dependency-name: setuptools
+        versions: [">=81"]
       # Frozen WER stack (tests/parity/bakeoff, vendored provenance.json) and
       # the eval-quality instrument pins.
       - dependency-name: jiwer
@@ -99,6 +103,11 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      # librosa 0.10.1 (titanet) and pyannote.database import pkg_resources,
+      # removed in setuptools 81. The rule above does not stop a security
+      # update or a range widening (#656 was one), so ignore 81 and later.
+      - dependency-name: setuptools
+        versions: [">=81"]
 
   # App image. Node stays on the 22 LTS line (contract-tested against ci.yml
   # and frontend/.nvmrc); the Python interpreter moves deliberately, together
