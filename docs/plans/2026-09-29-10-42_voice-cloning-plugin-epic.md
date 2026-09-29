@@ -1,12 +1,13 @@
 # Voice cloning plugin epic (#672)
 
-Status: draft
+Status: in-progress
 
 ## Goal
 
 Add a second greenfield plugin, `voiceclone`, that synthesizes speech in a
 consented speaker's voice and converts a speaker's turns into a synthetic
-voice, locally, with every output watermarked, labelled and provenance-tracked.
+voice, locally, with every output labelled and provenance-tracked and
+watermarked unless an admin has taken the watermark override.
 The epic is #672; its children are #662 to #670, with post-epic follow-ups in
 #671. This plan records the scoping decisions and the acceptance criteria the
 children inherit. Defaults are fixed in
@@ -40,7 +41,7 @@ One epic, nine children, in this order:
 
 | Child | Issue | What lands |
 |---|---|---|
-| V0 | #662 | ADR 0009 accepted: watermark, provenance, consent model, revocation, synthetic targets, risk-reduction naming, no autogenerate, CUDA lane |
+| V0 | #662 | ADR 0009 accepted: watermark, provenance, consent model, revocation, synthetic targets, risk-reduction naming, no autogenerate, CUDA lane, the two operator overrides |
 | V1 | #663 | Packaging gate (reproducible sha-pinned image) and falsification gate on Voxint-realistic audio; engine paragraph appended to the ADR |
 | V2 | #664 | Vendored synthetic target voice pack as a sha-pinned release asset with provenance |
 | V3 | #665 | `services/voiceclone/` container, HTTP contract, compose overlay pair, contract tests, `docs/gpu-contracts.md` |
@@ -82,7 +83,8 @@ Design points that every child honours:
 ### Requirement: Every output is watermarked and labelled
 
 The system SHALL refuse to publish any generated audio whose watermark cannot
-be verified, and SHALL label every published output as synthetic.
+be verified unless the watermark override is on, and SHALL label every
+published output as synthetic either way.
 
 #### Scenario: Service self-check fails
 
@@ -105,7 +107,7 @@ THEN a synthetic badge is shown beside it
 ### Requirement: Consent gates every generation
 
 The system SHALL generate only from a profile with an unrevoked consent record
-whose purpose matches the job kind.
+whose purpose matches the job kind, unless the consent override is on.
 
 #### Scenario: Missing or mismatched consent
 
@@ -124,6 +126,45 @@ THEN enrollment is refused
 
 WHEN the source run's intermediates are reclaimed
 THEN the profile's copied reference clip and its sha remain valid
+
+### Requirement: Operator overrides are explicit, admin-only and recorded
+
+The system SHALL keep the consent override and the watermark override off by
+default, SHALL let only an admin turn either on after accepting its
+disclaimer, and SHALL record every change and every output's consent basis
+and watermark state.
+
+#### Scenario: Override enabled from the console or CLI
+
+WHEN an admin turns on either override
+THEN the console requires the disclaimer checkbox and a typed confirmation,
+or the CLI requires `--accept`, and a generation-log row records who, when,
+which override and the disclaimer version
+
+#### Scenario: Non-admin or unaccepted attempt
+
+WHEN a non-admin tries to turn on an override, or the disclaimer is not
+accepted
+THEN the setting is unchanged and nothing is logged as enabled
+
+#### Scenario: Consent override on
+
+WHEN the consent override is on and a job is requested for a profile with no
+matching consent record
+THEN the job runs, and its provenance records consent basis `override`
+
+#### Scenario: Watermark override on
+
+WHEN the watermark override is on
+THEN the output carries no watermark, neither watermark check runs, the
+provenance row and WAV metadata record watermark state `disabled`, and the
+synthetic badge is still shown
+
+#### Scenario: Override turned off
+
+WHEN an admin turns an override off
+THEN the next job is held to the default rule, and earlier outputs keep the
+consent basis and watermark state recorded at generation time
 
 ### Requirement: Voice risk reduction is reported honestly
 
@@ -205,6 +246,9 @@ its own small PR. V8 closes the epic.
   profile-id-only API.
 - **Speaker merge and delete.** Profiles follow the canonical speaker on
   merge; a deleted speaker's profiles are revoked. Specified in V4.
+- **Watermark override seam.** The presumptive engine watermarks inside its
+  own generate call. Gate 0 must identify a pinned bypass seam; if none exists
+  without forking the engine, the override is revisited before V3.
 - **Open:** where the watermark is embedded (native rate then resample vs at
   16 kHz) is decided by a V1 arm.
 - **Hardware window.** The shared 32 GB card is on loan to the maintainer's
@@ -243,3 +287,12 @@ crossfades, sample-accurate placement, replace never mix).
 
 **Rejected:** none. UTMOS and a blind listener panel were dropped as not
 moving any decision for this audience.
+
+### Maintainer review of ADR 0009 (2026-09-29)
+
+Approved with two additions the consult did not propose: an admin-only
+consent override (blanket approval for both purposes) and an admin-only
+watermark override, each behind its own disclaimer in which the operator
+takes full responsibility. Profiles, provenance, the synthetic badge and the
+generation log stay in force under either override. ADR 0009 section 8
+records the rules.

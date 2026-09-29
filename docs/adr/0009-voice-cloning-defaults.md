@@ -1,9 +1,10 @@
 # ADR 0009: Voice cloning plugin defaults and consent model
 
-> **Status:** Proposed (voice cloning epic). Records the non-negotiable
-> defaults for the `voiceclone` plugin before any code lands. The engine
-> selection paragraph is filled in after the packaging and falsification gates
-> report; everything else here is decided now.
+> **Status:** Accepted 2026-09-29 (voice cloning epic). Records the defaults
+> for the `voiceclone` plugin, and the two operator overrides that may relax
+> them, before any code lands. The engine selection paragraph is filled in
+> after the packaging and falsification gates report; everything else here is
+> decided now.
 
 ## Context
 
@@ -31,16 +32,21 @@ of real people. Two facts from the landscape research shape the defaults:
 
 ### 1. Every output is watermarked, verified, and labelled
 
-- The service applies the generator's watermark to every output unconditionally.
-  There is no request flag, setting, or CLI switch to turn it off.
+- By default the service applies the generator's watermark to every output.
+  There is no per-request flag. The only way to turn it off is the
+  instance-wide watermark override in section 8.
 - The service re-detects the watermark on its own output before responding. A
   failed self-check is an error response, never a silent unmarked file.
 - The worker re-verifies the watermark on the final file it publishes, at the
   pipeline's 16 kHz rate, and refuses to publish on failure.
+- The two watermark checks are skipped only while the watermark override is on.
+  Provenance, the metadata chunk, the badge and the generation log below apply
+  to every output either way.
 - Every published output carries provenance in a plugin table and in the WAV
-  metadata chunk: engine inference-space id, weights sha, watermark verified,
-  input hashes, profile id, operator, timestamp. Assembled outputs (conversion
-  and dubbing) also carry a per-line provenance row.
+  metadata chunk: engine inference-space id, weights sha, watermark state
+  (verified, or disabled by override), consent basis (profile record, or
+  override), input hashes, profile id, operator, timestamp. Assembled
+  outputs (conversion and dubbing) also carry a per-line provenance row.
 - Wherever an output plays or is listed, the console shows a "synthetic" badge.
 
 ### 2. Consent is recorded per voice profile, with two purposes
@@ -63,6 +69,11 @@ Enrollment enforces that the chosen reference turns belong to the consented
 speaker and pass duration, signal-to-noise and no-overlap gates. The plugin API
 accepts only a profile id; the reference is resolved server-side. Nothing an
 operator can reach passes an arbitrary reference path.
+
+While the consent override in section 8 is on, it stands in for the
+attestation step for both purposes. The profile itself still exists: the
+reference clip is still copied, hashed and put through the same gates, and
+the API still accepts only a profile id.
 
 Consent enforcement is procedural, not cryptographic. The tool makes the
 honest path the default and the dishonest path visible in an append-only
@@ -121,6 +132,35 @@ constant (engine, license, weights sha) is checked at boot.
 
 *Engine selection: to be recorded here after the gates report.*
 
+### 8. Two operator overrides, off by default
+
+An operator who has their own grounds for consent, or their own reason to ship
+unmarked audio, may take that responsibility explicitly. Two separate
+instance-wide settings exist, and both are off on every install:
+
+| Override | While on | Still enforced |
+|---|---|---|
+| Consent override | Blanket approval for both purposes. Any profile may be used for `clone` and `risk_reduction` without a per-profile attestation. | Profile enrollment gates, profile-id-only API, synthetic-only conversion targets, admin and CSRF gates, the generation log |
+| Watermark override | The service does not embed the watermark, and neither check in section 1 runs. | Provenance row and WAV metadata chunk (watermark state `disabled`), the console "synthetic" badge, the generation log |
+
+Rules for both:
+
+- Only an admin can turn an override on, from the settings page or the CLI.
+  Each has its own disclaimer. The console requires a checkbox and a typed
+  confirmation; the CLI prints the disclaimer and requires an explicit
+  `--accept` flag. There is no environment variable that turns either on
+  silently.
+- The disclaimer states that the operator takes full responsibility for how
+  the feature is used and for every output it generates. The watermark
+  disclaimer also states that unmarked output cannot be recognised by the
+  watermark detector, and that passive detectors, Voxint's own `synthdetect`
+  included, mostly fail on this generator (issue #252).
+- Turning an override on or off appends a row to the generation log: who,
+  when, which override, and the disclaimer version accepted. Turning one off
+  takes effect for the next job. Outputs made while it was on keep the consent
+  basis and watermark state recorded in their provenance.
+- A disclaimer text change bumps its version and requires a fresh acceptance.
+
 ## Consequences
 
 - The service is stateless and mounts media read-only; it returns audio bytes
@@ -135,6 +175,12 @@ constant (engine, license, weights sha) is checked at boot.
 - A profile keyed to a roster speaker means a speaker merge or delete must be
   handled explicitly by the plugin (profiles follow the canonical speaker on
   merge; a deleted speaker's profiles are revoked).
-- Anything in this record that a later change wants to relax (watermark
-  enforcement, synthetic-only targets, no autogenerate, the copy in section 5)
-  requires a superseding ADR, not a settings knob.
+- The presumptive engine embeds its watermark unconditionally inside its own
+  generate call, so the watermark override needs a pinned bypass seam in the
+  service. The packaging gate identifies that seam; a contract test proves
+  output is unmarked only while the override is on.
+- With the watermark override on, the `synthdetect` watermark pre-check cannot
+  flag those outputs. That trade is the operator's, and the disclaimer says so.
+- Section 8 is the complete list of operator overrides. Anything else a later
+  change wants to relax (synthetic-only targets, no autogenerate, the copy in
+  section 5, a third override) requires a superseding ADR, not a settings knob.
