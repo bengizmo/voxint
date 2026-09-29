@@ -12,6 +12,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   redirects into the media editor, which returned 404 because the Media library
   shipped turned off. A regression test now follows each redirect to a 200 page
   with the shipped defaults.
+- **Emptying the trash asks first.** **Empty trash permanently** deleted every
+  trashed file from disk on one click; it now asks for confirmation.
+- **The trash stays reachable.** Trashing the last file in the Media library
+  hid the **Trash** and **Archived** links, leaving no way back to restore it.
+  They now show on the empty library too.
+- The browser acceptance lane's seed writes the recording's original file, so
+  the Media library no longer flags it as missing and trash and restore can be
+  exercised.
 
 ### Changed
 - **The Media library is on by default** (`CONSOLE_MEDIA_ENABLED=true`). Media is

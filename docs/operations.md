@@ -1004,12 +1004,14 @@ operations system that survives crashes at any filesystem boundary:
 - **Trash** (`POST /media/trash`): bulk-moves selected files into a managed
   `_trash/` tree inside `MEDIA_ROOT`. The file stays playable (playback resolves
   `current_path`, which follows the move). The watcher skips the trash tree.
-  `media_items.trashed_at` is set on completion.
+  `media_items.trashed_at` is set on completion. The library links to the trash
+  view (**Trash →**) even when every file has been trashed.
 - **Restore** (`POST /media/restore`, from the trash view): moves each file back
   to its original location. Refuses if the destination is occupied (an honest
   "destination occupied" error, never an overwrite).
 - **Empty trash** (`POST /media/empty-trash`): permanently deletes every trashed
   file and all its derived artifacts (preprocessed WAV, chunks, peaks, clips).
+  The button asks for confirmation before it submits.
   Builds a durable per-file manifest first, deletes children one at a time with
   per-child commits, then removes artifact DB rows and sets `purged_at`. A partial
   purge is recoverable (the reconciler retries failed children on the next sweep).

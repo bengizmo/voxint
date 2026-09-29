@@ -615,10 +615,18 @@ def seed_browser_run(
         speakers = {speaker.display_name: speaker.id for speaker in speaker_rows}
         _seed_rail_evidence(session, run.id, speakers)
 
+    wav_bytes = _silent_wav_bytes(duration)
+    # The original upload, where the Media library looks for it. Without it the
+    # library flags "Original file not found" and trash/restore (which move the
+    # original) fail, so the lane could not exercise them.
+    original_abs = media_root / media.source_path
+    original_abs.parent.mkdir(parents=True, exist_ok=True)
+    original_abs.write_bytes(wav_bytes)
+
     audio_rel = f"artifacts/{run.id}/normalized.wav"
     audio_abs = media_root / audio_rel
     audio_abs.parent.mkdir(parents=True, exist_ok=True)
-    audio_abs.write_bytes(_silent_wav_bytes(duration))
+    audio_abs.write_bytes(wav_bytes)
     session.add(
         AudioArtifact(
             pipeline_run_id=run.id,

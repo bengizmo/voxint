@@ -354,10 +354,18 @@
 {% else %}
 <p class="oc-muted">No media yet. Add a recording with the button above, or register a folder on the server.</p>
 {% endif %}
+{% if not trashed and not archived %}
+{# The toolbar above only renders with rows; keep Trash reachable after the last file is trashed. #}
+<p style="font-size:var(--t-sm)">
+  <a href="{{ archived_toggle_url }}" style="color:var(--accent);text-decoration:none">Archived →</a>
+  <a href="{{ trash_toggle_url }}" style="color:var(--accent);text-decoration:none;margin-left:var(--space-3)">Trash →</a>
+</p>
+{% endif %}
 {% endif %}
 
 {% if trashed and rows and shell.can_write %}
-<form method="post" action="/media/empty-trash" style="margin-top:var(--space-4)">
+<form method="post" action="/media/empty-trash" style="margin-top:var(--space-4)"
+      onsubmit="return confirm('Permanently delete every file in the trash? This removes them from disk and cannot be undone.')">
   <input type="hidden" name="csrf_token" value="{{ csrf_media_empty_trash }}">
   <p class="oc-muted">Emptying the trash permanently deletes the files from disk. This cannot be undone.</p>
   <button type="submit" class="danger">Empty trash permanently</button>

@@ -74,6 +74,9 @@ def test_seed_builds_a_completed_review_run(
         assert media is not None
         # duration_seconds MUST be set or playback_capability gates seeking off.
         assert media.duration_seconds == pytest.approx(5.0 * len(_SEED_SEGMENTS))
+        # The original must exist: the Media library flags a missing one, and
+        # trash/restore move it, so the lane can't exercise them without it.
+        assert (tmp_path / media.source_path).is_file()
 
         artifact = (
             session.query(AudioArtifact).filter(AudioArtifact.pipeline_run_id == run_id).one()
