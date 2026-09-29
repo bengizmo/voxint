@@ -15,7 +15,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - **Review links open the right place.** A finished run's **Review →** link on
   the Runs page opens that run in the editor instead of the whole Media library,
   and the retired `/review` queue URL (the Home page's "runs to review" arrow)
-  lands on the Media library's **Needs review** filter.
+  lands on the Media library's **Needs review** filter. An archived run, which
+  cannot be reviewed until it is restored, shows **View →** instead.
 - **The tutorial recording no longer shows "Original file not found".** The
   bundled tutorial wrote only its processed audio, so the Media library flagged
   its original as missing and could not move it to the trash. Seeding now writes

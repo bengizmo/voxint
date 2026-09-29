@@ -461,7 +461,6 @@ def seed_tutorial_run(
 
     wav_bytes = resources.load_sample_wav_bytes()
     media = _get_or_create_media(session, provenance, len(wav_bytes))
-    _ensure_source_present(media, media_root)
     run_id = _build_run(
         session,
         media=media,
@@ -475,4 +474,7 @@ def seed_tutorial_run(
     row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
     row.tutorial_run_id = run_id
     session.flush()
+    # Last, after every step that can fail: a rolled-back seed must not leave the
+    # original behind with no MediaItem row, where a folder scan would ingest it.
+    _ensure_source_present(media, media_root)
     return run_id

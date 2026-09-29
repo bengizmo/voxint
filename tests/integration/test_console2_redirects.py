@@ -117,6 +117,9 @@ def test_review_entry_points_reach_the_editor_on_a_default_install_646(
     queue = client.get("/review", follow_redirects=False)
     assert queue.status_code == 303
     assert queue.headers["location"] == "/media?status=needs_review"
+    # Preserved params append to the filter's query string, not a second "?".
+    kept = client.get("/review?t=12&token=abc", follow_redirects=False)
+    assert kept.headers["location"] == "/media?status=needs_review&t=12&token=abc"
     filtered = client.get("/review")
     assert filtered.status_code == 200
     assert '<option value="needs_review" selected>' in filtered.text

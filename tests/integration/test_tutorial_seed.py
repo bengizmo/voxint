@@ -32,6 +32,7 @@ from voxint.db.models import (
 )
 from voxint.db.session import session_scope
 from voxint.tutorial import resources
+from voxint.tutorial import seed as seed_module
 from voxint.tutorial.seed import TUTORIAL_SOURCE_PATH, seed_tutorial_run
 
 CREDS = ("reviewer", "s3cret")
@@ -214,6 +215,24 @@ def test_seed_writes_the_original_the_media_library_checks(
     original.unlink()
     _seed(session_factory, settings)
     assert original.read_bytes() == resources.load_sample_wav_bytes()
+
+
+def test_failed_seed_leaves_no_original_for_a_folder_scan(
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    media_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A seed that fails rolls its rows back; a tutorial original left behind with
+    # no MediaItem row would look like new media to a folder scan. The file is
+    # written only after every step that can fail.
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise seed_module.TutorialSeedError("forced")
+
+    monkeypatch.setattr(seed_module, "_verify_states", boom)
+    with pytest.raises(seed_module.TutorialSeedError), session_scope(session_factory) as session:
+        seed_tutorial_run(session, media_root=media_root, settings=settings)
+    assert not (media_root / TUTORIAL_SOURCE_PATH).exists()
 
 
 def test_reseed_repairs_the_original_where_it_was_moved(
