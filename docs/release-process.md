@@ -226,14 +226,16 @@ weights), so it runs on maintainer hardware BEFORE tagging.
 Before tagging a release that touches `services/` or the pipeline stages, bring
 up the three model services on a lane the host supports (the maintainer's
 host-specific bring-up, covering compose overlays and CPU limits, lives outside this
-public repo) and run the real-pipeline lane against a disposable database. Note
-`test_real_pipeline.py`'s `EXPECTED_SERVICES` **hardcodes whisper `device: rocm`**
-(fail-not-skip, no env override), so the pipeline lane is **AMD-only**: run it on
-an AMD/ROCm box; the browser review lane below is hardware-agnostic:
+public repo) and run the real-pipeline lane against a disposable database.
+`VOXINT_E2E_LANE` (`cuda`, `rocm` or `cpu`) names the compose overlay the
+services run under and sets the `/healthz` device each must report; it has no
+default, so an unset or unknown lane fails (see
+[`testing.md`](testing.md#automated-e2e-testse2e)). Record the lane in the
+evidence. The browser review lane below is hardware-agnostic:
 
 ```bash
 export VOXINT_TEST_DATABASE_URL="postgresql+psycopg://voxint:voxint@127.0.0.1:5432/voxint_e2e"
-VOXINT_E2E=1 uv run --extra dev pytest tests/e2e -q
+VOXINT_E2E=1 VOXINT_E2E_LANE=cuda uv run --extra dev pytest tests/e2e -q
 ```
 
 Expect COMPLETED runs with the persistence invariants intact and no

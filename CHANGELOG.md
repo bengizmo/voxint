@@ -50,6 +50,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - The native install lane (`tools/native_e2e_lifecycle.py`) submits through
   `POST /media/submit`, and the browser acceptance lane runs the shipped default
   instead of forcing the flag on.
+- **The real-pipeline E2E lane runs on any shipped overlay.** It hardcoded the
+  ROCm devices, so it could only run on an AMD host. `VOXINT_E2E_LANE` (`cuda`,
+  `rocm` or `cpu`, no default) now names the overlay and sets the `/healthz`
+  device each model service must report; unset or unknown, the lane fails.
 
 ## [0.46.0] - 2026-09-21
 
