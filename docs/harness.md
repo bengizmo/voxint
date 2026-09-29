@@ -6,6 +6,11 @@ settings, the database, or the worker. `voxint score …` runs on any machine
 against plain JSON/JSONL files (`pip install voxint` is all it needs; no
 Docker stack).
 
+Not to be confused with the maintainer eval-quality harness
+(`tools/eval_quality.py`, issue #97, see
+[testing.md](testing.md#eval-quality-harness-offline-maintainer)), which grades
+structural numerics (DER/JER/WER/cpWER) against annotated corpora.
+
 All JSON documents (aliases, enrollment, thresholds) and all *output* records
 carry `"schema_version": 1`; *input* JSONL streams (name-accuracy items,
 agreement slots) are versioned by their command's contract rather than per

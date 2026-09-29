@@ -447,6 +447,76 @@ at rest; per the numerics doctrine, WER normalization is applied to raw referenc
 and raw hypothesis together at scoring time, and the harness records which
 normalizer scored it.
 
+This is a different tool from `voxint score` ([harness.md](harness.md)), which
+grades speaker-name accuracy on your own runs. The scoring subset is 14
+recordings, and scope is English-only: WER and cpWER tokenize with the frozen
+English Whisper normalizer from the bakeoff stack.
+
+### The `run` driver
+
+`run` submits each recording through the same `submit_media_item_if_new` seam a
+normal ingest uses (a unique staged media path per pass), polls to completion,
+and writes a self-contained score bundle: relabelled hypothesis RTTM/text, a
+`manifest.json`, and a crash-safe journal. It never mutates the app otherwise and
+is resumable.
+
+| Flag | Meaning |
+|---|---|
+| `--corpus {ami,voxconverse}` | Required. Which ground-truth corpus. |
+| `--subset PATH` | Required. Scoring-subset JSON: a bare array, or an object with an `items` or `files` array. |
+| `--out-dir PATH` | Required. Bundle and journal output directory. |
+| `--pipeline-env PATH` | Required. The static pipeline-environment JSON (below). |
+| `--corpus-root PATH` | Ground-truth root (or `EVAL_CORPUS_ROOT`). |
+| `--only IDS` | Comma-separated recording ids to restrict to. |
+| `--database-url URL` | Postgres URL (or `DATABASE_URL`). |
+| `--media-root PATH` | Host path to stage audio into (default: settings). |
+| `--media-subdir NAME` | `MEDIA_ROOT` subdirectory for staged audio. |
+| `--container-prefix NAME` | Compose project prefix for the fingerprint probe. |
+| `--cuda-visible-devices VAL` | Recorded in the fingerprint. |
+| `--compute-tier {gpu,rocm}` | GPU vendor to probe: `gpu` reads `nvidia-smi`, `rocm` reads sysfs. |
+| `--interval SECS` | Poll interval (default `10`). |
+| `--timeout SECS` | Per-recording poll timeout (default `3600`). |
+| `--duration-tol SECS` | Audio/annotation duration tolerance. |
+| `--batch-id ID` | Provenance tag; the default is a fresh uuid per pass. |
+| `--resume` | Honor an existing `--out-dir` journal. |
+| `--retry-failed` | Re-submit recordings that failed. |
+
+### Cohort binding and the fail-closed fingerprint
+
+Every metrics JSON is bound to a cohort: the subset, the frozen references, and
+`pipeline-env.json` hash into `environment.cohort_sha256`. `score` recomputes the
+reference, UEM, and WER-reference hashes from the bytes it actually scored and
+rejects a manifest that disagrees. `report` refuses to combine passes that do not
+share one cohort and one recording set, so "K runs with no code change" is a
+checked claim.
+
+`pipeline-env.json` is hand-authored provenance for the host it runs on (app
+image digest, model-weight shas, GPU identity, runtime versions, decode
+settings). It is not a file to copy between machines. `run` also probes the live
+deploy before and after the batch (image digests via `docker inspect`, the GPU
+via `nvidia-smi` or sysfs) and fails closed if the probe is degraded, changes
+mid-batch, or disagrees with `pipeline-env.json`.
+
+### Reading the report
+
+- Each corpus is scored and reported on its own; no combined AMI+VoxConverse
+  number is published.
+- With K passes of a corpus, the report renders the zero-change noise band (the
+  maximum spread per metric, pooled and worst-file). A metric inside the band is
+  noise. The band is a small-sample maximum, so thresholds use the worst-file
+  spread.
+- The primary DER is strict (`collar=0.0`, overlap scored). The overlap-deletion
+  floor note explains why DER cannot reach zero on overlapping speech.
+- JER is a delta-only signal: pyannote 4.1's speaker mapping is not the DIHARD
+  Jaccard-optimal assignment, so absolute JER is not DIHARD-comparable.
+- cpWER appears for AMI only, per recording; `unassigned_words` must be zero.
+
+The harness is deliberately not a CI or release gate: it needs a live worker, a
+large ground-truth corpus, and GPU time that GitHub runners do not have. Its own
+tests do run in the normal suites: `tests/unit/test_eval_run_*.py`,
+`tests/parity/test_eval_quality_*.py`, and the extra-isolation contract
+`tests/contracts/test_eval_quality_extra.py`.
+
 ## Eval-attribution harness (offline, maintainer)
 
 `tools/eval_attribution.py` (issue #113) scores end-to-end speaker

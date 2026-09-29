@@ -208,6 +208,11 @@ offline harness: name accuracy against ground truth, acoustic agreement
 verdicts, two-voter fusion, regression gate metrics. It is documented in
 [harness.md](harness.md) and exposed as `voxint score …` (file-based, DB-free).
 
+The structural numerics the doctrine leans on (DER/JER/WER/cpWER against
+annotated corpora) are measured separately by the maintainer eval-quality
+tripwire in [testing.md](testing.md#eval-quality-harness-offline-maintainer). It
+is run by hand when the GPU knobs change (#96), not at pipeline time.
+
 The `match_candidates` evidence (issue #113) is what closes the loop: the
 maintainer driver `tools/export_match_evidence.py` renders live runs, including
 those near-miss decisions, into the harness input files, so the gates above can
