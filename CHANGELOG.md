@@ -33,6 +33,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - The browser acceptance lane's seed writes the recording's original file, so
   the Media library no longer flags it as missing and trash and restore can be
   exercised.
+- **The Metal parity lane runs again** (#647). The repo-wide test conftest
+  imported the app at module level, so pytest could not collect any parity test
+  from the model services' own environments, and the scheduled `metal-lane`
+  workflow had failed every run since 2026-08-27. The conftest now loads without
+  the app installed, and a contract test in `lint-test` rebuilds that situation
+  so the regression fails CI instead of only the macOS schedule.
 
 ### Changed
 - **The Media library is on by default** (`CONSOLE_MEDIA_ENABLED=true`). Media is
@@ -44,6 +50,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - The native install lane (`tools/native_e2e_lifecycle.py`) submits through
   `POST /media/submit`, and the browser acceptance lane runs the shipped default
   instead of forcing the flag on.
+- **The real-pipeline E2E lane runs on any shipped overlay.** It hardcoded the
+  ROCm devices, so it could only run on an AMD host. `VOXINT_E2E_LANE` (`cuda`,
+  `rocm` or `cpu`, no default) now names the overlay and sets the `/healthz`
+  device each model service must report; unset or unknown, the lane fails.
 
 ## [0.46.0] - 2026-09-21
 

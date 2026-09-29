@@ -12,7 +12,7 @@ doctrine: see [`gpu-contracts.md`](gpu-contracts.md) and the parity notes below.
 | Contracts | `tests/contracts/` | Invariants that would rot silently: version-pin parity across pyproject/compose/`.env.example`, Dockerfile sha ARGs ↔ provenance, restart policies, routes/schemas, the **frontend build/island wiring** (`test_frontend_build.py`), and **pipeline stage graph** invariants (`test_stage_graph.py`: enum/STAGE_ORDER agreement, GPU/POST lane partition, `build_stage_fns` coverage; a runtime guard in `build_stage_fns` also fails at startup if a new `Stage` member lacks a function mapping). | nothing |
 | Integration | `tests/integration/` | Real Postgres + the alembic chain. Every API/console behaviour is exercised here (submission, adjudication, verify-and-advance, run-assets, Home, migrations). | a pgvector database |
 | Parity | `tests/parity/` | Model-output equivalence gates (mel / vector / decision) against committed CUDA references. Real audio fixtures live under `tests/parity/fixtures/`. | strict mode: `VOXINT_PARITY_REQUIRED=1` |
-| E2E | `tests/e2e/` | The **real** pipeline against the **real** model services (faster-whisper + pyannote + TitaNet in their containers): submit the tutorial clip, run every stage, assert the persistence invariants. Plus a **real-LLM** enrichment lane (real `HttpLLMClient` → real endpoint) that gates the summary chain. Maintainer-run, opt-in gate, **never public CI**. | `VOXINT_E2E=1` + `VOXINT_TEST_DATABASE_URL` + the model services running; the LLM lane also needs the enrichment LLM env (see below) |
+| E2E | `tests/e2e/` | The **real** pipeline against the **real** model services (faster-whisper + pyannote + TitaNet in their containers): submit the tutorial clip, run every stage, assert the persistence invariants. Plus a **real-LLM** enrichment lane (real `HttpLLMClient` → real endpoint) that gates the summary chain. Maintainer-run, opt-in gate, **never public CI**. | `VOXINT_E2E=1` + `VOXINT_TEST_DATABASE_URL` + the model services running; the pipeline lane also needs `VOXINT_E2E_LANE`, and the LLM lane the enrichment LLM env (see below) |
 
 The layout is the standard `pytest` tree; add a test in the same commit that adds
 the behaviour or invariant it guards (a new island → a row in
@@ -261,9 +261,18 @@ It is built in lanes; **landed so far:**
   `duration_seconds` populated by the real PREPARE stage. Assertions are on
   *ranges and shape*, never exact transcript text (real ASR is not
   bit-deterministic). Two serial runs are checked for clean repetition with no
-  cross-run leakage. **This lane is AMD-only**: `EXPECTED_SERVICES` hardcodes
-  whisper `device: rocm` (fail-not-skip, no env override), so run it on an
-  AMD/ROCm box.
+  cross-run leakage. `VOXINT_E2E_LANE` names the compose overlay the services
+  run under, which sets the `/healthz` device each one must report
+  (`tests/e2e/lanes.py`):
+
+  | `VOXINT_E2E_LANE` | Overlay | whisper | pyannote | titanet |
+  |---|---|---|---|---|
+  | `cuda` | `compose.gpu.yaml` | `cuda` | `cuda` | `cuda` |
+  | `rocm` | `compose.rocm.yaml` | `rocm` | `cpu` | `cpu` |
+  | `cpu` | `compose.cpu.yaml` | `cpu` | `cpu` | `cpu` |
+
+  It has no default. Unset or unknown, the lane fails and lists the valid
+  values, so it never runs against a guessed device.
 
 - **Real LLM, enrichment summary** (`test_enrich_assets_real_llm.py`): the one
   lane that drives a real `HttpLLMClient` against a real OpenAI-compatible
@@ -349,8 +358,8 @@ explicit run can never go green by skipping itself:
 - **`VOXINT_E2E` unset** → the whole directory is skipped at collection, so a
   bare `pytest` run (or CI) stays green with no model services present.
 - **`VOXINT_E2E=1`** → any missing prerequisite (the test DB, model-service
-  health, or a wrong `/healthz` device identity) is a **hard failure, not a
-  skip**.
+  health, an unset or unknown `VOXINT_E2E_LANE`, or a `/healthz` device that
+  does not match the lane) is a **hard failure, not a skip**.
 
 The **native install + usage** lane is a skill, not a pytest module, so its
 fail-not-skip is enforced by the skill: it keys off `VOXINT_NATIVE_E2E=1` and
@@ -370,16 +379,15 @@ is a named signal rather than an invisible change in the summary text.
 
 ### Running it
 
-Bring up the model services on a lane your host supports. The host-specific
-bring-up (compose overlays, CPU limits, the AMD render gid) lives outside this
-public repo. The real-pipeline lane needs whisper on **ROCm** (see the AMD-only
-note above); the real-LLM and browser lanes are hardware-agnostic. Then, against
-a **disposable** database (its schema is dropped and rebuilt from the alembic
-chain, never the live `voxint` DB):
+Bring up the model services on a lane your host supports, with the matching
+compose overlay. Host-specific bring-up (CPU limits, the AMD render gid) lives
+outside this public repo. The real-LLM and browser lanes are hardware-agnostic.
+Then, against a **disposable** database (its schema is dropped and rebuilt from
+the alembic chain, never the live `voxint` DB), name the lane and run:
 
 ```bash
 export VOXINT_TEST_DATABASE_URL="postgresql+psycopg://voxint:voxint@127.0.0.1:5432/voxint_e2e"
-VOXINT_E2E=1 uv run --extra dev pytest tests/e2e -q
+VOXINT_E2E=1 VOXINT_E2E_LANE=cuda uv run --extra dev pytest tests/e2e -q
 ```
 
 > ⚠ The browser lane and this pytest lane default to the **same** disposable
@@ -396,8 +404,11 @@ model alias, and key live in your own environment, never in the repo):
 ```bash
 export LLM_ENABLED=true ENRICHMENT_RUN_ASSETS_ENABLED=true
 export LLM_BASE_URL=... LLM_MODEL=... LLM_API_KEY=...
-VOXINT_E2E=1 uv run --extra dev pytest tests/e2e -q
+VOXINT_E2E=1 VOXINT_E2E_LANE=cuda uv run --extra dev pytest tests/e2e -q
 ```
+
+The LLM lane does not need the model services or `VOXINT_E2E_LANE`. To run it
+alone, point pytest at `tests/e2e/test_enrich_assets_real_llm.py`.
 
 Keep it **serial / low concurrency**: the pipeline is heavy and the lane is not
 built for parallel fan-out. The suite stages audio under `MEDIA_ROOT` (the same

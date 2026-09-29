@@ -21,9 +21,11 @@ Prerequisites when enabled:
 * ``VOXINT_TEST_DATABASE_URL`` points at a **disposable** database (its schema is
   dropped and rebuilt from the alembic chain, and every table is truncated
   between tests — never aim it at live data).
-* The three model services answer ``/healthz`` with the expected identity and no
-  device fallback. Host-specific bring-up (compose overlays, CPU caps, the AMD
-  render gid) lives outside this repo; this file only *asserts* the contract.
+* ``VOXINT_E2E_LANE`` names the compose overlay the model services run under
+  (``cuda``, ``rocm`` or ``cpu``), and the three services answer ``/healthz``
+  with that lane's identity and no device fallback. Host-specific bring-up
+  (CPU caps, the AMD render gid) lives outside this repo; this file only
+  *asserts* the contract.
 * ``MEDIA_ROOT`` (via ``Settings``) is the host directory the model-service
   containers mount at ``/data/media``. Fixtures stage audio there so a container
   reading a path relative to *its* mount sees the same bytes.
@@ -46,6 +48,7 @@ from alembic.config import Config
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from tests.e2e.lanes import expected_services
 from voxint.config import Settings
 from voxint.db.models import Base
 from voxint.pipeline.stages.context import StageContext, build_stage_context
@@ -57,20 +60,6 @@ E2E_ENABLED = os.environ.get("VOXINT_E2E", "").strip().lower() not in ("", "0", 
 TEST_DB_URL = os.environ.get("VOXINT_TEST_DATABASE_URL")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TUTORIAL_WAV = REPO_ROOT / "src" / "voxint" / "tutorial" / "assets" / "sample-3speaker.wav"
-
-# The identity each model service must report at /healthz for the real-pipeline
-# lane. ``device`` is load-bearing: a container that silently fell back to CPU
-# (whisper) or CUDA (a mis-tagged image) would still "work" but stops being the
-# thing we mean to gate — abort on any drift, never skip.
-EXPECTED_SERVICES: dict[str, dict[str, str]] = {
-    "asr_url": {"service": "whisper", "device": "rocm", "model": "large-v2"},
-    "diarizer_url": {
-        "service": "pyannote",
-        "device": "cpu",
-        "model": "pyannote/speaker-diarization-3.1",
-    },
-    "embedder_url": {"service": "titanet", "device": "cpu"},
-}
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -177,10 +166,22 @@ def settings() -> Settings:
 
 @pytest.fixture(scope="session")
 def model_services(settings: Settings) -> None:
-    """Assert all three model services are up with the expected identity."""
-    assert_service_identity(settings.asr_url, EXPECTED_SERVICES["asr_url"])
-    assert_service_identity(settings.diarizer_url, EXPECTED_SERVICES["diarizer_url"])
-    assert_service_identity(settings.embedder_url, EXPECTED_SERVICES["embedder_url"])
+    """Assert all three model services are up with the identity their lane expects.
+
+    ``VOXINT_E2E_LANE`` names the compose overlay the services run under
+    (``tests/e2e/lanes.py``). ``device`` is load-bearing: a container that
+    silently fell back to CPU, or a mis-tagged image, would still "work" but
+    stops being the thing we mean to gate, so any drift fails, never skips. An
+    unset or unknown lane fails here rather than at import, so the optional LLM
+    sub-lane runs without it.
+    """
+    try:
+        expected = expected_services(os.environ.get("VOXINT_E2E_LANE"))
+    except ValueError as exc:
+        pytest.fail(str(exc), pytrace=False)
+    assert_service_identity(settings.asr_url, expected["asr_url"])
+    assert_service_identity(settings.diarizer_url, expected["diarizer_url"])
+    assert_service_identity(settings.embedder_url, expected["embedder_url"])
 
 
 @pytest.fixture(scope="session")
