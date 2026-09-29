@@ -227,10 +227,11 @@ ground.
 
 ## Watch a run
 
-Every run has its own page (open it from the **Runs** list, then click **open** on
-a row). The page shows where the run is and what has happened.
+Every run has its own page. On the **Runs** page, click a recording's name, or
+the **View →** link at the end of its row. The page shows where the run is and
+what has happened.
 
-![The Runs page with Needs attention, Active, Failed, and All tabs, a collapsed Filter, and title-first rows with a short run ID underneath. When the Media library is off, Upload media and Fetch from URL boxes appear at the top.](../images/runs-list.png)
+![The Runs list with Needs attention, Active, Failed, and All tabs, Exact and Meaning search, a collapsed Filter, and title-first rows with a short run ID underneath, a status chip, a review chip, and a Review link at the end of each row.](../images/runs-list.png)
 
 A run moves through **six stages**, in order:
 
