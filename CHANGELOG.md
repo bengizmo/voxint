@@ -12,6 +12,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   redirects into the media editor, which returned 404 because the Media library
   shipped turned off. A regression test now follows each redirect to a 200 page
   with the shipped defaults.
+- **Review links open the right place.** A finished run's **Review →** link on
+  the Runs page opens that run in the editor instead of the whole Media library,
+  and the retired `/review` queue URL (the Home page's "runs to review" arrow)
+  lands on the Media library's **Needs review** filter.
 - **Emptying the trash asks first.** **Empty trash permanently** deleted every
   trashed file from disk on one click; it now asks for confirmation.
 - **The trash stays reachable.** Trashing the last file in the Media library

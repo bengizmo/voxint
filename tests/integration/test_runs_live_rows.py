@@ -68,7 +68,7 @@ def test_mixed_completion(client: TestClient, session_factory: sessionmaker[Sess
     done_row, live_row = _row(body, done), _row(body, live)
     assert "is-just-finished" in done_row
     assert "needs review" in done_row.lower()
-    assert 'href="/review"' in done_row
+    assert f'href="/review/{done}"' in done_row
     assert "is-just-finished" not in live_row
     assert 'class="chip chip-info ">Running</span>' in live_row
 

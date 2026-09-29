@@ -1753,8 +1753,9 @@ authenticated page to the first-run setup wizard (`/setup`) until setup is
 finished, so the review flow below becomes reachable only after onboarding completes
 (see [onboarding.md](onboarding.md)):
 
-1. **Queue**: the Media library (`/media`; the old `/review` queue URL
-   redirects there) lists recordings, including runs awaiting human review.
+1. **Queue**: the Media library (`/media`) lists recordings; its **Needs review**
+   filter (`/media?status=needs_review`, where the old `/review` queue URL now
+   redirects) shows the ones awaiting a human ruling.
 2. **Claim**: claiming a run gives you an exclusive slot for
    `REVIEW_CLAIM_TTL_SECONDS` (default 30 min); a closed tab self-releases
    when the TTL lapses, so the queue never dams.

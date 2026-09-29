@@ -112,10 +112,14 @@ def test_review_entry_points_reach_the_editor_on_a_default_install_646(
         assert landed.status_code == 200, f"{source} -> {landed.url} = {landed.status_code}"
         assert landed.url.path == editor
 
+    # The retired review queue lands on its replacement: the Media page filtered
+    # to "Needs review" (the Home page's "runs to review" arrow links here).
     queue = client.get("/review", follow_redirects=False)
     assert queue.status_code == 303
-    assert queue.headers["location"] == "/media"
-    assert client.get("/review").status_code == 200
+    assert queue.headers["location"] == "/media?status=needs_review"
+    filtered = client.get("/review")
+    assert filtered.status_code == 200
+    assert '<option value="needs_review" selected>' in filtered.text
 
     # The run page's "Open in editor" button.
     run_page = client.get(f"/runs/{run_id}")

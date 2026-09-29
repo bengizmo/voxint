@@ -36,7 +36,7 @@
     <span><span title="{{ it.created_at.strftime("%Y-%m-%d %H:%M UTC") }}">{{ format_age(it.created_at, now=now) }}</span></span>
     <span class="gt-action">
       {% if it.status == "completed" and it.unresolved_count > 0 %}
-      <a href="/review">Review →</a>
+      <a href="/review/{{ it.run_id }}">Review →</a>
       {% elif it.status == "failed" and not it.archived %}
       <form method="post" action="/runs/{{ it.run_id }}/requeue" style="display:inline">
         <input type="hidden" name="revision" value="{{ it.revision }}">

@@ -238,9 +238,10 @@ class TestRowActions:
         self, client: TestClient, session_factory: sessionmaker[Session]
     ) -> None:
         with session_factory() as s:
-            _make_run(s, status=RunStatus.COMPLETED, labels=("A",))
+            run_id = _make_run(s, status=RunStatus.COMPLETED, labels=("A",))
         resp = client.get("/runs")
-        assert "Review →" in resp.text
+        # The link opens THIS run in the editor, not the unfiltered library (#646).
+        assert f'<a href="/review/{run_id}">Review →</a>' in resp.text
 
     def test_failed_shows_retry(
         self, client: TestClient, session_factory: sessionmaker[Session]
