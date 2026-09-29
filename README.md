@@ -5,13 +5,9 @@ journalists, and researchers who want full control over their audio corpus.**
 
 Voxint transcribes audio and video, separates and identifies voices across
 recordings, and opens a review console where you confirm each speaker and
-correct the wording before you export. Automated suggestions stay separate from
-your rulings. You always have the final say.
-
-Built for researchers, journalists, educators, and small teams whose
-recordings need to stay local. No cloud account, no per-minute fees,
-nothing uploaded. One install gives you transcription, speaker separation,
-voice recognition, and a searchable corpus on hardware you control.
+correct the wording before you export. No cloud account, no per-minute fees,
+nothing uploaded. One install gives you a searchable corpus on hardware you
+control.
 
 Your audio is processed locally by default. Two optional features reach the
 network when you turn them on: fetching a recording from a URL, and sending
@@ -24,8 +20,8 @@ others. These projects made state-of-the-art speech intelligence accessible
 to developers; Voxint's job is to make it accessible to everyone else. Thank
 you to every contributor.
 
-> **Status: beta (v0.43), approaching 1.0.** The pipeline, review console,
-> CLI, API, and export path are in daily use, held to ~4,800 tests, full
+> **Status: beta (v0.46), approaching 1.0.** The pipeline, review console,
+> CLI, API, and export path are in daily use, held to ~4,900 tests, full
 > CI/CD, GPU parity gates, and contract tests that pin model outputs. The
 > project follows 0.x semver: interfaces and database schemas can still
 > change between minor releases. Pin a release for work you cannot re-do,
@@ -63,7 +59,7 @@ Voxint takes a recording and walks it through four steps:
    a roster that grows as you use it.
 3. **You review**: confirm each speaker, and fix any wording, in a console
    built for exactly this. Automated suggestions stay separate from your
-   decisions; you always have the final say.
+   decisions.
 4. **Read or export**: read a finished transcript on screen, or download a
    clean, speaker-labelled copy (plain text, Markdown, subtitles, or
    structured data).
@@ -263,9 +259,7 @@ gives you the `voxint score` CLI for speaker-attribution metrics (see
 | All docs | [docs/README.md](docs/README.md) |
 
 **Tests.** Unit and contract tests are the PR bar. Integration tests need
-Postgres. GPU parity and browser acceptance lanes are maintainer-run. The suite
-runs in parallel via pytest-xdist; a typical `tests/unit` run finishes in about
-two minutes.
+Postgres. GPU parity and browser acceptance lanes are maintainer-run.
 
 ## Contributing
 
