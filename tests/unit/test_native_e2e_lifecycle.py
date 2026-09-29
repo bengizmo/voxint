@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import pytest
 from tools.native_e2e_lifecycle import (
+    LaneError,
     NativeConfig,
     build_parser,
     entry_url,
     manifest_bundles,
     parse_state_env,
-    run_id_from_location,
+    run_id_from_submit_json,
 )
 
 # A representative state.env exactly as voxint-native.sh's write_state_env emits it.
@@ -136,24 +137,32 @@ def test_entry_url_keys_by_source_stem() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# run_id_from_location
+# run_id_from_submit_json
 # --------------------------------------------------------------------------- #
 _UUID = "12345678-1234-1234-1234-1234567890ab"
 
 
+def test_run_id_from_submit_json_published() -> None:
+    payload = {"ok": True, "run_id": _UUID.upper(), "enqueue": "published"}
+    assert run_id_from_submit_json(payload) == _UUID
+
+
 @pytest.mark.parametrize(
-    ("location", "expected"),
+    ("payload", "match"),
     [
-        (f"/runs/{_UUID}", _UUID),
-        (f"/runs/{_UUID}?enqueue=deferred", _UUID),
-        (f"http://127.0.0.1:8081/runs/{_UUID}", _UUID),
-        ("/runs/not-a-uuid", None),
-        ("/setup", None),
-        ("", None),
+        ({"ok": True, "run_id": _UUID, "enqueue": "deferred"}, "broker/worker is not up"),
+        ({"ok": True, "run_id": _UUID}, "broker/worker is not up"),
+        ({"ok": True, "run_id": "not-a-uuid", "enqueue": "published"}, "no valid run id"),
+        ({"ok": True, "enqueue": "published"}, "no valid run id"),
+        ({"ok": False, "run_id": _UUID, "enqueue": "published"}, "unexpected"),
+        ({"run_id": _UUID, "enqueue": "published"}, "unexpected"),
+        ([_UUID], "unexpected"),
+        (None, "unexpected"),
     ],
 )
-def test_run_id_from_location(location: str, expected: str | None) -> None:
-    assert run_id_from_location(location) == expected
+def test_run_id_from_submit_json_rejects(payload: object, match: str) -> None:
+    with pytest.raises(LaneError, match=match):
+        run_id_from_submit_json(payload)
 
 
 # --------------------------------------------------------------------------- #

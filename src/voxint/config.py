@@ -574,10 +574,15 @@ class Settings(BaseSettings):
     console_projects_enabled: bool = False
 
     # The media library area (Console 2.0 P2a, #153). The /media routes are
-    # always registered so the route inventory is stable, but the area gate
-    # (require_media_enabled) returns 404 until this is on. The page is reachable
-    # only by URL for now; the sidebar's Media link is repointed in a later phase.
-    console_media_enabled: bool = False
+    # always registered so the route inventory is stable; the area gate
+    # (require_media_enabled) returns 404 while this is off.
+    #
+    # On by default (#646): the area is live, and its editor
+    # (/media/{id}/editor) is the only review surface, since every legacy review
+    # entry point (/review/{id}, the run page's Editor button, claim) redirects
+    # into it. Setting False hides the Media library AND makes review
+    # unreachable; it exists only until the flag is removed.
+    console_media_enabled: bool = True
 
     # The speakers area rebuild (Console 2.0 P4, #159). /speakers is ALREADY a
     # live page, so this flag branches CONTENT, not access: off = the legacy

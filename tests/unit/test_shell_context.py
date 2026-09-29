@@ -30,11 +30,23 @@ def _request_with(
     return cast(Request, SimpleNamespace(app=app, state=SimpleNamespace()))
 
 
-def test_console_area_flags_default_off() -> None:
+def test_console_area_flags_shipped_default_on() -> None:
+    """Shipped areas are live on a stock install. Media is among them (#646):
+    its editor is the only review surface, so a dark media area made review
+    unreachable on every default install."""
+    settings = Settings(database_url="postgresql+psycopg://x/x", _env_file=None)
+    assert settings.console_media_enabled is True
+    assert settings.console_speakers_enabled is True
+    assert settings.console_settings_enabled is True
+    assert settings.console_palette_enabled is True
+
+
+def test_console_area_flags_unshipped_default_off() -> None:
     """Unshipped areas stay dark on a stock install."""
-    settings = Settings(database_url="postgresql+psycopg://x/x")
+    settings = Settings(database_url="postgresql+psycopg://x/x", _env_file=None)
     assert settings.console_projects_enabled is False
-    assert settings.console_media_enabled is False
+    assert settings.console_users_enabled is False
+    assert settings.console_activity_enabled is False
 
 
 def test_shell_context_requires_flag_and_route() -> None:
@@ -54,7 +66,7 @@ def test_shell_context_requires_flag_and_route() -> None:
     ) == {
         "shell": {
             "projects_enabled": True,
-            "media_enabled": False,
+            "media_enabled": True,
             "activity_enabled": False,
             "users_enabled": False,
             "multi_user": False,
@@ -71,7 +83,7 @@ def test_shell_context_requires_flag_and_route() -> None:
     ) == {
         "shell": {
             "projects_enabled": False,
-            "media_enabled": False,
+            "media_enabled": True,
             "activity_enabled": False,
             "users_enabled": False,
             "multi_user": False,
@@ -102,7 +114,7 @@ def test_shell_context_requires_flag_and_route() -> None:
     ) == {
         "shell": {
             "projects_enabled": False,
-            "media_enabled": False,
+            "media_enabled": True,
             "activity_enabled": False,
             "users_enabled": False,
             "multi_user": False,
@@ -120,7 +132,7 @@ def test_shell_context_media_discovery_flag() -> None:
     exists (media_routed True), so the sidebar Media entry and the "Add media"
     quick action follow the flag alone."""
     on = Settings(database_url="postgresql+psycopg://x/x", console_media_enabled=True)
-    off = Settings(database_url="postgresql+psycopg://x/x")
+    off = Settings(database_url="postgresql+psycopg://x/x", console_media_enabled=False)
     assert (
         _shell_template_context(_request_with(on, media_routed=True))["shell"][
             "media_enabled"

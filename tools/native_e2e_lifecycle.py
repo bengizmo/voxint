@@ -52,13 +52,13 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 import httpx
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from voxint.api.csrf import CSRF_SETUP, CSRF_SUBMIT, mint_csrf_token
+from voxint.api.csrf import CSRF_MEDIA_SUBMIT, CSRF_SETUP, mint_csrf_token
 from voxint.db.models import (
     EMBEDDING_DIM,
     DiarizationTurn,
@@ -104,7 +104,6 @@ POLL_INTERVAL_DEFAULT = 5.0
 POLL_TIMEOUT_DEFAULT = 600.0
 
 _KEY_VALUE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
-_RUN_PATH_RE = re.compile(r"/runs/([0-9a-fA-F-]{36})")
 
 
 def fail(msg: str) -> None:
@@ -248,15 +247,26 @@ def entry_url(manifest: dict[str, Any], entry_name: str) -> str | None:
     return None
 
 
-def run_id_from_location(location: str) -> str | None:
-    """Extract the run uuid from a ``Location: /runs/{uuid}[?...]`` header."""
-    match = _RUN_PATH_RE.search(urlsplit(location).path)
-    if not match:
-        return None
+def run_id_from_submit_json(payload: object) -> str:
+    """The run uuid from a ``POST /media/submit`` JSON reply
+    (``{"ok": true, "run_id": ..., "enqueue": "published" | "deferred"}``).
+
+    A ``deferred`` enqueue means the Celery broker/worker is not up, so the run
+    would never progress: that is a lane failure, not a pass.
+    """
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        raise LaneError(f"SUBMIT: unexpected /media/submit reply {payload!r}")
+    enqueue = payload.get("enqueue")
+    if enqueue != "published":
+        raise LaneError(
+            f"SUBMIT: run enqueue {enqueue!r} -- the Celery broker/worker is not up; "
+            "the run would never progress"
+        )
+    raw = payload.get("run_id")
     try:
-        return str(uuid.UUID(match.group(1)))
-    except ValueError:
-        return None
+        return str(uuid.UUID(str(raw)))
+    except ValueError as exc:
+        raise LaneError(f"SUBMIT: reply carries no valid run id ({raw!r})") from exc
 
 
 def check_run_invariants(session: Session, run_id: uuid.UUID) -> list[str]:
@@ -364,30 +374,26 @@ def _onboard(client: httpx.Client, cfg: NativeConfig) -> None:
 
 
 def _submit(client: httpx.Client, cfg: NativeConfig, media_bytes: bytes, name: str) -> str:
-    token = mint_csrf_token(cfg.csrf_secret, CSRF_SUBMIT)
+    token = mint_csrf_token(cfg.csrf_secret, CSRF_MEDIA_SUBMIT)
     response = client.post(
-        "/submit",
+        "/media/submit",
         auth=cfg.auth,
+        headers={"Accept": "application/json"},
         files={"file": (name, media_bytes, "application/octet-stream")},
         data={"submission_id": uuid.uuid4().hex, "csrf_token": token},
     )
-    if response.status_code != 303:
+    if response.status_code != 200:
         raise LaneError(
-            f"SUBMIT: /submit returned {response.status_code}, expected 303 "
+            f"SUBMIT: /media/submit returned {response.status_code}, expected 200 "
             f"(body: {response.text[:300]!r})"
         )
-    location = response.headers.get("location", "")
-    if not location:
-        raise LaneError("SUBMIT: 303 without a Location header")
-    if "enqueue=deferred" in location:
+    try:
+        payload = response.json()
+    except ValueError as exc:
         raise LaneError(
-            f"SUBMIT: run enqueue deferred ({location}) -- the Celery broker/worker is "
-            "not up; the run would never progress"
-        )
-    run_id = run_id_from_location(location)
-    if run_id is None:
-        raise LaneError(f"SUBMIT: could not parse a run id from Location {location!r}")
-    return run_id
+            f"SUBMIT: /media/submit reply is not JSON (body: {response.text[:300]!r})"
+        ) from exc
+    return run_id_from_submit_json(payload)
 
 
 def _poll(
@@ -585,7 +591,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_state(p_onboard)
     p_onboard.set_defaults(func=cmd_onboard)
 
-    p_submit = sub.add_parser("submit", help="POST /submit a media file; prints RUN_ID=")
+    p_submit = sub.add_parser("submit", help="POST /media/submit a media file; prints RUN_ID=")
     add_state(p_submit)
     p_submit.add_argument("--file", required=True, help="media file to upload")
     p_submit.set_defaults(func=cmd_submit)

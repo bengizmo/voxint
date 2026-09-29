@@ -6,6 +6,24 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **Review is reachable on a default install** (#646). Every review entry point
+  (`/review/{id}`, the run page's **Open in editor** button, claiming a run)
+  redirects into the media editor, which returned 404 because the Media library
+  shipped turned off. A regression test now follows each redirect to a 200 page
+  with the shipped defaults.
+
+### Changed
+- **The Media library is on by default** (`CONSOLE_MEDIA_ENABLED=true`). Media is
+  added from the **Media** page; the sidebar **Media** link and the Home
+  **+ Add media** action open it. The legacy upload and URL-fetch boxes on the
+  Runs page appear only when the flag is turned off, and turning it off makes
+  review unreachable again. The legacy `POST /submit` and `POST /fetch` redirect
+  to `/media` without processing while the flag is on.
+- The native install lane (`tools/native_e2e_lifecycle.py`) submits through
+  `POST /media/submit`, and the browser acceptance lane runs the shipped default
+  instead of forcing the flag on.
+
 ## [0.46.0] - 2026-09-21
 
 ### Security
