@@ -232,12 +232,15 @@ so browser-verifying a local change means running a fresh local instance:
    (verified lines are re-reachable); type an unsaved edit then verify to see the
    discard warning; focus the playback-speed `<select>` and press `v` to confirm
    the keymap does **not** fire from a form control.
-6. **Clean up.** Kill the local server **by port** (`fuser -k 8099/tcp`), **not**
+6. **Clean up.** Kill the local server **by port**, **not**
    `pkill -f "voxint serve"`, which also matches and restarts the dockerized `api`
-   container. Then drop the throwaway database, remove the copied build artifacts,
-   and restore the placeholder:
+   container. On Linux use `fuser -k 8099/tcp`; macOS has no `fuser -k`, so use
+   `lsof -ti tcp:8099 -sTCP:LISTEN | xargs kill` there. (`tools/e2e_browser_lifecycle.py
+   teardown --port 8099` does either and fails if the port stays open.) Then drop
+   the throwaway database, remove the copied build artifacts, and restore the
+   placeholder:
    ```bash
-   fuser -k 8099/tcp
+   fuser -k 8099/tcp        # macOS: lsof -ti tcp:8099 -sTCP:LISTEN | xargs kill
    docker compose exec -T postgres psql -U voxint -d voxint -c "DROP DATABASE IF EXISTS voxint_e2e"
    rm -rf src/voxint/api/static/app/.vite src/voxint/api/static/app/assets media-e2e
    git checkout -- src/voxint/api/static/app/.gitkeep

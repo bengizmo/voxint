@@ -226,13 +226,14 @@ the rail mounts as `[aria-label="Speaker rail"]`. Assert, in order:
   auto-saved path) → `POST …/labels/S5/decision`.
 - **Rulings.** `Can't tell` on S3 and, after opening the too-short group,
   `Not a person` on S4 → one decision POST each; S4's row reads "Left out".
-- **Add a new person.** On S2 pick "Add a new person…" in the picker → the
-  name box (`aria-label="Name the new person for S2"`) appears focused with
-  **Add person** disabled until text is typed. Submitting fires
-  `POST …/labels/S2/enroll`; on this seed it returns **400** ("no speaker audio
-  to create an identity from": the seed's turns carry no embeddings) and the
-  rail shows that message in its `[role="alert"]` without losing the card. That
-  is the honest error path; do not treat it as a pass for enrollment itself.
+- **Add a new person.** On S2 open the picker (`aria-label="S2: choose who
+  this is"`) and type a name that is not on the roster → the listbox offers a
+  `Create "<name>"` row. Choosing it fires `POST …/labels/S2/enroll`; on this
+  seed it returns **400** ("no speaker audio to create an identity from": the
+  seed's turns carry no embeddings) and the rail shows that message in its
+  `[role="alert"]` without losing the card. The picker stays open with the typed
+  name kept so a retry needs no retyping; press Escape to close it. That is the
+  honest error path; do not treat it as a pass for enrollment itself.
 - **Finish line.** `Can't tell` on S2 → summary "Every voice has a ruling." and
   both `Matched automatically` and `Your rulings` are open; a `Change` button on
   a resolved row reveals the `Reassign to…` picker.

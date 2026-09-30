@@ -10,6 +10,10 @@ derivation, and the build (un)staging that must always preserve ``.gitkeep``.
 from __future__ import annotations
 
 import argparse
+import shutil
+import socket
+import subprocess
+import sys
 import wave
 from pathlib import Path
 
@@ -33,6 +37,7 @@ from tools.e2e_browser_lifecycle import (
     cmd_serve,
     cmd_setup,
     cmd_teardown,
+    stop_port,
     unstage_build,
 )
 
@@ -370,3 +375,57 @@ def test_seed_browser_run_rejects_unknown_fixture() -> None:
 
         seed = __import__("tools.e2e_browser_lifecycle", fromlist=["seed_browser_run"])
         seed.seed_browser_run(MagicMock(), MagicMock(), fixture="bogus")
+
+
+_LISTENER = """
+import socket, sys, time
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", 0))
+s.listen()
+print(s.getsockname()[1], flush=True)
+while True:
+    time.sleep(1)
+"""
+
+
+@pytest.mark.skipif(
+    shutil.which("lsof") is None and shutil.which("fuser") is None,
+    reason="needs lsof or fuser to find the listener",
+)
+def test_stop_port_kills_a_real_listener_and_confirms_the_port_closed() -> None:
+    """Teardown stops the process on the port on this OS (macOS has no `fuser -k`)."""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _LISTENER], stdout=subprocess.PIPE, text=True
+    )
+    try:
+        assert proc.stdout is not None
+        port = int(proc.stdout.readline())
+        stop_port(port)
+        assert proc.wait(timeout=10) != 0
+        with socket.socket() as sock:
+            assert sock.connect_ex(("127.0.0.1", port)) != 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+def test_stop_port_passes_when_nothing_listens(capsys: pytest.CaptureFixture[str]) -> None:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    stop_port(port)
+    assert f"port {port} is closed" in capsys.readouterr().out
+
+
+def test_stop_port_fails_closed_when_the_port_stays_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A server that survives teardown must fail the lane, never print PASS."""
+    monkeypatch.setattr("tools.e2e_browser_lifecycle._listener_pids", lambda port: [])
+    monkeypatch.setattr("tools.e2e_browser_lifecycle.shutil.which", lambda name: None)
+    monkeypatch.setattr("tools.e2e_browser_lifecycle._port_accepting", lambda port: True)
+    with pytest.raises(SystemExit) as exc:
+        stop_port(8099, wait_s=0.0)
+    assert exc.value.code == 1
