@@ -183,12 +183,13 @@ ships inside the images too). Rules:
 - Feature branches; `main` is always releasable. GitHub `main` is
   branch-protected (`enforce_admins=true`, so the rule binds maintainer sessions
   too): it advances only by merging a PR whose required checks (`lint-test` +
-  `secrets-scan` + `coverage`) are green. Direct pushes to GitHub `main`,
-  force-pushes, and branch deletion are all rejected. No human reviewer is
-  required (single operator), so a green PR is yours to merge. The `coverage`
-  job (full suite with `--cov`, in parallel with `lint-test` so it stays off the
-  fast path) is the third required check; `ci.yml` also runs a `frontend` job on
-  every push and PR that is not currently required. Protection is `strict`, so a
+  `secrets-scan` + `coverage` + `frontend`) are green. Direct pushes to GitHub
+  `main`, force-pushes, and branch deletion are all rejected. No human reviewer
+  is required (single operator), so a green PR is yours to merge. The `coverage`
+  job runs the full suite with `--cov` in parallel with `lint-test`, so it stays
+  off the fast path; `frontend` runs lint, typecheck, vitest, and the build.
+  `tests/contracts/test_required_ci_checks.py` pins the set to `ci.yml`.
+  Protection is `strict`, so a
   PR must be up to date with `main` before it can merge; rebase or merge `main`
   in if it moved.
 - After a PR merges on GitHub, sync the private origin (Forgejo `main` is not

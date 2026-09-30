@@ -59,6 +59,9 @@ function setup(overrides: Partial<MediaEditorProps> = {}) {
   />);
   fireEvent.click(screen.getByRole("button", { name: "Speaker 1: Alice" }));
 }
+// jsdom has no scrollIntoView, so give vi.spyOn a function to wrap.
+Element.prototype.scrollIntoView ??= () => {};
+
 function body() {
   return new URLSearchParams(String(vi.mocked(apiFetch).mock.calls[0][1]?.body));
 }
@@ -66,12 +69,18 @@ function body() {
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   vi.stubGlobal("CSS", { escape: (s: string) => s.replaceAll(":", "\\:") });
-  Element.prototype.scrollIntoView = vi.fn();
+  vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
   vi.mocked(apiFetch).mockResolvedValue({
     json: async () => ({ segments, progress: { verified: 0, total: 2 }, labels: [] }),
   } as unknown as Response);
 });
-afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  window.history.replaceState(null, "", "/");
+});
 
 it("assigns the clicked segment rather than the previous cursor", async () => {
   setup();
@@ -82,6 +91,30 @@ it("assigns the clicked segment rather than the previous cursor", async () => {
   expect(body().get("speaker_id")).toBe("bob");
   expect(body().get("token")).toBe("claim");
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("auto-claims the editor for a single operator and adopts the token", async () => {
+  vi.mocked(apiFetch).mockResolvedValue({
+    json: async () => ({ token: "fresh-token", tagCsrf: "tag", clipCsrf: "clip" }),
+  } as unknown as Response);
+  render(<MediaEditor
+    mediaId="media" runId="run" mediaUrl="/audio"
+    segments={segments}
+    capability={{ seekEnabled: true, reasons: [], mediaDuration: 2 }}
+    lowConfidenceThreshold={0.5}
+    reviewToken={null}
+    initialProgress={{ verified: 0, total: 2 }}
+    speakers={[]}
+    claimCsrf="claim-csrf"
+  />);
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
+  const [url, init] = vi.mocked(apiFetch).mock.calls[0];
+  expect(url).toBe("/media/media/editor/claim");
+  expect(init?.method).toBe("POST");
+  expect(body().get("run_id")).toBe("run");
+  expect(body().get("csrf_token")).toBe("claim-csrf");
+  await waitFor(() =>
+    expect(new URLSearchParams(window.location.search).get("token")).toBe("fresh-token"));
 });
 
 it("encodes label-scope assignment paths", async () => {
