@@ -52,11 +52,20 @@ def _via_upload(session: Session, media_root: Path) -> SubmissionResult | None:
 def enqueued(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, tuple[Any, ...]]]:
     calls: list[tuple[str, tuple[Any, ...]]] = []
 
-    def _apply_async(self: Task, args: tuple[Any, ...] = (), *_a: Any, **_kw: Any) -> None:
-        calls.append((str(self.name), tuple(args)))
+    # Same leading parameters as the real methods (args may be None, send_task
+    # takes kwargs positionally), so any call shape is recorded, not rejected.
+    def _apply_async(self: Task, args: tuple[Any, ...] | None = None, *_a: Any, **_kw: Any) -> None:
+        calls.append((str(self.name), tuple(args or ())))
 
-    def _send_task(_self: Celery, name: str, args: tuple[Any, ...] = (), **_kw: Any) -> None:
-        calls.append((name, tuple(args)))
+    def _send_task(
+        _self: Celery,
+        name: str,
+        args: tuple[Any, ...] | None = None,
+        kwargs: dict[str, Any] | None = None,
+        *_a: Any,
+        **_kw: Any,
+    ) -> None:
+        calls.append((name, tuple(args or ())))
 
     monkeypatch.setattr(Task, "apply_async", _apply_async)
     monkeypatch.setattr(Celery, "send_task", _send_task)
