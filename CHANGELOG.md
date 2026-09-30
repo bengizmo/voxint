@@ -6,6 +6,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **The website deploy workflow no longer fails on every docs push** (#648). The
+  deploy target moved out of the public workflow file into repository settings
+  (`VOXINT_DEPLOY_HOST` and `VOXINT_DEPLOY_PATH` variables, `VOXINT_DEPLOY_KEY`
+  secret). Until they are set, pushes still build the site with
+  `mkdocs build --strict` and skip the deploy; a partial configuration fails the
+  run.
+
 ## [0.48.0] - 2026-09-30
 
 ### Removed

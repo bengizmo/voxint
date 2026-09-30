@@ -13,9 +13,19 @@ on:
 permissions:
   contents: read
 
+# The deploy target lives in repository settings, not in this public file (#648):
+# variables VOXINT_DEPLOY_HOST and VOXINT_DEPLOY_PATH (the site directory on the
+# host), and the secret VOXINT_DEPLOY_KEY. With none of them set, every push still
+# builds the site (the mkdocs --strict check) and the deploy step is skipped. A
+# partial configuration fails the run.
+
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
+    env:
+      DEPLOY_HOST: ${{ vars.VOXINT_DEPLOY_HOST }}
+      DEPLOY_PATH: ${{ vars.VOXINT_DEPLOY_PATH }}
+      DEPLOY_KEY_SET: ${{ secrets.VOXINT_DEPLOY_KEY != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -36,15 +46,33 @@ jobs:
           cp website/style.css website/_site/
           cp -r website/assets website/_site/
 
+      - name: Check deploy configuration
+        id: deploy-config
+        run: |
+          configured=0
+          [ -n "$DEPLOY_HOST" ] && configured=$((configured + 1))
+          [ -n "$DEPLOY_PATH" ] && configured=$((configured + 1))
+          [ "$DEPLOY_KEY_SET" = "true" ] && configured=$((configured + 1))
+          if [ "$configured" -eq 3 ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          elif [ "$configured" -eq 0 ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Deploy skipped::Deploy target not configured. Set the VOXINT_DEPLOY_HOST and VOXINT_DEPLOY_PATH variables and the VOXINT_DEPLOY_KEY secret to deploy."
+          else
+            echo "::error title=Deploy misconfigured::VOXINT_DEPLOY_HOST, VOXINT_DEPLOY_PATH and VOXINT_DEPLOY_KEY must all be set, or none of them."
+            exit 1
+          fi
+
       - name: Deploy to VPS
+        if: steps.deploy-config.outputs.ready == 'true'
         env:
           DEPLOY_KEY: ${{ secrets.VOXINT_DEPLOY_KEY }}
         run: |
           mkdir -p ~/.ssh
           echo "$DEPLOY_KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
-          ssh-keyscan -H 129.212.241.53 >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           rsync -avz --delete \
             -e "ssh -i ~/.ssh/id_deploy" \
             website/_site/ \
-            deploy@129.212.241.53:/var/www/voxint.app/
+            "deploy@${DEPLOY_HOST}:${DEPLOY_PATH}"
