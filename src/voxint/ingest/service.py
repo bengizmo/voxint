@@ -1904,6 +1904,12 @@ def submit_upload(
     size-capped and hashed, then atomically ``os.replace``\\d into place; the
     MediaItem records the first ``sha256``/``size_bytes`` the schema ever stores.
 
+    Pre-commit filesystem exception: this is the one submit path that writes to
+    disk before the caller's commit. The file is in place before the MediaItem row
+    is committed, so a crash in between leaves an ``incoming/`` file with no row.
+    A same-bytes retry re-inserts the row and replaces the file identically, and
+    :func:`reconcile_orphaned_incoming` removes any left over at app startup.
+
     ``media_folder_id`` (Console 2.0 P2b, ADR 0002 addendum) is an OPTIONAL
     settings-folder pick: the uploaded bytes still land under ``incoming/`` — never
     moved into the folder — but the folder's (and its project's) vocabulary and
