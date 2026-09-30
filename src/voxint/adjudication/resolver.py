@@ -608,7 +608,7 @@ def _active_overrides(
             sid: name
             for sid, name in session.execute(
                 select(Speaker.id, Speaker.display_name).where(Speaker.id.in_(speaker_ids))
-            ).tuples()
+            )
         }
         if speaker_ids
         else {}
@@ -696,7 +696,7 @@ def label_states(
                 select(
                     Speaker.id, Speaker.display_name, Speaker.deleted_at, Speaker.merged_into_id
                 ).where(Speaker.id.in_(speaker_ids))
-            ).tuples()
+            )
         )
         if speaker_ids
         else []

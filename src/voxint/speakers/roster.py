@@ -143,7 +143,7 @@ def merge_map(session: Session) -> dict[uuid.UUID, uuid.UUID]:
             select(Speaker.id, Speaker.merged_into_id).where(
                 Speaker.merged_into_id.is_not(None)
             )
-        ).tuples()
+        )
         if target is not None  # guaranteed by the WHERE; narrows the type
     }
 

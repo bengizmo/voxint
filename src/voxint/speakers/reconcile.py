@@ -87,7 +87,8 @@ def cold_start_affected_runs(
     ]
 
     query = (
-        select(distinct(MatchCandidate.pipeline_run_id))
+        select(MatchCandidate.pipeline_run_id)
+        .distinct()
         .join(PipelineRun, MatchCandidate.pipeline_run_id == PipelineRun.id)
         .where(
             PipelineRun.status == RunStatus.COMPLETED.value,
