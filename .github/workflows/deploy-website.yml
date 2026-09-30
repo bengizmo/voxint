@@ -15,8 +15,8 @@ permissions:
 
 # The deploy target lives in repository settings, not in this public file (#648):
 # variables VOXINT_DEPLOY_HOST and VOXINT_DEPLOY_PATH (the site directory on the
-# host), and the secret VOXINT_DEPLOY_KEY. With none of them set, every push still
-# builds the site (the mkdocs --strict check) and the deploy step is skipped. A
+# host), and the secret VOXINT_DEPLOY_KEY. With none of them set, every docs push
+# still builds the site (the mkdocs --strict check) and the deploy step is skipped. A
 # partial configuration fails the run.
 
 jobs:
@@ -71,7 +71,7 @@ jobs:
           mkdir -p ~/.ssh
           echo "$DEPLOY_KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
           rsync -avz --delete \
             -e "ssh -i ~/.ssh/id_deploy" \
             website/_site/ \
