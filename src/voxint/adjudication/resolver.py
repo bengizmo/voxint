@@ -28,6 +28,7 @@ from sqlalchemy import (
     ColumnElement,
     ColumnExpressionArgument,
     Exists,
+    Row,
     ScalarSelect,
     and_,
     distinct,
@@ -690,7 +691,7 @@ def label_states(
         | {canonical(mc.top_speaker_id) for mc in mc_rows if mc.top_speaker_id}
     )
     speaker_ids.discard(None)
-    speaker_rows: list[tuple[uuid.UUID, str, datetime | None, uuid.UUID | None]] = (
+    speaker_rows: list[Row[uuid.UUID, str, datetime | None, uuid.UUID | None]] = (
         list(
             session.execute(
                 select(
