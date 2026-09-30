@@ -1190,6 +1190,68 @@ That triggers the browser acceptance lane and not the pipeline lane.
   browser-verified at the landing commit `af60c45`, which is the release
   content minus version pins, changelog, docs, and screenshots.
 
+#### Verdict: v0.48.0, Gate E pipeline, LLM, and browser lanes run fresh (PASS), Gate M backed by a green scheduled lane run, Gates A/R carry (2026-09-30)
+
+v0.48.0 removes the `CONSOLE_MEDIA_ENABLED` setting and the legacy
+`POST /submit` and `POST /fetch` routes (#682), and ships dependency updates:
+Python (#685: alembic 1.20.0, sqlalchemy 2.0.54, pydantic 2.13.5, tokenizers
+0.23.2) and frontend (#679 React 19.3, #657 dev tooling).
+
+`git diff v0.42.0..v0.48.0 -- services/` is empty, so the model services are
+byte-identical to v0.42.0.
+
+- **Gate A (CUDA)**: **carries** from the v0.42.0 fresh run on RTX 5090.
+- **Gate R (ROCm)**: **carries**, standing since v0.33.0. No AMD hardware
+  available.
+- **Gate E (whole-pipeline E2E)**: the pipeline-aware diff
+  `v0.47.0..v0.48.0` is non-empty (`src/voxint/api/`, `frontend/`,
+  `tools/e2e_browser_lifecycle.py`, and one field removed from
+  `src/voxint/config.py`), and the runtime dependencies above moved under the
+  persistence path, so every lane ran fresh on the release commit's code
+  (`0b24116`, which the release commit extends only with this record).
+  - **Pipeline lane: PASS** on `VOXINT_E2E_LANE=cuda`, maintainer hardware,
+    RTX 5090, serial, disposable `voxint_e2e` database. The published 0.47.0
+    CUDA service images stood in for 0.48.0 (empty `services/` diff).
+    `/healthz` matched the v0.47.0 table exactly: whisper `cuda` large-v2
+    (faster-whisper 1.2.1, ctranslate2 4.8.2), pyannote `cuda`
+    speaker-diarization-3.1 (pyannote.audio 3.1.1, torch 2.8.0+cu128), titanet
+    `cuda` onnxruntime 1.28.0 with `embedding_space=titanet-large-v2`; all
+    `contract_version=v1`, `model_loaded=true`.
+    `test_real_pipeline_persists_invariants` and
+    `test_real_pipeline_repeats_cleanly`: **2 passed** in 35.31 s, zero
+    service restarts.
+  - **Real-LLM enrichment sub-lane: PASS** against a local OpenAI-compatible
+    endpoint serving Qwen3.8-27B. `test_real_llm_summary_chain` and the three
+    malformed-reply cases: **4 passed** in 17.48 s.
+  - **Browser review lane: PASS**, run on `0b24116` with the shipped defaults
+    (no `.env`), maintainer hardware (Apple Silicon), serial, Playwright over
+    `tools/e2e_browser_lifecycle.py`. The full `voxint-e2e-review` sequence
+    passed: two uncertain chips, verify-and-advance (one `POST /verify` 200)
+    with replay still firing afterwards, skip and replay with no network,
+    click-to-edit, the discard warning, edit and save (one `POST /text` 200),
+    keymap suppression on a focused select, the shortcuts dialog (14 rows;
+    opened by key and button; dismissed by Escape, close control, and
+    backdrop, focus returned), domain-pack provenance (present on segment 0,
+    absent on segment 2, superseded by an operator save), and the waveform
+    strip (one `/peaks` fetch, region click selects without writing, playhead
+    sync). The #646/#682 surfaces: both `/review/{id}` routes and the run
+    page's **Open in editor** and **Transcript** links land on the media
+    editor; `/review` lands on `/media`; the upload and fetch panels render;
+    trash, restore, and **Empty trash permanently** (dismissed sends nothing,
+    accepted sends exactly one POST) all behave. **RECONCILE PASS** (1 of 5
+    verified, both corrections matched). No browser console errors, no server
+    5xx. Teardown stopped the server on macOS (#687).
+- **Gate M (Metal)**: **PASS on a green lane run.** Since v0.47.0 the metal
+  lane changed only by a pinned `setup-uv` action bump. The scheduled
+  `metal-lane` run on `2482609`, the pre-bump `main`:
+  <https://github.com/bengizmo/voxint/actions/runs/36724728886>. Junit guard:
+  whisper 3 collected, 0 skipped, 3 ran; titanet 7, 0, 7; pyannote 7, 0, 7.
+  This is the first green scheduled run since 2026-08-27; #647 is closed.
+
+Gate E ran fresh and green on the release content, Gate M has a green lane
+run on the pre-bump commit, and A and R carried on an empty `services/` diff.
+Clear to tag v0.48.0.
+
 #### Verdict: v0.47.0 (catch-up for v0.43.0 to v0.46.0), Gate E pipeline and LLM lanes run fresh on CUDA (PASS), Gate E browser lane run fresh (PASS), Gate M run fresh (PASS), Gates A/R carry (2026-09-29)
 
 v0.47.0 makes review reachable on a default install (#646: the Media library
