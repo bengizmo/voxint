@@ -1765,6 +1765,11 @@ class EnrichmentCandidateEvidence(Base):
             "(detached_at IS NULL) = (original_transcript_segment_id IS NULL)",
             name="enrichment_candidate_evidence_detach_pair_check",
         ),
+        # Supports the ON DELETE SET NULL cascade from transcript_segments (0066).
+        Index(
+            "ix_enrichment_candidate_evidence_transcript_segment_id",
+            "transcript_segment_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -3163,6 +3168,13 @@ class MediaOperation(Base):
             "'awaiting_retry', 'completed', 'failed')",
             name="media_operations_state_check",
         ),
+        # At most one in-flight operation per media item (0044).
+        Index(
+            "uq_media_operations_active_per_item",
+            "media_id",
+            unique=True,
+            postgresql_where=text("state NOT IN ('completed', 'failed')"),
+        ),
         Index("ix_media_operations_media_id", "media_id"),
         Index("ix_media_operations_reconciler", "state", "next_attempt_at"),
     )
@@ -3358,7 +3370,7 @@ class CorpusAnalysisArtifact(Base):
     artifact_kind: Mapped[str] = mapped_column(Text)
     generation: Mapped[int] = mapped_column(Integer)
     source_hash: Mapped[str] = mapped_column(Text)
-    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

@@ -10,9 +10,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - **SQLAlchemy 2.1** (#683). The lock moves from 2.0.54 to 2.1.1 and the
   declared floor rises to `sqlalchemy>=2.1`. Installs from PyPI could already
   resolve 2.1 under the old `>=2.0` floor; this release is the first tested on
-  it. A database written by an earlier Voxint reads back identically, and no
-  schema migration is needed. SQLAlchemy 2.1 no longer installs `greenlet`,
-  which Voxint does not use.
+  it. A database written by an earlier Voxint reads back identically, and the
+  SQLAlchemy change needs no schema migration of its own. SQLAlchemy 2.1 no
+  longer installs `greenlet`, which Voxint does not use.
+- **Upgrading runs database migration 0067** (#692). It makes
+  `synthdetect_jobs.created_at` required, as every other creation time in the
+  schema already is. A synthdetect job row with no creation time, which only a
+  manual edit could produce, gets one during the upgrade: its start time if it
+  started, otherwise the upgrade time. The migration logs how many rows it
+  repaired.
 
 ### Fixed
 - **The website deploy workflow no longer fails on every docs push** (#648). The
@@ -21,6 +27,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   secret). Until they are set, pushes still build the site with
   `mkdocs build --strict` and skip the deploy; a partial configuration fails the
   run.
+- **The database models match the migrated schema again** (#692). Three
+  declarations had drifted from what the migrations build: the corpus analysis
+  cache payload is declared JSONB (it always was in the database), and the
+  models now declare the index on evidence rows' transcript segment and the
+  one-active-operation-per-media-item unique index. Nothing behaved
+  differently at runtime; a new integration test runs the `alembic check`
+  comparison against a database at head and fails on any future drift.
 
 ## [0.48.0] - 2026-09-30
 
