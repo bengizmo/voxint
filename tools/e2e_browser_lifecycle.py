@@ -40,8 +40,11 @@ import json
 import os
 import re
 import shutil
+import signal
+import socket
 import subprocess
 import sys
+import time
 import uuid
 import wave
 from dataclasses import dataclass
@@ -771,11 +774,12 @@ def cmd_serve(args: argparse.Namespace) -> None:
     Path(args.media_root).mkdir(parents=True, exist_ok=True)
     print(
         f"ok: serving working-tree instance on http://127.0.0.1:{args.port} "
-        f"(user={args.user}); stop with: fuser -k {args.port}/tcp",
+        f"(user={args.user}); stop with: "
+        f"tools/e2e_browser_lifecycle.py teardown --port {args.port}",
         flush=True,
     )
-    # Replace this process so signals and `fuser -k <port>/tcp` reach uvicorn
-    # directly (the skill backgrounds this call).
+    # Replace this process so a signal sent to the port's listener (teardown)
+    # reaches uvicorn directly (the skill backgrounds this call).
     os.execvpe("voxint", ["voxint", "serve"], env)
 
 
@@ -1082,11 +1086,57 @@ def _drop_database(url: str) -> None:
     print(f"ok: dropped database {db_name}")
 
 
+def _listener_pids(port: int) -> list[int]:
+    """PIDs with a TCP socket LISTENing on ``port``, via ``lsof`` when present."""
+    lsof = shutil.which("lsof")
+    if lsof is None:
+        return []
+    out = subprocess.run(
+        [lsof, "-nP", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    return sorted({int(tok) for tok in out.split() if tok.isdigit()})
+
+
+def _port_accepting(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def stop_port(port: int, *, wait_s: float = 10.0) -> None:
+    """SIGTERM whatever listens on ``port``, then fail unless the port closes.
+
+    Kill by PORT, never `pkill -f "voxint serve"` (that also restarts the
+    dockerized api container). `lsof` works on macOS and most Linux hosts;
+    `fuser` (Linux) is the fallback. The closing check keeps TEARDOWN PASS
+    honest: a server left running must fail here, not pass silently.
+    """
+    pids = _listener_pids(port)
+    if pids:
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                continue
+            except PermissionError:
+                # Someone else's listener: keep signalling the rest, and let the
+                # closing check below fail the teardown if the port stays open.
+                print(f"warning: cannot signal pid {pid} on port {port}", file=sys.stderr)
+    elif shutil.which("fuser") is not None:
+        subprocess.run(["fuser", "-k", f"{port}/tcp"], check=False)
+    deadline = time.monotonic() + wait_s
+    while _port_accepting(port):
+        if time.monotonic() >= deadline:
+            fail(f"port {port} still accepting connections after teardown; stop the server by hand")
+        time.sleep(0.2)
+    print(f"ok: port {port} is closed")
+
+
 def cmd_teardown(args: argparse.Namespace) -> None:
-    # Kill by PORT, never `pkill -f "voxint serve"` (that also restarts the
-    # dockerized api container). `fuser` is Linux — the maintainer host is Linux;
-    # on macOS the equivalent is `lsof -ti tcp:<port> | xargs kill`.
-    subprocess.run(["fuser", "-k", f"{args.port}/tcp"], check=False)
+    stop_port(args.port)
     removed = unstage_build(Path(args.static_dir))
     if removed:
         print(f"ok: unstaged build artifacts {removed}")

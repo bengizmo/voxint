@@ -1560,7 +1560,7 @@ the run). Summaries and topics are the model's reading, not a verified
 record, so the UI labels them machine-generated; entity spans that cannot be
 located verbatim in their segment are dropped and counted rather than shown.
 
-The mutation forms that require a CSRF token are `POST /media/submit`,
+The mutation forms that require a CSRF token include `POST /media/submit`,
 `/media/fetch`, `/runs/{id}/requeue`, `POST /review/{id}/claim` (claiming mints
 the run's claim token, so it has none of its own to gate a forged POST), the
 web-research forms on `/speakers` (start, cancel, and per-draft accept/reject,

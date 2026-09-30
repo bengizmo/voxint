@@ -33,6 +33,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - **Saving run notes lands on a live page.** The save redirects into the run's
   editor, which returned 404 when the Media library was turned off; with the
   setting gone the redirect always resolves, and a test pins its exact target.
+- **The browser-lane teardown stops the server on macOS** (maintainer tooling).
+  `tools/e2e_browser_lifecycle.py teardown` called `fuser -k`, which macOS does
+  not support, so it printed TEARDOWN PASS with the server still running. It now
+  finds the listener with `lsof` (falling back to `fuser`) and fails if the port
+  stays open.
 
 ## [0.47.0] - 2026-09-29
 
