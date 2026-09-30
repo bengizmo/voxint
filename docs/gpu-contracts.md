@@ -1190,15 +1190,16 @@ That triggers the browser acceptance lane and not the pipeline lane.
   browser-verified at the landing commit `af60c45`, which is the release
   content minus version pins, changelog, docs, and screenshots.
 
-#### Verdict: v0.48.0, Gate E pipeline, LLM, and browser lanes run fresh (PASS), Gate M backed by a green scheduled lane run, Gates A/R carry (2026-09-30)
+#### Verdict: v0.48.0, Gate E pipeline, LLM, and browser lanes run fresh (PASS), Gate M run fresh (PASS), Gates A/R carry (2026-09-30)
 
 v0.48.0 removes the `CONSOLE_MEDIA_ENABLED` setting and the legacy
 `POST /submit` and `POST /fetch` routes (#682), and ships dependency updates:
 Python (#685: alembic 1.20.0, sqlalchemy 2.0.54, pydantic 2.13.5, tokenizers
 0.23.2) and frontend (#679 React 19.3, #657 dev tooling).
 
-`git diff v0.42.0..v0.48.0 -- services/` is empty, so the model services are
-byte-identical to v0.42.0.
+`git diff v0.42.0..v0.48.0 -- services/` is empty, so the model-service
+images are rebuilds of the same source and numerics as v0.42.0 (CI's parity
+and smoke jobs prove each rebuild).
 
 - **Gate A (CUDA)**: **carries** from the v0.42.0 fresh run on RTX 5090.
 - **Gate R (ROCm)**: **carries**, standing since v0.33.0. No AMD hardware
@@ -1241,16 +1242,24 @@ byte-identical to v0.42.0.
     accepted sends exactly one POST) all behave. **RECONCILE PASS** (1 of 5
     verified, both corrections matched). No browser console errors, no server
     5xx. Teardown stopped the server on macOS (#687).
-- **Gate M (Metal)**: **PASS on a green lane run.** Since v0.47.0 the metal
-  lane changed only by a pinned `setup-uv` action bump. The scheduled
-  `metal-lane` run on `2482609`, the pre-bump `main`:
-  <https://github.com/bengizmo/voxint/actions/runs/36724728886>. Junit guard:
-  whisper 3 collected, 0 skipped, 3 ran; titanet 7, 0, 7; pyannote 7, 0, 7.
-  This is the first green scheduled run since 2026-08-27; #647 is closed.
+- **Gate M (Metal)**: **run fresh, PASS.** The release touches the metal lane
+  only through `metal-lane.yml` (a pinned `setup-uv` action bump); the
+  launcher, the metal parity modules, and `tests/conftest.py` are unchanged
+  since v0.47.0. Two runs back it:
+  - Maintainer-run on Apple Silicon (M1 Pro, macOS 26.6.2, MPS available)
+    with the release commit checked out: `voxint-metal.sh setup` (weights
+    sha-verified), the launcher unit tests, then the lane's three modules
+    from the launcher's per-service venvs (titanet strict via
+    `VOXINT_PARITY_REQUIRED=1`). Junit: whisper 3 collected, 0 skipped, 3
+    ran; titanet 7, 0, 7; pyannote 7, 0, 7; no failures.
+  - The scheduled `metal-lane` run on `2482609`, the pre-bump `main`, which
+    already carries the new `setup-uv` pin:
+    <https://github.com/bengizmo/voxint/actions/runs/36724728886>, same
+    counts. This is the first green scheduled run since 2026-08-27; #647 is
+    closed.
 
-Gate E ran fresh and green on the release content, Gate M has a green lane
-run on the pre-bump commit, and A and R carried on an empty `services/` diff.
-Clear to tag v0.48.0.
+Gates E and M ran fresh and green on the release content; A and R carried on
+an empty `services/` diff. Clear to tag v0.48.0.
 
 #### Verdict: v0.47.0 (catch-up for v0.43.0 to v0.46.0), Gate E pipeline and LLM lanes run fresh on CUDA (PASS), Gate E browser lane run fresh (PASS), Gate M run fresh (PASS), Gates A/R carry (2026-09-29)
 
