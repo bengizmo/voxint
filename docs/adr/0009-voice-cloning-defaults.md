@@ -4,7 +4,7 @@
 > for the `voiceclone` plugin, and the two operator overrides that may relax
 > them, before any code lands. The engine selection paragraph is filled in
 > after the packaging and falsification gates report; everything else here is
-> decided now.
+> decided now. Engine recorded in section 7 on 2026-09-30 (issue #663).
 
 ## Context
 
@@ -130,7 +130,49 @@ through the 16 kHz chain, peak VRAM measured on maintainer hardware). A
 license allowlist
 constant (engine, license, weights sha) is checked at boot.
 
-*Engine selection: to be recorded here after the gates report.*
+**Engine selection (recorded 2026-09-30): Chatterbox** (Resemble AI, MIT),
+pinned at commit `5de7a54a` with weights `ResembleAI/chatterbox@5bb1f6ee`.
+CosyVoice 3 remains the recorded fallback.
+
+- **Packaging gate: pass.** The engine builds into a fully offline CUDA image
+  with every dependency and weight sha-pinned, and a no-cache rebuild
+  reproduced the same dependency receipt. Two upstream behaviours that break
+  offline use (a first-use model download and a cache-layout lookup) are handled
+  without forking, and the watermark bypass seam that the section 8 override
+  needs works per request without forking.
+- **Falsification gate: pass.** 15 speakers from AMI and VoxConverse, 625
+  generated clips on maintainer hardware (RTX 5090), measured with Voxint
+  0.46.0's own whisper and TitaNet services:
+  - Similarity to the speaker's held-out speech (TitaNet centroid cosine) is
+    0.63 to 0.72 from a 10 s reference and 0.51 to 0.57 from 3 s, against a
+    real-speech ceiling of 0.83 to 0.88. A 3 s phone-quality reference loses a
+    further 0.17, while real 3 s phone audio loses 0.13 (AMI) to 0.17
+    (VoxConverse) against the same held-out speech, so most of that drop is
+    the channel. Enrollment guidance: prefer
+    10 s of clean reference audio.
+  - Word error rate is 0.4% for English synthesis and 0.2% for the
+    multilingual model in English.
+  - Voice conversion puts all 60 outputs below the 0.60 match floor against
+    their source speaker (mean cosine 0.12 to 0.20) and adds 0.5 points of word
+    error rate (the interval spans zero). Closeness to the synthetic target
+    averages 0.65 to 0.81 and depends on the source recording: 4 of 15 source
+    speakers convert to a target cosine below 0.60.
+  - The watermark is detected on every output through 16 kHz resampling, Opus,
+    telephone band-limiting and MP3, whether applied at the engine's native
+    rate or at 16 kHz. Unmarked synthetic audio produced no false positives;
+    4 of 60 real clips crossed the threshold after band-limiting, and the
+    threshold-free margin between marked and unmarked audio is positive in
+    every condition.
+  - Peak reserved VRAM is about 5 GiB (multilingual model). Median real-time
+    factor is 0.38 for synthesis and 0.04 for conversion.
+- **Passive detection is informational.** The pinned `synthdetect` detector,
+  run unchanged on a rented RTX 3090 because its CUDA 11.8 runtime has no
+  kernels for the RTX 5090, scores 32% to 38% EER per generator arm on this
+  corpus. On the 3-speaker VoxConverse slices, synthesis sits at or above
+  chance (55% to 61%). This is consistent with issue #252. This confirms section 1: the watermark is the provenance
+  signal for this engine, and a classifier is not.
+- The multilingual weights' license must be confirmed from the model card
+  before they are pinned for dubbing.
 
 ### 8. Two operator overrides, off by default
 
