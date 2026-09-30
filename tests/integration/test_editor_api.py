@@ -22,14 +22,13 @@ CREDS = ("reviewer", "s3cret")
 _CSRF_KEY = "editor-test-csrf-key"
 
 
-def _app(session_factory: sessionmaker[Session], *, media_enabled: bool = True) -> TestClient:
+def _app(session_factory: sessionmaker[Session]) -> TestClient:
     with TemporaryDirectory() as tmpdir:
         settings = Settings(
             _env_file=None,  # type: ignore[call-arg]
             voxint_user=CREDS[0],
             voxint_password=CREDS[1],
             media_root=Path(tmpdir),
-            console_media_enabled=media_enabled,
             csrf_secret=_CSRF_KEY,
         )
         seed_onboarded(session_factory)
@@ -65,15 +64,6 @@ def test_unknown_media_returns_404(
         auth=CREDS,
         follow_redirects=False,
     )
-    assert resp.status_code == 404
-
-
-def test_media_enabled_gate(
-    session_factory: sessionmaker[Session],
-) -> None:
-    media_id, _ = _seed_media_with_run(session_factory)
-    client = _app(session_factory, media_enabled=False)
-    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
     assert resp.status_code == 404
 
 

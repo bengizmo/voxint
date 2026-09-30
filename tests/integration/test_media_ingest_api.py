@@ -1,10 +1,11 @@
 """POST /media/submit and /media/fetch — the P2b library ingest (issue #154).
 
 Acceptance AC-1: upload and URL ingestion from /media produce IDENTICAL
-media_items/pipeline_runs rows to the legacy /runs path, because both call the
-same broker-free backends (submit_upload/submit_url). These tests submit the same
-bytes/URL through each surface and diff the durable columns. They also pin the
-/media redirect (back to the library, not /runs) and the flag-off 404. Needs the
+media_items/pipeline_runs rows to the broker-free backends they wrap
+(submit_upload/submit_url). These tests submit the same bytes/URL through the
+route and straight through the backend and diff the durable columns (the legacy
+/runs forms this once compared against were removed in #682). They also pin the
+/media redirect (back to the library, not /runs) and the JSON contract. Needs the
 real Postgres test DB, so skipped without VOXINT_TEST_DATABASE_URL.
 """
 
@@ -21,19 +22,15 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
-from voxint.api.csrf import (
-    CSRF_FETCH,
-    CSRF_MEDIA_FETCH,
-    CSRF_MEDIA_SUBMIT,
-    CSRF_SUBMIT,
-    mint_csrf_token,
-)
+from voxint.api.csrf import CSRF_MEDIA_FETCH, CSRF_MEDIA_SUBMIT, mint_csrf_token
 from voxint.config import Settings
 from voxint.db.models import MediaItem, PipelineRun, RunStatus
+from voxint.ingest import submit_upload, submit_url
 
 CREDS = ("reviewer", "s3cret")
 _CSRF_KEY = "media-ingest-test-csrf-key"
 _URL = "https://example.com/audio.mp3"
+_MAX_BYTES = 10 * 1024 * 1024
 
 
 def _data(action: str, **fields: str) -> dict[str, str]:
@@ -55,16 +52,13 @@ def _wav_bytes(seconds: float = 0.02) -> bytes:
 def _make_client(
     session_factory: sessionmaker[Session],
     media_root: Path,
-    *,
-    media_enabled: bool = True,
 ) -> TestClient:
     settings = Settings(
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=media_root,
-        upload_max_bytes=10 * 1024 * 1024,
+        upload_max_bytes=_MAX_BYTES,
         ytdlp_enabled=True,
-        console_media_enabled=media_enabled,
         csrf_secret=_CSRF_KEY,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
@@ -76,13 +70,6 @@ def _make_client(
 @pytest.fixture()
 def client(session_factory: sessionmaker[Session], tmp_path: Path) -> TestClient:
     return _make_client(session_factory, tmp_path)
-
-
-@pytest.fixture()
-def legacy_client(
-    session_factory: sessionmaker[Session], tmp_path: Path
-) -> TestClient:
-    return _make_client(session_factory, tmp_path, media_enabled=False)
 
 
 @pytest.fixture()
@@ -118,23 +105,26 @@ def _media_and_run(
     return media, run
 
 
-def test_media_upload_matches_legacy_upload(
+def test_media_upload_matches_the_ingest_backend(
     client: TestClient,
-    legacy_client: TestClient,
     session_factory: sessionmaker[Session],
+    tmp_path: Path,
     published: list[uuid.UUID],
 ) -> None:
     body = _wav_bytes()
-    legacy_sub, media_sub = uuid.uuid4().hex, uuid.uuid4().hex
+    reference_sub, media_sub = uuid.uuid4().hex, uuid.uuid4().hex
 
-    legacy = legacy_client.post(
-        "/submit",
-        files={"file": ("clip.wav", body, "audio/wav")},
-        data=_data(CSRF_SUBMIT, submission_id=legacy_sub),
-        follow_redirects=False,
-    )
-    assert legacy.status_code == 303
-    assert legacy.headers["location"].startswith("/runs/")
+    # The reference: the same bytes straight through the backend the route wraps.
+    with session_factory() as session:
+        submit_upload(
+            session,
+            stream=io.BytesIO(body),
+            filename="clip.wav",
+            submission_id=reference_sub,
+            media_root=tmp_path,
+            max_bytes=_MAX_BYTES,
+        )
+        session.commit()
 
     media = client.post(
         "/media/submit",
@@ -143,35 +133,33 @@ def test_media_upload_matches_legacy_upload(
         follow_redirects=False,
     )
     assert media.status_code == 303
-    # The library ingest returns to /media, not the legacy run page.
+    # The library ingest returns to /media, not the run page.
     assert media.headers["location"] == "/media?submitted=1"
 
     with session_factory() as session:
-        m_legacy, r_legacy = _media_and_run(session, f"incoming/{legacy_sub}/clip.wav")
+        m_ref, r_ref = _media_and_run(session, f"incoming/{reference_sub}/clip.wav")
         m_media, r_media = _media_and_run(session, f"incoming/{media_sub}/clip.wav")
         # Identical durable content: the differing leg is only the uuid namespace.
-        assert m_media.sha256 == m_legacy.sha256 == hashlib.sha256(body).hexdigest()
-        assert m_media.size_bytes == m_legacy.size_bytes == len(body)
-        assert m_media.media_folder_id is None and m_legacy.media_folder_id is None
-        assert r_media.status == r_legacy.status == RunStatus.QUEUED.value
-        assert r_media.domain_pack == r_legacy.domain_pack
-    assert len(published) == 2
+        assert m_media.sha256 == m_ref.sha256 == hashlib.sha256(body).hexdigest()
+        assert m_media.size_bytes == m_ref.size_bytes == len(body)
+        assert m_media.media_folder_id is None and m_ref.media_folder_id is None
+        assert r_media.status == r_ref.status == RunStatus.QUEUED.value
+        assert r_media.domain_pack == r_ref.domain_pack
+        media_run_id = r_media.id
+    # Only the route publishes (the reference never enqueued), exactly once.
+    assert published == [media_run_id]
 
 
-def test_media_fetch_matches_legacy_fetch(
+def test_media_fetch_matches_the_ingest_backend(
     client: TestClient,
-    legacy_client: TestClient,
     session_factory: sessionmaker[Session],
     published: list[uuid.UUID],
 ) -> None:
-    legacy_sub, media_sub = uuid.uuid4().hex, uuid.uuid4().hex
+    reference_sub, media_sub = uuid.uuid4().hex, uuid.uuid4().hex
 
-    legacy = legacy_client.post(
-        "/fetch",
-        data=_data(CSRF_FETCH, url=_URL, submission_id=legacy_sub),
-        follow_redirects=False,
-    )
-    assert legacy.status_code == 303
+    with session_factory() as session:
+        submit_url(session, url=_URL, submission_id=reference_sub)
+        session.commit()
 
     media = client.post(
         "/media/fetch",
@@ -182,13 +170,14 @@ def test_media_fetch_matches_legacy_fetch(
     assert media.headers["location"] == "/media?submitted=1"
 
     with session_factory() as session:
-        m_legacy, r_legacy = _media_and_run(session, f"incoming/{legacy_sub}/source")
+        m_ref, r_ref = _media_and_run(session, f"incoming/{reference_sub}/source")
         m_media, r_media = _media_and_run(session, f"incoming/{media_sub}/source")
-        assert m_media.source_url == m_legacy.source_url == _URL
-        assert m_media.media_folder_id is None and m_legacy.media_folder_id is None
-        assert r_media.status == r_legacy.status == RunStatus.QUEUED.value
-        assert r_media.domain_pack == r_legacy.domain_pack
-    assert len(published) == 2
+        assert m_media.source_url == m_ref.source_url == _URL
+        assert m_media.media_folder_id is None and m_ref.media_folder_id is None
+        assert r_media.status == r_ref.status == RunStatus.QUEUED.value
+        assert r_media.domain_pack == r_ref.domain_pack
+        media_run_id = r_media.id
+    assert published == [media_run_id]
 
 
 def test_media_forms_render_with_picker(client: TestClient) -> None:
@@ -271,7 +260,6 @@ def test_media_upload_json_413_too_large(
         voxint_password=CREDS[1],
         media_root=tmp_path,
         upload_max_bytes=100,
-        console_media_enabled=True,
         csrf_secret=_CSRF_KEY,
     )
     c = TestClient(create_app(settings=settings, session_factory=session_factory))
@@ -368,18 +356,3 @@ def test_media_upload_json_403_bad_csrf(
     )
     assert resp.status_code == 403
     assert "detail" in resp.json()
-
-
-def test_media_routes_404_when_flag_off(
-    session_factory: sessionmaker[Session], tmp_path: Path
-) -> None:
-    client = _make_client(session_factory, tmp_path, media_enabled=False)
-    assert client.get("/media").status_code == 404
-    # The POST routes are registered but gated: 404, not a 405/403, with the flag off.
-    resp = client.post(
-        "/media/submit",
-        files={"file": ("clip.wav", _wav_bytes(), "audio/wav")},
-        data=_data(CSRF_MEDIA_SUBMIT, submission_id=uuid.uuid4().hex),
-        follow_redirects=False,
-    )
-    assert resp.status_code == 404

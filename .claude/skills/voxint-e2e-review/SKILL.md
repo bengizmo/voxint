@@ -247,11 +247,11 @@ Reconcile with the rulings you made, for example:
 # → ok: 0 of 12 verified; corrections match; 5 label ruling(s) match / RECONCILE PASS
 ```
 
-### Media library on the shipped default (#646)
+### Media library (#646, #682)
 
-The lane serves the shipped default (`console_media_enabled` on, nothing forced),
-so every review entry point must reach the editor. Run the trash checks **after**
-the step-3 reconcile: emptying the trash purges the seeded run.
+The Media library is always on (#682 removed its flag), so every review entry
+point must reach the editor. Run the trash checks **after** the step-3
+reconcile: emptying the trash purges the seeded run.
 
 - **Review entry points.** `/review/<RUN_ID>` and `/review/<RUN_ID>/transcript`
   land on `/media/<MEDIA_ID>/editor?run=…`, the island mounts (wait for the edit
@@ -263,7 +263,7 @@ the step-3 reconcile: emptying the trash purges the seeded run.
   input and **Fetch and transcribe**.
 - **No missing-file chip.** The seeded row carries no "Original file not found"
   chip (the seed writes the original).
-- **Trash and restore.** Select the row, **Delete...** → "Moved 1 file to trash."
+- **Trash and restore.** Select the row, **Move to trash** → "Moved 1 file to trash."
   With the library now empty, **Trash →** must still render; follow it, select the
   row, **Restore selected** → "Restored 1 file from trash." and the row is back.
 - **Empty trash asks first.** Trash the row again, open the trash view, click

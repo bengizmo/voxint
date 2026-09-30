@@ -589,10 +589,6 @@
        inside a page rather than the global nav. `nav.tab-strip` matches nav.top's
        specificity and, as the later source, wins. Replaces two inline styles. */
     nav.tab-strip { border-bottom: 0; margin: var(--space-2) 0; padding-bottom: 0; }
-    form.upload { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;
-                  margin: 1rem 0; padding: .8rem 1rem; border: 1px solid var(--line);
-                  border-radius: var(--r-md); background: var(--surface); }
-    form.upload label { display: flex; flex-direction: column; font-size: .8rem; gap: .2rem; }
     form.filters { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;
                    margin: 1rem 0; }
     form.filters label { display: flex; flex-direction: column; font-size: .8rem; gap: .2rem; }
@@ -979,11 +975,6 @@
     details.run-details { margin: .5rem 0 1rem; }
     details.run-details > summary { cursor: pointer; font-weight: 600;
                  color: var(--ink-2); padding: .3rem 0; }
-    /* Runs "Add media" section (issue #117 Phase C): a named landing target for
-       the dashboard "Add audio" card; its H2 anchors the section without a nav
-       item. */
-    .add-media { margin: 0 0 1rem; }
-    .add-media > h2 { margin: .6rem 0 .8rem; font-size: var(--t-md); }
     /* Meaning-search results (issue #121): a ranked passage list. Each row is a
        transcript deep-link title, an optional speaker badge + time range, and the
        marked passage snippet. Tokens only, consistent with the run listing; the
@@ -1697,8 +1688,8 @@
           <span class="rail-label">Home</span>
           <span class="rail-tip">Home</span>
         </a>
-        {# Media — circle glyph. Points at /media when enabled, /runs otherwise. #}
-        <a class="rail-link" href="{% if shell.media_enabled %}/media{% else %}/runs{% endif %}"{% if active_nav == "media" or (not shell.media_enabled and active_nav == "runs") %} aria-current="page"{% endif %} aria-label="Media">
+        {# Media — circle glyph. #}
+        <a class="rail-link" href="/media"{% if active_nav == "media" %} aria-current="page"{% endif %} aria-label="Media">
           <span class="rail-icon-wrap"><svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true" focusable="false"><circle cx="9" cy="9" r="6"/></svg></span>
           <span class="rail-label">Media</span>
           <span class="rail-tip">Media</span>

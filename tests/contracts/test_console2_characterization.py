@@ -393,6 +393,6 @@ def test_route_records_capture_gate_and_auth() -> None:
     # /healthz is the one exempt, unauthenticated liveness route.
     assert by_path["/healthz"].gate == "exempt"
     assert by_path["/healthz"].auth is False
-    # A protected, operator-gated route (the review submit).
-    assert by_path["/submit"].gate == "onboarding"
-    assert by_path["/submit"].auth is True
+    # A protected, operator-gated route (the media library upload).
+    assert by_path["/media/submit"].gate == "onboarding"
+    assert by_path["/media/submit"].auth is True

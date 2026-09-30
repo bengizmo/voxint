@@ -1,4 +1,4 @@
-"""POST /fetch — browser URL ingestion, end to end against real Postgres.
+"""POST /media/fetch — browser URL ingestion, end to end against real Postgres.
 
 Wiring over the already-tested submit_url service (its DB semantics —
 replay/conflict/SSRF validation — are covered in test_ingest_service.py and
@@ -6,7 +6,8 @@ test_ingest_url.py). These exercise the ROUTE: it creates a source_url MediaItem
 + QUEUED run and publishes commit-before-publish, maps the service's typed
 errors to status codes, refuses cleanly when ytdlp_enabled is off, gives the
 upload and fetch forms independent submission ids, and shows a run's provenance
-as a bare host — never the raw URL (whose query can carry a signed token).
+as a bare host — never the raw URL (whose query can carry a signed token). They
+moved here from the legacy ``POST /fetch`` when #682 removed that route.
 
 Synthetic data is neutral: example.com and the IETF TEST-NET documentation
 ranges only, never a private/internal host.
@@ -14,6 +15,7 @@ ranges only, never a private/internal host.
 
 import re
 import uuid
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -22,32 +24,33 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
-from voxint.api.csrf import CSRF_FETCH, CSRF_SUBMIT, mint_csrf_token
+from voxint.api.csrf import CSRF_MEDIA_FETCH, CSRF_MEDIA_SUBMIT, mint_csrf_token
 from voxint.config import Settings
 from voxint.db.models import MediaItem, PipelineRun, RunStatus
 
 CREDS = ("reviewer", "s3cret")
 _URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 _CSRF_KEY = "fetch-api-test-csrf-key"  # low-entropy; a known secret lets tests mint
+_QUEUED = "/media?submitted=1"
+_DEFERRED = "/media?submitted=deferred"
 
 
 def _fd(**kwargs: str) -> dict[str, str]:
-    """Form data with a valid /fetch CSRF token merged in (the real forms carry
-    one; posting without it is 403 — see test_fetch_rejected_without_csrf_token)."""
-    return {"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_FETCH), **kwargs}
+    """Form data with a valid /media/fetch CSRF token merged in (the real forms
+    carry one; posting without it is 403 — see
+    test_fetch_rejected_without_csrf_token)."""
+    return {"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_MEDIA_FETCH), **kwargs}
 
 
 def make_client(
-    session_factory: sessionmaker[Session], *, ytdlp_enabled: bool = True
+    session_factory: sessionmaker[Session], tmp_path: Path, *, ytdlp_enabled: bool = True
 ) -> TestClient:
     settings = Settings(
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
+        media_root=tmp_path,
         ytdlp_enabled=ytdlp_enabled,
         csrf_secret=_CSRF_KEY,
-        # The legacy Runs-page handlers process only while the media area is off;
-        # with it on (the default since #646) they 303 to /media untouched.
-        console_media_enabled=False,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
     client.auth = CREDS
@@ -56,8 +59,8 @@ def make_client(
 
 
 @pytest.fixture()
-def client(session_factory: sessionmaker[Session]) -> TestClient:
-    return make_client(session_factory)
+def client(session_factory: sessionmaker[Session], tmp_path: Path) -> TestClient:
+    return make_client(session_factory, tmp_path)
 
 
 @pytest.fixture()
@@ -78,9 +81,16 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
     return calls
 
 
-def _run_id_from_redirect(location: str) -> uuid.UUID:
-    assert location.startswith("/runs/")
-    return uuid.UUID(location.removeprefix("/runs/").split("?", 1)[0])
+def _run_id_for(session_factory: sessionmaker[Session], submission_id: str) -> uuid.UUID:
+    """The one run the fetch under ``submission_id`` created (the library
+    redirect carries no run id)."""
+    with session_factory() as session:
+        media = session.execute(
+            select(MediaItem).where(MediaItem.source_path == f"incoming/{submission_id}/source")
+        ).scalar_one()
+        return session.execute(
+            select(PipelineRun.id).where(PipelineRun.media_item_id == media.id)
+        ).scalar_one()
 
 
 # --- happy path ---------------------------------------------------------------
@@ -93,10 +103,11 @@ def test_fetch_creates_source_url_run_and_publishes(
 ) -> None:
     sub = uuid.uuid4().hex
     resp = client.post(
-        "/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
+        "/media/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
     )
     assert resp.status_code == 303
-    run_id = _run_id_from_redirect(resp.headers["location"])
+    assert resp.headers["location"] == _QUEUED
+    run_id = _run_id_for(session_factory, sub)
 
     with session_factory() as session:
         run = session.get(PipelineRun, run_id)
@@ -112,9 +123,9 @@ def test_fetch_creates_source_url_run_and_publishes(
     assert published == [run_id]  # commit-before-publish fired exactly once
 
 
-def test_runs_page_offers_the_fetch_form(client: TestClient) -> None:
-    body = client.get("/runs").text
-    assert 'action="/fetch"' in body
+def test_media_page_offers_the_fetch_form(client: TestClient) -> None:
+    body = client.get("/media").text
+    assert 'action="/media/fetch"' in body
     assert 'name="url"' in body
 
 
@@ -123,7 +134,7 @@ def test_upload_and_fetch_forms_get_independent_submission_ids(
 ) -> None:
     # The two forms must NOT share a submission_id (they would collide on the
     # source_path namespace). Both hidden fields render, with distinct values.
-    body = client.get("/runs").text
+    body = client.get("/media").text
     ids = re.findall(r'name="submission_id" value="([0-9a-f]+)"', body)
     assert len(ids) == 2
     assert ids[0] != ids[1]
@@ -138,7 +149,7 @@ def test_fetch_bad_url_is_422_and_creates_nothing(
     published: list[uuid.UUID],
 ) -> None:
     resp = client.post(
-        "/fetch",
+        "/media/fetch",
         data=_fd(url="ftp://example.com/f.mp3", submission_id=uuid.uuid4().hex),
         follow_redirects=False,
     )
@@ -155,7 +166,7 @@ def test_fetch_error_body_never_echoes_the_url(client: TestClient) -> None:
     # error message is generic by construction.
     secret = "SUPERSECRETSIGNATURE"
     resp = client.post(
-        "/fetch",
+        "/media/fetch",
         data=_fd(
             url=f"http://192.0.2.9/media?token={secret}",
             submission_id=uuid.uuid4().hex,
@@ -170,7 +181,7 @@ def test_fetch_non_uuid_submission_id_is_422(
     client: TestClient, published: list[uuid.UUID]
 ) -> None:
     resp = client.post(
-        "/fetch",
+        "/media/fetch",
         data=_fd(url=_URL, submission_id="not-a-uuid"),
         follow_redirects=False,
     )
@@ -188,7 +199,7 @@ def test_fetch_rejected_without_csrf_token(
 ) -> None:
     # No csrf_token field ⇒ 403 before any DB write (a forged cross-site POST).
     resp = client.post(
-        "/fetch",
+        "/media/fetch",
         data={"url": _URL, "submission_id": uuid.uuid4().hex},  # NB: no _fd() token
         follow_redirects=False,
     )
@@ -202,13 +213,13 @@ def test_fetch_rejected_without_csrf_token(
 def test_fetch_rejected_with_wrong_action_token(
     client: TestClient, published: list[uuid.UUID]
 ) -> None:
-    # A token minted for /submit is not valid on /fetch (action binding).
+    # A token minted for /media/submit is not valid on /media/fetch (action binding).
     resp = client.post(
-        "/fetch",
+        "/media/fetch",
         data={
             "url": _URL,
             "submission_id": uuid.uuid4().hex,
-            "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SUBMIT),
+            "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_MEDIA_SUBMIT),
         },
         follow_redirects=False,
     )
@@ -216,16 +227,16 @@ def test_fetch_rejected_with_wrong_action_token(
     assert published == []
 
 
-def test_runs_page_renders_fetch_csrf_token(client: TestClient) -> None:
-    # The fetch form carries a hidden csrf_token that verifies for /fetch.
-    body = client.get("/runs").text
+def test_media_page_renders_fetch_csrf_token(client: TestClient) -> None:
+    # The fetch form carries a hidden csrf_token that verifies for /media/fetch.
+    body = client.get("/media").text
     match = re.search(
-        r'action="/fetch".*?name="csrf_token" value="([^"]+)"', body, re.DOTALL
+        r'action="/media/fetch".*?name="csrf_token" value="([^"]+)"', body, re.DOTALL
     )
     assert match is not None
     from voxint.api.csrf import verify_csrf_token
 
-    assert verify_csrf_token(_CSRF_KEY, CSRF_FETCH, match.group(1))
+    assert verify_csrf_token(_CSRF_KEY, CSRF_MEDIA_FETCH, match.group(1))
 
 
 # --- replay idempotency -------------------------------------------------------
@@ -238,14 +249,14 @@ def test_fetch_replay_same_url_returns_same_run(
 ) -> None:
     sub = uuid.uuid4().hex
     first = client.post(
-        "/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
+        "/media/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
     )
     second = client.post(
-        "/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
+        "/media/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
     )
     assert first.status_code == second.status_code == 303
-    run_id = _run_id_from_redirect(first.headers["location"])
-    assert _run_id_from_redirect(second.headers["location"]) == run_id
+    assert first.headers["location"] == second.headers["location"] == _QUEUED
+    run_id = _run_id_for(session_factory, sub)
 
     with session_factory() as session:
         assert len(session.execute(select(PipelineRun)).scalars().all()) == 1
@@ -260,13 +271,13 @@ def test_fetch_replay_different_url_conflicts(
 ) -> None:
     sub = uuid.uuid4().hex
     first = client.post(
-        "/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
+        "/media/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
     )
     assert first.status_code == 303
-    run_id = _run_id_from_redirect(first.headers["location"])
+    run_id = _run_id_for(session_factory, sub)
 
     clash = client.post(
-        "/fetch",
+        "/media/fetch",
         data=_fd(url="https://example.com/other.mp3", submission_id=sub),
         follow_redirects=False,
     )
@@ -283,11 +294,11 @@ def test_fetch_replay_different_url_conflicts(
 
 
 def test_fetch_refused_when_ytdlp_disabled(
-    session_factory: sessionmaker[Session], published: list[uuid.UUID]
+    session_factory: sessionmaker[Session], tmp_path: Path, published: list[uuid.UUID]
 ) -> None:
-    client = make_client(session_factory, ytdlp_enabled=False)
+    client = make_client(session_factory, tmp_path, ytdlp_enabled=False)
     resp = client.post(
-        "/fetch",
+        "/media/fetch",
         data=_fd(url=_URL, submission_id=uuid.uuid4().hex),
         follow_redirects=False,
     )
@@ -298,13 +309,28 @@ def test_fetch_refused_when_ytdlp_disabled(
         assert session.execute(select(MediaItem)).first() is None
 
 
-def test_runs_page_hides_fetch_form_when_disabled(
-    session_factory: sessionmaker[Session],
+def test_media_page_disables_fetch_form_when_disabled(
+    session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
-    client = make_client(session_factory, ytdlp_enabled=False)
-    body = client.get("/runs").text
-    assert 'action="/fetch"' not in body
-    assert "URL ingestion is disabled" in body
+    client = make_client(session_factory, tmp_path, ytdlp_enabled=False)
+    body = client.get("/media").text
+    # The form stays (the add menu keeps its shape) but cannot be submitted, and
+    # the page says why and where to turn it on.
+    assert re.search(r'<input type="url" name="url"[^>]*\brequired disabled>', body)
+    assert re.search(r'<button type="submit" disabled>Fetch and transcribe</button>', body)
+    assert "Fetching from a URL is turned off." in body
+    assert "compose.ytdlp-egress.yaml" not in body
+
+
+def test_media_page_points_at_the_egress_overlay_when_enabled(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """The fetch panel carries the egress warning the legacy /runs form had
+    (#682): fetching untrusted links needs the restricted overlay."""
+    body = make_client(session_factory, tmp_path, ytdlp_enabled=True).get("/media").text
+    assert "compose.ytdlp-egress.yaml" in body
+    assert "URL ingestion &amp; egress security" in body
+    assert "Fetching from a URL is turned off." not in body
 
 
 # --- provenance display (host, never the raw URL) -----------------------------
@@ -316,9 +342,10 @@ def test_run_detail_shows_host_not_raw_url(
     secret_url = "https://cdn.example.com/media.mp3?token=SUPERSECRETSIGNATURE"
     sub = uuid.uuid4().hex
     resp = client.post(
-        "/fetch", data=_fd(url=secret_url, submission_id=sub), follow_redirects=False
+        "/media/fetch", data=_fd(url=secret_url, submission_id=sub), follow_redirects=False
     )
-    run_id = _run_id_from_redirect(resp.headers["location"])
+    assert resp.status_code == 303
+    run_id = _run_id_for(session_factory, sub)
 
     detail = client.get(f"/runs/{run_id}").text
     assert "cdn.example.com" in detail  # provenance host is shown
@@ -356,17 +383,17 @@ def test_broker_down_fetch_leaves_run_queued(
 ) -> None:
     # Commit-before-publish: a broker outage at enqueue is non-fatal — the run
     # is durably QUEUED (never FAILED, no error) and the redirect flags the
-    # deferred-enqueue banner for the recovery sweep.
+    # deferred-enqueue notice for the recovery sweep.
     from voxint.ingest.service import SubmissionResult
 
     monkeypatch.setattr(SubmissionResult, "publish", lambda self: False)
     sub = uuid.uuid4().hex
     resp = client.post(
-        "/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
+        "/media/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
     )
     assert resp.status_code == 303
-    assert resp.headers["location"].endswith("?enqueue=deferred")
-    run_id = _run_id_from_redirect(resp.headers["location"])
+    assert resp.headers["location"] == _DEFERRED
+    run_id = _run_id_for(session_factory, sub)
 
     with session_factory() as session:
         run = session.get(PipelineRun, run_id)
@@ -393,8 +420,8 @@ def test_fetch_maps_domain_pack_error_to_422(
             "would re-fire on the replacement of rule 'zb'"
         )
 
-    monkeypatch.setattr("voxint.api.routers.legacy_runs.submit_url", _raise)
-    resp = client.post("/fetch", data=_fd(url=_URL, submission_id=uuid.uuid4().hex))
+    monkeypatch.setattr("voxint.api.routers.media.submit_url", _raise)
+    resp = client.post("/media/fetch", data=_fd(url=_URL, submission_id=uuid.uuid4().hex))
     assert resp.status_code == 422
     detail = resp.json()["detail"]
     assert "couldn't be applied" in detail

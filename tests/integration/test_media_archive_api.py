@@ -41,13 +41,12 @@ _CSRF_KEY = "media-archive-test-csrf-key"
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def _settings(tmp_path: Path, *, media_enabled: bool = True) -> Settings:
+def _settings(tmp_path: Path) -> Settings:
     return Settings(
         _env_file=None,
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=tmp_path / "media",
-        console_media_enabled=media_enabled,
         csrf_secret=_CSRF_KEY,
     )
 
@@ -528,19 +527,3 @@ def test_archive_requires_csrf(
         follow_redirects=False,
     )
     assert resp.status_code == 403
-
-
-@pytest.mark.parametrize("route", ["/media/archive", "/media/unarchive"])
-def test_archive_flag_off_404(
-    session_factory: sessionmaker[Session], tmp_path: Path, route: str
-) -> None:
-    settings = _settings(tmp_path, media_enabled=False)
-    settings.media_root.mkdir(parents=True, exist_ok=True)
-    client = _make_client(session_factory, settings)
-    action = CSRF_MEDIA_UNARCHIVE if route.endswith("unarchive") else CSRF_MEDIA_ARCHIVE
-    resp = client.post(
-        route,
-        data=_data(action, media_id=[str(uuid.uuid4())]),
-        follow_redirects=False,
-    )
-    assert resp.status_code == 404

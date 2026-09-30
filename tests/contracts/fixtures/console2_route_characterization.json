@@ -120,14 +120,6 @@
     true
   ],
   [
-    "/fetch",
-    [
-      "POST"
-    ],
-    "onboarding",
-    true
-  ],
-  [
     "/healthz",
     [
       "GET"
@@ -1481,14 +1473,6 @@
       "GET"
     ],
     "exempt",
-    true
-  ],
-  [
-    "/submit",
-    [
-      "POST"
-    ],
-    "onboarding",
     true
   ],
   [

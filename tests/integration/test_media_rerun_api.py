@@ -52,7 +52,7 @@ def _write_pack(root: Path, name: str, vocab: list[str]) -> None:
     )
 
 
-def _settings(tmp_path: Path, *, media_enabled: bool = True) -> Settings:
+def _settings(tmp_path: Path) -> Settings:
     packs = tmp_path / "packs"
     _write_pack(packs, BASE_PACK, BASE_VOCAB)
     return Settings(
@@ -60,7 +60,6 @@ def _settings(tmp_path: Path, *, media_enabled: bool = True) -> Settings:
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=tmp_path / "media",
-        console_media_enabled=media_enabled,
         csrf_secret=_CSRF_KEY,
         domain_packs_dir=packs,
         domain_pack_path=packs / BASE_PACK,
@@ -268,6 +267,37 @@ def test_confirm_mints_run_with_folder_precedence_and_parity(
     assert f"{len(snapshot['vocabulary'])} glossary term" in preview.text
 
 
+@pytest.mark.parametrize("projects_enabled", [False, True])
+def test_preview_names_the_project_only_while_the_projects_area_is_on(
+    session_factory: sessionmaker[Session], settings: Settings, projects_enabled: bool
+) -> None:
+    """#682: with the projects area off (the default) the preview still says the
+    project layer supplies the vocabulary, but does not name a project the
+    operator cannot open."""
+    with session_factory() as session:
+        project = Project(name="Oral histories", vocabulary=list(PROJECT_VOCAB))
+        session.add(project)
+        session.flush()
+        folder = MediaFolder(path="interviews", project_id=project.id)
+        session.add(folder)
+        session.flush()
+        m_id = _add_media(session, source_path="interviews/a.wav", folder_id=folder.id).id
+        session.commit()
+
+    client = _make_client(
+        session_factory,
+        settings.model_copy(update={"console_projects_enabled": projects_enabled}),
+    )
+    preview = client.post(
+        "/media/rerun",
+        data=_data(CSRF_MEDIA_RERUN, media_id=[str(m_id)]),
+        follow_redirects=False,
+    )
+    assert preview.status_code == 200
+    assert "(project)" in preview.text
+    assert ("Oral histories" in preview.text) is projects_enabled
+
+
 def test_confirm_double_submit_creates_at_most_one_run(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
@@ -465,30 +495,6 @@ def test_confirm_count_mismatch_rejected(client: TestClient) -> None:
     )
     assert resp.status_code == 409
     assert "no longer exist" in resp.text
-
-
-def test_rerun_routes_404_when_flag_off(
-    session_factory: sessionmaker[Session], tmp_path: Path
-) -> None:
-    settings = _settings(tmp_path, media_enabled=False)
-    settings.media_root.mkdir(parents=True, exist_ok=True)
-    off = _make_client(session_factory, settings)
-    assert (
-        off.post(
-            "/media/rerun",
-            data=_data(CSRF_MEDIA_RERUN, media_id=[str(uuid.uuid4())]),
-            follow_redirects=False,
-        ).status_code
-        == 404
-    )
-    assert (
-        off.post(
-            "/media/rerun/confirm",
-            data=_data(CSRF_MEDIA_RERUN_CONFIRM, item=[_pair(uuid.uuid4(), "none")]),
-            follow_redirects=False,
-        ).status_code
-        == 404
-    )
 
 
 # ---- publish batch cap and broker-failure short-circuit --------------------

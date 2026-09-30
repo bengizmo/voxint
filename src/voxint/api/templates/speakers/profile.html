@@ -149,9 +149,7 @@ and web research is off. Restore the speaker from the
       <span></span>
     </div>
     {% for a in aggregate.appearances %}
-    {#- The editor is an area-gated route (console_media_enabled, off by default);
-        fall back to the always-routed run page exactly as the sidebar does. -#}
-    {%- set open_href = "/media/" ~ a.media_id ~ "/editor?run=" ~ a.run_id if shell.media_enabled else "/runs/" ~ a.run_id -%}
+    {%- set open_href = "/media/" ~ a.media_id ~ "/editor?run=" ~ a.run_id -%}
     <div class="gt-row">
       <span>
         {% if runs_by_id.get(a.run_id) %}

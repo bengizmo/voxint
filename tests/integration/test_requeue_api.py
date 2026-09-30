@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
-from voxint.api.csrf import CSRF_FETCH, CSRF_REQUEUE, mint_csrf_token
+from voxint.api.csrf import CSRF_MEDIA_FETCH, CSRF_REQUEUE, mint_csrf_token
 from voxint.config import Settings
 from voxint.db.models import STAGE_ORDER, PipelineRun, RunStatus, Stage
 from voxint.ingest import submit_media_item
@@ -240,13 +240,13 @@ def test_requeue_rejected_with_wrong_action_token(
     session_factory: sessionmaker[Session],
     published: list[tuple[uuid.UUID, Stage | None]],
 ) -> None:
-    # A token minted for /fetch is not valid on /requeue (action binding).
+    # A token minted for /media/fetch is not valid on /requeue (action binding).
     run_id, revision = _make_failed_run(session_factory)
     resp = client.post(
         f"/runs/{run_id}/requeue",
         data={
             "revision": str(revision),
-            "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_FETCH),
+            "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_MEDIA_FETCH),
         },
         follow_redirects=False,
     )

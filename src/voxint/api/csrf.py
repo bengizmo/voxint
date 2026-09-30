@@ -64,8 +64,6 @@ _CSRF_FUTURE_SKEW_SECONDS = 60
 # interchangeable between mutation forms.
 CSRF_LOGIN = "login"
 CSRF_LOGOUT = "logout"
-CSRF_SUBMIT = "submit"
-CSRF_FETCH = "fetch"
 CSRF_REQUEUE = "requeue"
 # Run cancellation (issue #5). Its own action — a distinct pipeline-state
 # mutation on the run detail page, never interchangeable with requeue/notes.
@@ -165,16 +163,14 @@ CSRF_PROJECT_CORRECTIONS = "project-corrections"
 CSRF_PROJECT_ARCHIVE = "project-archive"
 CSRF_PROJECT_RESTORE = "project-restore"
 CSRF_PROJECT_DELETE = "project-delete"
-# Media library ingest (issue #154, Console 2.0 P2b). Upload and URL fetch move
-# onto /media with their own action tokens, distinct from the legacy /submit and
-# /fetch forms' CSRF_SUBMIT/CSRF_FETCH so a token minted on one surface is not
-# valid on the other.
 # Quote board (issue #338, Phase 6). Saving a KWIC row from Explore and
 # managing (delete/edit) quotes on the project page are independent mutations
 # under separate tokens: a save token from the Explore page must not be
 # replayable on the project page to delete a different quote.
 CSRF_QUOTE_SAVE = "quote-save"
 CSRF_QUOTE_MANAGE = "quote-manage"
+# Media library ingest (issue #154, Console 2.0 P2b): upload and URL fetch on
+# /media, each under its own action so an upload token is not valid for a fetch.
 CSRF_MEDIA_SUBMIT = "media-submit"
 CSRF_MEDIA_FETCH = "media-fetch"
 # Media library organization (issue #154, Console 2.0 P2b). Per-action tokens:

@@ -55,7 +55,6 @@ def editor_client(session_factory: sessionmaker[Session]) -> TestClient:
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         csrf_secret=_CSRF_KEY,
-        console_media_enabled=True,
     )
     app = create_app(settings=settings, session_factory=session_factory)
     test_client = TestClient(app)

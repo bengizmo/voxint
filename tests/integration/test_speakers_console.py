@@ -44,14 +44,12 @@ def _make_client(
     tmp_path: Path,
     *,
     speakers_enabled: bool,
-    media_enabled: bool = False,
 ) -> TestClient:
     settings = Settings(
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=tmp_path,
         console_speakers_enabled=speakers_enabled,
-        console_media_enabled=media_enabled,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
     client.auth = CREDS
@@ -418,29 +416,28 @@ def test_profile_page_renders_stats_research_and_recordings(
     assert 'id="profile-panel"' in page.text
     assert "not set" in page.text
     assert f'id="research-{speaker_id}"' in page.text
-    # With the media area off (the default) Heard In rows still drill through to
-    # the always-routed run page: the editor route would 404 (#246 review).
-    assert 'href="/runs/' in page.text
-    assert "/editor?run=" not in page.text
+    # Heard In rows open the run in the editor (#682: the media area is always on).
+    assert "/editor?run=" in page.text
+    assert 'href="/runs/' not in page.text
     assert "verified" in page.text  # the human-assign chip on the appearance
     # The "..." overflow menu carries the Archive action with its own CSRF token.
     assert f'action="/speakers/{speaker_id}/archive' in page.text
     assert "Archive speaker" in page.text
 
 
-def test_profile_heard_in_links_open_the_editor_when_media_area_is_on(
+def test_profile_heard_in_links_open_the_editor(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
-    client = _make_client(session_factory, tmp_path, speakers_enabled=True, media_enabled=True)
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
     with session_factory() as session:
         speaker_id = _seed_speaker_with_activity(session, "Alice", minutes_rank=2, human=True)
         session.commit()
     page = client.get(f"/speakers/{speaker_id}")
     assert page.status_code == 200
     hrefs = re.findall(r'href="(/media/[0-9a-f-]+/editor\?run=[0-9a-f-]+)"', page.text)
-    assert hrefs, "Heard In rows should link to the editor when the media area is on"
+    assert hrefs, "Heard In rows should link to the editor"
     assert 'href="/runs/' not in page.text
-    # The link actually resolves (the editor route is area-gated).
+    # The link actually resolves.
     editor = client.get(hrefs[0])
     assert editor.status_code == 200
 

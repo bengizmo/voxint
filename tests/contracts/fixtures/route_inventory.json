@@ -90,12 +90,6 @@
     ]
   ],
   [
-    "/fetch",
-    [
-      "POST"
-    ]
-  ],
-  [
     "/healthz",
     [
       "GET"
@@ -1109,12 +1103,6 @@
     "/static/htmx.min.js",
     [
       "GET"
-    ]
-  ],
-  [
-    "/submit",
-    [
-      "POST"
     ]
   ],
   [

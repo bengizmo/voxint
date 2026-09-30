@@ -159,7 +159,7 @@ def _get_session(request: Request) -> Iterator[Session]:
     # yield-dependency past its `yield` on success and throws the route's
     # exception back in on failure, which is exactly the control flow the `with`
     # needs to drive session_scope's commit/rollback. Mutations that commit
-    # before publishing (POST /submit, /runs/{id}/requeue) make the trailing
+    # before publishing (POST /media/submit, /runs/{id}/requeue) make the trailing
     # commit here a harmless no-op — nothing is left pending.
     with session_scope(get_session_factory(request)) as session:
         yield session
@@ -320,33 +320,18 @@ def require_onboarded(
     raise HTTPException(status_code=303, headers={"Location": "/setup"})
 
 
-def require_media_enabled(request: Request) -> None:
-    """Area gate for the media library (Console 2.0 P2a, #153).
-
-    The ``/media`` routes are always registered so the route inventory is stable
-    across the dark-ship flip (codex: conditional registration would destabilize
-    the inventory contract). Access is gated here instead: when
-    ``console_media_enabled`` is off (on by default since #646; off only when an
-    operator turns it off) the page is indistinguishable from an unbuilt route
-    (404, no hint that a hidden area exists). The media editor is the only review
-    surface, so turning it off also makes review unreachable. Wired as a
-    router-level dependency on the media router, after ``require_onboarded`` so
-    an un-onboarded operator is still sent to setup.
-    """
-    settings: Settings = request.app.state.settings
-    if not settings.console_media_enabled:
-        raise HTTPException(status_code=404, detail="not found")
-
-
 def require_projects_enabled(request: Request) -> None:
     """Area gate for projects (Console 2.0 P2b, #153).
 
-    Same shape as :func:`require_media_enabled`: the ``/projects`` routes are
-    always registered so the route inventory is stable, and access 404s until
+    The ``/projects`` routes are always registered so the route inventory is
+    stable across the dark-ship flip (conditional registration would destabilize
+    the inventory contract). Access is gated here instead: until
     ``console_projects_enabled`` is on (the flag P1 already added, which also
-    governs whether the sidebar shows the Projects link). Registering the routes
-    is what flips ``app.state.projects_routed`` on, so the nav link appears only
-    once the pages actually exist AND the flag is set.
+    governs whether the sidebar shows the Projects link) the page is
+    indistinguishable from an unbuilt route (404, no hint that a hidden area
+    exists). Registering the routes is what flips ``app.state.projects_routed``
+    on, so the nav link appears only once the pages actually exist AND the flag
+    is set.
     """
     settings: Settings = request.app.state.settings
     if not settings.console_projects_enabled:
@@ -359,7 +344,7 @@ def require_speakers_enabled(request: Request) -> None:
     ``/speakers`` itself is a LIVE page (its handler branches skins on
     ``console_speakers_enabled``), so this gate guards only the routes that did
     not exist before Console 2.0 — the profile page and its edit POST. Same
-    shape as :func:`require_media_enabled`: always-registered routes, a plain
+    shape as :func:`require_projects_enabled`: always-registered routes, a plain
     404 while the flag is off, wired per-route (not router-level, which would
     take the legacy roster down with it).
     """
@@ -371,7 +356,7 @@ def require_speakers_enabled(request: Request) -> None:
 def require_palette_enabled(request: Request) -> None:
     """Area gate for the command palette search routes (#162).
 
-    Same shape as :func:`require_media_enabled`: the ``/palette`` routes are
+    Same shape as :func:`require_projects_enabled`: the ``/palette`` routes are
     always registered so the route inventory is stable, and access 404s until
     ``console_palette_enabled`` is on.
     """
@@ -430,15 +415,6 @@ def _shell_template_context(request: Request) -> dict[str, Any]:
             "projects_enabled": (
                 settings.console_projects_enabled
                 and getattr(request.app.state, "projects_routed", False)
-            ),
-            # Media (#154) dark-ships routed-but-undiscovered: /media
-            # always registers, so this stamp is always true. The shell reads flag
-            # AND stamp, so flipping CONSOLE_MEDIA_ENABLED alone points the sidebar
-            # Media link and the "Add media" quick action at the operable /media
-            # library instead of the legacy /runs placeholder.
-            "media_enabled": (
-                settings.console_media_enabled
-                and getattr(request.app.state, "media_routed", False)
             ),
             # Activity (#162) dark-ships behind console_activity_enabled and its
             # route stamp.

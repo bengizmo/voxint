@@ -13,7 +13,7 @@
 {% endblock %}
 {% block cb_actions %}
 {% if shell.can_write %}
-<a class="cb-btn cb-btn-primary" href="{% if shell.media_enabled %}/media{% else %}/runs#add-media{% endif %}">+ Add media</a>
+<a class="cb-btn cb-btn-primary" href="/media">+ Add media</a>
 {% endif %}
 {% endblock %}
 
@@ -55,7 +55,7 @@
   <h2 class="oc-section-title">START SOMETHING</h2>
   <div class="start-actions">
     {% if shell.can_write %}
-    <a class="start-btn" href="{% if shell.media_enabled %}/media{% else %}/runs#add-media{% endif %}">Upload a recording</a>
+    <a class="start-btn" href="/media">Upload a recording</a>
     <a class="start-btn" href="/settings#folders">Watch a folder</a>
     {% endif %}
     {% if shell.projects_enabled and shell.can_write %}<a class="start-btn" href="/projects">New project</a>{% endif %}

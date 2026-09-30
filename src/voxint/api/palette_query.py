@@ -77,43 +77,39 @@ def search_entities(
     items: list[EntityItem] = []
 
     # ---- Media items ----
-    media_enabled = settings.console_media_enabled and getattr(
-        app_state, "media_routed", False
-    )
-    if media_enabled:
-        media_stmt = (
-            select(
-                MediaItem.id,
-                MediaItem.source_path,
-                MediaSourceMetadata.title,
-            )
-            .outerjoin(
-                MediaSourceMetadata,
-                MediaSourceMetadata.media_item_id == MediaItem.id,
-            )
-            .where(
-                MediaItem.trashed_at.is_(None),
-                MediaItem.purged_at.is_(None),
-                or_(
-                    MediaItem.source_path.ilike(pattern, escape="\\"),
-                    MediaSourceMetadata.title.ilike(pattern, escape="\\"),
-                ),
-            )
-            .order_by(func.lower(func.coalesce(MediaSourceMetadata.title, MediaItem.source_path)))
-            .limit(PER_KIND_CAP)
+    media_stmt = (
+        select(
+            MediaItem.id,
+            MediaItem.source_path,
+            MediaSourceMetadata.title,
         )
-        for m_row in session.execute(media_stmt):
-            label = friendly_media_label(m_row.title, m_row.source_path)
-            items.append(
-                EntityItem(
-                    kind="media",
-                    id=str(m_row.id),
-                    label=label,
-                    sublabel=None,
-                    href=f"/media/{m_row.id}/editor",
-                    archived=False,
-                )
+        .outerjoin(
+            MediaSourceMetadata,
+            MediaSourceMetadata.media_item_id == MediaItem.id,
+        )
+        .where(
+            MediaItem.trashed_at.is_(None),
+            MediaItem.purged_at.is_(None),
+            or_(
+                MediaItem.source_path.ilike(pattern, escape="\\"),
+                MediaSourceMetadata.title.ilike(pattern, escape="\\"),
+            ),
+        )
+        .order_by(func.lower(func.coalesce(MediaSourceMetadata.title, MediaItem.source_path)))
+        .limit(PER_KIND_CAP)
+    )
+    for m_row in session.execute(media_stmt):
+        label = friendly_media_label(m_row.title, m_row.source_path)
+        items.append(
+            EntityItem(
+                kind="media",
+                id=str(m_row.id),
+                label=label,
+                sublabel=None,
+                href=f"/media/{m_row.id}/editor",
+                archived=False,
             )
+        )
 
     # ---- Speakers ----
     speaker_stmt = (

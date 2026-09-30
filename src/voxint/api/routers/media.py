@@ -2,16 +2,15 @@
 /media plus its upload, URL-fetch, and organization surface.
 
 The listing (P2a) is one read-only page over :mod:`voxint.api.media_query`. P2b
-moves file upload and URL ingestion onto this page (the legacy `/runs` forms stay
-until P5), reusing the same broker-free ingest backends
-(:func:`voxint.ingest.submit_upload` / :func:`voxint.ingest.submit_url`); each form
-may pick a settings folder whose vocabulary/corrections apply to the run without
-moving the bytes (ADR 0002 addendum). P2b also makes the library operable: a
-multi-select drives a non-destructive bulk **assign** (set each file's settings
-folder, including clearing it), and a folder panel registers/unregisters folders
-through the shared write service. Every route is always registered so the console
-route inventory is stable across the dark-ship flip; access is gated by
-:func:`require_media_enabled`, which 404s until ``console_media_enabled`` is on.
+moved file upload and URL ingestion onto this page, reusing the broker-free ingest
+backends (:func:`voxint.ingest.submit_upload` / :func:`voxint.ingest.submit_url`);
+it is the only browser ingest surface since the legacy ``POST /submit`` and
+``POST /fetch`` were removed (#682). Each form may pick a settings folder whose
+vocabulary/corrections apply to the run without moving the bytes (ADR 0002
+addendum). P2b also makes the library operable: a multi-select drives a
+non-destructive bulk **assign** (set each file's settings folder, including
+clearing it), and a folder panel registers/unregisters folders through the shared
+write service.
 """
 
 from __future__ import annotations
@@ -63,7 +62,6 @@ from voxint.api.routers.deps import (
     OperatorDep,
     SessionDep,
     _require_csrf,
-    require_media_enabled,
     require_onboarded,
     templates,
 )
@@ -107,14 +105,10 @@ from voxint.media.purge import build_manifest, execute_purge, plan_purge
 from voxint.media.registration import register_folder, unregister_folder_by_id
 from voxint.speakers.matching import gates_from_settings
 
-# require_onboarded first (an un-onboarded operator is sent to setup), then the
-# area gate (404 when the flag is off) — the same order the module docstring and
-# the projects area will follow.
+# An un-onboarded operator is sent to setup before any media route runs.
 logger = logging.getLogger(__name__)
 
-router = APIRouter(
-    dependencies=[Depends(require_onboarded), Depends(require_media_enabled)]
-)
+router = APIRouter(dependencies=[Depends(require_onboarded)])
 
 # The layout toggle: cards for scanning, a table for dense comparison. A ?view=
 # outside this set degrades to the default rather than 422-ing (the Home ?window=
@@ -235,7 +229,7 @@ def _media_redirect(*, published: bool) -> RedirectResponse:
 
     ``published`` False means the durable QUEUED run exists but the enqueue was
     deferred (broker unavailable); the page says the recovery sweep will pick it
-    up, mirroring the legacy ``/submit`` redirect's ``?enqueue=deferred``.
+    up, the same honesty as the run pages' ``?enqueue=deferred``.
     """
     marker = "1" if published else "deferred"
     return RedirectResponse(f"/media?submitted={marker}", status_code=303)
@@ -589,7 +583,7 @@ def media_submit_upload(
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> Response:
     # CSRF before anything: a forged cross-site upload is refused before the DB
-    # write / file finalize (mirrors the legacy POST /submit).
+    # write / file finalize.
     _require_csrf(request, CSRF_MEDIA_SUBMIT, csrf_token)
     settings: Settings = request.app.state.settings
     folder_id = _resolve_picked_folder(session, media_folder_id)

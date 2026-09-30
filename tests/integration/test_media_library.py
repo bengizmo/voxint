@@ -1,10 +1,10 @@
 """The media library page and its query (Console 2.0 P2a, #153) end to end.
 
 The library lists every media file with its folder membership and latest-run
-status. These tests pin the wiring the pure helpers cannot see: the area flag
-gate (404 until ``console_media_enabled``, auth first), the aggregate's
-latest-run-per-file and archived-run exclusion, the folder join, the sort
-allowlist's honest degrade, and the card/table view toggle.
+status. These tests pin the wiring the pure helpers cannot see: auth and the
+onboarding gate, the aggregate's latest-run-per-file and archived-run exclusion,
+the folder join, the sort allowlist's honest degrade, and the card/table view
+toggle.
 """
 
 import re
@@ -38,14 +38,11 @@ CREDS = ("reviewer", "s3cret")
 def _make_client(
     session_factory: sessionmaker[Session],
     tmp_path: Path,
-    *,
-    media_enabled: bool,
 ) -> TestClient:
     settings = Settings(
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=tmp_path,
-        console_media_enabled=media_enabled,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
     client.auth = CREDS
@@ -55,8 +52,7 @@ def _make_client(
 
 @pytest.fixture()
 def client(session_factory: sessionmaker[Session], tmp_path: Path) -> TestClient:
-    """The page with the area flag ON (the common case these tests exercise)."""
-    return _make_client(session_factory, tmp_path, media_enabled=True)
+    return _make_client(session_factory, tmp_path)
 
 
 def _add_media(
@@ -110,20 +106,11 @@ def _add_run(
     return run
 
 
-# ---- the area flag gate -----------------------------------------------------
+# ---- auth and onboarding ----------------------------------------------------
 
 
-def test_media_404s_when_flag_off(session_factory: sessionmaker[Session], tmp_path: Path) -> None:
-    client = _make_client(session_factory, tmp_path, media_enabled=False)
-    assert client.get("/media").status_code == 404
-
-
-def test_media_requires_auth_before_the_gate(
-    session_factory: sessionmaker[Session], tmp_path: Path
-) -> None:
-    # Auth runs ahead of the area gate, so an unauthenticated request gets a 401
-    # challenge and never learns whether the hidden area exists — even off.
-    client = _make_client(session_factory, tmp_path, media_enabled=False)
+def test_media_requires_auth(session_factory: sessionmaker[Session], tmp_path: Path) -> None:
+    client = _make_client(session_factory, tmp_path)
     client.auth = None
     assert client.get("/media").status_code == 401
 
@@ -135,12 +122,10 @@ def test_media_redirects_when_not_onboarded(
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=tmp_path,
-        console_media_enabled=True,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
     client.auth = CREDS
-    # No seed_onboarded: the onboarding gate (which runs before the area gate)
-    # sends an ordinary navigation to /setup.
+    # No seed_onboarded: the onboarding gate sends an ordinary navigation to /setup.
     resp = client.get("/media", follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"] == "/setup"
