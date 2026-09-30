@@ -1195,7 +1195,7 @@ That triggers the browser acceptance lane and not the pipeline lane.
 v0.48.0 removes the `CONSOLE_MEDIA_ENABLED` setting and the legacy
 `POST /submit` and `POST /fetch` routes (#682), and ships dependency updates:
 Python (#685: alembic 1.20.0, sqlalchemy 2.0.54, pydantic 2.13.5, tokenizers
-0.23.2) and frontend (#679 React 19.3, #657 dev tooling).
+0.23.2; #689: urllib3 2.8.0) and frontend (#679 React 19.3, #657 dev tooling).
 
 `git diff v0.42.0..v0.48.0 -- services/` is empty, so the model-service
 images are rebuilds of the same source and numerics as v0.42.0 (CI's parity
@@ -1208,8 +1208,13 @@ and smoke jobs prove each rebuild).
   `v0.47.0..v0.48.0` is non-empty (`src/voxint/api/`, `frontend/`,
   `tools/e2e_browser_lifecycle.py`, and one field removed from
   `src/voxint/config.py`), and the runtime dependencies above moved under the
-  persistence path, so every lane ran fresh on the release commit's code
-  (`0b24116`, which the release commit extends only with this record).
+  persistence path, so every lane ran fresh on `0b24116`. The release
+  extends that commit with this record and one later dependency bump:
+  urllib3 2.7.0 to 2.8.0 (#689), which clears three advisories. urllib3
+  reaches Voxint only through yt-dlp URL fetches and the parity extra, and
+  no Gate E lane exercises either (the browser lane renders the fetch panel
+  but submits nothing), so the evidence stands. #689 smoke-tested the fetch
+  path under 2.8.0 through the egress proxy.
   - **Pipeline lane: PASS** on `VOXINT_E2E_LANE=cuda`, maintainer hardware,
     RTX 5090, serial, disposable `voxint_e2e` database. The published 0.47.0
     CUDA service images stood in for 0.48.0 (empty `services/` diff).
