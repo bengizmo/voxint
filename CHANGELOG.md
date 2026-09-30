@@ -6,6 +6,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-09-30
+
 ### Removed
 - **The `CONSOLE_MEDIA_ENABLED` setting** (#682). The Media library is always on.
   Its editor is the only review surface, so turning the setting off made review
@@ -4716,7 +4718,8 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.47.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.48.0...HEAD
+[0.48.0]: https://github.com/bengizmo/voxint/compare/v0.47.0...v0.48.0
 [0.47.0]: https://github.com/bengizmo/voxint/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/bengizmo/voxint/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/bengizmo/voxint/compare/v0.44.0...v0.45.0
