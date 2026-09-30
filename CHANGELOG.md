@@ -14,6 +14,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   schema migration is needed. SQLAlchemy 2.1 no longer installs `greenlet`,
   which Voxint does not use.
 
+### Fixed
+- **The website deploy workflow no longer fails on every docs push** (#648). The
+  deploy target moved out of the public workflow file into repository settings
+  (`VOXINT_DEPLOY_HOST` and `VOXINT_DEPLOY_PATH` variables, `VOXINT_DEPLOY_KEY`
+  secret). Until they are set, pushes still build the site with
+  `mkdocs build --strict` and skip the deploy; a partial configuration fails the
+  run.
+
 ## [0.48.0] - 2026-09-30
 
 ### Removed
