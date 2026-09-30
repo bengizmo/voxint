@@ -201,7 +201,12 @@
     </label>
     {{ folder_picker("fetch-folder") }}
     <button type="submit"{% if not ytdlp_enabled %} disabled{% endif %}>Fetch and transcribe</button>
-    {% if not ytdlp_enabled %}
+    {% if ytdlp_enabled %}
+    <p class="oc-muted">Fetching a URL lets the downloader contact other sites, including
+    ones a link redirects to. If you fetch links you don't fully trust, run the
+    restricted URL-download overlay (<code>compose.ytdlp-egress.yaml</code>). See the
+    operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
+    {% else %}
     <p class="oc-muted">Fetching from a URL is turned off. Turn it on in <a href="/settings">Settings</a>.</p>
     {% endif %}
   </form>

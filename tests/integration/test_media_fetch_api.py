@@ -319,6 +319,18 @@ def test_media_page_disables_fetch_form_when_disabled(
     assert re.search(r'<input type="url" name="url"[^>]*\brequired disabled>', body)
     assert re.search(r'<button type="submit" disabled>Fetch and transcribe</button>', body)
     assert "Fetching from a URL is turned off." in body
+    assert "compose.ytdlp-egress.yaml" not in body
+
+
+def test_media_page_points_at_the_egress_overlay_when_enabled(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """The fetch panel carries the egress warning the legacy /runs form had
+    (#682): fetching untrusted links needs the restricted overlay."""
+    body = make_client(session_factory, tmp_path, ytdlp_enabled=True).get("/media").text
+    assert "compose.ytdlp-egress.yaml" in body
+    assert "URL ingestion &amp; egress security" in body
+    assert "Fetching from a URL is turned off." not in body
 
 
 # --- provenance display (host, never the raw URL) -----------------------------
