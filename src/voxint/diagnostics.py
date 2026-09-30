@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import httpx
-from sqlalchemy import Engine, distinct, select, text
+from sqlalchemy import Engine, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -130,18 +130,18 @@ def check_voice_embedding_spaces(
             turn_spaces = set(
                 space
                 for space in session.scalars(
-                    select(distinct(DiarizationTurn.embedding_space)).where(
-                        DiarizationTurn.embedding_space.is_not(None)
-                    )
+                    select(DiarizationTurn.embedding_space)
+                    .distinct()
+                    .where(DiarizationTurn.embedding_space.is_not(None))
                 )
                 if space is not None
             )
             enrollment_spaces = set(
                 space
                 for space in session.scalars(
-                    select(distinct(SpeakerEmbedding.embedding_space)).where(
-                        SpeakerEmbedding.embedding_space.is_not(None)
-                    )
+                    select(SpeakerEmbedding.embedding_space)
+                    .distinct()
+                    .where(SpeakerEmbedding.embedding_space.is_not(None))
                 )
                 if space is not None
             )

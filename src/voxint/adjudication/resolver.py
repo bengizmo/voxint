@@ -28,6 +28,7 @@ from sqlalchemy import (
     ColumnElement,
     ColumnExpressionArgument,
     Exists,
+    Row,
     ScalarSelect,
     and_,
     distinct,
@@ -608,7 +609,7 @@ def _active_overrides(
             sid: name
             for sid, name in session.execute(
                 select(Speaker.id, Speaker.display_name).where(Speaker.id.in_(speaker_ids))
-            ).tuples()
+            )
         }
         if speaker_ids
         else {}
@@ -690,13 +691,13 @@ def label_states(
         | {canonical(mc.top_speaker_id) for mc in mc_rows if mc.top_speaker_id}
     )
     speaker_ids.discard(None)
-    speaker_rows: list[tuple[uuid.UUID, str, datetime | None, uuid.UUID | None]] = (
+    speaker_rows: list[Row[uuid.UUID, str, datetime | None, uuid.UUID | None]] = (
         list(
             session.execute(
                 select(
                     Speaker.id, Speaker.display_name, Speaker.deleted_at, Speaker.merged_into_id
                 ).where(Speaker.id.in_(speaker_ids))
-            ).tuples()
+            )
         )
         if speaker_ids
         else []

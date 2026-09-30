@@ -127,7 +127,7 @@ def _run_tally(session: Session, selected: SelectedRun) -> RunTally:
         select(MatchCandidate.decision, func.count(MatchCandidate.id))
         .where(MatchCandidate.pipeline_run_id == selected.run_id)
         .group_by(MatchCandidate.decision)
-    ).tuples()
+    )
     counts: Counter[str] = Counter({decision: count for decision, count in rows})
     spaces = set(
         session.scalars(
