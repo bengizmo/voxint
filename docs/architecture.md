@@ -30,7 +30,7 @@ run's LLM enhancement with the next run's transcription.
 
 **ACQUIRE** (`STAGE_ORDER[0]`) is the universal first stage: a successful no-op for
 local or uploaded media (`source_url IS NULL`), and a yt-dlp download for URL runs
-(`voxint fetch` / `POST /fetch`). Making it the first stage, rather than a special
+(`voxint fetch` / `POST /media/fetch`). Making it the first stage, rather than a special
 submit-time step, keeps the "every fresh run starts at `STAGE_ORDER[0]`" invariant
 intact, so legacy `queued`/`current_stage=NULL` rows route safely into the no-op.
 Download mechanics and the SSRF model are below.
@@ -368,7 +368,7 @@ on the feature), deliberately outside the `EffectiveFlags` web.
 
 ## URL ingestion & SSRF (the ACQUIRE stage)
 
-`voxint fetch <url>` / `POST /fetch` register a URL as a `MediaItem.source_url`
+`voxint fetch <url>` / `POST /media/fetch` register a URL as a `MediaItem.source_url`
 and queue a run; the pipeline's first stage, **ACQUIRE**, downloads it with
 yt-dlp on the worker (a no-op when `source_url IS NULL`, meaning local/uploaded
 media). URL ingestion is an authenticated **admin egress** capability
@@ -444,13 +444,13 @@ private space are refused (for yt-dlp's own HTTP(S) traffic). It is deliberately
 routable network, still wants a host-level egress firewall. See
 `docs/operations.md`, "Restricted URL-download overlay".
 
-**CSRF.** Four mutation forms (`POST /submit`, `/fetch`, `/runs/{id}/requeue`,
-and `POST /review/{id}/claim`) carry a stateless, action-bound HMAC token
-(`api.csrf`, keyed by `csrf_secret`, independent of the Basic-auth password); a
-missing/mis-signed token is refused before any state change. While
-`console_media_enabled` is on (the default), `POST /submit` and `POST /fetch`
-redirect to `/media` (303) before reaching the CSRF-protected handler; the `/media/submit`
-and `/media/fetch` routes carry their own CSRF actions. `/claim` needs its own
+**CSRF.** Every console mutation form (the `/media/submit` upload, the
+`/media/fetch` URL ingest, `/runs/{id}/requeue`, `POST /review/{id}/claim`, and the
+rest) carries a stateless, action-bound HMAC token (`api.csrf`, keyed by
+`csrf_secret`, independent of the Basic-auth password); a missing/mis-signed token
+is refused before any state change, and a token minted for one action is not valid
+on another. The legacy `POST /submit` and `POST /fetch` forms were removed in #682
+and now 404. `/claim` needs its own
 because claiming is what *mints* the run's claim token: it has no unguessable
 token of its own yet. The remaining review-workbench mutations (release, decision,
 enroll) are instead gated by that per-run claim token. Since v0.27.0 the CSRF
@@ -632,8 +632,8 @@ dropped in revision 0046. An archived project is skipped: its folders resolve as
 if unassigned for new runs, learned-corrections capture and new quote saves are
 off, history and membership stay live.
 
-Console 2.0 P2b (#154) makes `/media` operable behind the same
-`CONSOLE_MEDIA_ENABLED` flag. Upload and URL fetch move onto the page (each may
+Console 2.0 P2b (#154) makes `/media` operable. Upload and URL fetch move onto
+the page (each may
 choose a settings folder that sets which vocabulary and corrections apply without
 moving the file, per the ADR 0002 addendum), a folder panel registers or
 unregisters folders, and a multi-select drives non-destructive bulk actions:
@@ -650,12 +650,12 @@ file. Archive and restore carry each selected row's render-time latest-run id as
 baseline and act on that exact run, skipping on drift, so a double-submit is
 idempotent rather than sliding onto the next-older run. The archived view
 (`/media?archived=1`) lists files whose latest run is archived so bulk unarchive
-has a target. All routes are always registered (the
-route inventory is stable across the flag flip) and 404 while the flag is off;
-the flag also points the sidebar Media link and the Home "Add media" action at
-`/media` instead of the legacy `/runs` upload. No schema migration ships in P2b.
-The flag has defaulted on since #646: the media editor had by then become the
-only review surface, so with the flag off every review entry point ended in a 404.
+has a target. No schema migration ships in P2b. The area first shipped behind a
+`CONSOLE_MEDIA_ENABLED` flag, which defaulted on in #646 (the media editor had
+become the only review surface, so with the flag off every review entry point
+ended in a 404) and was removed in #682 along with the legacy `/runs` upload and
+URL-fetch forms. The sidebar Media link and every "Add media" action point at
+`/media`.
 
 ## Review console
 

@@ -885,18 +885,16 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
 - **`GET /review`**: redirects (303) to the Media library (`/media`).
   `GET /review/{run_id}` and `GET /review/{run_id}/transcript` redirect (302)
   into that run's media editor (`/media/{media_id}/editor?run=…`), where review
-  happens. Both targets need `console_media_enabled`, which is on by default;
-  turning it off makes every review entry point end in a 404 (#646).
-- **`POST /submit`**: a bounded **file upload**. `UPLOAD_MAX_BYTES` (default
-  5 GiB) is enforced *while streaming* (never a single unbounded read); the file
-  lands under a server-issued, uuid-namespaced `incoming/{submission_id}/…` path,
-  so re-uploading a name yields a distinct immutable media item and never
-  overwrites history. A hidden `submission_id` makes form replay idempotent.
-  With `console_media_enabled` on (the default), this route redirects to
-  `/media` (303) without processing; uploads go through `/media/submit` instead.
-- **`POST /fetch`**: the browser equivalent of `voxint fetch` (URL ingestion).
-  With `console_media_enabled` on (the default), this route redirects to
-  `/media` (303); URL fetches go through `/media/fetch` instead.
+  happens.
+- **`POST /media/submit`**: a bounded **file upload** from the Media library.
+  `UPLOAD_MAX_BYTES` (default 5 GiB) is enforced *while streaming* (never a single
+  unbounded read); the file lands under a server-issued, uuid-namespaced
+  `incoming/{submission_id}/…` path, so re-uploading a name yields a distinct
+  immutable media item and never overwrites history. A hidden `submission_id`
+  makes form replay idempotent.
+- **`POST /media/fetch`**: the browser equivalent of `voxint fetch` (URL
+  ingestion), from the Media library. The legacy `POST /submit` and `POST /fetch`
+  routes were removed in #682 and return 404.
 - **`POST /runs/{id}/requeue`**: an exact-revision (CAS) requeue of a FAILED run,
   the browser equivalent of `voxint requeue` (covers failed downloads).
 - **`POST /runs/{id}/pause`**: an exact-revision (CAS) pause of a `QUEUED` or
@@ -997,8 +995,8 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   Use whichever fits, they compose (deleting a run already GC-reclaimed just
   finds its file already gone).
 
-**Media library file management** (`/media`, behind `console_media_enabled`,
-on by default; ADR 0007). The library page offers three file operations through a journaled
+**Media library file management** (`/media`; ADR 0007). The library page offers
+three file operations through a journaled
 operations system that survives crashes at any filesystem boundary:
 
 - **Trash** (`POST /media/trash`): bulk-moves selected files into a managed
@@ -1106,12 +1104,11 @@ selects the segment, never seeks, and no playhead is shown. If the amplitude
 data cannot be computed (e.g. the media file is gone and nothing was cached)
 the strip simply does not appear; the transcript list is unaffected.
 
-**Broker-degraded submission.** `/media/submit` (or the legacy `/submit` when the
-Media library is turned off), `/media/fetch` (or `/fetch`), and `/runs/{id}/requeue`
-commit the durable run *before* publishing the Celery task. If Redis is down at
-that moment the mutation still succeeds: the run stays `QUEUED` (never `FAILED`)
-with a clear linked note, and the recovery sweep re-enqueues it once the broker
-returns. Read pages (`/runs*`) render from Postgres only and never touch Redis.
+**Broker-degraded submission.** `/media/submit`, `/media/fetch`, and
+`/runs/{id}/requeue` commit the durable run *before* publishing the Celery task.
+If Redis is down at that moment the mutation still succeeds: the run stays
+`QUEUED` (never `FAILED`) with a clear linked note, and the recovery sweep
+re-enqueues it once the broker returns. Read pages (`/runs*`) render from Postgres only and never touch Redis.
 
 **Orphaned incoming cleanup.** At app startup, `reconcile_orphaned_incoming`
 scans `media_root/incoming/` and removes files that have no committed
@@ -1169,7 +1166,7 @@ retroactively for existing media.
 
 ### URL ingestion & egress security
 
-`voxint fetch <url>` / `POST /fetch` download a URL with yt-dlp on the worker
+`voxint fetch <url>` / `POST /media/fetch` download a URL with yt-dlp on the worker
 (the ACQUIRE stage). Toggle the capability with `YTDLP_ENABLED` (default on) or
 from **Settings → Features**, where a saved console choice wins over the
 environment and applies with no restart; when off, the fetch route/CLI/form refuse
@@ -1563,11 +1560,11 @@ the run). Summaries and topics are the model's reading, not a verified
 record, so the UI labels them machine-generated; entity spans that cannot be
 located verbatim in their segment are dropped and counted rather than shown.
 
-The mutation forms that require a CSRF token are `POST /submit`, `/fetch`,
-`/runs/{id}/requeue`, `POST /review/{id}/claim` (claiming mints the run's claim
-token, so it has none of its own to gate a forged POST), the web-research
-forms on `/speakers` (start, cancel, and per-draft accept/reject, each under
-its own token action), and the run-asset forms on `/media/{id}/editor` (generate and
+The mutation forms that require a CSRF token are `POST /media/submit`,
+`/media/fetch`, `/runs/{id}/requeue`, `POST /review/{id}/claim` (claiming mints
+the run's claim token, so it has none of its own to gate a forged POST), the
+web-research forms on `/speakers` (start, cancel, and per-draft accept/reject,
+each under its own token action), and the run-asset forms on `/media/{id}/editor` (generate and
 cancel, each under its own token action). Since v0.27.0, the app auto-generates
 a CSRF secret on first start and persists it to `.csrf_secret` in the media
 root (`MEDIA_ROOT`, `/data/media` inside the container), created with 0600
@@ -1874,8 +1871,8 @@ Existing adjudication decisions retain their `user_id` attribution.
 
 Every route but `/healthz` and `/login` sits behind authentication: HTTP Basic
 in single-operator mode, or session cookies in multi-user mode (see "Multi-user
-authentication" above). The core mutation forms (`POST /submit`, `/fetch`,
-`/runs/{id}/requeue`, `POST /review/{id}/claim`, and the wizard/settings forms
+authentication" above). The core mutation forms (`POST /media/submit`,
+`/media/fetch`, `/runs/{id}/requeue`, `POST /review/{id}/claim`, and the wizard/settings forms
 with their own `CSRF_SETUP` / `CSRF_SETTINGS` tokens) additionally require a
 CSRF token (see above), and the remaining review-workbench mutations are gated
 by their per-run claim token.
@@ -1891,8 +1888,6 @@ by their per-run claim token.
 | `GET /jobs`, `GET /jobs/{run_id}` | Compatibility routes; 303 redirects to `/runs` or `/runs/{run_id}` |
 | `GET /runs/{run_id}` | Run detail; the per-stage attempt ledger is in the collapsed Technical details section |
 | `GET /runs/{run_id}/transcript?read=1&text=raw\|enhanced` | Read-mode transcript (HTML); add `&timestamps=false` for the prose view. Without `read=1` it redirects (302) into the run's media editor |
-| `POST /submit` | Legacy browser file upload; redirects (303) to `/media` without processing while `console_media_enabled` is on (the default). Use `POST /media/submit` |
-| `POST /fetch` | Legacy yt-dlp URL ingestion; redirects (303) to `/media` while `console_media_enabled` is on (the default). Use `POST /media/fetch` |
 | `POST /runs/{run_id}/requeue` | Exact-revision (CAS) requeue of a FAILED run |
 | `POST /runs/bulk-retry` | Bulk retry for a grouped failure on the Failed tab; each item carries its expected revision |
 | `GET /review` | 303 redirect to `/media` |

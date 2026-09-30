@@ -6,6 +6,34 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Removed
+- **The `CONSOLE_MEDIA_ENABLED` setting** (#682). The Media library is always on.
+  Its editor is the only review surface, so turning the setting off made review
+  unreachable. A leftover `CONSOLE_MEDIA_ENABLED` in your environment or `.env`
+  is ignored.
+- **The legacy `POST /submit` and `POST /fetch` routes** (#682). They were the
+  upload and URL-fetch forms on the old Runs page and, since the Media library
+  became the default, redirected to `/media` without processing, so a stale form
+  lost its input silently. They now return 404. Add recordings from the Media
+  library (`POST /media/submit`, `POST /media/fetch`).
+
+### Changed
+- The Media library's bulk **Delete...** button is now labelled **Move to
+  trash**, which is what it does (files can be restored until the trash is
+  emptied).
+
+### Fixed
+- **The empty Media library no longer points a read-only operator at a button
+  they cannot see.** "Add a recording with the button above" now shows only to
+  operators who can add recordings.
+- **Folder pickers no longer name projects while the projects area is off.** The
+  upload, URL, folder-panel and move-to-folder pickers, and the re-run preview,
+  showed a folder's project name even though projects cannot be opened on a
+  default install.
+- **Saving run notes lands on a live page.** The save redirects into the run's
+  editor, which returned 404 when the Media library was turned off; with the
+  setting gone the redirect always resolves, and a test pins its exact target.
+
 ## [0.47.0] - 2026-09-29
 
 ### Fixed

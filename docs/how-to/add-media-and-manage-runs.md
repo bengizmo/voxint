@@ -57,11 +57,6 @@ show the reason and offer a **Retry** button.
 When the batch is done, you see a summary ("5 of 5 queued for transcription").
 Reload the page to see the new recordings in the library.
 
-> If **Media** in the sidebar opens the **Runs** page instead, whoever set up
-> your Voxint turned the Media library off (`CONSOLE_MEDIA_ENABLED=false`). You
-> can still upload from the boxes at the top of the Runs page, but you cannot
-> open finished transcripts for review until the Media library is turned back on.
-
 On the **Media** page, use the search box to find a recording by name or folder.
 The status filter offers **Needs review**, **Failed**, **Reviewed**, and **All**.
 Each recording's action matches its state: **Review**, **Retry**, or **Open**.
