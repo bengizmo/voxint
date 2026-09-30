@@ -1,10 +1,13 @@
-"""POST /submit — the browser upload path, end to end against real Postgres.
+"""POST /media/submit — the browser upload path, end to end against real Postgres.
 
 Covers the happy path (bytes land uuid-namespaced, MediaItem gets the first-ever
 sha256/size, run queued + published), the size cap on both the early
 Content-Length gate and the authoritative stream copy, filename rejection,
 submission-id replay idempotency (same bytes → same run) and its conflict
 (different bytes → 409), and that a failed upload never leaves a temp behind.
+These moved here from the legacy ``POST /submit`` when #682 removed that route;
+the JSON (``Accept: application/json``) contract is pinned in
+``test_media_ingest_api.py``.
 """
 
 import hashlib
@@ -24,19 +27,21 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import _UPLOAD_ENVELOPE_ALLOWANCE, create_app
-from voxint.api.csrf import CSRF_FETCH, CSRF_SUBMIT, mint_csrf_token
+from voxint.api.csrf import CSRF_MEDIA_FETCH, CSRF_MEDIA_SUBMIT, mint_csrf_token
 from voxint.config import Settings
 from voxint.db.models import MediaItem, PipelineRun, RunStatus
 from voxint.ingest.service import UploadConflictError, UploadTooLargeError, submit_upload
 
 CREDS = ("reviewer", "s3cret")
 _CSRF_KEY = "submit-api-test-csrf-key"  # low-entropy; a known secret lets tests mint
+_QUEUED = "/media?submitted=1"
+_DEFERRED = "/media?submitted=deferred"
 
 
 def _sd(**kwargs: str) -> dict[str, str]:
-    """Form fields (submission_id, …) with a valid /submit CSRF token merged in —
-    the real upload form carries one; posting without it is 403."""
-    return {"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SUBMIT), **kwargs}
+    """Form fields (submission_id, …) with a valid /media/submit CSRF token merged
+    in — the real upload form carries one; posting without it is 403."""
+    return {"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_MEDIA_SUBMIT), **kwargs}
 
 
 def wav_bytes(seconds: float = 0.02) -> bytes:
@@ -64,9 +69,6 @@ def make_client(
         media_root=media_root,
         upload_max_bytes=max_bytes,
         csrf_secret=_CSRF_KEY,
-        # The legacy Runs-page handlers process only while the media area is off;
-        # with it on (the default since #646) they 303 to /media untouched.
-        console_media_enabled=False,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
     client.auth = CREDS
@@ -99,9 +101,16 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
     return calls
 
 
-def _run_id_from_redirect(location: str) -> uuid.UUID:
-    assert location.startswith("/runs/")
-    return uuid.UUID(location.removeprefix("/runs/"))
+def _run_id_for(session_factory: sessionmaker[Session], source_path: str) -> uuid.UUID:
+    """The one run the upload at ``source_path`` created (the library redirect
+    carries no run id)."""
+    with session_factory() as session:
+        media = session.execute(
+            select(MediaItem).where(MediaItem.source_path == source_path)
+        ).scalar_one()
+        return session.execute(
+            select(PipelineRun.id).where(PipelineRun.media_item_id == media.id)
+        ).scalar_one()
 
 
 # --- happy path ---------------------------------------------------------------
@@ -116,13 +125,14 @@ def test_upload_creates_namespaced_media_and_publishes(
     body = wav_bytes()
     sub = uuid.uuid4().hex
     resp = client.post(
-        "/submit",
+        "/media/submit",
         files={"file": ("episode 5.wav", body, "audio/wav")},
         data=_sd(submission_id=sub),
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    run_id = _run_id_from_redirect(resp.headers["location"])
+    assert resp.headers["location"] == _QUEUED
+    run_id = _run_id_for(session_factory, f"incoming/{sub}/episode 5.wav")
 
     landed = media_root / "incoming" / sub / "episode 5.wav"
     assert landed.read_bytes() == body  # exact bytes, atomically placed
@@ -142,11 +152,12 @@ def test_upload_creates_namespaced_media_and_publishes(
     assert published == [run_id]  # commit-before-publish fired exactly once
 
 
-def test_runs_page_offers_the_upload_form(client: TestClient) -> None:
-    body = client.get("/runs").text
-    assert 'action="/submit"' in body
+def test_media_page_offers_the_upload_form(client: TestClient) -> None:
+    body = client.get("/media").text
+    form = re.search(r'<form method="post" action="/media/submit"[^>]*>', body)
+    assert form is not None
+    assert 'enctype="multipart/form-data"' in form.group(0)
     assert 'name="submission_id"' in body
-    assert 'enctype="multipart/form-data"' in body
 
 
 # --- CSRF ---------------------------------------------------------------------
@@ -155,12 +166,12 @@ def test_runs_page_offers_the_upload_form(client: TestClient) -> None:
 def test_upload_form_renders_valid_csrf_token(client: TestClient) -> None:
     from voxint.api.csrf import verify_csrf_token
 
-    body = client.get("/runs").text
+    body = client.get("/media").text
     match = re.search(
-        r'action="/submit".*?name="csrf_token" value="([^"]+)"', body, re.DOTALL
+        r'action="/media/submit".*?name="csrf_token" value="([^"]+)"', body, re.DOTALL
     )
     assert match is not None
-    assert verify_csrf_token(_CSRF_KEY, CSRF_SUBMIT, match.group(1))
+    assert verify_csrf_token(_CSRF_KEY, CSRF_MEDIA_SUBMIT, match.group(1))
 
 
 def test_submit_rejected_without_csrf_token(
@@ -170,7 +181,7 @@ def test_submit_rejected_without_csrf_token(
 ) -> None:
     # No csrf_token ⇒ 403 before the file is finalized / any row is written.
     resp = client.post(
-        "/submit",
+        "/media/submit",
         files={"file": ("ep.wav", wav_bytes(), "audio/wav")},
         data={"submission_id": uuid.uuid4().hex},  # NB: no csrf_token
         follow_redirects=False,
@@ -184,13 +195,13 @@ def test_submit_rejected_without_csrf_token(
 def test_submit_rejected_with_wrong_action_token(
     client: TestClient, published: list[uuid.UUID]
 ) -> None:
-    # A token minted for /fetch is not valid on /submit (action binding).
+    # A token minted for /media/fetch is not valid on /media/submit (action binding).
     resp = client.post(
-        "/submit",
+        "/media/submit",
         files={"file": ("ep.wav", wav_bytes(), "audio/wav")},
         data={
             "submission_id": uuid.uuid4().hex,
-            "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_FETCH),
+            "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_MEDIA_FETCH),
         },
         follow_redirects=False,
     )
@@ -208,23 +219,22 @@ def test_broker_down_submit_leaves_run_queued_and_flags_banner(
 ) -> None:
     # Commit-before-publish means a broker outage at enqueue time is non-fatal:
     # the upload succeeds, the durable run stays QUEUED (never FAILED, no error),
-    # and the redirect flags the deferred-enqueue banner. The recovery sweep
-    # republishes it later. Simulated by making the publish raise the exact broker
-    # exception _publish_or_defer catches.
+    # and the redirect flags the deferred-enqueue notice. The recovery sweep
+    # republishes it later. Simulated by making the publish report a deferral.
     from voxint.ingest.service import SubmissionResult
 
     monkeypatch.setattr(SubmissionResult, "publish", lambda self: False)
 
     sub = uuid.uuid4().hex
     resp = client.post(
-        "/submit",
+        "/media/submit",
         files={"file": ("ep.wav", wav_bytes(), "audio/wav")},
         data=_sd(submission_id=sub),
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert resp.headers["location"].endswith("?enqueue=deferred")
-    run_id = _run_id_from_redirect(resp.headers["location"].split("?", 1)[0])
+    assert resp.headers["location"] == _DEFERRED
+    run_id = _run_id_for(session_factory, f"incoming/{sub}/ep.wav")
 
     with session_factory() as session:
         run = session.get(PipelineRun, run_id)
@@ -232,9 +242,9 @@ def test_broker_down_submit_leaves_run_queued_and_flags_banner(
         assert run.status == RunStatus.QUEUED.value  # never FAILED
         assert run.error is None  # a broker outage is not a stage failure
 
-    # The detail page tells the operator the run is queued and self-healing.
-    detail = client.get(f"/runs/{run_id}?enqueue=deferred").text
-    assert "enqueue was deferred" in detail
+    # The library tells the operator the run is queued and will start later.
+    library = client.get(_DEFERRED).text
+    assert "It will start when the worker is available." in library
 
 
 # --- size cap -----------------------------------------------------------------
@@ -249,7 +259,7 @@ def test_oversized_upload_rejected_and_no_run(
     # authoritative streaming check refuses it — 413, no run, nothing published.
     client = make_client(session_factory, media_root, max_bytes=64)
     resp = client.post(
-        "/submit",
+        "/media/submit",
         files={"file": ("big.wav", wav_bytes(seconds=0.1), "audio/wav")},
         data=_sd(submission_id=uuid.uuid4().hex),
         follow_redirects=False,
@@ -272,7 +282,7 @@ def test_oversized_content_length_rejected_before_auth_and_body(
     client.auth = None
     threshold = 64 + _UPLOAD_ENVELOPE_ALLOWANCE
     resp = client.post(
-        "/submit",
+        "/media/submit",
         files={"file": ("big.wav", b"x" * (threshold + 1024), "audio/wav")},
         data=_sd(submission_id=uuid.uuid4().hex),
         follow_redirects=False,
@@ -298,7 +308,7 @@ def test_chunked_oversized_upload_rejected_and_no_run(
     head = (
         f"--{boundary}\r\n"
         'Content-Disposition: form-data; name="csrf_token"\r\n\r\n'
-        f"{mint_csrf_token(_CSRF_KEY, CSRF_SUBMIT)}\r\n"
+        f"{mint_csrf_token(_CSRF_KEY, CSRF_MEDIA_SUBMIT)}\r\n"
         f"--{boundary}\r\n"
         'Content-Disposition: form-data; name="submission_id"\r\n\r\n'
         f"{uuid.uuid4().hex}\r\n"
@@ -319,7 +329,7 @@ def test_chunked_oversized_upload_rejected_and_no_run(
         yield tail
 
     resp = client.post(
-        "/submit",
+        "/media/submit",
         content=body_stream(),
         headers={"content-type": f"multipart/form-data; boundary={boundary}"},
         follow_redirects=False,
@@ -458,7 +468,7 @@ def test_traversal_filenames_rejected(
     bad: str,
 ) -> None:
     resp = client.post(
-        "/submit",
+        "/media/submit",
         files={"file": (bad, wav_bytes(), "audio/wav")},
         data=_sd(submission_id=uuid.uuid4().hex),
         follow_redirects=False,
@@ -473,7 +483,7 @@ def test_non_uuid_submission_id_rejected(
     client: TestClient, published: list[uuid.UUID]
 ) -> None:
     resp = client.post(
-        "/submit",
+        "/media/submit",
         files={"file": ("ok.wav", wav_bytes(), "audio/wav")},
         data=_sd(submission_id="not-a-uuid"),
         follow_redirects=False,
@@ -494,17 +504,17 @@ def test_replay_same_bytes_returns_same_run(
     sub = uuid.uuid4().hex
     files = {"file": ("ep.wav", body, "audio/wav")}
     first = client.post(
-        "/submit", files=files, data=_sd(submission_id=sub), follow_redirects=False
+        "/media/submit", files=files, data=_sd(submission_id=sub), follow_redirects=False
     )
     second = client.post(
-        "/submit",
+        "/media/submit",
         files={"file": ("ep.wav", body, "audio/wav")},
         data=_sd(submission_id=sub),
         follow_redirects=False,
     )
     assert first.status_code == second.status_code == 303
-    run_id = _run_id_from_redirect(first.headers["location"])
-    assert _run_id_from_redirect(second.headers["location"]) == run_id
+    assert first.headers["location"] == second.headers["location"] == _QUEUED
+    run_id = _run_id_for(session_factory, f"incoming/{sub}/ep.wav")
 
     with session_factory() as session:
         runs = session.execute(select(PipelineRun)).scalars().all()
@@ -522,16 +532,16 @@ def test_replay_different_bytes_conflicts(
 ) -> None:
     sub = uuid.uuid4().hex
     first = client.post(
-        "/submit",
+        "/media/submit",
         files={"file": ("ep.wav", wav_bytes(seconds=0.02), "audio/wav")},
         data=_sd(submission_id=sub),
         follow_redirects=False,
     )
     assert first.status_code == 303
-    run_id = _run_id_from_redirect(first.headers["location"])
+    run_id = _run_id_for(session_factory, f"incoming/{sub}/ep.wav")
 
     clash = client.post(
-        "/submit",
+        "/media/submit",
         files={"file": ("ep.wav", wav_bytes(seconds=0.05), "audio/wav")},
         data=_sd(submission_id=sub),
         follow_redirects=False,

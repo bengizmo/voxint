@@ -141,7 +141,7 @@ class Settings(BaseSettings):
     # Bounded page size for the /runs execution-history browser (keyset paged).
     runs_page_size: int = Field(default=50, ge=1, le=500)
     media_page_size: int = Field(default=50, ge=1, le=500)
-    # Hard ceiling on a browser upload (POST /submit), enforced authoritatively
+    # Hard ceiling on a browser upload (POST /media/submit), enforced authoritatively
     # while streaming — an oversized Content-Length is rejected early, but the
     # stream copy stops and unlinks its temp the moment it crosses this bound, so
     # a lying header can never write past it. 5 GB fits long-form podcast media.
@@ -572,17 +572,6 @@ class Settings(BaseSettings):
     # runtime toggle. Projects is the first flagged area; its sidebar entry and
     # the "New project" quick action render only when this is true.
     console_projects_enabled: bool = False
-
-    # The media library area (Console 2.0 P2a, #153). The /media routes are
-    # always registered so the route inventory is stable; the area gate
-    # (require_media_enabled) returns 404 while this is off.
-    #
-    # On by default (#646): the area is live, and its editor
-    # (/media/{id}/editor) is the only review surface, since every legacy review
-    # entry point (/review/{id}, the run page's Editor button, claim) redirects
-    # into it. Setting False hides the Media library AND makes review
-    # unreachable; it exists only until the flag is removed.
-    console_media_enabled: bool = True
 
     # The speakers area rebuild (Console 2.0 P4, #159). /speakers is ALREADY a
     # live page, so this flag branches CONTENT, not access: off = the legacy

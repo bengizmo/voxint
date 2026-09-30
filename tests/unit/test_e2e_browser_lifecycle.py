@@ -215,12 +215,10 @@ def test_parser_wires_each_subcommand(argv: list[str], func: object) -> None:
     assert args.func is func
 
 
-def test_cmd_serve_runs_the_shipped_media_default(
+def test_cmd_serve_points_the_instance_at_the_disposable_db(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """#646: the lane serves the shipped default, so a host-exported
-    CONSOLE_MEDIA_ENABLED never reaches the served instance."""
-    monkeypatch.setenv("CONSOLE_MEDIA_ENABLED", "false")
+    """The served instance gets the guarded disposable DATABASE_URL."""
     captured: dict[str, dict[str, str]] = {}
 
     def fake_exec(file: str, argv: list[str], env: dict[str, str]) -> None:
@@ -231,7 +229,6 @@ def test_cmd_serve_runs_the_shipped_media_default(
         ["serve", "--database-url", _DISPOSABLE, "--media-root", str(tmp_path / "m")]
     )
     cmd_serve(args)
-    assert "CONSOLE_MEDIA_ENABLED" not in captured["env"]
     assert captured["env"]["DATABASE_URL"] == _DISPOSABLE
 
 

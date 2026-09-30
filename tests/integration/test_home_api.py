@@ -223,25 +223,6 @@ def test_home_quick_actions(client: TestClient) -> None:
     assert 'href="/projects"' not in body
 
 
-def test_home_quick_actions_media_off_use_runs_forms(
-    session_factory: sessionmaker[Session], tmp_path: Path
-) -> None:
-    """With the media area off, the add-media actions fall back to the Runs
-    page forms (the only way in on that config)."""
-    settings = Settings(
-        voxint_user=CREDS[0],
-        voxint_password=CREDS[1],
-        media_root=tmp_path,
-        console_media_enabled=False,
-    )
-    test_client = TestClient(create_app(settings=settings, session_factory=session_factory))
-    test_client.auth = CREDS
-    seed_onboarded(session_factory)
-    body = test_client.get("/").text
-    assert '<a class="cb-btn cb-btn-primary" href="/runs#add-media">+ Add media</a>' in body
-    assert '<a class="start-btn" href="/runs#add-media">Upload a recording</a>' in body
-
-
 def test_home_window_switch_changes_counts(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:

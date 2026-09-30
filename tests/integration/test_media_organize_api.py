@@ -6,7 +6,7 @@ clearing it), and a folder panel registers/unregisters folders through the share
 write service. These tests pin the wiring the pure helpers cannot see: the CSRF
 gate, whole-selection prevalidation with zero writes on any failure, the ADR 0002
 no-filesystem-touch invariant (only ``media_folder_id`` moves), the honest
-"N files reverted to global settings" count on unregister, and the flag-off 404.
+"N files reverted to global settings" count on unregister.
 
 Needs the real Postgres test DB (the advisory lock / FK SET NULL are Postgres
 behaviour), so skipped without VOXINT_TEST_DATABASE_URL.
@@ -38,14 +38,11 @@ _CSRF_KEY = "media-organize-test-csrf-key"
 def _make_client(
     session_factory: sessionmaker[Session],
     media_root: Path,
-    *,
-    media_enabled: bool = True,
 ) -> TestClient:
     settings = Settings(
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=media_root,
-        console_media_enabled=media_enabled,
         csrf_secret=_CSRF_KEY,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
@@ -391,28 +388,6 @@ def test_folders_requires_csrf(
     assert resp.status_code == 403
     with session_factory() as session:
         assert session.execute(select(MediaFolder)).first() is None
-
-
-def test_organize_routes_404_when_flag_off(
-    session_factory: sessionmaker[Session], tmp_path: Path
-) -> None:
-    off = _make_client(session_factory, tmp_path, media_enabled=False)
-    assert (
-        off.post(
-            "/media/assign",
-            data=_data(CSRF_MEDIA_ASSIGN, media_id=[str(uuid.uuid4())]),
-            follow_redirects=False,
-        ).status_code
-        == 404
-    )
-    assert (
-        off.post(
-            "/media/folders",
-            data=_data(CSRF_MEDIA_FOLDERS, action="add", folder="x"),
-            follow_redirects=False,
-        ).status_code
-        == 404
-    )
 
 
 def test_folder_panel_renders_registered_folders(

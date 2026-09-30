@@ -551,15 +551,13 @@ def _register_routes(app: FastAPI) -> None:
     # match/inventory order, where the old index redirect lived.
     console.include_router(home_router)
 
-    # ---- Media library (Console 2.0 P2a, #153): the /media file listing.
-    # Always registered so the route inventory is stable across the dark-ship
-    # flip; the router's require_media_enabled gate 404s until the flag is on.
+    # ---- Media library (Console 2.0 P2a, #153): the /media file listing, and
+    # the browser's only upload / URL-fetch surface (#682).
     console.include_router(media_router)
 
     # ---- Media detail / editor (Console 2.0 P3a, #156): the /media/{id} page.
     # Registered immediately after media_router so the UUID path parameter does
-    # not shadow the library's named action routes (/media/submit etc.). Same
-    # area gate (require_media_enabled) on the router.
+    # not shadow the library's named action routes (/media/submit etc.).
     console.include_router(editor_router)
 
     # ---- Projects (Console 2.0 P2b, #153): the /projects list + detail pages.
@@ -779,11 +777,6 @@ def _register_routes(app: FastAPI) -> None:
     app.state.projects_routed = any(
         route.path == "/projects" for route in _iter_api_routes(app.routes)
     )
-    # Media (#154) dark-ships routed-but-undiscovered: /media always registers, so
-    # this stamp is always true. The shell reads flag AND stamp, so
-    # flipping CONSOLE_MEDIA_ENABLED alone points the sidebar Media link and the
-    # "Add media" quick action at /media — the dark-ship activation switch.
-    app.state.media_routed = any(route.path == "/media" for route in _iter_api_routes(app.routes))
     # Activity (#162) dark-ships routed-but-undiscovered: /activity/events always
     # registers, so this stamp is always true. shell.activity_enabled ANDs the
     # flag and this stamp.

@@ -50,7 +50,6 @@ from voxint.api.routers.deps import (
     _get_media_gate,
     _reject_if_archived,
     _require_csrf,
-    require_media_enabled,
     require_onboarded,
     templates,
 )
@@ -77,7 +76,7 @@ from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import active_speakers
 from voxint.tutorial.steps import TutorialPage
 
-router = APIRouter(dependencies=[Depends(require_onboarded), Depends(require_media_enabled)])
+router = APIRouter(dependencies=[Depends(require_onboarded)])
 
 
 @router.get("/media/{media_id}/editor", name="media_detail")

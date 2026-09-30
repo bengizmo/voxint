@@ -1,10 +1,10 @@
-"""Legacy runs area: submission, browsing, run actions, dashboards, media.
+"""Legacy runs area: browsing, run actions, dashboards, media.
 
 Moved verbatim from ``api/app.py`` in the P0b router decomposition (#151).
 Four routers, all behind the router-level onboarding gate, because the run
 routes interleave with the review family in registration order (which the P0b
 order contract pins): ``core_router`` (/ index, /runs browsing + search +
-submit/fetch + run detail and transcript), ``actions_router`` (requeue,
+run detail and transcript), ``actions_router`` (requeue,
 cancel, archive, media delete, notes, export), ``dashboards_router``
 (/metrics, /dashboard, /resources), and ``tail_router`` (run assets,
 translation, media streaming + peaks). Console 2.0 later phases fold these
@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Annotated, Any, BinaryIO
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from sqlalchemy import exists, func, select
 from sqlalchemy.exc import IntegrityError
@@ -41,7 +41,6 @@ from voxint.api.csrf import (
     CSRF_ASSETS_GENERATE,
     CSRF_BULK_RETRY,
     CSRF_CANCEL,
-    CSRF_FETCH,
     CSRF_NOTES,
     CSRF_PAUSE,
     CSRF_PLUGIN,
@@ -53,7 +52,6 @@ from voxint.api.csrf import (
     CSRF_RUN_ARCHIVE,
     CSRF_RUN_MEDIA_DELETE,
     CSRF_RUN_UNARCHIVE,
-    CSRF_SUBMIT,
     CSRF_TRANSLATION_CANCEL,
     CSRF_TRANSLATION_GENERATE,
     mint_csrf_token,
@@ -114,7 +112,6 @@ from voxint.app_settings import (
     get_app_settings,
     is_queue_paused,
     resolve_effective_translation_target_language,
-    resolve_effective_ytdlp_enabled,
     set_queue_paused,
 )
 from voxint.config import Settings
@@ -129,7 +126,6 @@ from voxint.db.models import (
     TranscriptSegment,
     TranslationJob,
 )
-from voxint.domain_packs.base import DomainPackError
 from voxint.enrichment.asset_jobs import (
     RunAssetJobError,
     active_or_last_jobs,
@@ -175,10 +171,6 @@ from voxint.ingest import (
     RunRestartEditorialLossError,
     RunRestartLabelRiskError,
     RunRestartVoidRequiredError,
-    UploadConflictError,
-    UploadTooLargeError,
-    UploadValidationError,
-    UrlValidationError,
     archive_run,
     cancel_run,
     delete_run_derived_media,
@@ -188,8 +180,6 @@ from voxint.ingest import (
     restart_run,
     restart_stage_profiles,
     resume_run,
-    submit_upload,
-    submit_url,
     unarchive_run,
     unlink_media_paths,
 )
@@ -814,16 +804,6 @@ def runs(
             "aux_jobs": recent_aux_jobs(session),
             "settings_status_url": str(request.url_for("settings_status")),
             "next_url": next_url,
-            # Server-issued per-render ids: each namespaces its form's path and
-            # makes a double-submit idempotent (see POST /submit, POST /fetch).
-            # The upload and fetch forms get INDEPENDENT ids so the two unrelated
-            # submissions can never collide on a shared source_path.
-            "submission_id": uuid.uuid4().hex,
-            "fetch_submission_id": uuid.uuid4().hex,
-            # Per-form CSRF tokens, each bound to its own action so one form's
-            # token is not valid on the other's route (or on /requeue).
-            "csrf_submit": mint_csrf_token(request.app.state.csrf_secret, CSRF_SUBMIT),
-            "csrf_fetch": mint_csrf_token(request.app.state.csrf_secret, CSRF_FETCH),
             "csrf_bulk_retry": (
                 mint_csrf_token(request.app.state.csrf_secret, CSRF_BULK_RETRY)
                 if grouped_items is not None
@@ -833,9 +813,6 @@ def runs(
             "queue_paused": _queue_paused,
             "csrf_queue_pause": mint_csrf_token(request.app.state.csrf_secret, CSRF_QUEUE_PAUSE),
             "csrf_queue_resume": mint_csrf_token(request.app.state.csrf_secret, CSRF_QUEUE_RESUME),
-            # Gate the URL-fetch form: when off, it renders disabled (POST /fetch
-            # also refuses with 403), matching the CLI's ytdlp_enabled refusal.
-            "ytdlp_enabled": resolve_effective_ytdlp_enabled(get_app_settings(session), settings),
             # Injected clock for the relative-age render (format_age(now=…)).
             "now": _now,
             "active_nav": "runs",
@@ -959,99 +936,6 @@ def runs_live_rows(
     )
     response.headers["Cache-Control"] = "no-store"
     return response
-
-
-@core_router.post("/submit")
-def submit_media_upload(
-    request: Request,
-    operator: OperatorDep,
-    session: SessionDep,
-    file: Annotated[UploadFile, File()],
-    submission_id: Annotated[str, Form()],
-    csrf_token: Annotated[str | None, Form()] = None,
-) -> RedirectResponse:
-    settings: Settings = request.app.state.settings
-    if settings.console_media_enabled:
-        return RedirectResponse("/media", status_code=303)
-    # CSRF before anything: a forged cross-site upload is refused before the DB
-    # write / file finalize. (FastAPI spools the multipart file part before this
-    # body runs — the pre-body spool is bounded by _RequestSizeLimitMiddleware +
-    # the streaming cap, so a forgery cannot write past those; the DB and the
-    # os.replace publish are still gated here.)
-    _require_csrf(request, CSRF_SUBMIT, csrf_token)
-    # An over-cap Content-Length was already rejected before the body was read
-    # (_RequestSizeLimitMiddleware); submit_upload enforces the exact per-file
-    # cap authoritatively while streaming (covers a lying/absent length).
-    try:
-        result = submit_upload(
-            session,
-            stream=file.file,
-            filename=file.filename or "",
-            submission_id=submission_id,
-            media_root=settings.media_root,
-            max_bytes=settings.upload_max_bytes,
-        )
-    except UploadTooLargeError as exc:
-        raise HTTPException(status_code=413, detail=str(exc)) from exc
-    except UploadValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except UploadConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except DomainPackError as exc:
-        # Freeze-time snapshot collision (issue #84) / unresolvable pack (issue
-        # #11): surface a plain-language 422, not the raw 500 the bare raise gave.
-        raise HTTPException(status_code=422, detail=deps._submit_domain_pack_detail(exc)) from exc
-    # Commit-before-publish: the durable QUEUED run must exist before the
-    # enqueue, so commit here rather than leaning on the dependency's
-    # post-return commit (which would run after publish). A broker outage is
-    # then non-fatal — the run stays QUEUED and the recovery sweep republishes.
-    session.commit()
-    return _run_redirect(result.run_id, published=result.publish())
-
-
-@core_router.post("/fetch")
-def fetch_media_url(
-    request: Request,
-    operator: OperatorDep,
-    session: SessionDep,
-    url: Annotated[str, Form()],
-    submission_id: Annotated[str, Form()],
-    csrf_token: Annotated[str | None, Form()] = None,
-) -> RedirectResponse:
-    settings: Settings = request.app.state.settings
-    if settings.console_media_enabled:
-        return RedirectResponse("/media", status_code=303)
-    # CSRF first — reject a forged cross-site fetch before any other check, so
-    # a forgery is refused regardless of the ytdlp_enabled flag's state.
-    _require_csrf(request, CSRF_FETCH, csrf_token)
-    # URL ingestion is an authenticated egress capability gated at the
-    # submission surface: refuse before touching the DB when it is off, so no
-    # row is created and nothing is published. (The worker's ACQUIRE stage
-    # never consults the flag — an already-queued URL run still completes.)
-    if not resolve_effective_ytdlp_enabled(get_app_settings(session), settings):
-        # Generic message — never echo the submitted URL into an error body.
-        raise HTTPException(status_code=403, detail="URL ingestion is disabled")
-    # Mirrors POST /submit: the ingest service is broker-free and does its own
-    # SSRF/replay handling; map its typed errors to status codes. The error
-    # text is URL-free by construction (UrlValidationError never echoes the
-    # URL; a conflict names only the internal source_path), so a signed query
-    # string can't leak into a 4xx body.
-    try:
-        result = submit_url(session, url=url, submission_id=submission_id)
-    except (UrlValidationError, UploadValidationError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except UploadConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except DomainPackError as exc:
-        # Freeze-time snapshot collision (issue #84) / unresolvable pack (issue
-        # #11): plain-language 422 rather than a raw 500. The snapshot is frozen
-        # before any row/source_path write, so nothing is stranded.
-        raise HTTPException(status_code=422, detail=deps._submit_domain_pack_detail(exc)) from exc
-    # Commit-before-publish, exactly as /submit: the durable QUEUED run must
-    # exist before the enqueue, so a broker outage leaves it QUEUED for the
-    # recovery sweep rather than failing the request.
-    session.commit()
-    return _run_redirect(result.run_id, published=result.publish())
 
 
 def build_run_detail_context(
@@ -1544,7 +1428,7 @@ def requeue_run(
         # InvalidTransitionError: defensive — this FAILED→QUEUED-same-stage
         # path cannot trip it, but the CAS contract permits it.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    # Commit-before-publish, mirroring /submit: the durable QUEUED run must
+    # Commit-before-publish, mirroring /media/submit: the durable QUEUED run must
     # exist before the enqueue, and a broker outage leaves it QUEUED for the
     # recovery sweep rather than failing the request.
     session.commit()
@@ -1565,7 +1449,7 @@ def cancel_run_route(
     Exact-revision CAS from the form's hidden field, mirroring /requeue: a
     stale tab holding an older revision 409s rather than cancelling a run
     that already moved on. Cancellation is pure DB state (the existing
-    ``→ CANCELLED`` transition), so unlike /submit and /requeue there is
+    ``→ CANCELLED`` transition), so unlike /media/submit and /requeue there is
     NOTHING to publish — a worker mid-run observes the cancel at its next
     stage boundary (the currently executing stage body finishes first), and
     a QUEUED run simply never starts. Cancelling an already-cancelled run is

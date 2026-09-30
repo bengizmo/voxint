@@ -15,46 +15,11 @@
 {% endblock %}
 {% block cb_actions %}
 {% if shell.can_write %}
-{% if shell.media_enabled %}
 <a class="cb-btn cb-btn-primary" href="/media">+ Add media</a>
-{% else %}
-<a class="cb-btn cb-btn-primary" href="#add-media">+ Add media</a>
-{% endif %}
 {% endif %}
 {% endblock %}
 
 {% block body %}
-{% if not shell.media_enabled and shell.can_write %}
-<section id="add-media" class="oc-section">
-  <h2 class="oc-section-title">ADD MEDIA</h2>
-  <form method="post" action="/submit" enctype="multipart/form-data" class="upload">
-    <input type="hidden" name="submission_id" value="{{ submission_id }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_submit }}">
-    <label>Upload media
-      <input type="file" name="file" required>
-    </label>
-    <button type="submit" class="primary">Submit for transcription</button>
-  </form>
-
-  {% if ytdlp_enabled %}
-  <form method="post" action="/fetch" class="upload">
-    <input type="hidden" name="submission_id" value="{{ fetch_submission_id }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_fetch }}">
-    <label>Fetch from URL
-      <input type="url" name="url" placeholder="https://…" required>
-    </label>
-    <button type="submit">Fetch &amp; transcribe</button>
-  </form>
-  <p class="oc-muted">Fetching a URL lets the downloader contact other sites, including
-  ones a link redirects to. If you fetch links you don't fully trust, run the
-  restricted URL-download overlay (<code>compose.ytdlp-egress.yaml</code>) — see the
-  operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
-  {% else %}
-  <p class="oc-muted">URL ingestion is disabled.</p>
-  {% endif %}
-</section>
-{% endif %}
-
 {% for d in degraded %}
 <div class="degraded-banner" role="alert">
   <div class="db-text">

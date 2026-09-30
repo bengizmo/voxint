@@ -758,9 +758,6 @@ def cmd_seed(args: argparse.Namespace) -> None:
 def cmd_serve(args: argparse.Namespace) -> None:
     url = _guarded(args.database_url)
     env = os.environ.copy()
-    # Serve the shipped default (#646): a host-exported flag must not flip the
-    # lane onto the flag-off path, where every review entry point 404s.
-    env.pop("CONSOLE_MEDIA_ENABLED", None)
     env.update(
         {
             "DATABASE_URL": url,

@@ -52,7 +52,7 @@ def _write_pack(root: Path, name: str, vocab: list[str]) -> None:
     )
 
 
-def _settings(tmp_path: Path, *, media_enabled: bool = True) -> Settings:
+def _settings(tmp_path: Path) -> Settings:
     packs = tmp_path / "packs"
     _write_pack(packs, BASE_PACK, BASE_VOCAB)
     return Settings(
@@ -60,7 +60,6 @@ def _settings(tmp_path: Path, *, media_enabled: bool = True) -> Settings:
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=tmp_path / "media",
-        console_media_enabled=media_enabled,
         csrf_secret=_CSRF_KEY,
         domain_packs_dir=packs,
         domain_pack_path=packs / BASE_PACK,
@@ -465,30 +464,6 @@ def test_confirm_count_mismatch_rejected(client: TestClient) -> None:
     )
     assert resp.status_code == 409
     assert "no longer exist" in resp.text
-
-
-def test_rerun_routes_404_when_flag_off(
-    session_factory: sessionmaker[Session], tmp_path: Path
-) -> None:
-    settings = _settings(tmp_path, media_enabled=False)
-    settings.media_root.mkdir(parents=True, exist_ok=True)
-    off = _make_client(session_factory, settings)
-    assert (
-        off.post(
-            "/media/rerun",
-            data=_data(CSRF_MEDIA_RERUN, media_id=[str(uuid.uuid4())]),
-            follow_redirects=False,
-        ).status_code
-        == 404
-    )
-    assert (
-        off.post(
-            "/media/rerun/confirm",
-            data=_data(CSRF_MEDIA_RERUN_CONFIRM, item=[_pair(uuid.uuid4(), "none")]),
-            follow_redirects=False,
-        ).status_code
-        == 404
-    )
 
 
 # ---- publish batch cap and broker-failure short-circuit --------------------

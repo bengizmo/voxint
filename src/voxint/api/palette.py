@@ -51,20 +51,13 @@ def palette_destinations(
     projects_enabled = settings.console_projects_enabled and getattr(
         app_state, "projects_routed", False
     )
-    media_enabled = settings.console_media_enabled and getattr(
-        app_state, "media_routed", False
-    )
     is_admin = (
         current_user is not None and current_user.role == "admin"
     ) or not settings.voxint_multi_user
 
     dests: list[PaletteCommand] = [
         PaletteCommand("Home", "/", "destination"),
-        PaletteCommand(
-            "Media",
-            "/media" if media_enabled else "/runs",
-            "destination",
-        ),
+        PaletteCommand("Media", "/media", "destination"),
     ]
     if projects_enabled:
         dests.append(PaletteCommand("Projects", "/projects", "destination"))

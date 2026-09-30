@@ -143,10 +143,14 @@ class TestSaveNotes:
             follow_redirects=False,
         )
         assert response.status_code == 303
-        location = response.headers["location"]
-        # Issue #567: redirect now goes to the editor page.
-        assert location.startswith("/media/")
-        assert f"run={run_id}" in location
+        with session_factory() as session:
+            run = session.get(PipelineRun, run_id)
+            assert run is not None
+            media_id = run.media_item_id
+        # Issue #567: the save returns to the run in the editor. #682: that page is
+        # always routed now, so the redirect must land on a live page.
+        assert response.headers["location"] == f"/media/{media_id}/editor?run={run_id}"
+        assert client.get(response.headers["location"]).status_code == 200
         assert _notes_for(session_factory, run_id) == "Speaker 2 sounds like Jim."
 
     def test_blank_notes_clear_to_null(

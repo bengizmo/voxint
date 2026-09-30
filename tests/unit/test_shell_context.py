@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -17,15 +18,12 @@ def _request_with(
     settings: Settings,
     *,
     projects_routed: bool | None = None,
-    media_routed: bool | None = None,
     activity_routed: bool | None = None,
     csrf_secret: str = "test-secret",
 ) -> Request:
     state = SimpleNamespace(settings=settings, csrf_secret=csrf_secret)
     if projects_routed is not None:
         state.projects_routed = projects_routed
-    if media_routed is not None:
-        state.media_routed = media_routed
     if activity_routed is not None:
         state.activity_routed = activity_routed
     app = SimpleNamespace(state=state)
@@ -42,11 +40,8 @@ def _no_console_flags_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_console_area_flags_shipped_default_on() -> None:
-    """Shipped areas are live on a stock install. Media is among them (#646):
-    its editor is the only review surface, so a dark media area made review
-    unreachable on every default install."""
+    """Shipped areas are live on a stock install."""
     settings = Settings(database_url="postgresql+psycopg://x/x", _env_file=None)
-    assert settings.console_media_enabled is True
     assert settings.console_speakers_enabled is True
     assert settings.console_settings_enabled is True
     assert settings.console_palette_enabled is True
@@ -75,11 +70,10 @@ def test_shell_context_requires_flag_and_route() -> None:
         console_palette_enabled=False,
     )
     assert _shell_template_context(
-        _request_with(on, projects_routed=True, media_routed=True)
+        _request_with(on, projects_routed=True)
     ) == {
         "shell": {
             "projects_enabled": True,
-            "media_enabled": True,
             "activity_enabled": False,
             "users_enabled": False,
             "multi_user": False,
@@ -92,11 +86,10 @@ def test_shell_context_requires_flag_and_route() -> None:
     }
     # Flag on, no /projects route registered yet (today's reality): stays dark.
     assert _shell_template_context(
-        _request_with(on, projects_routed=False, media_routed=True)
+        _request_with(on, projects_routed=False)
     ) == {
         "shell": {
             "projects_enabled": False,
-            "media_enabled": True,
             "activity_enabled": False,
             "users_enabled": False,
             "multi_user": False,
@@ -111,7 +104,6 @@ def test_shell_context_requires_flag_and_route() -> None:
     assert _shell_template_context(_request_with(on)) == {
         "shell": {
             "projects_enabled": False,
-            "media_enabled": False,
             "activity_enabled": False,
             "users_enabled": False,
             "multi_user": False,
@@ -123,11 +115,10 @@ def test_shell_context_requires_flag_and_route() -> None:
         }
     }
     assert _shell_template_context(
-        _request_with(off, projects_routed=True, media_routed=True)
+        _request_with(off, projects_routed=True)
     ) == {
         "shell": {
             "projects_enabled": False,
-            "media_enabled": True,
             "activity_enabled": False,
             "users_enabled": False,
             "multi_user": False,
@@ -140,31 +131,20 @@ def test_shell_context_requires_flag_and_route() -> None:
     }
 
 
-def test_shell_context_media_discovery_flag() -> None:
-    """Media (#154) dark-ships routed-but-undiscovered: the /media route always
-    exists (media_routed True), so the sidebar Media entry and the "Add media"
-    quick action follow the flag alone."""
-    on = Settings(
-        database_url="postgresql+psycopg://x/x", console_media_enabled=True, _env_file=None
-    )
-    off = Settings(
-        database_url="postgresql+psycopg://x/x", console_media_enabled=False, _env_file=None
-    )
-    assert (
-        _shell_template_context(_request_with(on, media_routed=True))["shell"][
-            "media_enabled"
-        ]
-        is True
-    )
-    assert (
-        _shell_template_context(_request_with(off, media_routed=True))["shell"][
-            "media_enabled"
-        ]
-        is False
-    )
-    assert (
-        _shell_template_context(_request_with(on))["shell"]["media_enabled"] is False
-    )
+def test_media_library_is_not_flagged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#682 removed CONSOLE_MEDIA_ENABLED: the Media library is always on. A
+    leftover value in the environment or in .env is ignored rather than failing
+    startup, and the shell carries no media flag for a template to branch on."""
+    monkeypatch.setenv("CONSOLE_MEDIA_ENABLED", "false")
+    env_file = tmp_path / ".env"
+    env_file.write_text("CONSOLE_MEDIA_ENABLED=false\n")
+    settings = Settings(database_url="postgresql+psycopg://x/x", _env_file=env_file)
+    assert "console_media_enabled" not in Settings.model_fields
+    assert not hasattr(settings, "console_media_enabled")
+    shell = _shell_template_context(_request_with(settings))["shell"]
+    assert "media_enabled" not in shell
 
 
 def test_shell_context_activity_flag() -> None:
@@ -203,9 +183,7 @@ def test_shell_context_multi_user_csrf_logout_token() -> None:
     settings = Settings(
         database_url="postgresql+psycopg://x/x", voxint_multi_user=True, _env_file=None
     )
-    ctx = _shell_template_context(
-        _request_with(settings, media_routed=True)
-    )
+    ctx = _shell_template_context(_request_with(settings))
     token = ctx["shell"]["csrf_logout_token"]
     assert isinstance(token, str)
     assert len(token) > 0

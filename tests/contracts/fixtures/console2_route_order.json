@@ -378,18 +378,6 @@
     ]
   ],
   [
-    "/submit",
-    [
-      "POST"
-    ]
-  ],
-  [
-    "/fetch",
-    [
-      "POST"
-    ]
-  ],
-  [
     "/runs/{run_id}",
     [
       "GET"

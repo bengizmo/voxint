@@ -95,7 +95,8 @@ def test_review_entry_points_reach_the_editor_on_a_default_install_646(
     """#646: with the shipped defaults, every review entry point must land on a
     live page. The redirect map above checks only each Location header, which is
     how a 302-then-404 editor shipped unnoticed; this follows the hops."""
-    assert settings.console_media_enabled is True  # the shipped default, not an override
+    # #682: the editor is not behind a flag any more, so nothing can hide it.
+    assert "console_media_enabled" not in Settings.model_fields
     client = _client(session_factory, settings, auth=True)
     run_id, media_id = _seed_run(session_factory)
     editor = f"/media/{media_id}/editor"
@@ -141,11 +142,13 @@ def test_review_entry_points_reach_the_editor_on_a_default_install_646(
     assert client.get(claim.headers["location"]).status_code == 200
 
 
-def test_legacy_submit_and_fetch_send_a_default_install_to_media_646(
+def test_legacy_submit_and_fetch_are_gone_682(
     session_factory: sessionmaker[Session], settings: Settings
 ) -> None:
-    """On a default install media is added on /media: the legacy Runs-page
-    handlers redirect there without processing anything (no run is created)."""
+    """Media is added on /media. The legacy Runs-page handlers once redirected
+    there without processing anything (#646), so a stale form lost its input
+    silently; #682 removed them, so a stale form now fails visibly with a 404,
+    and still nothing is processed (no run is created)."""
     client = _client(session_factory, settings, auth=True)
 
     def run_count() -> int:
@@ -165,6 +168,6 @@ def test_legacy_submit_and_fetch_send_a_default_install_to_media_646(
         follow_redirects=False,
     )
     for response in (submit, fetch):
-        assert response.status_code == 303
-        assert response.headers["location"] == "/media"
+        assert response.status_code == 404
+        assert "location" not in response.headers
     assert run_count() == before

@@ -13,7 +13,6 @@ def _settings(**overrides: Any) -> Settings:
     """Create a Settings with sensible defaults plus overrides."""
     defaults = {
         "console_projects_enabled": False,
-        "console_media_enabled": False,
         "console_speakers_enabled": True,
         "console_activity_enabled": False,
         "console_palette_enabled": True,
@@ -26,12 +25,10 @@ def _settings(**overrides: Any) -> Settings:
 def _app_state(
     *,
     projects_routed: bool = True,
-    media_routed: bool = True,
     activity_routed: bool = True,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         projects_routed=projects_routed,
-        media_routed=media_routed,
         activity_routed=activity_routed,
     )
 
@@ -49,19 +46,13 @@ class TestPaletteDestinations:
         labels = [d["label"] for d in dests]
         assert labels == ["Home", "Media", "Explore", "Speakers", "Runs", "Settings"]
 
-    def test_media_href_depends_on_flag(self) -> None:
-        """Media destination href reflects console_media_enabled."""
-        dests_off = palette_destinations(
-            _settings(console_media_enabled=False), _app_state(), None
-        )
-        media_off = next(d for d in dests_off if d["label"] == "Media")
-        assert media_off["href"] == "/runs"
-
-        dests_on = palette_destinations(
-            _settings(console_media_enabled=True), _app_state(), None
-        )
-        media_on = next(d for d in dests_on if d["label"] == "Media")
-        assert media_on["href"] == "/media"
+    def test_media_always_points_at_the_library(self) -> None:
+        """#682: the Media library is not flagged, so its destination is /media
+        on any app state (the sidebar rail link is unconditional too)."""
+        for state in (_app_state(), SimpleNamespace()):
+            dests = palette_destinations(_settings(), state, None)
+            media = next(d for d in dests if d["label"] == "Media")
+            assert media["href"] == "/media"
 
     def test_projects_included_when_enabled_and_routed(self) -> None:
         dests = palette_destinations(
