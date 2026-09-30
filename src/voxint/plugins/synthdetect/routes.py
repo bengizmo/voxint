@@ -69,7 +69,7 @@ def build_synthdetect_router(deps: PluginRouteDeps) -> APIRouter:
             ).all()
 
             for score, turn in scores_with_turns:
-                row = {
+                row: dict[str, object] = {
                     "speaker_label": score.speaker_label,
                     "start_seconds": turn.start_seconds if turn else None,
                     "end_seconds": turn.end_seconds if turn else None,

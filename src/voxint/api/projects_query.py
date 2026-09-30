@@ -14,6 +14,7 @@ one ``label_states`` call per completed run.
 """
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -197,7 +198,7 @@ def _derived_speakers(session: Session, project_id: uuid.UUID) -> list[ProjectSp
         .where(PipelineRun.archived_at.is_(None))
         .subquery()
     )
-    run_ids = (
+    run_ids: Sequence[uuid.UUID] = (
         session.execute(sa_select(ranked.c.run_id).where(ranked.c.rank == 1))
         .scalars()
         .all()

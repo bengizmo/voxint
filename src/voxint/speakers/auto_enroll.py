@@ -89,7 +89,7 @@ class AutoEnrollMatchResult:
 
 def _next_voice_number(session: Session) -> int:
     """The next available "Voice N" number across all speakers."""
-    result = session.execute(
+    result: int = session.execute(
         text(
             "SELECT COALESCE(MAX("
             "  CAST((regexp_match(display_name, '^Voice (\\d{1,9})$'))[1] AS int)"
