@@ -263,7 +263,7 @@ reconcile: emptying the trash purges the seeded run.
   input and **Fetch and transcribe**.
 - **No missing-file chip.** The seeded row carries no "Original file not found"
   chip (the seed writes the original).
-- **Trash and restore.** Select the row, **Delete...** → "Moved 1 file to trash."
+- **Trash and restore.** Select the row, **Move to trash** → "Moved 1 file to trash."
   With the library now empty, **Trash →** must still render; follow it, select the
   row, **Restore selected** → "Restored 1 file from trash." and the row is back.
 - **Empty trash asks first.** Trash the row again, open the trash view, click

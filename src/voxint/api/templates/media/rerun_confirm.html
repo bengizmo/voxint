@@ -47,7 +47,7 @@
         · {{ p.preview.vocabulary_count }} glossary term{{ '' if p.preview.vocabulary_count == 1 else 's' }} ({{ p.preview.vocabulary_source }})
         · {{ p.preview.corrections_count }} correction rule{{ '' if p.preview.corrections_count == 1 else 's' }} ({{ p.preview.corrections_source }})
         {% if p.preview.folder_path %}· folder <code>{{ p.preview.folder_path }}</code>{% endif %}
-        {% if p.preview.project_name %}· project {{ p.preview.project_name }}{% endif %}
+        {% if shell.projects_enabled and p.preview.project_name %}· project {{ p.preview.project_name }}{% endif %}
       </p>
       {% if not p.has_prior_run %}<p class="muted">No earlier run — this will be its first.</p>{% endif %}
       {% endif %}

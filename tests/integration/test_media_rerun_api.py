@@ -267,6 +267,37 @@ def test_confirm_mints_run_with_folder_precedence_and_parity(
     assert f"{len(snapshot['vocabulary'])} glossary term" in preview.text
 
 
+@pytest.mark.parametrize("projects_enabled", [False, True])
+def test_preview_names_the_project_only_while_the_projects_area_is_on(
+    session_factory: sessionmaker[Session], settings: Settings, projects_enabled: bool
+) -> None:
+    """#682: with the projects area off (the default) the preview still says the
+    project layer supplies the vocabulary, but does not name a project the
+    operator cannot open."""
+    with session_factory() as session:
+        project = Project(name="Oral histories", vocabulary=list(PROJECT_VOCAB))
+        session.add(project)
+        session.flush()
+        folder = MediaFolder(path="interviews", project_id=project.id)
+        session.add(folder)
+        session.flush()
+        m_id = _add_media(session, source_path="interviews/a.wav", folder_id=folder.id).id
+        session.commit()
+
+    client = _make_client(
+        session_factory,
+        settings.model_copy(update={"console_projects_enabled": projects_enabled}),
+    )
+    preview = client.post(
+        "/media/rerun",
+        data=_data(CSRF_MEDIA_RERUN, media_id=[str(m_id)]),
+        follow_redirects=False,
+    )
+    assert preview.status_code == 200
+    assert "(project)" in preview.text
+    assert ("Oral histories" in preview.text) is projects_enabled
+
+
 def test_confirm_double_submit_creates_at_most_one_run(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:

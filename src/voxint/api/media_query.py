@@ -242,7 +242,8 @@ class FolderOption:
 
     ``project_name`` labels the folder by the project it joins (``None`` for a
     folder in no project). The picker sets a settings SCOPE, not a project
-    membership, so it renders whether or not the projects area is enabled.
+    membership, so it renders whether or not the projects area is enabled; the
+    templates show the project label only while that area is on (#682).
     """
 
     id: uuid.UUID

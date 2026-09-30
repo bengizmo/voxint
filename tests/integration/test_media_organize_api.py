@@ -6,7 +6,8 @@ clearing it), and a folder panel registers/unregisters folders through the share
 write service. These tests pin the wiring the pure helpers cannot see: the CSRF
 gate, whole-selection prevalidation with zero writes on any failure, the ADR 0002
 no-filesystem-touch invariant (only ``media_folder_id`` moves), the honest
-"N files reverted to global settings" count on unregister.
+"N files reverted to global settings" count on unregister, and the folder
+labels' projects-area gate.
 
 Needs the real Postgres test DB (the advisory lock / FK SET NULL are Postgres
 behaviour), so skipped without VOXINT_TEST_DATABASE_URL.
@@ -29,7 +30,7 @@ from voxint.api.csrf import (
 )
 from voxint.api.routers.media import MEDIA_BULK_LIMIT
 from voxint.config import Settings
-from voxint.db.models import MediaFolder, MediaItem
+from voxint.db.models import MediaFolder, MediaItem, Project
 
 CREDS = ("reviewer", "s3cret")
 _CSRF_KEY = "media-organize-test-csrf-key"
@@ -38,11 +39,14 @@ _CSRF_KEY = "media-organize-test-csrf-key"
 def _make_client(
     session_factory: sessionmaker[Session],
     media_root: Path,
+    *,
+    projects_enabled: bool = False,
 ) -> TestClient:
     settings = Settings(
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         media_root=media_root,
+        console_projects_enabled=projects_enabled,
         csrf_secret=_CSRF_KEY,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
@@ -388,6 +392,29 @@ def test_folders_requires_csrf(
     assert resp.status_code == 403
     with session_factory() as session:
         assert session.execute(select(MediaFolder)).first() is None
+
+
+@pytest.mark.parametrize("projects_enabled", [False, True])
+def test_folder_labels_name_the_project_only_while_the_projects_area_is_on(
+    session_factory: sessionmaker[Session], tmp_path: Path, projects_enabled: bool
+) -> None:
+    """#682: the upload and URL pickers, the folder panel and the bulk-assign
+    picker label a folder by its project only while the projects area is on.
+    With it off (the default) the folders still render, unlabelled."""
+    with session_factory() as session:
+        project = Project(name="Oral histories")
+        session.add(project)
+        session.flush()
+        session.add(MediaFolder(path="interviews", project_id=project.id))
+        _add_media(session, source_path="incoming/a.wav")
+        session.commit()
+    client = _make_client(session_factory, tmp_path, projects_enabled=projects_enabled)
+    body = client.get("/media").text
+    # Four renderings of the one folder: two pickers, the panel, the assign picker.
+    assert body.count(">interviews<") + body.count(">interviews —") == 4
+    assert 'action="/media/assign"' in body
+    expected = 4 if projects_enabled else 0
+    assert body.count("Oral histories") == expected
 
 
 def test_folder_panel_renders_registered_folders(
