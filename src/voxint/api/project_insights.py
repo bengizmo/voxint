@@ -17,6 +17,7 @@ import logging
 import unicodedata
 import uuid
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -478,7 +479,7 @@ def _fetch_enrichment_assets(
     """Fetch latest-generation non-superseded assets of the given kind."""
     if not run_ids:
         return []
-    rows = session.execute(
+    rows: Sequence[dict[str, Any]] = session.execute(
         select(RunEnrichmentAsset.payload)
         .where(
             RunEnrichmentAsset.pipeline_run_id.in_(run_ids),

@@ -251,7 +251,7 @@ def minutes_transcribed_since(session: Session, *, since: datetime | None) -> in
         )
     completed_sub = completed_media_stmt.distinct().correlate(None).subquery()
 
-    raw = session.execute(
+    raw: float = session.execute(
         sa_select(func.coalesce(func.sum(MediaItem.duration_seconds), 0.0).cast(Float))
         .where(
             MediaItem.id.in_(sa_select(completed_sub.c.media_item_id)),

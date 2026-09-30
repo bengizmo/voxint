@@ -342,7 +342,7 @@ def _media_base_stmt(
     search: str | None = None,
     status: str | None = None,
     gates: MatchingGates,
-) -> tuple[Select[Any], Subquery, tuple[Any, ...]]:
+) -> tuple[Select[*tuple[Any, ...]], Subquery, tuple[Any, ...]]:
     """Build the filtered library query without ordering or pagination."""
     order_by = _SORTS.get(sort, _SORTS[DEFAULT_SORT])
 

@@ -25,6 +25,7 @@ from urllib.parse import urlencode
 from markupsafe import Markup, escape
 from sqlalchemy import ColumnElement, Float, and_, case, cast, func, or_
 from sqlalchemy import select as sa_select
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.orm import Session
 
 from voxint.adjudication.resolver import (
@@ -451,7 +452,7 @@ def _snippets_for(session: Session, run_ids: list[uuid.UUID], q: str) -> dict[uu
             or_(_segment_matches(tsq), corrected_matches),
         )
     )
-    stmt = headline.distinct(TranscriptSegment.pipeline_run_id).order_by(
+    stmt = headline.ext(distinct_on(TranscriptSegment.pipeline_run_id)).order_by(
         TranscriptSegment.pipeline_run_id, TranscriptSegment.segment_index
     )
     return {

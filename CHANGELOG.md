@@ -6,6 +6,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **SQLAlchemy 2.1** (#683). The lock moves from 2.0.54 to 2.1.1 and the
+  declared floor rises to `sqlalchemy>=2.1`. Installs from PyPI could already
+  resolve 2.1 under the old `>=2.0` floor; this release is the first tested on
+  it. A database written by an earlier Voxint reads back identically, and no
+  schema migration is needed. SQLAlchemy 2.1 no longer installs `greenlet`,
+  which Voxint does not use.
+
 ### Fixed
 - **The website deploy workflow no longer fails on every docs push** (#648). The
   deploy target moved out of the public workflow file into repository settings

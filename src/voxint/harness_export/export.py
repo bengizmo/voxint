@@ -123,7 +123,7 @@ def _resolve_names(
         return {}
     rows = session.execute(
         select(Speaker.id, Speaker.display_name).where(Speaker.id.in_(canonical))
-    ).tuples()
+    )
     by_canonical = {sid: name for sid, name in rows}
     # Key the result by the ORIGINAL id so callers can look up a raw
     # top_speaker_id directly and still get the canonical name.

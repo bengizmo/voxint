@@ -253,7 +253,7 @@ def build_database_view(session: Session, settings: Settings) -> DatabaseView:
 
     retention = _retention_settings(settings)
     try:
-        size_bytes = session.execute(
+        size_bytes: int = session.execute(
             text("SELECT pg_database_size(current_database())")
         ).scalar_one()
         rows = session.execute(
