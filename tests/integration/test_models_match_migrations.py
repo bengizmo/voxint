@@ -35,6 +35,7 @@ def test_models_match_schema_at_head(engine: Engine) -> None:
         command.check(cfg)
     except CommandError as exc:
         raise AssertionError(
-            "ORM models drift from the migrated schema; fix models.py or add a "
-            f"migration so `alembic check` reports nothing:\n{exc}"
+            "`alembic check` failed: either the ORM models drift from the migrated "
+            "schema (fix models.py or add a migration) or this database is not at "
+            f"head:\n{exc}"
         ) from None
