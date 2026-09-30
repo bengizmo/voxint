@@ -39,6 +39,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   finds the listener with `lsof` (falling back to `fuser`) and fails if the port
   stays open.
 
+### Security
+- **urllib3 2.8.0** (from 2.7.0). Fixes three advisories CI's `pip-audit` now
+  flags (CVE-2026-97687, CVE-2026-97688, CVE-2026-97689): HTTPS-proxy TLS settings
+  that could be ignored, unbounded chunk-size buffering, and a chunked-Deflate
+  infinite loop. urllib3 reaches Voxint only through `requests` (yt-dlp URL
+  fetches; librosa in the parity extra). The yt-dlp egress overlay uses a plain
+  `http://` proxy, so the 2.8.0 HTTPS-proxy behavior change does not apply.
+
 ## [0.47.0] - 2026-09-29
 
 ### Fixed
