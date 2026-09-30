@@ -180,6 +180,19 @@ def test_server_default_still_fills_created_at(alembic_cfg: Config, engine: Engi
     assert _created_at(engine, jid) is not None
 
 
+def test_offline_sql_renders_backfill_then_not_null(
+    alembic_cfg: Config, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``alembic upgrade --sql`` renders a script: no bind, so no row count."""
+    command.upgrade(alembic_cfg, "0066:0067", sql=True)
+    sql = capsys.readouterr().out
+    backfill = sql.index(
+        "UPDATE synthdetect_jobs SET created_at = COALESCE(started_at, now())"
+        " WHERE created_at IS NULL"
+    )
+    assert backfill < sql.index("ALTER TABLE synthdetect_jobs ALTER COLUMN created_at SET NOT NULL")
+
+
 def test_downgrade_drops_not_null_and_keeps_backfilled_values(
     alembic_cfg: Config, engine: Engine
 ) -> None:

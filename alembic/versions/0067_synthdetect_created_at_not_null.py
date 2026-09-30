@@ -10,7 +10,8 @@ rather than failing the upgrade: ``created_at`` becomes ``started_at`` when the
 job started (which keeps ``started_at >= created_at`` true), else ``now()``.
 A NULL ``started_at`` implies a NULL ``finished_at`` (CHECK
 ``synthdetect_jobs_finished_requires_started_check``), so no other timestamp
-constrains the fallback. The repaired row count is logged as a warning.
+constrains the fallback. The repaired row count is logged as a warning
+(online upgrades only; ``--sql`` renders the UPDATE without a count).
 
 Downgrade drops NOT NULL only; backfilled values stay.
 
@@ -33,18 +34,16 @@ depends_on: str | Sequence[str] | None = None
 log = logging.getLogger("alembic.runtime.migration")
 
 
+_BACKFILL = sa.text(
+    "UPDATE synthdetect_jobs SET created_at = COALESCE(started_at, now()) WHERE created_at IS NULL"
+)
+
+
 def upgrade() -> None:
-    repaired = (
-        op.get_bind()
-        .execute(
-            sa.text(
-                "UPDATE synthdetect_jobs SET created_at = COALESCE(started_at, now())"
-                " WHERE created_at IS NULL"
-            )
-        )
-        .rowcount
-    )
-    if repaired:
+    if op.get_context().as_sql:
+        # `alembic upgrade --sql` renders a script; there is no row count to log.
+        op.execute(_BACKFILL)
+    elif repaired := op.get_bind().execute(_BACKFILL).rowcount:
         log.warning(
             "0067: backfilled created_at on %d synthdetect_jobs row(s) that had none",
             repaired,

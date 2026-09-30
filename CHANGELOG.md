@@ -15,10 +15,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   longer installs `greenlet`, which Voxint does not use.
 - **Upgrading runs database migration 0067** (#692). It makes
   `synthdetect_jobs.created_at` required, as every other creation time in the
-  schema already is. A synthdetect job row with no creation time, which only a
-  manual edit could produce, gets one during the upgrade: its start time if it
-  started, otherwise the upgrade time. The migration logs how many rows it
-  repaired.
+  schema already is. Voxint itself always records a creation time, so a row
+  without one can only come from a manual edit or an explicit NULL insert. Any
+  such row gets one during the upgrade: its start time if the job started,
+  otherwise the upgrade time. The migration logs how many rows it repaired.
 
 ### Fixed
 - **The website deploy workflow no longer fails on every docs push** (#648). The
