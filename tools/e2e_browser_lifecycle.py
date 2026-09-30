@@ -35,7 +35,6 @@ which ports) stays in a maintainer-only runbook, never in this public repo.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import io
 import json
 import os
@@ -1118,8 +1117,14 @@ def stop_port(port: int, *, wait_s: float = 10.0) -> None:
     pids = _listener_pids(port)
     if pids:
         for pid in pids:
-            with contextlib.suppress(ProcessLookupError):
+            try:
                 os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                continue
+            except PermissionError:
+                # Someone else's listener: keep signalling the rest, and let the
+                # closing check below fail the teardown if the port stays open.
+                print(f"warning: cannot signal pid {pid} on port {port}", file=sys.stderr)
     elif shutil.which("fuser") is not None:
         subprocess.run(["fuser", "-k", f"{port}/tcp"], check=False)
     deadline = time.monotonic() + wait_s

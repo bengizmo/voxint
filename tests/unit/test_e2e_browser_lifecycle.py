@@ -429,3 +429,21 @@ def test_stop_port_fails_closed_when_the_port_stays_open(
     with pytest.raises(SystemExit) as exc:
         stop_port(8099, wait_s=0.0)
     assert exc.value.code == 1
+
+
+def test_stop_port_keeps_signalling_past_a_foreign_listener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A PermissionError on one pid must not stop the loop before the lane's own server."""
+    signalled: list[int] = []
+
+    def fake_kill(pid: int, sig: int) -> None:
+        if pid == 1:
+            raise PermissionError
+        signalled.append(pid)
+
+    monkeypatch.setattr("tools.e2e_browser_lifecycle._listener_pids", lambda port: [1, 4242])
+    monkeypatch.setattr("tools.e2e_browser_lifecycle.os.kill", fake_kill)
+    monkeypatch.setattr("tools.e2e_browser_lifecycle._port_accepting", lambda port: False)
+    stop_port(8099)
+    assert signalled == [4242]
