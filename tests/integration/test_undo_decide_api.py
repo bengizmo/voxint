@@ -7,7 +7,7 @@ compensating REVOKE. Real Postgres, real app.
 
 import json
 import uuid
-from datetime import UTC, datetime, timedelta, tzinfo
+from datetime import datetime, timedelta, tzinfo
 from pathlib import Path
 
 import pytest
@@ -104,7 +104,6 @@ def test_fresh_decision_returns_an_undo_payload(
         run_id = seed_run(session, media_root)
     token = claim_token(client, run_id)
 
-    before = datetime.now(UTC)
     body = _decide(client, run_id, token, "S1", "exclude")
 
     undo = body["undo"]
@@ -114,9 +113,9 @@ def test_fresh_decision_returns_an_undo_payload(
         row = session.get(AdjudicationDecision, uuid.UUID(undo["decisionId"]))
         assert row is not None
         assert (row.diarization_label, row.decision) == ("S1", Decision.EXCLUDE.value)
-    expires = datetime.fromisoformat(undo["expiresAt"])
-    assert before + timedelta(seconds=_GRACE - 5) <= expires
-    assert expires <= datetime.now(UTC) + timedelta(seconds=_GRACE)
+        # The advertised deadline is exactly the one undo_decision enforces.
+        expires = datetime.fromisoformat(undo["expiresAt"])
+        assert expires == row.created_at + timedelta(seconds=_GRACE)
 
 
 def test_replayed_decision_carries_no_undo_payload(
@@ -196,6 +195,7 @@ def test_undo_after_a_later_ruling_is_a_409_and_changes_nothing(
     resp = _undo(client, run_id, token, undo["decisionId"], csrf=_csrf())
 
     assert resp.status_code == 409  # type: ignore[attr-defined]
+    assert "re-ruled" in resp.json()["detail"]  # type: ignore[attr-defined]
     # A drift 409 is a state conflict, never a lost claim: the island keeps
     # its claim and shows "too late to undo".
     assert "x-voxint-conflict" not in resp.headers  # type: ignore[attr-defined]
@@ -251,7 +251,7 @@ def test_undo_requires_the_claim_csrf_token(
         assert effective_decisions(session, run_id)["S1"].decision == Decision.EXCLUDE.value
 
 
-def test_undo_with_a_stale_claim_is_a_marked_409(
+def test_undo_with_a_wrong_claim_token_is_a_marked_409(
     client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
     with session_factory() as session:
@@ -264,6 +264,25 @@ def test_undo_with_a_stale_claim_is_a_marked_409(
 
     assert resp.status_code == 409  # type: ignore[attr-defined]
     assert resp.headers["x-voxint-conflict"] == "claim"  # type: ignore[attr-defined]
+    with session_factory() as session:
+        assert effective_decisions(session, run_id)["S1"].decision == Decision.EXCLUDE.value
+
+
+def test_undo_key_reused_for_another_decision_is_a_409(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    token = claim_token(client, run_id)
+    first = _decide(client, run_id, token, "S0", "exclude")["undo"]
+    second = _decide(client, run_id, token, "S1", "exclude")["undo"]
+    assert isinstance(first, dict) and isinstance(second, dict)
+    used = _undo(client, run_id, token, first["decisionId"], csrf=_csrf(), nonce="shared-undo")
+    assert used.status_code == 200  # type: ignore[attr-defined]
+
+    resp = _undo(client, run_id, token, second["decisionId"], csrf=_csrf(), nonce="shared-undo")
+
+    assert resp.status_code == 409  # type: ignore[attr-defined]
     with session_factory() as session:
         assert effective_decisions(session, run_id)["S1"].decision == Decision.EXCLUDE.value
 

@@ -113,7 +113,13 @@ describe("UndoToast", () => {
       });
       expect(apiFetch).toHaveBeenCalledExactlyOnceWith(
         url,
-        expect.objectContaining({ method: "POST" }),
+        expect.objectContaining({
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            accept: "application/json",
+          },
+        }),
       );
       const body = postedBody();
       expect(body.get("token")).toBe("review-token");
@@ -145,16 +151,23 @@ describe("UndoToast", () => {
 
     fireEvent.click(button);
     fireEvent.click(button);
-    expect(screen.getByRole("button", { name: "Undoing…" })).toBeTruthy();
+    const busy = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Undoing…",
+    });
+    expect(busy.disabled).toBe(true);
     resolve(jsonResponse(labels));
 
     await waitFor(() => {
       expect(props.onUndone).toHaveBeenCalledOnce();
     });
     expect(apiFetch).toHaveBeenCalledOnce();
+    const idle = screen.getByRole<HTMLButtonElement>("button", { name: "Undo" });
+    expect(idle.disabled).toBe(false);
   });
 
   it("reports a drift 409 inside the window as too late to undo", async () => {
+    // Pin the clock so a slow run cannot cross the deadline mid-test.
+    vi.useFakeTimers({ toFake: ["Date"] });
     vi.mocked(apiFetch).mockRejectedValueOnce(new ApiError(409, "drift"));
     const { props } = setup();
 
