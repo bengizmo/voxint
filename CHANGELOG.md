@@ -6,6 +6,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-10-01
+
 ### Added
 - **Undo for single-line speaker changes** (#573). Changing the speaker of one
   line, or of one part of a split line, now shows the same undo toast as a
@@ -19,6 +21,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   yourself when possible), so you can compare voices before you choose, or
   check a doubtful automatic match. The reviewing guide described this as a
   per-option button that never existed; it now describes what the menu does.
+
+### Changed
+- **The review console is built with Vite 8** (#655, first slice). The island
+  toolchain moves to vite 8.3.2, `@vitejs/plugin-react` 6.1.1 and vitest 5.0.3.
+  Building the frontend from source now needs Node 22.12 or later (it was 22.0).
+  The built console still supports the same browsers as before (Edge 88,
+  Firefox 78, Chrome 87, Safari 14): the build pins those targets, and a new
+  check fails the build if its output uses syntax those browsers cannot run.
+- **CI jobs have time limits** (#709). Each job now stops after a fixed time,
+  and the `ffmpeg` install step stops after 10 minutes, so a stalled package
+  mirror fails fast instead of holding a run for hours.
 
 ### Removed
 - **Leftover code from the retired correction-rules summary and raw compare**
@@ -4875,7 +4888,9 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.48.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.50.0...HEAD
+[0.50.0]: https://github.com/bengizmo/voxint/compare/v0.49.0...v0.50.0
+[0.49.0]: https://github.com/bengizmo/voxint/compare/v0.48.0...v0.49.0
 [0.48.0]: https://github.com/bengizmo/voxint/compare/v0.47.0...v0.48.0
 [0.47.0]: https://github.com/bengizmo/voxint/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/bengizmo/voxint/compare/v0.45.0...v0.46.0
