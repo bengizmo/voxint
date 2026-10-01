@@ -58,6 +58,20 @@ _NOT_ATTRIBUTE_ONLY = re.compile(
     r"resembl\w*|celebrit\w*|famous|voice\s+of)\b",
     re.IGNORECASE,
 )
+# Every argument Qwen3TTSModel._merge_generate_kwargs would otherwise fill from
+# generation_config.json or its hard defaults; the spec sets all of them.
+SAMPLING_KEYS = (
+    "do_sample",
+    "temperature",
+    "top_k",
+    "top_p",
+    "repetition_penalty",
+    "subtalker_dosample",
+    "subtalker_temperature",
+    "subtalker_top_p",
+    "subtalker_top_k",
+    "max_new_tokens",
+)
 _GENERATOR_KEYS = (
     "model_id",
     "hf_revision",
@@ -216,8 +230,8 @@ def validate_spec(spec: Mapping[str, Any]) -> None:
     if not isinstance(text, str) or not text.strip():
         raise SpecError("spec.text is empty")
     sampling = _req(spec, "sampling", "spec")
-    for key in ("do_sample", "temperature", "top_k", "top_p", "repetition_penalty"):
-        _req(sampling, key, "sampling")
+    if set(sampling) != set(SAMPLING_KEYS):
+        raise SpecError(f"sampling must set exactly {sorted(SAMPLING_KEYS)}")
     _validate_dsp(_req(spec, "dsp", "spec"))
     analysis = _req(spec, "analysis", "spec")
     fmin = _req(analysis, "f0_fmin_hz", "analysis")

@@ -25,7 +25,12 @@
     "temperature": 0.9,
     "top_k": 50,
     "top_p": 1.0,
-    "repetition_penalty": 1.05
+    "repetition_penalty": 1.05,
+    "subtalker_dosample": true,
+    "subtalker_temperature": 0.9,
+    "subtalker_top_p": 1.0,
+    "subtalker_top_k": 50,
+    "max_new_tokens": 8192
   },
   "text": "On a quiet Thursday morning, the old ferry pulled away from the harbor while six curious children watched gulls chase each other above the bright, choppy water.",
   "dsp": {

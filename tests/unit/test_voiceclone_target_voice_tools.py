@@ -115,6 +115,8 @@ _DELETE = object()
         (["screening", "swap_headroom"], -0.1, "swap_headroom"),
         (["chatterbox", "min_sources_reached"], 16, "min_sources_reached"),
         (["dsp", "peak_dbfs"], _DELETE, "peak_dbfs"),
+        (["sampling", "subtalker_top_k"], _DELETE, "sampling"),
+        (["sampling", "seed"], 1, "sampling"),
     ],
 )
 def test_spec_validation_rejects(
@@ -681,6 +683,7 @@ def _cand_dir(tmp_path: Path, ids: list[tuple[str, str]]) -> Path:
             json.dumps(
                 {
                     "candidate_id": cid,
+                    "status": "candidate",
                     "voice_id": voice,
                     "wav": f"{cid}.wav",
                     "wav_sha256": "0" * 64,
@@ -694,18 +697,25 @@ def _cand_dir(tmp_path: Path, ids: list[tuple[str, str]]) -> Path:
 def test_load_candidates_fails_closed(tmp_path: Path) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
-    with pytest.raises(scr.PoolError, match="no candidate"):
+    with pytest.raises(scr.PoolError, match="no accepted"):
         scr.load_candidates(empty)
     d = _cand_dir(tmp_path, [("a1", "target-a"), ("b1", "target-b")])
     assert [r["candidate_id"] for r in scr.load_candidates(d)] == ["a1", "b1"]
-    (d / "zz.json").write_text(
-        json.dumps({"candidate_id": "a1", "voice_id": "x", "wav": "w", "wav_sha256": "0" * 64})
-    )
+    dup = {"candidate_id": "a1", "status": "rejected"}
+    (d / "zz.json").write_text(json.dumps(dup))
     with pytest.raises(scr.PoolError, match="unique"):
         scr.load_candidates(d)
-    (d / "zz.json").write_text(json.dumps({"candidate_id": "q"}))
+    (d / "zz.json").write_text(json.dumps({"candidate_id": "q", "status": "candidate"}))
     with pytest.raises(scr.PoolError, match="lacks"):
         scr.load_candidates(d)
+    (d / "zz.json").write_text(json.dumps({"candidate_id": "q"}))
+    with pytest.raises(scr.PoolError, match="status"):
+        scr.load_candidates(d)
+    only_rejected = tmp_path / "rej"
+    only_rejected.mkdir()
+    (only_rejected / "r.json").write_text(json.dumps({"candidate_id": "r", "status": "rejected"}))
+    with pytest.raises(scr.PoolError, match="no accepted"):
+        scr.load_candidates(only_rejected)
 
 
 def _pool_records() -> list[dict[str, Any]]:
@@ -879,6 +889,7 @@ def test_embed_pool_and_screen_cli_with_fake_service(
                 "voice_id": "target-a",
                 "wav": "c1.wav",
                 "wav_sha256": shas["c1"],
+                "status": "candidate",
                 "median_f0_hz": 100.0,
             }
         )
@@ -910,3 +921,175 @@ def test_embed_pool_and_screen_cli_with_fake_service(
     _patch_live(monkeypatch, {**health, "engine_version": "other"}, vectors)
     with pytest.raises(scr.PoolError, match="titanet changed"):
         scr.main(argv)
+
+
+# --- generator helpers (tools/generate_voiceclone_target_voices.py) ----------------
+
+from tools import generate_voiceclone_target_voices as gen  # noqa: E402
+
+_ENV = {"device": "cuda:0", "gpu": "test", "dtype": "bfloat16"}
+_TOOL = {"name": "gen", "git_sha": "0" * 40, "spec_sha256": "1" * 64}
+_RAW = {"sample_rate": SR, "n_samples": 1, "peak": 0.5, "finite": True}
+
+
+def test_plan_jobs_covers_spec_and_filters(spec: dict[str, Any]) -> None:
+    jobs = gen.plan_jobs(spec)
+    assert len(jobs) == 20
+    assert jobs[0].candidate_id == "target-a-s1101"
+    spike = gen.plan_jobs(spec, ["target-c"], [3101])
+    assert [j.candidate_id for j in spike] == ["target-c-s3101"]
+    with pytest.raises(gen.core.SpecError, match="unknown voice"):
+        gen.plan_jobs(spec, ["target-z"])
+    with pytest.raises(gen.core.SpecError, match="not in the spec"):
+        gen.plan_jobs(spec, None, [7])
+    with pytest.raises(gen.core.SpecError, match="selects nothing"):
+        gen.plan_jobs(spec, ["target-a"], [2101])
+
+
+def test_verify_weights(tmp_path: Path) -> None:
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "w.bin").write_bytes(b"weights")
+    good = {"sub/w.bin": core.sha256_hex(b"weights")}
+    assert gen.verify_weights(tmp_path, good) == good
+    with pytest.raises(gen.core.SpecError, match="sha256"):
+        gen.verify_weights(tmp_path, {"sub/w.bin": "0" * 64})
+    with pytest.raises(gen.core.SpecError, match="missing"):
+        gen.verify_weights(tmp_path, {"nope.bin": "0" * 64})
+
+
+def test_build_record_reads_format_back_from_bytes(spec: dict[str, Any], dsp: core.Dsp) -> None:
+    job = gen.plan_jobs(spec, ["target-a"], [1101])[0]
+    data = core.encode_wav(core.postprocess(_tone(10.5), SR, dsp), SR)
+    rec = gen.build_record(
+        job,
+        spec,
+        wav_name="target-a-s1101.wav",
+        wav_bytes=data,
+        raw=_RAW,
+        f0_hz=110.0,
+        rejection=None,
+        environment=_ENV,
+        tool=_TOOL,
+    )
+    assert rec["status"] == "candidate"
+    assert rec["wav_sha256"] == core.sha256_hex(data)
+    assert rec["format"]["n_samples"] == dsp.max_samples
+    assert rec["format"]["sample_rate"] == SR
+    assert rec["generator"]["reference_recording_used"] is False
+    assert rec["description"] == spec["voices"][0]["description"]
+    json.dumps(rec)
+
+
+def test_build_record_rejection_and_guards(spec: dict[str, Any]) -> None:
+    job = gen.plan_jobs(spec, ["target-b"], [2101])[0]
+    rec = gen.build_record(
+        job,
+        spec,
+        wav_name=None,
+        wav_bytes=None,
+        raw=_RAW,
+        f0_hz=None,
+        rejection="candidate is silent",
+        environment=_ENV,
+        tool=_TOOL,
+    )
+    assert rec["status"] == "rejected" and "wav_sha256" not in rec
+    with pytest.raises(ValueError, match="needs its WAV"):
+        gen.build_record(
+            job,
+            spec,
+            wav_name=None,
+            wav_bytes=None,
+            raw=_RAW,
+            f0_hz=None,
+            rejection=None,
+            environment=_ENV,
+            tool=_TOOL,
+        )
+    short = core.encode_wav(np.full(960, 1000, np.int16), SR)
+    with pytest.raises(ValueError, match="misses the format"):
+        gen.build_record(
+            job,
+            spec,
+            wav_name="x.wav",
+            wav_bytes=short,
+            raw=_RAW,
+            f0_hz=None,
+            rejection=None,
+            environment=_ENV,
+            tool=_TOOL,
+        )
+
+
+def test_sha256sums_lines_lists_only_accepted_sorted() -> None:
+    recs = [
+        {"status": "candidate", "wav": "b.wav", "wav_sha256": "b" * 64},
+        {"status": "rejected"},
+        {"status": "candidate", "wav": "a.wav", "wav_sha256": "a" * 64},
+    ]
+    assert gen.sha256sums_lines(recs) == f"{'a' * 64}  a.wav\n{'b' * 64}  b.wav\n"
+
+
+def test_write_atomic_and_file_sha(tmp_path: Path) -> None:
+    p = tmp_path / "f.bin"
+    gen.write_atomic(p, b"abc")
+    assert p.read_bytes() == b"abc" and not (tmp_path / "f.bin.tmp").exists()
+    assert gen.file_sha256(p) == core.sha256_hex(b"abc")
+
+
+def test_parse_args_requires_tool_sha() -> None:
+    args = gen.parse_args(["--out-dir", "o", "--tool-git-sha", "abc", "--voice", "target-a"])
+    assert args.voice == ["target-a"] and args.seed is None
+    with pytest.raises(SystemExit):
+        gen.parse_args(["--out-dir", "o"])
+
+
+def test_median_f0_of_a_pure_tone() -> None:
+    pytest.importorskip("librosa")
+    t = np.arange(SR * 2) / SR
+    pcm = core.to_pcm16(0.5 * np.sin(2 * np.pi * 150.0 * t))
+    assert gen.median_f0(pcm, SR, 50.0, 500.0) == pytest.approx(150.0, rel=0.03)
+    assert gen.median_f0(np.zeros(SR, np.int16), SR, 50.0, 500.0) is None
+
+
+def test_run_end_to_end_with_faked_gpu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spec: dict[str, Any]
+) -> None:
+    def fake_generate(_model: object, job: Any, _spec: object) -> tuple[np.ndarray, int, float]:
+        if job.seed == 1102:
+            return np.zeros(SR * 11), SR, 0.1  # silent: rejected, not written
+        return _tone(10.5, freq=100.0 + job.seed % 10).astype(np.float64), SR, 0.2
+
+    monkeypatch.setattr(gen, "environment_record", lambda dtype: {**_ENV, "dtype": dtype})
+    monkeypatch.setattr(gen, "load_model", lambda _spec, _cache: (object(), tmp_path))
+    monkeypatch.setattr(gen, "generate_one", fake_generate)
+    monkeypatch.setattr(gen, "median_f0", lambda *_a: 101.0)
+    out = tmp_path / "cands"
+    args = gen.parse_args(
+        [
+            "--spec",
+            str(SPEC_PATH),
+            "--out-dir",
+            str(out),
+            "--tool-git-sha",
+            "f" * 40,
+            "--voice",
+            "target-a",
+            "--seed",
+            "1101",
+            "--seed",
+            "1102",
+        ]
+    )
+    assert gen.run(args) == 0
+    ok = json.loads((out / "target-a-s1101.json").read_text())
+    bad = json.loads((out / "target-a-s1102.json").read_text())
+    assert ok["status"] == "candidate" and bad["status"] == "rejected"
+    assert not (out / "target-a-s1102.wav").exists()
+    wav = (out / "target-a-s1101.wav").read_bytes()
+    assert ok["wav_sha256"] == core.sha256_hex(wav)
+    assert ok["tool"]["git_sha"] == "f" * 40
+    assert ok["tool"]["spec_sha256"] == gen.file_sha256(SPEC_PATH)
+    assert (out / "candidates.sha256").read_text() == f"{ok['wav_sha256']}  target-a-s1101.wav\n"
+    # The screen tool consumes exactly these records.
+    assert [r["candidate_id"] for r in scr.load_candidates(out)] == ["target-a-s1101"]

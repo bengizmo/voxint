@@ -278,19 +278,29 @@ def _summary(values: np.ndarray) -> dict[str, float]:
 
 
 def load_candidates(candidates_dir: Path) -> list[dict[str, Any]]:
-    """The generator's per-candidate records (``*.json``), sorted by id."""
+    """The generator's accepted candidates (``*.json`` records), sorted by id.
+
+    Records with ``status: rejected`` (non-finite, silent or too short; they
+    have no WAV) are skipped. Any other status fails closed.
+    """
     records = []
+    ids = []
     for path in sorted(candidates_dir.glob("*.json")):
         rec = json.loads(path.read_text(encoding="utf-8"))
+        status = rec.get("status")
+        if status not in ("candidate", "rejected"):
+            raise PoolError(f"{path}: record status {status!r} is not candidate/rejected")
+        ids.append(rec.get("candidate_id"))
+        if status == "rejected":
+            continue
         for key in ("candidate_id", "voice_id", "wav", "wav_sha256"):
             if key not in rec:
                 raise PoolError(f"{path}: candidate record lacks {key!r}")
         records.append(rec)
-    if not records:
-        raise PoolError(f"no candidate records in {candidates_dir}")
-    ids = [r["candidate_id"] for r in records]
     if len(set(ids)) != len(ids):
         raise PoolError("candidate ids are not unique")
+    if not records:
+        raise PoolError(f"no accepted candidate records in {candidates_dir}")
     return records
 
 
