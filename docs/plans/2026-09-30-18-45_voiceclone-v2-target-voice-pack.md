@@ -1,6 +1,6 @@
 # Voiceclone V2 (#664): synthetic target voice pack
 
-Status: draft
+Status: in-progress
 
 ## Goal
 
@@ -322,6 +322,31 @@ Spec deltas: none (no living spec declared).
   pinned in the report, and headroom is recorded.
 - **Risk: chain of custody across machines.** Every step consumes files by sha, and the
   pre-upload `sha256sum -c` gates the release.
+
+### Slice 1 findings (2026-09-30)
+
+- **Pool as built.** 53 speakers and 471 clips:
+  - all 15 Gate 1 speakers (180 clips);
+  - 38 LibriTTS-R `test-clean` speakers (291 clips, up to 8 each, at least 3.0 s).
+
+  LibriTTS-R filtered some speakers down to one or two files, so the selection is "up to 8".
+  `libritts-r-61` has no clip that long and is recorded as excluded in the manifest. Every clip
+  embedded through the `titanet-onnx-v1` graph (sha checked against its provenance) after
+  `normalize_to_wav`; none was skipped.
+- **The real-speaker null sits at the floor.**
+  - The median real speaker's nearest other real speaker has a centroid cosine of **0.601**. So
+    half the pool's real people already have another real person at or above 0.60.
+  - Every such pair is LibriTTS-R against LibriTTS-R: 25 of 703 pairs, max 0.719. No pair
+    involving AMI or VoxConverse reaches 0.39, in either the clean-only or the all-condition
+    centroids.
+  - Likely cause (a hypothesis, not measured): the restoration step in LibriTTS-R makes the
+    channel uniform, so clean studio-like speech clusters there for channel reasons, not
+    identity. Clean synthetic candidates may land near that cluster in the same way.
+- **What this means for slice 3.** Expect more candidates to be rejected against LibriTTS-R
+  speakers than the draft assumed. The decided rule (centroid AND clip max < 0.60) stays as it
+  is unless Ben changes it. The screening report gives each rejection's nearest speaker, so the
+  corpus pattern is visible. If a slot runs dry, the iteration protocol applies, ending in
+  "ask Ben".
 
 ## Review notes
 

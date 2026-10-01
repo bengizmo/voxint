@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "release_tag": "voiceclone-target-voices-v1",
+  "asset_license": "CC0-1.0",
+  "generator": {
+    "model_id": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "hf_revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+    "hf_card_url": "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "hf_card_license": "apache-2.0",
+    "hf_card_checked": "2026-09-30",
+    "code_repo": "https://github.com/QwenLM/Qwen3-TTS",
+    "code_commit": "022e286b98fbec7e1e916cb940cdf532cd9f488e",
+    "code_license": "Apache-2.0",
+    "package": "qwen-tts==0.1.1",
+    "weights_sha256": {
+      "model.safetensors": "391e8db219f292c515297cdceeb43e4eae67cdde35fa57e79a6a8a532fca0522",
+      "speech_tokenizer/model.safetensors": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258"
+    },
+    "dtype": "bfloat16",
+    "language": "English",
+    "reference_recording_used": false
+  },
+  "sampling": {
+    "do_sample": true,
+    "temperature": 0.9,
+    "top_k": 50,
+    "top_p": 1.0,
+    "repetition_penalty": 1.05
+  },
+  "text": "On a quiet Thursday morning, the old ferry pulled away from the harbor while six curious children watched gulls chase each other above the bright, choppy water.",
+  "dsp": {
+    "sample_rate": 24000,
+    "channels": 1,
+    "sample_format": "pcm_s16le",
+    "dither": false,
+    "trim_frame_samples": 480,
+    "trim_threshold_db_below_peak": 40.0,
+    "trim_pad_samples": 1200,
+    "fade_samples": 240,
+    "min_samples": 192000,
+    "max_samples": 240000,
+    "align_samples": 960,
+    "peak_dbfs": -1.0
+  },
+  "analysis": {
+    "f0_fmin_hz": 50.0,
+    "f0_fmax_hz": 500.0
+  },
+  "screening": {
+    "reject_at_or_above": 0.6,
+    "swap_headroom": 0.05
+  },
+  "chatterbox": {
+    "target_cosine_floor": 0.6,
+    "sources": 15,
+    "min_sources_reached": 11
+  },
+  "voices": [
+    {
+      "id": "target-a",
+      "pitch_band": "lower",
+      "description": "An adult man in his fifties with a low, resonant voice. Calm, steady pace. Warm, slightly gravelly timbre. Plain, conversational delivery with neutral emotion.",
+      "seeds": [1101, 1102, 1103, 1104, 1105]
+    },
+    {
+      "id": "target-b",
+      "pitch_band": "lower",
+      "description": "An adult woman in her forties with a low-pitched, smooth voice. Measured pace. Even, slightly husky timbre. Composed, clear delivery with neutral emotion.",
+      "seeds": [2101, 2102, 2103, 2104, 2105]
+    },
+    {
+      "id": "target-c",
+      "pitch_band": "higher",
+      "description": "A young adult man in his twenties with a light, higher-pitched voice. Brisk pace. Bright, clear timbre. Friendly, conversational delivery with mild warmth.",
+      "seeds": [3101, 3102, 3103, 3104, 3105]
+    },
+    {
+      "id": "target-d",
+      "pitch_band": "higher",
+      "description": "An adult woman in her thirties with a high, clear voice. Moderate pace. Bright, crisp timbre. Relaxed, natural delivery with mild warmth.",
+      "seeds": [4101, 4102, 4103, 4104, 4105]
+    }
+  ]
+}
