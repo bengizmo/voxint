@@ -6,6 +6,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-10-01
+
 ### Changed
 - **SQLAlchemy 2.1** (#683). The lock moves from 2.0.54 to 2.1.1 and the
   declared floor rises to `sqlalchemy>=2.1`. Installs from PyPI could already
