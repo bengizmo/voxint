@@ -45,9 +45,12 @@ engine, same code path. `DEVICE` stays `cuda` (CT2's ROCm build uses the
 CUDA-alias API) and `/healthz` reports `device: "rocm"`. Run via
 `compose.rocm.yaml` (device passthrough + host render gid).
 
+Replace `X.Y.Z` with a release version (the `VOXINT_IMAGE_TAG` default in
+`compose.yaml` is the current one):
+
 ```bash
-docker pull ghcr.io/bengizmo/voxint-whisper:0.4.0   # prebuilt release image
-docker build -t voxint-whisper services/whisper     # …or build from source
+docker pull ghcr.io/bengizmo/voxint-whisper:X.Y.Z   # prebuilt release image
+docker build -t voxint-whisper services/whisper     # ...or build from source
 docker run --rm --gpus all -p 127.0.0.1:8022:8022 \
   -v /path/to/media:/data/media:ro voxint-whisper
 curl -s localhost:8022/healthz

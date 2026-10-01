@@ -35,6 +35,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   then failed. Settings now offers to set the tutorial up again, and setting it
   up builds a fresh tutorial run with its audio. The old tutorial run is
   archived, so it leaves the review queue.
+- **The model-service READMEs describe the shipped images.** The titanet README
+  still described the retired NeMo/torch image; it now documents the ONNX
+  Runtime CUDA and CPU images and their settings. The whisper, pyannote, and
+  titanet READMEs no longer suggest pulling long-outdated release tags.
 
 ## [0.49.0] - 2026-10-01
 
