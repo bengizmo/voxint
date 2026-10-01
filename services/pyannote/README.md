@@ -39,6 +39,7 @@ persist them.
 | `PYANNOTE_SEGMENTATION_STEP` | `0.5` | Larger than the 0.1 default → sustained GPU load |
 | `MAX_PENDING_REQUESTS` | `8` | Admission bound; beyond it → retryable 503 |
 | `PORT` | `8024` | Listen port |
+| `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD` | `1` in the images and the metal launcher | Required on torch 2.6+: the pyannote 3.1 checkpoints do not load in torch's `weights_only` mode. The vendored files are sha256-checked at build and setup |
 
 The clustering, step, and merge knobs (`PYANNOTE_CLUSTERING_THRESHOLD`,
 `PYANNOTE_CLUSTERING_MIN_SIZE`, `PYANNOTE_SEGMENTATION_STEP`,

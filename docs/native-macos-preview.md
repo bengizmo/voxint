@@ -312,6 +312,12 @@ can rotate on demand with `scripts/native/voxint-native.sh rotate-logs`.
   `static/app/.vite/manifest.json` is present.
 - **Submissions fail.** The model services are not up. `status` shows the
   delegated model state; `scripts/metal/voxint-metal.sh doctor` diagnoses them.
+- **The pyannote service exits at startup with "torch >= 2.6 refuses to unpickle
+  the pyannote 3.1 checkpoints".** Its environment lacks
+  `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`. The metal launcher sets it for the
+  `launchd` job, so this only happens when you start the service some other way,
+  such as `uvicorn` from the venv. Set the variable there, or start the service
+  with the launcher.
 - **A service keeps flapping.** `status` reports each `launchd` job's liveness:
   `running`, `restarting (last exit N)` when it is crash-looping (the non-zero
   exit is the clue), or `stopped (clean exit)` when the job exited with code 0

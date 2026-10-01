@@ -55,7 +55,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `torch.load(weights_only=True)`, and pyannote never loads that way: torch 2.6
   and later refuse the pyannote 3.1 checkpoints in that mode, so every flavor
   sets `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` and unpickles them in full (the CPU
-  image and the native launcher now set it, as the CUDA image already did). What
+  image and the native launcher now set it, as the CUDA image already did; its
+  absence, not a slow start, is why 0.36.1 reverted the CPU image to 2.5.0). What
   protects the default install is that its checkpoints are vendored and checked
   by sha256 at image build and native setup. The optional online path
   (`DIARIZER_MODEL_NAME`) downloads checkpoints from Hugging Face without that

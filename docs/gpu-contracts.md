@@ -95,7 +95,7 @@ same contract.
     never the driver or userspace stack. `model` stays the weights identity:
     large-v2 is large-v2 regardless of engine.
   - `runtime` / `runtime_version` identify the compute userspace the engine
-    runs on (e.g. `torch` / `2.5.0+cu118`, `torch` / `2.8.0+rocm7.2`,
+    runs on (e.g. `torch` / `2.8.0+cu128`, `torch` / `2.8.0+rocm7.2`,
     `ctranslate2` / `4.4.0`, `onnxruntime` / `1.20.1`), `null` when the
     engine has no separable runtime. Best-effort diagnostics: host-driver
     provenance is **not** readiness truth and is never required for `"ok"`.
