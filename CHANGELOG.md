@@ -27,6 +27,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   this voice** played nothing. Pressing the mouse button collapsed the speaker
   list, the controls below it moved up, and the click landed somewhere else.
   A click below the list no longer collapses it.
+- **The speaker menu no longer closes the moment it opens** (#716). Clicking a
+  speaker name near the edge of the window sometimes opened the menu and shut
+  it straight away, so the click seemed to do nothing. The browser scrolled the
+  name into view, and the menu read that scroll as you scrolling away. It now
+  closes only when a scroll actually moves the line it belongs to.
 - **The tutorial's speaker rail no longer says voice matching did not run**
   (#675). The bundled tutorial run listed one voice as matched automatically
   while the rail's summary said "Voice matching did not run on this recording."

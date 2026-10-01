@@ -214,12 +214,54 @@ describe("SpeakerAssignPopover", () => {
     outside.remove();
   });
 
-  it("closes on captured scroll and removes the listener on unmount", () => {
+  // The opener the editor focuses before opening the menu, reporting `rect`.
+  function focusedAnchor(rect: { top: number; left: number }) {
+    const anchor = document.createElement("button");
+    document.body.append(anchor);
+    anchor.focus();
+    const at = { ...rect };
+    vi.spyOn(anchor, "getBoundingClientRect").mockImplementation(
+      () => new DOMRect(at.left, at.top, 100, 20),
+    );
+    return { anchor, at };
+  }
+
+  it("closes when a scroll moves the anchor and removes the listener on unmount", () => {
+    const { anchor, at } = focusedAnchor({ top: 50, left: 40 });
     const { props, unmount } = setup();
-    fireEvent.scroll(document.body);
+    at.top = 10;
+    fireEvent.scroll(document);
     expect(props.onClose).toHaveBeenCalledOnce();
     unmount();
-    fireEvent.scroll(document.body);
+    fireEvent.scroll(document);
+    expect(props.onClose).toHaveBeenCalledOnce();
+    anchor.remove();
+  });
+
+  it("stays open when a scroll leaves the anchor in place (#716)", () => {
+    // The browser scrolling the focused opener into view: the anchor was
+    // measured after that scroll, and its event arrives a frame later.
+    const { anchor } = focusedAnchor({ top: 50, left: 40 });
+    const { props } = setup();
+    fireEvent.scroll(document);
+    expect(props.onClose).not.toHaveBeenCalled();
+    anchor.remove();
+  });
+
+  it("stays open when something inside the panel scrolls (#716)", () => {
+    const { anchor, at } = focusedAnchor({ top: 50, left: 40 });
+    const { props } = setup();
+    at.top = 10; // even if the anchor reads as moved, an inner scroll is ignored
+    fireEvent.scroll(screen.getByRole("listbox"));
+    expect(props.onClose).not.toHaveBeenCalled();
+    anchor.remove();
+  });
+
+  it("closes on scroll once its anchor has left the page", () => {
+    const { anchor } = focusedAnchor({ top: 50, left: 40 });
+    const { props } = setup();
+    anchor.remove();
+    fireEvent.scroll(document);
     expect(props.onClose).toHaveBeenCalledOnce();
   });
 
