@@ -585,14 +585,39 @@ def test_tutorial_editor_rail_inputs_report_matching_ran(
         run = session.get(PipelineRun, run_id)
         assert run is not None
         media_id = run.media_item_id
-    states = _editor_props(client, media_id)["labelStates"]
-    assert len(states) == 3
-    assert all(state["matchDecision"] is not None for state in states)
-    grounded = [s for s in states if s["resolution"] == "grounded_cosine"]
-    assert len(grounded) == 1
-    needs_you = [s for s in states if s["resolution"] == "unresolved"]
-    assert len(needs_you) == 2
-    assert all(s["candidatePromptAllowed"] is False for s in needs_you)
+        speaker = session.execute(
+            select(Speaker).where(
+                Speaker.display_name == resources.load_layout()["roster_speaker"]["display_name"]
+            )
+        ).scalar_one()
+    states = {s["label"]: s for s in _editor_props(client, media_id)["labelStates"]}
+    layout = resources.load_layout()
+    roster_label = layout["roster_speaker"]["label"]
+    others = {layout["heard_name"]["label"], layout["unresolved_label"]}
+    assert set(states) == {roster_label, *others}
+
+    # The exact serialized shape speaker-bands.test.ts feeds summary() with.
+    grounded = states[roster_label]
+    assert grounded["resolution"] == "grounded_cosine"
+    assert grounded["band"] == "auto_attribute"
+    assert grounded["candidatePromptAllowed"] is True
+    assert grounded["matchDecision"] == "accepted"
+    assert grounded["matchReason"] == "accepted"
+    assert grounded["matchSimilarity"] == pytest.approx(0.95)
+    assert grounded["matchMargin"] is None
+    assert grounded["matchVoteAgreement"] == 1.0
+    for label in others:
+        state = states[label]
+        assert state["resolution"] == "unresolved"
+        assert state["band"] == "abstain"
+        assert state["bandReason"] == "Voice not distinctive enough to match."
+        assert state["candidatePromptAllowed"] is False
+        assert state["candidateSpeakerId"] == str(speaker.id)
+        assert state["matchDecision"] == "rejected"
+        assert state["matchReason"] == "below_cosine"
+        assert state["matchSimilarity"] == 0.0
+        assert state["matchMargin"] is None
+        assert state["matchVoteAgreement"] == 1.0
 
 
 def test_purged_tutorial_reads_as_not_set_up_and_reseeds_fresh(

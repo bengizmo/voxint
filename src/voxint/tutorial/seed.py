@@ -81,7 +81,7 @@ from voxint.db.models import (
 )
 from voxint.domain_packs.base import load_default
 from voxint.ingest.service import archive_run
-from voxint.media.operations import has_active_operation, lock_media_row
+from voxint.media.operations import has_active_operation
 from voxint.pipeline.stages.context import normalized_audio_path
 from voxint.speakers.matching import (
     DECISION_ACCEPTED,
@@ -181,9 +181,17 @@ def _revive_purged_media(session: Session, media: MediaItem) -> None:
     the operator's choice, not a silent undo of "Delete permanently". Every old
     run on the item is soft-archived so it leaves the review queue and /runs;
     the caller then builds a fresh run and rewrites the original file.
+
+    The columns are rewritten directly, not through a media operation, so the
+    item's completed PURGE row stays in ``media_operations`` as history of the
+    earlier deletion. Nothing reads a completed operation as current state, and
+    a later trash or purge of the revived item plans its own operations.
     """
-    if lock_media_row(session, media.id) is None:
-        raise TutorialSeedError("tutorial media item vanished during revive")
+    # Lock AND repopulate: a plain FOR UPDATE would return the instance already
+    # in the identity map with its pre-lock values (see reconcile._process_one).
+    session.refresh(media, with_for_update=True)
+    if media.purged_at is None:
+        return
     if has_active_operation(session, media.id):
         raise TutorialSeedError("tutorial media item has a media operation in progress")
     old_runs = session.execute(
