@@ -29,6 +29,7 @@ jobs:
   # cores instead of serializing on a single shared DROP SCHEMA.
   lint-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -58,7 +59,13 @@ jobs:
           uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file "$RUNNER_TEMP/production-requirements.txt"
           .venv/bin/pip-audit --strict --requirement "$RUNNER_TEMP/production-requirements.txt"
       - name: Install ffmpeg (normalize-stage tests)
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
+        # A stalled apt mirror once held this step for half an hour; fail fast
+        # so a re-run is one click instead of a wait for the 6-hour default.
+        timeout-minutes: 5
+        run: >-
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update -qq &&
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          install -y --no-install-recommends ffmpeg
       - name: Ruff
         run: uv run ruff check .
       - name: Mypy
@@ -86,6 +93,7 @@ jobs:
   # fail_under in pyproject.toml.
   coverage:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -108,7 +116,13 @@ jobs:
       - name: Install
         run: uv sync --frozen --extra dev --extra parity
       - name: Install ffmpeg (normalize-stage tests)
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
+        # A stalled apt mirror once held this step for half an hour; fail fast
+        # so a re-run is one click instead of a wait for the 6-hour default.
+        timeout-minutes: 5
+        run: >-
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update -qq &&
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          install -y --no-install-recommends ffmpeg
       - name: Pytest (full suite, coverage)
         env:
           VOXINT_TEST_DATABASE_URL: postgresql+psycopg://voxint:voxint@localhost:5432/voxint_test
@@ -121,6 +135,7 @@ jobs:
     # to the Postgres service container. The no-CDN offline guarantee rides
     # inside `npm run build` (checks the exact dist/ bytes the image COPYs).
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: frontend
@@ -146,6 +161,7 @@ jobs:
 
   secrets-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
