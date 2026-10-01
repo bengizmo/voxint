@@ -12,7 +12,7 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   **All segments with this voice** closed the whole menu, and clicking **Hear
   this voice** played nothing. Pressing the mouse button collapsed the speaker
   list, the controls below it moved up, and the click landed somewhere else.
-  The list now stays in place until you pick a speaker or close the menu.
+  A click below the list no longer collapses it.
 - **The tutorial's speaker rail no longer says voice matching did not run**
   (#675). The bundled tutorial run listed one voice as matched automatically
   while the rail's summary said "Voice matching did not run on this recording."
