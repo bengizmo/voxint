@@ -117,6 +117,7 @@ it("offers undo for a segment relabel and adopts the undo result", async () => {
   fireEvent.click(screen.getByRole("option", { name: "Bob" }));
   await screen.findByText("Segment speaker changed.");
   expect(screen.getByRole("button", { name: "Speaker 1: Bob" })).toBeTruthy();
+  expect(screen.getByText("Assigned to Bob.")).toBeTruthy();
 
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
 
@@ -127,6 +128,8 @@ it("offers undo for a segment relabel and adopts the undo result", async () => {
   expect(undoBody.get("nonce")).toBe("undo:dec-9");
   expect(undoBody.get("csrf_token")).toBe("claim-csrf");
   expect(screen.queryByText("Segment speaker changed.")).toBeNull();
+  // The live region no longer claims the undone assignment.
+  expect(screen.queryByText("Assigned to Bob.")).toBeNull();
 });
 
 function renderUnclaimed(overrides: Partial<MediaEditorProps> = {}) {

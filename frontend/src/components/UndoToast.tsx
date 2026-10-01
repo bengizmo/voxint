@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, apiFetch } from "../lib/api-client";
 import type { LabelsResult } from "./SpeakerRail";
@@ -13,6 +13,9 @@ interface UndoToastProps {
   onClaimLost: () => void;
   onUndone: (data: LabelsResult) => void;
   onDismiss: () => void;
+  // The editor's write guard. An undo holds it so no other edit can be in
+  // flight at the same time and land its response out of order.
+  writeGuard?: { busyRef: RefObject<boolean>; setBusy: (busy: boolean) => void };
 }
 
 const UNDO_COPY: Record<UndoPayload["kind"], string> = {
@@ -45,8 +48,10 @@ export function UndoToast({
   onClaimLost,
   onUndone,
   onDismiss,
+  writeGuard,
 }: UndoToastProps) {
-  const busyRef = useRef(false);
+  const localBusyRef = useRef(false);
+  const busyRef = writeGuard?.busyRef ?? localBusyRef;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -67,6 +72,7 @@ export function UndoToast({
     if (busyRef.current || !claimCsrf) return;
     busyRef.current = true;
     setBusy(true);
+    writeGuard?.setBusy(true);
     setError(null);
     try {
       const body = new URLSearchParams();
@@ -92,7 +98,7 @@ export function UndoToast({
         setError(
           expired
             ? "Undo window expired."
-            : "Too late to undo. The speaker was changed again since.",
+            : "Too late to undo. This was changed again since.",
         );
       } else {
         setError(err instanceof ApiError ? err.detail : "Undo failed.");
@@ -100,8 +106,9 @@ export function UndoToast({
     } finally {
       busyRef.current = false;
       setBusy(false);
+      writeGuard?.setBusy(false);
     }
-  }, [claimCsrf, reviewToken, undo, runId, onUndone, onClaimLost, onDismiss]);
+  }, [claimCsrf, reviewToken, undo, runId, onUndone, onClaimLost, onDismiss, busyRef, writeGuard]);
 
   const label = UNDO_COPY[undo.kind];
 

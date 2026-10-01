@@ -409,6 +409,8 @@ export function MediaEditor({
     }
   }, [popoverTarget]);
 
+  const undoWriteGuard = useMemo(() => ({ busyRef, setBusy }), [busyRef, setBusy]);
+
   const postForm = useFormPost(
     reviewToken,
     writable,
@@ -635,7 +637,8 @@ export function MediaEditor({
         if (!result) return;
         setSegments(result.segments);
         setProgress(result.progress);
-        setUndoInfo(result.undo ?? null);
+        // A replay carries no undo; keep any toast that is still valid.
+        if (result.undo) setUndoInfo(result.undo);
         void reloadAnnotationsRef.current?.();
       } finally {
         busyRef.current = false;
@@ -673,7 +676,8 @@ export function MediaEditor({
         if (!result) return;
         setSegments(result.segments);
         setProgress(result.progress);
-        setUndoInfo(result.undo ?? null);
+        // A replay carries no undo; keep any toast that is still valid.
+        if (result.undo) setUndoInfo(result.undo);
         void reloadAnnotationsRef.current?.();
         const name = speakers.find((s) => s.id === speakerId)?.displayName;
         setAssignStatus(
@@ -1673,8 +1677,9 @@ export function MediaEditor({
           ]}
         />
       </div>
-      {undoInfo && reviewToken && (
+      {undoInfo && writable && reviewToken && (
         <UndoToast
+          key={undoInfo.kind === "merge" ? undoInfo.mergeNonce : undoInfo.decisionId}
           undo={undoInfo}
           runId={runId}
           reviewToken={reviewToken}
@@ -1682,9 +1687,11 @@ export function MediaEditor({
           onClaimLost={onAnnotationClaimLost}
           onUndone={(data) => {
             setUndoInfo(null);
+            setAssignStatus(null);
             onLabelsChanged(data);
           }}
           onDismiss={() => setUndoInfo(null)}
+          writeGuard={undoWriteGuard}
         />
       )}
       {mergeSuggestion && reviewToken && (

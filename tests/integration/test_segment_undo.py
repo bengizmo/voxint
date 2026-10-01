@@ -384,6 +384,39 @@ def test_undo_refuses_a_key_already_used_elsewhere(
             _undo(session, seeded, second.id, key=second.idempotency_key)
 
 
+def test_undo_refuses_a_key_reused_for_another_ruling_in_the_same_scope(
+    session_factory: sessionmaker[Session],
+) -> None:
+    seeded = _seed(session_factory)
+    with session_factory() as session:
+        first = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
+        _undo(session, seeded, first.id, key="same-scope-key")
+        second = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
+
+        with pytest.raises(ConflictingReplayError):
+            _undo(session, seeded, second.id, key="same-scope-key")
+        session.rollback()
+        assert _segment_speaker(session, seeded) == seeded.bob
+
+
+def test_a_replay_after_a_later_ruling_reports_the_undo_it_already_did(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # A retried request whose first attempt committed is a replay, not a new
+    # undo: it must not touch the later ruling.
+    seeded = _seed(session_factory)
+    with session_factory() as session:
+        original = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
+        first = _undo(session, seeded, original.id, key="retried")
+        _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
+
+        replay = _undo(session, seeded, original.id, key="retried")
+
+        assert replay["is_replay"] is True
+        assert replay["compensating_decision_id"] == first["compensating_decision_id"]
+        assert _segment_speaker(session, seeded) == seeded.bob
+
+
 def test_undo_refuses_rows_that_are_not_segment_rulings(
     session_factory: sessionmaker[Session],
 ) -> None:

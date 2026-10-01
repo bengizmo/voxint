@@ -27,7 +27,7 @@ from voxint.adjudication.corrections_view import (
     resolve_segment_provenance,
 )
 from voxint.adjudication.review_state import verified_progress
-from voxint.adjudication.splits import derive_children
+from voxint.adjudication.splits import child_ranges
 from voxint.adjudication.transcript import TranscriptLine, TranscriptText, attributed_transcript
 from voxint.api.playback import PlaybackCapability
 from voxint.api.speaker_colors import run_label_universe, speaker_palette
@@ -288,26 +288,8 @@ def _segment_is_split(session: Session, segment_id: uuid.UUID) -> bool:
 def _segment_child_ranges(
     session: Session, segment: TranscriptSegment
 ) -> set[tuple[int, int]]:
-    """The half-open ``(word_start, word_end)`` ranges of a segment's current
-    derived split children (issue #59 slice 3).
-
-    The reassign route validates a submitted range against this set so a ruling
-    can only target a child that actually exists right now — an arbitrary range
-    would write a ledger row the read path never applies (it matches children by
-    exact coordinates). Empty for an unsplit or unsplittable segment."""
-    cuts = list(
-        session.execute(
-            select(SegmentSplitBoundary.word_index).where(
-                SegmentSplitBoundary.parent_segment_id == segment.id
-            )
-        ).scalars()
-    )
-    if not cuts:
-        return set()
-    children = derive_children(segment, cuts)
-    if children is None or len(children) < 2:
-        return set()
-    return {(child.word_start, child.word_end) for child in children}
+    """See :func:`voxint.adjudication.splits.child_ranges`."""
+    return child_ranges(session, segment)
 
 
 def _segment_is_corrected(session: Session, segment_id: uuid.UUID) -> bool:

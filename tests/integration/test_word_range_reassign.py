@@ -256,7 +256,8 @@ def test_island_reassign_returns_whole_run_reconcile(
 ) -> None:
     """A JSON-Accept (island) reassign returns the whole-run reconcile shape
     ({segments, progress}) with the child's new speaker string, so the console
-    adopts server truth wholesale — mirroring the /split response."""
+    adopts server truth wholesale — mirroring the /split response. A fresh
+    ruling also carries its undo (issue #573)."""
     run_id, seg_id, other = _seed(session_factory)
     token = _claim(client, run_id)
     _split(client, run_id, seg_id, token, at=2)
@@ -265,7 +266,8 @@ def test_island_reassign_returns_whole_run_reconcile(
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert set(body) == {"segments", "progress"}
+    assert set(body) == {"segments", "progress", "undo"}
+    assert body["undo"]["kind"] == "relabel"
     segments = body["segments"]
     # Both children still render, and only the reassigned child ([2,4)) moved.
     assert [s["text"] for s in segments] == ["Hello there", "big world"]

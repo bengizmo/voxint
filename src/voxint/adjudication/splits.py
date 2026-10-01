@@ -268,3 +268,27 @@ def record_split(
         )
     )
     session.flush()
+
+
+def child_ranges(session: Session, segment: TranscriptSegment) -> set[tuple[int, int]]:
+    """The half-open ``(word_start, word_end)`` ranges of a segment's current
+    derived split children (issue #59 slice 3).
+
+    A word-range ruling must target a child that exists right now: the read path
+    matches children by exact coordinates, so a ruling on any other range would
+    write a ledger row nothing applies. The reassign route validates against this
+    set, and the undo of a ranged ruling (issue #573) re-checks it. Empty for an
+    unsplit or unsplittable segment."""
+    cuts = list(
+        session.execute(
+            select(SegmentSplitBoundary.word_index).where(
+                SegmentSplitBoundary.parent_segment_id == segment.id
+            )
+        ).scalars()
+    )
+    if not cuts:
+        return set()
+    children = derive_children(segment, cuts)
+    if children is None or len(children) < 2:
+        return set()
+    return {(child.word_start, child.word_end) for child in children}

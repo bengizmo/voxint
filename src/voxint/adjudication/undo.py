@@ -21,11 +21,10 @@ from sqlalchemy.orm import Session, aliased
 
 from voxint.adjudication.ledger import ConflictingReplayError, record_decision
 from voxint.adjudication.resolver import effective_decisions
-from voxint.adjudication.splits import derive_children
+from voxint.adjudication.splits import child_ranges
 from voxint.db.models import (
     AdjudicationDecision,
     Decision,
-    SegmentSplitBoundary,
     Speaker,
     SpeakerEmbedding,
     TranscriptSegment,
@@ -262,15 +261,6 @@ def _check_grace(created_at: datetime, grace_seconds: float, message: str) -> No
         raise UndoExpiredError(message)
 
 
-def _same_scope(row: AdjudicationDecision, original: AdjudicationDecision) -> bool:
-    return (
-        row.pipeline_run_id == original.pipeline_run_id
-        and row.transcript_segment_id == original.transcript_segment_id
-        and row.start_word_index == original.start_word_index
-        and row.end_word_index == original.end_word_index
-    )
-
-
 def _scope_history(
     session: Session, original: AdjudicationDecision
 ) -> list[AdjudicationDecision]:
@@ -303,31 +293,6 @@ def _scope_history(
     )
 
 
-def _range_is_current_child(
-    session: Session, segment_id: uuid.UUID, start: int, end: int
-) -> bool:
-    """Whether ``[start, end)`` is still one of the segment's split children.
-
-    Splits only ever add cuts, so a later split can subdivide the range. The
-    read path matches children by exact coordinates, so a ruling on a range
-    that no longer renders would change nothing the operator can see.
-    """
-    segment = session.get(TranscriptSegment, segment_id)
-    if segment is None:
-        return False
-    cuts = list(
-        session.execute(
-            select(SegmentSplitBoundary.word_index).where(
-                SegmentSplitBoundary.parent_segment_id == segment_id
-            )
-        ).scalars()
-    )
-    children = derive_children(segment, cuts) if cuts else None
-    if children is None or len(children) < 2:
-        return False
-    return (start, end) in {(child.word_start, child.word_end) for child in children}
-
-
 def undo_segment_decision(
     session: Session,
     run_id: uuid.UUID,
@@ -357,13 +322,31 @@ def undo_segment_decision(
     ):
         raise UndoError("only a segment-scope ruling from this run can be undone")
 
+    history = _scope_history(session, original)
+    position = next(i for i, row in enumerate(history) if row.id == original.id)
+    prior = history[position + 1] if position + 1 < len(history) else None
+    restore_speaker = (
+        prior.speaker_id
+        if prior is not None and prior.decision == Decision.ASSIGN.value
+        else None
+    )
+    restore = Decision.ASSIGN if restore_speaker is not None else Decision.INHERIT
+
     existing = session.execute(
         select(AdjudicationDecision).where(
             AdjudicationDecision.idempotency_key == idempotency_key
         )
     ).scalar_one_or_none()
     if existing is not None:
-        if existing.id == original.id or not _same_scope(existing, original):
+        # A replay must be this original's compensation: newer than it in the
+        # same scope and re-asserting exactly what preceded it. Anything else
+        # is the key reused for a different ruling.
+        later = {row.id for row in history[:position]}
+        if (
+            existing.id not in later
+            or existing.decision != restore.value
+            or existing.speaker_id != restore_speaker
+        ):
             raise ConflictingReplayError(idempotency_key)
         return {
             "compensating_decision_id": existing.id,
@@ -373,32 +356,22 @@ def undo_segment_decision(
 
     _check_grace(original.created_at, grace_seconds, "the undo grace window has passed")
 
-    history = _scope_history(session, original)
-    if not history or history[0].id != original.id:
+    if position != 0:
         raise UndoDriftError("this segment's speaker was changed again after this ruling")
+    segment = session.get(TranscriptSegment, original.transcript_segment_id)
     if (
         original.start_word_index is not None
-        and original.end_word_index is not None
-        and not _range_is_current_child(
-            session,
-            original.transcript_segment_id,
-            original.start_word_index,
-            original.end_word_index,
-        )
+        and segment is not None
+        and (original.start_word_index, original.end_word_index)
+        not in child_ranges(session, segment)
     ):
         raise UndoDriftError("this part of the segment was split again after this ruling")
 
-    prior = history[1] if len(history) > 1 else None
-    restore_speaker = (
-        prior.speaker_id
-        if prior is not None and prior.decision == Decision.ASSIGN.value
-        else None
-    )
     compensating = record_decision(
         session,
         pipeline_run_id=run_id,
         diarization_label=original.diarization_label,
-        decision=Decision.ASSIGN if restore_speaker is not None else Decision.INHERIT,
+        decision=restore,
         operator=operator,
         idempotency_key=idempotency_key,
         speaker_id=restore_speaker,

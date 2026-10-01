@@ -195,8 +195,8 @@ toast** appears at the bottom of the screen. Click **Undo** within five minutes
 to reverse the ruling and restore the label to its previous state.
 
 Changing the speaker of a single line (or of one part of a split line) shows the
-same toast. **Undo** puts that line back to the speaker it had just before your
-change.
+same toast. **Undo** takes that change back, so the line shows whatever it
+showed before you changed it.
 
 The undo window is enforced on the server: if the label or line was changed
 again before you click Undo, the toast tells you so. Closing the toast, waiting
