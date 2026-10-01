@@ -100,6 +100,7 @@ from voxint.adjudication.undo import (
     undo_decision,
     undo_enrollment,
     undo_merge,
+    undo_segment_decision,
 )
 from voxint.api.annotation_view import (
     annotation_shapes as _annotation_shapes,
@@ -152,6 +153,7 @@ from voxint.app_settings import (
 from voxint.config import Settings
 from voxint.db.models import (
     MAX_CORRECTED_TEXT_CHARS,
+    AdjudicationDecision,
     AnnotationTag,
     ArtifactKind,
     AudioArtifact,
@@ -638,17 +640,21 @@ def decide(
         )
     undo = None
     if not is_replay:
-        created_at = row.created_at
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=UTC)
         undo = {
             "kind": "decide",
             "decisionId": str(row.id),
-            "expiresAt": (
-                created_at + timedelta(seconds=settings.UNDO_GRACE_SECONDS)
-            ).isoformat(),
+            "expiresAt": _undo_expires_at(row, settings),
         }
     return _labels_response(request, session, run, undo=undo)
+
+
+def _undo_expires_at(row: AdjudicationDecision, settings: Settings) -> str:
+    """When a fresh ruling's undo window closes: the window the undo service
+    enforces, measured from the row's own ``created_at``."""
+    created_at = row.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    return (created_at + timedelta(seconds=settings.UNDO_GRACE_SECONDS)).isoformat()
 
 
 @router.post("/review/{run_id}/merge/preview")
@@ -931,7 +937,14 @@ def relabel_segment(
             speaker_name=speaker.display_name,
             speaker_id=speaker.id,
         )
-    return _run_reconcile_response(session, run_id)
+    undo = None
+    if not is_replay:
+        undo = {
+            "kind": "relabel",
+            "decisionId": str(row.id),
+            "expiresAt": _undo_expires_at(row, settings),
+        }
+    return _run_reconcile_response(session, run_id, undo=undo)
 
 
 def _segment_review_json(
@@ -2573,6 +2586,48 @@ def undo_decide(
     settings: Settings = request.app.state.settings
     try:
         undo_decision(
+            session,
+            run_id=run_id,
+            decision_id=decision_id,
+            operator=operator,
+            idempotency_key=nonce,
+            grace_seconds=settings.UNDO_GRACE_SECONDS,
+            user_id=identity.user_id,
+        )
+    except (UndoDriftError, UndoExpiredError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConflictingReplayError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except UndoError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    return _labels_response(request, session, run)
+
+
+@router.post("/review/{run_id}/undo/relabel")
+def undo_relabel(
+    run_id: uuid.UUID,
+    request: Request,
+    identity: CurrentUserDep,
+    operator: OperatorDep,
+    session: SessionDep,
+    token: Annotated[uuid.UUID, Form()],
+    csrf_token: Annotated[str, Form()],
+    decision_id: Annotated[uuid.UUID, Form()],
+    nonce: Annotated[str, Form(min_length=8, max_length=64)],
+) -> Response:
+    """Undo a segment- or word-range-scope relabel (issue #573). Returns the
+    label-states shape every undo returns, so the island adopts it the same way."""
+    try:
+        run = verify_claim(session, run_id, token, for_update=True)
+    except ClaimMismatchError as exc:
+        raise HTTPException(
+            status_code=409, detail=str(exc), headers=_CLAIM_CONFLICT_HEADERS
+        ) from exc
+    _require_csrf(request, CSRF_CLAIM, csrf_token)
+    settings: Settings = request.app.state.settings
+    try:
+        undo_segment_decision(
             session,
             run_id=run_id,
             decision_id=decision_id,

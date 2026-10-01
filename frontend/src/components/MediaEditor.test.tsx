@@ -112,6 +112,43 @@ it("assigns the clicked segment rather than the previous cursor", async () => {
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
+it("offers undo for a segment relabel and adopts the undo result", async () => {
+  const expiresAt = new Date(Date.now() + 300_000).toISOString();
+  const relabeled = segments.map((seg, index) =>
+    index === 1 ? { ...seg, speaker: "Bob" } : seg);
+  vi.mocked(apiFetch)
+    .mockResolvedValueOnce({
+      json: async () => ({
+        segments: relabeled,
+        progress: { verified: 0, total: 2 },
+        undo: { kind: "relabel", decisionId: "dec-9", expiresAt },
+      }),
+    } as unknown as Response)
+    .mockResolvedValueOnce({
+      json: async () => ({
+        segments, progress: { verified: 0, total: 2 }, labels: defaultLabelStates,
+      }),
+    } as unknown as Response);
+  setup({ claimCsrf: "claim-csrf" });
+  fireEvent.click(screen.getByRole("radio", { name: "Just this segment" }));
+  fireEvent.click(screen.getByRole("option", { name: "Bob" }));
+  await screen.findByText("Segment speaker changed.");
+  expect(screen.getByRole("button", { name: "Speaker 1: Bob" })).toBeTruthy();
+  expect(screen.getByText("Assigned to Bob.")).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+  await screen.findByRole("button", { name: "Speaker 1: Alice" });
+  expect(vi.mocked(apiFetch).mock.calls[1][0]).toBe("/review/run/undo/relabel");
+  const undoBody = new URLSearchParams(String(vi.mocked(apiFetch).mock.calls[1][1]?.body));
+  expect(undoBody.get("decision_id")).toBe("dec-9");
+  expect(undoBody.get("nonce")).toBe("undo:dec-9");
+  expect(undoBody.get("csrf_token")).toBe("claim-csrf");
+  expect(screen.queryByText("Segment speaker changed.")).toBeNull();
+  // The live region no longer claims the undone assignment.
+  expect(screen.queryByText("Assigned to Bob.")).toBeNull();
+});
+
 function line(index: number, label: string, speaker: string, seconds = 1, extra = {}) {
   return {
     ...segments[0], start: index * 10, end: index * 10 + seconds, label, speaker,

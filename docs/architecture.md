@@ -725,7 +725,12 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   historical label scope), not a second table, with a new segment-only
   `inherit` decision as the append-only reset (the ledger is insert-only, so
   "undo this override" is a new row, never an UPDATE). The writer derives the
-  segment's label server-side; a CHECK keeps `inherit` segment-only.
+  segment's label server-side; a CHECK keeps `inherit` segment-only. The undo
+  toast for a segment or word-range ruling (issue #573) follows the same rule:
+  `undo_segment_decision` appends a compensating row in the exact scope that
+  re-asserts the previous newest row there (the earlier `assign`'s speaker, or
+  `inherit` when there was none), because a REVOKE stays label-shaped and the
+  segment resolvers reduce newest-wins without consulting voids.
   **Every label-scope query filters `transcript_segment_id IS NULL`** so a
   segment override never leaks into label resolution: `effective_decisions`
   (the source `label_states` reads), the `_label_unresolved` /

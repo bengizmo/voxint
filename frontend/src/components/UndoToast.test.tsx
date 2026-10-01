@@ -79,6 +79,10 @@ describe("UndoToast", () => {
       { kind: "merge", mergeNonce: "merge-1", expiresAt: inMinutes(5) },
       "Labels merged.",
     ],
+    [
+      { kind: "relabel", decisionId: "dec-1", expiresAt: inMinutes(5) },
+      "Segment speaker changed.",
+    ],
   ])("labels a %o undo", (undo, text) => {
     setup({ undo });
     expect(screen.getByRole("status").textContent).toContain(text);
@@ -99,6 +103,11 @@ describe("UndoToast", () => {
       { kind: "merge", mergeNonce: "merge-1", expiresAt: inMinutes(5) },
       "/review/run-1/undo/merge",
       { merge_nonce: "merge-1", nonce: "undo:merge-1" },
+    ],
+    [
+      { kind: "relabel", decisionId: "dec-3", expiresAt: inMinutes(5) },
+      "/review/run-1/undo/relabel",
+      { decision_id: "dec-3", nonce: "undo:dec-3" },
     ],
   ])(
     "posts a %o undo to its endpoint and hands back the labels",
@@ -130,6 +139,59 @@ describe("UndoToast", () => {
       expect(props.onClaimLost).not.toHaveBeenCalled();
     },
   );
+
+  it("holds the editor write guard while the undo is in flight", async () => {
+    let resolve: (value: Response) => void = () => {};
+    vi.mocked(apiFetch).mockReturnValueOnce(
+      new Promise<Response>((r) => {
+        resolve = r;
+      }),
+    );
+    const busyRef = { current: false };
+    const setBusy = vi.fn();
+    const { props } = setup({ writeGuard: { busy: false, busyRef, setBusy } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+    expect(busyRef.current).toBe(true);
+    expect(setBusy).toHaveBeenLastCalledWith(true);
+    resolve(jsonResponse(labels));
+    await waitFor(() => {
+      expect(props.onUndone).toHaveBeenCalledOnce();
+    });
+    expect(busyRef.current).toBe(false);
+    expect(setBusy).toHaveBeenLastCalledWith(false);
+  });
+
+  it("does not start while another editor write holds the guard", () => {
+    const busyRef = { current: true };
+    setup({ writeGuard: { busy: false, busyRef, setBusy: vi.fn() } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(busyRef.current).toBe(true);
+  });
+
+  it("disables Undo while another editor write is in flight", () => {
+    const busyRef = { current: true };
+    const { rerender, props } = setup({
+      writeGuard: { busy: true, busyRef, setBusy: vi.fn() },
+    });
+
+    const undoButton = () =>
+      screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement;
+    expect(undoButton().disabled).toBe(true);
+
+    busyRef.current = false;
+    rerender(
+      <UndoToast
+        {...props}
+        writeGuard={{ busy: false, busyRef, setBusy: vi.fn() }}
+      />,
+    );
+    expect(undoButton().disabled).toBe(false);
+  });
 
   it("does nothing without a claim CSRF token", () => {
     setup({ claimCsrf: null });
@@ -174,7 +236,9 @@ describe("UndoToast", () => {
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
 
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toMatch(/Too late to undo/);
+      expect(screen.getByRole("status").textContent).toContain(
+        "Too late to undo. This was changed again since.",
+      );
     });
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
     expect(props.onClaimLost).not.toHaveBeenCalled();
