@@ -45,6 +45,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   it straight away, so the click seemed to do nothing. The browser scrolled the
   name into view, and the menu read that scroll as you scrolling away. It now
   closes only when a scroll actually moves the line it belongs to.
+- **The speaker list on a split line can be clicked again** (#717). After you
+  split a line, opening the **speaker:** list for one of its parts showed the
+  names underneath the next transcript line, so a mouse click landed on that
+  line instead of a name. The list now opens on top of the lines below it and
+  the bar at the top of the transcript.
 - **The tutorial's speaker rail no longer says voice matching did not run**
   (#675). The bundled tutorial run listed one voice as matched automatically
   while the rail's summary said "Voice matching did not run on this recording."
