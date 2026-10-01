@@ -6,6 +6,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **The tutorial's speaker rail no longer says voice matching did not run**
+  (#675). The bundled tutorial run listed one voice as matched automatically
+  while the rail's summary said "Voice matching did not run on this recording."
+  The tutorial now records the same match evidence a real run does, so the
+  summary reads "2 voices need you. 1 matched automatically." A tutorial set up
+  by an earlier version gets the evidence the next time it is set up from
+  Settings or with `voxint tutorial seed`.
+- **Permanently deleting the tutorial recording no longer breaks the tutorial**
+  (#676). Emptying the trash with the tutorial recording in it left Settings
+  offering to replay a tutorial whose audio was gone, and `voxint tutorial seed`
+  then failed. Settings now offers to set the tutorial up again, and setting it
+  up builds a fresh tutorial run with its audio. The old tutorial run is
+  archived, so it leaves the review queue.
+
 ## [0.49.0] - 2026-10-01
 
 ### Changed
