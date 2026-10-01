@@ -112,30 +112,107 @@ it("assigns the clicked segment rather than the previous cursor", async () => {
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
-it("offers the other voices named in this recording for comparison", () => {
-  const named = [
-    { ...segments[0], speaker: "Bob" },
-    { ...segments[1], speaker: "Alice" },
-    { ...segments[1], segmentId: "seg-2", sourceSegmentId: "seg-2", speaker: "Bob" },
-  ];
+function line(index: number, label: string, speaker: string, seconds = 1, extra = {}) {
+  return {
+    ...segments[0], start: index * 10, end: index * 10 + seconds, label, speaker,
+    segmentId: `seg-${index}`, sourceSegmentId: `seg-${index}`, ...extra,
+  };
+}
+
+function labelState(label: string, resolution: string, speakerId: string | null, speakerName: string | null) {
+  return { ...defaultLabelStates[0], label, resolution, speakerId, speakerName };
+}
+
+const roster = [
+  { id: "alice", displayName: "Alice" },
+  { id: "bob", displayName: "Bob" },
+  { id: "voice2", displayName: "Voice 2" },
+  { id: "cass", displayName: "Cass" },
+];
+
+function openComparison(lines: Segment[], labelStates: ReturnType<typeof labelState>[], at: number) {
   player.previewSegment.mockClear();
-  setup({
-    segments: named,
-    speakers: [
-      { id: "alice", displayName: "Alice" },
-      { id: "bob", displayName: "Bob" },
-      { id: "cass", displayName: "Cass" },
-    ],
-  });
-  // The popover opened on line 1 (Alice). Bob has lines here; Cass has none.
-  expect(screen.queryByRole("button", { name: "Hear Alice" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "Hear Cass" })).toBeNull();
+  render(<MediaEditor
+    mediaId="media" runId="run" mediaUrl="/audio" segments={lines}
+    capability={{ seekEnabled: true, reasons: [], mediaDuration: 60 }}
+    lowConfidenceThreshold={0.5} reviewToken="claim"
+    initialProgress={{ verified: 0, total: lines.length }}
+    speakers={roster} labelStates={labelStates}
+  />);
+  fireEvent.click(screen.getByRole("button", { name: `Speaker ${at}: ${lines[at].speaker}` }));
+}
 
+function compareNames(): string[] {
+  return screen.queryAllByRole("button", { name: /^Hear (?!this voice)/ })
+    .map((button) => button.getAttribute("aria-label") ?? "");
+}
+
+it("compares against roster voices speaking under other labels", () => {
+  const lines = [
+    line(0, "S0", "Alice"),           // machine-matched to Alice, short
+    line(1, "S1", "Bob"),             // operator-assigned to Bob
+    line(2, "S0", "Alice", 3),        // machine, long
+    line(3, "S2", "Voice 2"),         // unresolved placeholder, not roster Voice 2
+    line(4, "S3", "Alice", 1),        // operator-assigned Alice, short
+    line(5, "S3", "Alice", 4),        // operator-assigned Alice, long: preferred
+  ];
+  const states = [
+    labelState("S0", "grounded_cosine", "alice", "Alice"),
+    labelState("S1", "human_assign", "bob", "Bob"),
+    labelState("S2", "unresolved", null, null),
+    labelState("S3", "human_assign", "alice", "Alice"),
+  ];
+  openComparison(lines, states, 0);
+
+  // Alice is the speaker on the opened line, yet she is offered: her S3 lines
+  // are a different voice cluster. The placeholder "Voice 2" maps to nobody.
+  expect(compareNames()).toEqual(["Hear Alice", "Hear Bob"]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Hear Alice" }));
+  expect(player.previewSegment).toHaveBeenLastCalledWith(5);
   fireEvent.click(screen.getByRole("button", { name: "Hear Bob" }));
-
-  // Bob's first line, played as a preview (no cursor move, popover stays).
-  expect(player.previewSegment).toHaveBeenCalledExactlyOnceWith(0);
+  expect(player.previewSegment).toHaveBeenLastCalledWith(1);
   expect(screen.getByRole("dialog")).toBeTruthy();
+});
+
+it("leaves out voices heard only under the opened line's label", () => {
+  const lines = [line(0, "S0", "Alice"), line(1, "S0", "Bob"), line(2, "S1", "Cass")];
+  const states = [
+    labelState("S0", "human_assign", "alice", "Alice"),
+    labelState("S1", "human_assign", "cass", "Cass"),
+  ];
+  openComparison(lines, states, 0);
+
+  expect(compareNames()).toEqual(["Hear Cass"]);
+});
+
+it("maps a whole-segment override by the name it shows", () => {
+  const lines = [line(0, "S0", "Alice"), line(1, "S1", "Bob"), line(2, "S1", "Alice")];
+  const states = [
+    labelState("S0", "human_assign", "alice", "Alice"),
+    // S1 resolves to Cass, but its lines were overridden to Bob and Alice.
+    labelState("S1", "human_assign", "cass", "Cass"),
+  ];
+  openComparison(lines, states, 0);
+
+  expect(compareNames()).toEqual(["Hear Alice", "Hear Bob"]);
+  fireEvent.click(screen.getByRole("button", { name: "Hear Alice" }));
+  expect(player.previewSegment).toHaveBeenLastCalledWith(2);
+});
+
+it("uses a split child's own override", () => {
+  const lines = [
+    line(0, "S0", "Alice"),
+    line(1, "S1", "Bob", 1, { wordStart: 0, wordEnd: 2, wordRangeSpeakerId: "bob" }),
+    line(2, "S1", "Voice 2", 1, { wordStart: 2, wordEnd: 4 }),
+  ];
+  const states = [
+    labelState("S0", "human_assign", "alice", "Alice"),
+    labelState("S1", "unresolved", null, null),
+  ];
+  openComparison(lines, states, 0);
+
+  expect(compareNames()).toEqual(["Hear Bob"]);
 });
 
 it("offers no comparison when playback cannot seek", () => {

@@ -8,11 +8,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ### Added
 - **Compare voices from the speaker menu** (#571). Below **Hear this voice**,
-  the menu that opens from a speaker name now lists everyone from your speaker
-  list who already has a line in this recording. Clicking a name plays that
-  person's first line, so you can compare voices before you choose. The
-  reviewing guide described this as a per-option button that never existed; it
-  now describes what the menu does.
+  the menu that opens from a speaker name now lists the people from your
+  speaker list who speak elsewhere in this recording, under a different
+  detected voice. Clicking a name plays one of their lines (one you assigned
+  yourself when possible), so you can compare voices before you choose, or
+  check a doubtful automatic match. The reviewing guide described this as a
+  per-option button that never existed; it now describes what the menu does.
 
 ### Fixed
 - **Mouse clicks in the speaker menu no longer get lost.** In the menu that

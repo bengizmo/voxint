@@ -405,37 +405,61 @@ export function MediaEditor({
     }
   }, [popoverTarget]);
 
-  // Roster voices with at least one line in this recording, each mapped to its
-  // first line (issue #571). Lines carry the speaker's display name, which is
-  // unique on the roster. The voice on the popover's own line is left out:
-  // "Hear this voice" already plays it.
-  const speakerExemplars = useMemo(() => {
-    const firstLine = new Map<string, number>();
+  // Roster voices to compare against in the popover (issue #571), each with one
+  // line to preview. Only lines under a different diarization label than the
+  // popover's count: those are a different voice cluster, so the speaker the
+  // line is currently attributed to can be checked against their other speech.
+  // Identity comes from the label's resolution or the child's own word-range
+  // override; a line showing another roster name than its resolved label is a
+  // whole-segment override and maps by that (unique) name. Lines of unresolved
+  // labels never map by name, so a "Voice N" placeholder cannot pose as a
+  // roster speaker. Per speaker, an operator-attributed line of at least two
+  // seconds wins, then any operator line, then any line; ties keep the earliest.
+  const comparisons = useMemo(() => {
+    if (!popoverSegment) return [];
+    const idByName = new Map(speakers.map((speaker) => [speaker.displayName, speaker.id]));
+    const humanLabels = new Set(
+      labelStates.filter((ls) => ls.resolution === "human_assign").map((ls) => ls.label),
+    );
+    const best = new Map<string, { index: number; score: number }>();
     segments.forEach((segment, index) => {
-      if (!firstLine.has(segment.speaker)) firstLine.set(segment.speaker, index);
+      if (segment.label === popoverSegment.label) return;
+      const resolution =
+        segment.label != null ? labelResolutions.get(segment.label) : undefined;
+      let speakerId: string | null | undefined = null;
+      let byOperator = true;
+      if (segment.wordRangeSpeakerId != null) {
+        speakerId = segment.wordRangeSpeakerId;
+      } else if (resolution?.speakerId != null) {
+        if (segment.speaker === resolution.speakerName) {
+          speakerId = resolution.speakerId;
+          byOperator = segment.label != null && humanLabels.has(segment.label);
+        } else {
+          speakerId = idByName.get(segment.speaker);
+        }
+      }
+      if (speakerId == null) return;
+      const score = (byOperator ? 2 : 0) + (segment.end - segment.start >= 2 ? 1 : 0);
+      const previous = best.get(speakerId);
+      if (previous === undefined || score > previous.score) {
+        best.set(speakerId, { index, score });
+      }
     });
-    const exemplars = new Map<string, number>();
-    for (const speaker of speakers) {
-      const index = firstLine.get(speaker.displayName);
-      if (index !== undefined) exemplars.set(speaker.id, index);
-    }
-    return exemplars;
-  }, [segments, speakers]);
+    return speakers.flatMap((speaker) => {
+      const found = best.get(speaker.id);
+      return found ? [{ speaker, index: found.index }] : [];
+    });
+  }, [popoverSegment, speakers, labelStates, labelResolutions, segments]);
   const comparableSpeakers = useMemo(
-    () =>
-      speakers.filter(
-        (speaker) =>
-          speakerExemplars.has(speaker.id) &&
-          speaker.displayName !== popoverSegment?.speaker,
-      ),
-    [speakers, speakerExemplars, popoverSegment?.speaker],
+    () => comparisons.map((comparison) => comparison.speaker),
+    [comparisons],
   );
   const hearSpeaker = useCallback(
     (speakerId: string) => {
-      const index = speakerExemplars.get(speakerId);
-      if (index !== undefined) playerRef.current?.previewSegment(index);
+      const found = comparisons.find((comparison) => comparison.speaker.id === speakerId);
+      if (found) playerRef.current?.previewSegment(found.index);
     },
-    [speakerExemplars],
+    [comparisons],
   );
 
   const postForm = useFormPost(

@@ -240,7 +240,8 @@ export function SpeakerAssignPopover({
         {onHearSpeaker && comparableSpeakers.length > 0 && (
           <div className="sp-compare">
             <p id={`${uid}-compare`}>Compare with a voice named in this recording:</p>
-            <ul aria-labelledby={`${uid}-compare`}>
+            {/* role="list": list-style:none drops the implicit role in WebKit. */}
+            <ul role="list" aria-labelledby={`${uid}-compare`}>
               {comparableSpeakers.map((speaker) => (
                 <li key={speaker.id}>
                   <button
