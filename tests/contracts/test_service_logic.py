@@ -2479,16 +2479,16 @@ class TestCpuImageProvenance:
         assert torch_base("services/whisper/Dockerfile") == torch_base(
             "services/whisper/Dockerfile.cpu"
         )
-        # pyannote CUDA uses torch 2.8.0 (Blackwell/CUDA 12.8.1); the CPU
-        # image stays on 2.5.0 because torch 2.8.0 CPU exceeds the CI smoke
-        # startup timeout. The numerics contract is maintained by the vendored
-        # weights + pyannote.audio 3.1.1 pin, not by torch version parity.
+        # Every pyannote flavor runs the same torch (#697). 2.8.0 is also the
+        # ceiling: torchaudio 2.9 removed set_audio_backend(), which
+        # pyannote.audio 3.1.1 calls at import.
         assert torch_base("services/pyannote/Dockerfile") == "2.8.0"
-        assert torch_base("services/pyannote/Dockerfile.cpu") == "2.5.0"
+        assert torch_base("services/pyannote/Dockerfile.cpu") == torch_base(
+            "services/pyannote/Dockerfile"
+        )
         # The metal venv joins the same parity set: its torch/torchaudio must
-        # track Dockerfile.cpu exactly (the MPS spike measured 2.5.0; a
-        # one-sided bump would fork numerics between the container and native
-        # deployments of the same service).
+        # track Dockerfile.cpu exactly (a one-sided bump would fork numerics
+        # between the container and native deployments of the same service).
         assert torch_base("services/pyannote/requirements.metal.txt") == torch_base(
             "services/pyannote/Dockerfile.cpu"
         )
@@ -2501,6 +2501,28 @@ class TestCpuImageProvenance:
 
         assert torchaudio_base("services/pyannote/requirements.metal.txt") == torchaudio_base(
             "services/pyannote/Dockerfile.cpu"
+        )
+
+    def test_every_pyannote_flavor_allows_full_checkpoint_unpickling(self) -> None:
+        # torch >= 2.6 defaults torch.load to weights_only=True, which rejects
+        # the vendored pyannote 3.1.x checkpoints (they pickle TorchVersion):
+        # the service exits at startup and never turns healthy. That is what
+        # failed the v0.36.0 CPU smoke. Each flavor on torch >= 2.6 must set
+        # TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 where its service process starts.
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        for dockerfile in ("Dockerfile", "Dockerfile.cpu"):
+            text = (REPO_ROOT / "services" / "pyannote" / dockerfile).read_text()
+            assert re.search(
+                r"^ENV TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1$", text, re.MULTILINE
+            ), f"services/pyannote/{dockerfile} must set TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1"
+        launcher = (REPO_ROOT / "scripts" / "metal" / "voxint-metal.sh").read_text()
+        pyannote_env = launcher.split("    pyannote)\n", 1)[1].split(";;", 1)[0]
+        assert "printf 'TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1\\n'" in pyannote_env, (
+            "voxint-metal.sh service_env must set TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 "
+            "for pyannote (launchd passes no shell environment)"
         )
 
     def test_pyannote_metal_requirements_include_shared_stack(self) -> None:

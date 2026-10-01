@@ -33,7 +33,7 @@ RUN pip3 install --no-cache-dir --upgrade pip wheel "setuptools>=70,<81"
 # else — the order prevents the resolver from dragging in incompatible builds.
 RUN pip3 install --no-cache-dir "numpy==1.24.3"
 RUN pip3 install --no-cache-dir \
-    torch==2.5.0 torchaudio==2.5.0 \
+    torch==2.8.0 torchaudio==2.8.0 \
     --index-url https://download.pytorch.org/whl/cpu
 
 COPY requirements.txt /tmp/requirements.txt
@@ -67,6 +67,11 @@ RUN printf '%s\n' \
     || { echo "vendored pyannote checkpoints do not match the committed provenance sha256s — \
 fetch the matching pyannote-models-v1 release assets (see models/provenance.json)" >&2; exit 1; }
 ENV VOXINT_VENDORED_PIPELINE=/app/vendored/config.yaml
+# torch >= 2.6 defaults torch.load to weights_only=True, which rejects the
+# pyannote 3.1.x checkpoints (they pickle torch.torch_version.TorchVersion).
+# Same setting as the CUDA image; the checkpoints are vendored and
+# sha256-verified above, so full unpickling loads only bytes we pinned.
+ENV TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 
 COPY --chown=voxint:voxint app/ /app/app/
 

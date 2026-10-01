@@ -1,5 +1,6 @@
-# Pinned, known-good stack for pyannote.audio 3.1.1 on CUDA 12.8.1.
-# torch is installed separately from the cu128 index in the Dockerfile.
+# Pinned, known-good stack for pyannote.audio 3.1.1, shared by every flavor
+# (CUDA, CPU, metal). torch is installed separately: each Dockerfile pulls it
+# from its own wheel index, and requirements.metal.txt pins it for macOS.
 numpy==1.24.3
 
 librosa==0.10.1
@@ -11,7 +12,10 @@ speechbrain==0.5.16
 asteroid-filterbanks==0.4.0
 torch-audiomentations==0.11.0
 pytorch-metric-learning==2.3.0
-scikit-learn==1.3.2
+# scikit-learn is imported when the pipeline loads but never called while
+# diarizing: pyannote 3.1.1's AgglomerativeClustering uses scipy (profiled
+# for #697). 1.5.x clears the 1.3.2 security advisory.
+scikit-learn==1.5.2
 
 # huggingface_hub MUST be <0.26 — pyannote 3.1.1 calls hf_hub_download with
 # use_auth_token=, removed in huggingface_hub 0.26+. 0.23.4 keeps

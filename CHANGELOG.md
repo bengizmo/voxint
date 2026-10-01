@@ -30,6 +30,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   (GHSA-q2hr-2g5m-vwhr), which only the eslint linter uses. None of the three
   ships in the wheel or an image, and the compiled review-console bundles are
   byte-identical before and after.
+- **The pyannote CPU image and the native macOS diarizer move from torch 2.5.0 to
+  2.8.0** (#697), the version the CUDA image already runs. This clears
+  CVE-2025-32434 (`torch.load` with `weights_only=True` can still run code),
+  CVE-2025-3730 and CVE-2025-2953. scikit-learn moves from 1.3.2 to 1.5.2 in
+  every pyannote flavor (CVE-2024-5206). The practical exposure was small:
+  pyannote loads only its vendored checkpoints, which the image build and the
+  native setup check by sha256, and it loads them with full unpickling, so the
+  `weights_only` bypass never applied. torch 2.6 and later need
+  `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` for the pyannote 3.1 checkpoints; the CPU
+  image and the native launcher now set it, as the CUDA image already did.
+  Diarization output is unchanged: the new CPU image returns byte-identical
+  results to the old one and to the committed CUDA reference.
+  scikit-learn is never called while diarizing. torch stays below 2.9 because
+  pyannote.audio 3.1.1 needs a torchaudio function that 2.9 removed, so torch
+  advisories fixed only in 2.9.1 or later stay open for the diarizer.
 
 ## [0.48.0] - 2026-09-30
 

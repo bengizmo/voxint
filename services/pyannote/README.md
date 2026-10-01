@@ -54,9 +54,12 @@ silently running a different clustering config under the validated identity. See
 
 ## Image matrix
 
-Python 3.10 · CUDA 11.8 runtime (cuDNN 8) · torch/torchaudio 2.5.0+cu118 ·
-pyannote.audio 3.1.1 · huggingface_hub 0.23.4 (pinned, since 0.26+ removes the
-`use_auth_token=` kwarg pyannote 3.1.1 uses). VRAM: ~1-2 GB loaded.
+CUDA image: Python 3.10 · CUDA 12.8.1 runtime · torch/torchaudio 2.8.0+cu128.
+CPU image (amd64 + arm64): Python 3.11 · torch/torchaudio 2.8.0 CPU wheels.
+Both: pyannote.audio 3.1.1 · huggingface_hub 0.23.4 (pinned, since 0.26+ removes
+the `use_auth_token=` kwarg pyannote 3.1.1 uses). torch stays below 2.9 because
+torchaudio 2.9 removed `set_audio_backend()`, which pyannote 3.1.1 calls. VRAM:
+~1-2 GB loaded.
 
 ```bash
 docker pull ghcr.io/bengizmo/voxint-pyannote:0.6.0  # prebuilt release image
