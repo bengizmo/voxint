@@ -16,6 +16,11 @@ export default defineConfig({
   base: "/static/app/",
   plugins: [react()],
   build: {
+    // Vite 7 raised its default target to "baseline-widely-available" (Chrome
+    // 111, Firefox 114, Safari 16.4), which rewrites media queries into range
+    // syntax older Safari ignores. Keep Vite 6's targets so a toolchain bump does
+    // not silently drop browsers; raising the floor is a separate decision (#655).
+    target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"],
     manifest: true, // emits dist/.vite/manifest.json
     outDir: "dist",
     emptyOutDir: true,
