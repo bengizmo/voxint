@@ -191,6 +191,7 @@ export function SpeakerAssignPopover({
         label="Choose speaker"
         placeholder="Search or create speaker…"
         autoFocus
+        dismissOnOutsidePress={false}
         disabled={busy}
         onSelect={(speakerId) => {
           if (busy) return;
