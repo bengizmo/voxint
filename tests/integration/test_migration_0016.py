@@ -145,4 +145,5 @@ def test_single_alembic_head() -> None:
     # 0064 = project archived_at, issue #477.
     # 0065 = processing_cycle column for restart-from-stage, issue #506.
     # 0066 = provenance-preserving restart for adjudicated runs, issue #507.
-    assert list(heads) == ["0066"]
+    # 0067 = synthdetect_jobs.created_at NOT NULL, issue #692.
+    assert list(heads) == ["0067"]
