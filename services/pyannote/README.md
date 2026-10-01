@@ -68,9 +68,12 @@ set it yourself if you start the service another way (for example `uvicorn`
 from a venv). Without it the service exits at startup with an error naming the
 setting.
 
+Replace `X.Y.Z` with a release version (the `VOXINT_IMAGE_TAG` default in
+`compose.yaml` is the current one):
+
 ```bash
-docker pull ghcr.io/bengizmo/voxint-pyannote:0.6.0  # prebuilt release image
-docker build -t voxint-pyannote services/pyannote   # …or build from source
+docker pull ghcr.io/bengizmo/voxint-pyannote:X.Y.Z   # prebuilt release image
+docker build -t voxint-pyannote services/pyannote   # ...or build from source
 docker run --rm --gpus all -p 127.0.0.1:8024:8024 \
   -v /path/to/media:/data/media:ro voxint-pyannote
 curl -s localhost:8024/healthz
