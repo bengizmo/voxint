@@ -6,7 +6,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Compare voices from the speaker menu** (#571). Below **Hear this voice**,
+  the menu that opens from a speaker name now lists the people from your
+  speaker list who speak elsewhere in this recording, under a different
+  detected voice. Clicking a name plays one of their lines (one you assigned
+  yourself when possible), so you can compare voices before you choose, or
+  check a doubtful automatic match. The reviewing guide described this as a
+  per-option button that never existed; it now describes what the menu does.
+
 ### Fixed
+- **Mouse clicks in the speaker menu no longer get lost.** In the menu that
+  opens from a speaker name in the editor, clicking **Just this segment** or
+  **All segments with this voice** closed the whole menu, and clicking **Hear
+  this voice** played nothing. Pressing the mouse button collapsed the speaker
+  list, the controls below it moved up, and the click landed somewhere else.
+  A click below the list no longer collapses it.
 - **The tutorial's speaker rail no longer says voice matching did not run**
   (#675). The bundled tutorial run listed one voice as matched automatically
   while the rail's summary said "Voice matching did not run on this recording."
@@ -20,6 +35,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   then failed. Settings now offers to set the tutorial up again, and setting it
   up builds a fresh tutorial run with its audio. The old tutorial run is
   archived, so it leaves the review queue.
+- **The model-service READMEs describe the shipped images.** The titanet README
+  still described the retired NeMo/torch image; it now documents the ONNX
+  Runtime CUDA and CPU images and their settings. The whisper, pyannote, and
+  titanet READMEs no longer suggest pulling long-outdated release tags.
 
 ## [0.49.0] - 2026-10-01
 
