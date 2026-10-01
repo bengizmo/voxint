@@ -171,6 +171,34 @@ describe("SpeakerAssignPopover", () => {
     expect(props.onClose).not.toHaveBeenCalled();
   });
 
+  it("lists comparison voices and plays the chosen one without closing", () => {
+    const onHearSpeaker = vi.fn();
+    const { props } = setup({
+      comparableSpeakers: [
+        { id: "alice", displayName: "Alice Chen" },
+        { id: "bo", displayName: "Bo Diaz" },
+      ],
+      onHearSpeaker,
+    });
+    const list = screen.getByRole("list", {
+      name: "Compare with a voice named in this recording:",
+    });
+    expect(list.querySelectorAll("button")).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Hear Bo Diaz" }));
+
+    expect(onHearSpeaker).toHaveBeenCalledExactlyOnceWith("bo");
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no handler", { comparableSpeakers: [{ id: "alice", displayName: "Alice Chen" }] }],
+    ["no voices", { comparableSpeakers: [], onHearSpeaker: vi.fn() }],
+  ])("renders no comparison list with %s", (_case, overrides) => {
+    setup(overrides);
+    expect(screen.queryByText(/Compare with a voice/)).toBeNull();
+  });
+
   it("does not render the hear button when onHearVoice is omitted", () => {
     setup();
     expect(screen.queryByRole("button", { name: /Hear this voice/ })).toBeNull();
