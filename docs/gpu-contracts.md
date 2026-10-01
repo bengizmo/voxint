@@ -1194,6 +1194,92 @@ That triggers the browser acceptance lane and not the pipeline lane.
   browser-verified at the landing commit `af60c45`, which is the release
   content minus version pins, changelog, docs, and screenshots.
 
+#### Verdict: v0.49.0, Gate A run fresh (PASS), Gate E pipeline, LLM, and browser lanes run fresh (PASS), Gate M run fresh on the CI lane (PASS), Gate R carries (2026-10-01)
+
+v0.49.0 moves to SQLAlchemy 2.1 (#683), adds database migration 0067 (#692),
+moves the pyannote CPU image and the native diarizer to torch 2.8.0 with
+scikit-learn 1.5.2 in every pyannote flavor (#697), and drops torch from the
+whisper CUDA and CPU images (#701).
+
+`git diff v0.48.0..v0.49.0 -- services/` is **non-empty**: the pyannote
+requirements, `Dockerfile.cpu`, and a startup check in `app/diarizer.py`, and
+the whisper requirements, `Dockerfile`, and `Dockerfile.cpu`. `services/titanet`
+is unchanged since v0.47.0.
+
+- **Gate A (CUDA)**: **run fresh on RTX 5090 (sm_120, Blackwell, driver
+  610.57.04 open, CUDA 12.8): PASS.** whisper and pyannote CUDA images built
+  from `3453800` (the release content minus version strings) and the published
+  0.47.0 titanet image (unchanged source) ran against the committed parity
+  corpus. `/healthz`: whisper `cuda` large-v2 (faster-whisper 1.2.1,
+  ctranslate2 4.8.2, no torch in the image), pyannote `cuda`
+  speaker-diarization-3.1 (pyannote.audio 3.1.1, torch 2.8.0+cu128,
+  scikit-learn 1.5.2), titanet `cuda` onnxruntime 1.28.0 with
+  `embedding_space=titanet-large-v2`; all `contract_version=v1`.
+  - **Diarize**: response byte-identical to the committed reference.
+  - **Embed**: 99/114 pairs (15 skipped, no embedding in low-SNR windows), min
+    cosine **0.999996369** (window `gap_straddle_1`), all >= 0.999.
+  - **Transcribe vad_true**: transcript text byte-identical; confidence
+    float-tail drift (0.8457 to 0.8445) and three 20 ms word-boundary shifts.
+  - **Transcribe vad_false**: the known decode-boundary word ("Haber" to
+    "harbour" in segment 1) and 20 ms word-boundary shifts; all other words
+    byte-identical; confidence 0.7177 to 0.7169.
+  These are the v0.42.0 Blackwell figures exactly: the expected cross-GPU
+  drift against references recorded on other hardware, not a change from
+  this release. #701 also measured the rebuilt whisper image byte-identical
+  to the released 0.47.0 image on this card. Regenerated references
+  discarded; committed references unchanged.
+- **Gate R (ROCm)**: the `-rocm` whisper image (`Dockerfile.rocm`,
+  `requirements.rocm.txt`) is unchanged. The ROCm overlay runs the pyannote
+  and titanet `-cpu` images; the pyannote CPU image's torch and scikit-learn
+  move was measured byte-identical on CPU in #697 and is smoked by CI.
+  **Carries**, standing since v0.33.0. No AMD hardware available.
+- **Gate E (whole-pipeline E2E)**: `services/`, `src/voxint/db/` (migration
+  0067), the SQLAlchemy 2.1 query modules in `src/voxint/api/`, and
+  `frontend/` tests all changed, so every lane ran fresh on the release
+  commit.
+  - **Pipeline lane: PASS** on `VOXINT_E2E_LANE=cuda`, maintainer hardware,
+    RTX 5090, serial, disposable `voxint_e2e` database, the same images as
+    Gate A. `test_real_pipeline_persists_invariants` and
+    `test_real_pipeline_repeats_cleanly`: **2 passed** in 45.96 s, zero
+    service restarts.
+  - **Real-LLM enrichment sub-lane: PASS** against a local OpenAI-compatible
+    endpoint serving Qwen3.8-27B. `test_real_llm_summary_chain` and the three
+    malformed-reply cases: **4 passed** in 18.52 s.
+  - **Browser review lane: PASS**, run with the shipped defaults (no `.env`),
+    maintainer hardware (Linux, Chromium), serial, Playwright over
+    `tools/e2e_browser_lifecycle.py`. The review fixture passed the full
+    `voxint-e2e-review` sequence: two uncertain chips, verify-and-advance
+    with replay still firing afterwards, skip and replay with no network,
+    the waveform strip (one `/peaks` fetch, region click selects without
+    writing, playhead sync), click-to-edit, the discard warning, edit and
+    save, keymap suppression on a focused select, the shortcuts dialog (14
+    rows; opened by key and button; dismissed by Escape, close control, and
+    backdrop), and domain-pack provenance (present on segment 0, absent on
+    segment 2, superseded by an operator save). **RECONCILE PASS** (1 of 5
+    verified, both corrections matched). The Media library surfaces passed
+    as in v0.48.0: every review entry point lands on the media editor,
+    `/review` lands on `/media`, the upload and fetch panels render, and
+    trash, restore, and **Empty trash permanently** (dismissed sends nothing,
+    accepted sends exactly one POST) behave. Because every label decision now
+    persists through SQLAlchemy 2.1, the speaker-rail fixture ran too: the
+    initial partition and card copy, Hear this voice, Confirm on the
+    unresolved and auto-saved paths, Can't tell, Not a person, the honest
+    `enroll` 400 with the card and typed name kept, and "Every voice has a
+    ruling." **RECONCILE PASS** (0 of 12 verified, 5 label rulings matched).
+    No server 5xx; the only console error is the expected `enroll` 400.
+- **Gate M (Metal)**: **run fresh, PASS**, on the CI lane rather than a
+  maintainer Mac. `scripts/metal/voxint-metal.sh` (it now sets
+  `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`), the native diarizer requirements,
+  and `tests/parity/test_pyannote_metal.py` changed. The maintainer chose the
+  `metal-lane` workflow, dispatched on `3453800` on GitHub's `macos-15` arm64
+  runner with MPS available, over a per-chip run:
+  <https://github.com/bengizmo/voxint/actions/runs/36811088783>.
+  `launcher-unit` passed; `metal-parity` junit: whisper 3 collected, 0
+  skipped, 3 ran; titanet 7, 0, 7; pyannote 7, 0, 7; no failures.
+
+Gates A, E, and M ran fresh and green on the release content; R carries on an
+unchanged `-rocm` image. Clear to tag v0.49.0.
+
 #### Verdict: v0.48.0, Gate E pipeline, LLM, and browser lanes run fresh (PASS), Gate M run fresh (PASS), Gates A/R carry (2026-09-30)
 
 v0.48.0 removes the `CONSOLE_MEDIA_ENABLED` setting and the legacy
