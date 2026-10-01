@@ -616,6 +616,12 @@
     ]
   ],
   [
+    "/review/{run_id}/undo/relabel",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/runs",
     [
       "GET"

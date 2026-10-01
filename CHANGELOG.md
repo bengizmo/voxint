@@ -7,6 +7,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Undo for single-line speaker changes** (#573). Changing the speaker of one
+  line, or of one part of a split line, now shows the same undo toast as a
+  whole-label ruling. **Undo** within five minutes takes the change back. If
+  the line was changed again in the meantime, the toast says it is too late
+  instead.
 - **Compare voices from the speaker menu** (#571). Below **Hear this voice**,
   the menu that opens from a speaker name now lists the people from your
   speaker list who speak elsewhere in this recording, under a different
