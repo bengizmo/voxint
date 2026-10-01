@@ -95,7 +95,7 @@ same contract.
     never the driver or userspace stack. `model` stays the weights identity:
     large-v2 is large-v2 regardless of engine.
   - `runtime` / `runtime_version` identify the compute userspace the engine
-    runs on (e.g. `torch` / `2.5.0+cu118`, `torch` / `2.8.0+rocm7.2`,
+    runs on (e.g. `torch` / `2.8.0+cu128`, `torch` / `2.8.0+rocm7.2`,
     `ctranslate2` / `4.4.0`, `onnxruntime` / `1.20.1`), `null` when the
     engine has no separable runtime. Best-effort diagnostics: host-driver
     provenance is **not** readiness truth and is never required for `"ok"`.
@@ -238,7 +238,11 @@ same contract.
       differ from torch's `CUDA_VISIBLE_DEVICES`-remapped ordinals, so an
       index-based read can report the wrong card. Three services on one host
       commonly report the same physical GPU, so a consumer aggregates by
-      `gpu_uuid` into one device. NVML memory is device-global, never one
+      `gpu_uuid` into one device. The torch-free CUDA images (whisper and
+      titanet) cannot map the engine's device ordinal to a UUID without torch,
+      so they report a UUID only when the container sees exactly one GPU, which the shipped
+      `compose.gpu.yaml` arranges (`count: 1` per service); with several
+      visible GPUs they report `unsupported`. NVML memory is device-global, never one
       service's usage.
     - Bytes are integers on the wire (convert for display). `utilization_percent`
       is bounded 0-100, `vram_used_bytes <= vram_total_bytes`, and NaN/inf are

@@ -173,6 +173,7 @@ def _run_diarize(
             "VOXINT_VENDORED_PIPELINE",
             "DIARIZER_DEVICE",
             "DIARIZER_MODEL_NAME",
+            "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD",
             *ambient_pyannote,
             "PYANNOTE_CLUSTERING_THRESHOLD",
         )
@@ -182,6 +183,9 @@ def _run_diarize(
     os.environ["VOXINT_VENDORED_PIPELINE"] = str(local_config)
     os.environ["DIARIZER_DEVICE"] = device
     os.environ.pop("DIARIZER_MODEL_NAME", None)
+    # What voxint-metal.sh sets for the service: torch >= 2.6 rejects the
+    # pyannote 3.1.x checkpoints under the weights_only default.
+    os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
     if threshold is None:
         os.environ.pop("PYANNOTE_CLUSTERING_THRESHOLD", None)
     else:

@@ -39,6 +39,7 @@ persist them.
 | `PYANNOTE_SEGMENTATION_STEP` | `0.5` | Larger than the 0.1 default → sustained GPU load |
 | `MAX_PENDING_REQUESTS` | `8` | Admission bound; beyond it → retryable 503 |
 | `PORT` | `8024` | Listen port |
+| `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD` | `1` in the images and the metal launcher | Required on torch 2.6+: the pyannote 3.1 checkpoints do not load in torch's `weights_only` mode. The vendored files are sha256-checked at build and setup |
 
 The clustering, step, and merge knobs (`PYANNOTE_CLUSTERING_THRESHOLD`,
 `PYANNOTE_CLUSTERING_MIN_SIZE`, `PYANNOTE_SEGMENTATION_STEP`,
@@ -54,9 +55,18 @@ silently running a different clustering config under the validated identity. See
 
 ## Image matrix
 
-Python 3.10 · CUDA 11.8 runtime (cuDNN 8) · torch/torchaudio 2.5.0+cu118 ·
-pyannote.audio 3.1.1 · huggingface_hub 0.23.4 (pinned, since 0.26+ removes the
-`use_auth_token=` kwarg pyannote 3.1.1 uses). VRAM: ~1-2 GB loaded.
+CUDA image: Python 3.10 · CUDA 12.8.1 runtime · torch/torchaudio 2.8.0+cu128.
+CPU image (amd64 + arm64): Python 3.11 · torch/torchaudio 2.8.0 CPU wheels.
+Both: pyannote.audio 3.1.1 · huggingface_hub 0.23.4 (pinned, since 0.26+ removes
+the `use_auth_token=` kwarg pyannote 3.1.1 uses). torch stays below 2.9 because
+torchaudio 2.9 removed `set_audio_backend()`, which pyannote 3.1.1 calls. VRAM:
+~1-2 GB loaded.
+
+torch 2.6 and later refuse to load the pyannote 3.1 checkpoints by default. The
+images and the native macOS launcher set `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`;
+set it yourself if you start the service another way (for example `uvicorn`
+from a venv). Without it the service exits at startup with an error naming the
+setting.
 
 ```bash
 docker pull ghcr.io/bengizmo/voxint-pyannote:0.6.0  # prebuilt release image

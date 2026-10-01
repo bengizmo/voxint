@@ -40,6 +40,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   one-active-operation-per-media-item unique index. Nothing behaved
   differently at runtime; a new integration test runs the `alembic check`
   comparison against a database at head and fails on any future drift.
+- **A pyannote service that cannot unpickle its checkpoints now says why**
+  (#697). When `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` is missing, startup fails
+  with an error naming that setting instead of reporting corrupt vendored files
+  and suggesting a rebuild.
 
 ### Security
 - **Frontend development tooling clears three Dependabot advisories.** vitest
@@ -49,6 +53,42 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   (GHSA-q2hr-2g5m-vwhr), which only the eslint linter uses. None of the three
   ships in the wheel or an image, and the compiled review-console bundles are
   byte-identical before and after.
+- **The pyannote CPU image and the native macOS diarizer move from torch 2.5.0 to
+  2.8.0** (#697), the version the CUDA image already runs, and scikit-learn moves
+  from 1.3.2 to 1.5.2 in every pyannote flavor. The scanners stop flagging
+  CVE-2025-32434, CVE-2025-3730, CVE-2025-2953 and CVE-2024-5206 for the
+  diarizer. In practice little changes. CVE-2025-32434 is a bypass of
+  `torch.load(weights_only=True)`, and pyannote never loads that way: torch 2.6
+  and later refuse the pyannote 3.1 checkpoints in that mode, so every flavor
+  sets `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` and unpickles them in full (the CPU
+  image and the native launcher now set it, as the CUDA image already did; its
+  absence, not a slow start, is why 0.36.1 reverted the CPU image to 2.5.0). What
+  protects the default install is that its checkpoints are vendored and checked
+  by sha256 at image build and native setup. The optional online path
+  (`DIARIZER_MODEL_NAME`) downloads checkpoints from Hugging Face without that
+  check, before and after this change. torch stays below 2.9 because
+  pyannote.audio 3.1.1 needs a torchaudio function that 2.9 removed, so torch
+  advisories fixed only in 2.9.1 or later stay open for the diarizer.
+  Diarization output is unchanged, measured on maintainer hardware: on CPU and
+  CUDA the rebuilt images return byte-identical results to the released ones
+  and to the committed CUDA reference, including four 10-minute multi-speaker
+  recordings on CUDA. A profiled diarization makes no scikit-learn calls.
+- **The whisper CUDA and CPU images no longer install torch** (#701), like the
+  rocm and macOS flavors already. This closes the three torch advisories
+  scanners report against the transcriber (fixed upstream in torch 2.9.1, 2.10.0
+  and 2.13.0) and any later ones. Transcription has not used torch since
+  faster-whisper 1.2, which runs its speech detection on onnxruntime, and CTranslate2 now loads cuBLAS
+  12.8.4.1 from the CUDA base image instead of the identical copy torch bundled.
+  The CUDA image shrinks from 18.5 GB to 11.7 GB unpacked, the CPU image from
+  8.2 GB to 7.3 GB. GPU telemetry in `/healthz` still reports the card's UUID
+  when the container sees one GPU, as the shipped `compose.gpu.yaml` arranges.
+  A whisper container given several GPUs now reports GPU telemetry as
+  `unsupported`, as titanet already does; torch used to identify the card.
+  Transcripts are unchanged, measured on maintainer hardware: on CUDA the
+  rebuilt image returns byte-identical results to the released 0.47.0 image for
+  both parity variants and four 10-minute recordings, with the same peak and
+  settled GPU memory. On CPU (amd64) the rebuilt image matches the released one
+  byte for byte on the parity clip and a 10-minute recording.
 
 ## [0.48.0] - 2026-09-30
 

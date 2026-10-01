@@ -1,5 +1,8 @@
-# Pinned, known-good with the cu128 base image (CUDA 12.8.1, Blackwell-ready).
-# torch is installed separately from the cu128 index in the Dockerfile.
+# Pinned, known-good with the CUDA 12.8.1 base image (Blackwell-ready); the cpu
+# image installs the same file.
+# Torch-free in every flavor (#701): faster-whisper 1.2.x runs its Silero VAD on
+# onnxruntime, and the app's torch imports are guarded. CTranslate2 dlopens
+# libcublas.so.12 from the CUDA base image.
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
@@ -9,13 +12,9 @@ faster-whisper==1.2.1
 numpy==1.24.3
 soundfile==0.12.1
 
-# torch is required by the Silero VAD inside faster-whisper (cu128 wheels
-# installed separately in the Dockerfile builder stage).
-torch==2.8.0
-torchaudio==2.8.0
-
 # Pure-ctypes NVML bindings for the /healthz hardware-telemetry sampler
-# (temperature + throttle reasons, which torch alone cannot report). Fail-soft:
+# (GPU UUID, temperature and throttle reasons). Fail-soft:
 # absent/older bindings degrade telemetry to "unsupported", never affect
-# readiness. NVIDIA CUDA images only; the cpu/rocm/metal flavors omit it.
+# readiness. The CUDA and cpu images install it (the cpu image finds no NVML and
+# reports "unsupported"); the rocm and metal flavors omit it.
 nvidia-ml-py==12.560.30

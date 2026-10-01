@@ -140,6 +140,8 @@ def test_whisper_env_is_cpu_int8_with_pinned_cache(tmp_path: Path) -> None:
 def test_pyannote_env_forces_mps_and_vendored_pipeline(tmp_path: Path) -> None:
     env = env_lines(run_lib(tmp_path, "service_env pyannote /media/root"))
     assert env["DIARIZER_DEVICE"] == "mps"  # forced: no silent CPU degradation
+    # torch >= 2.6 rejects the pyannote 3.1.x checkpoints under weights_only.
+    assert env["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] == "1"
     assert (
         env["VOXINT_VENDORED_PIPELINE"]
         == f"{tmp_path}/models/pyannote/vendored/config.yaml"
