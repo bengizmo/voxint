@@ -187,11 +187,10 @@ ships inside the images too). Rules:
   `main`, force-pushes, and branch deletion are all rejected. No human reviewer
   is required (single operator), so a green PR is yours to merge. The `coverage`
   job runs the full suite with `--cov` in parallel with `lint-test`, so it stays
-  off the fast path; `frontend` runs lint, typecheck, vitest, and the build.
-  `tests/contracts/test_required_ci_checks.py` pins the set to `ci.yml`.
-  Protection is `strict`, so a
-  PR must be up to date with `main` before it can merge; rebase or merge `main`
-  in if it moved.
+  off the fast path; `frontend` runs lint, typecheck, vitest, the build, and
+  `npm audit`. `tests/contracts/test_required_ci_checks.py` pins the set to
+  `ci.yml`. Protection is `strict`, so a PR must be up to date with `main`
+  before it can merge; rebase or merge `main` in if it moved.
 - After a PR merges on GitHub, sync the private origin (Forgejo `main` is not
   protected): `git fetch github && git push origin github/main:main`. This keeps
   both remotes' `main` identical. When the two ever diverge, merge, do not

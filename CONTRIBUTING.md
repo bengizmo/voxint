@@ -66,7 +66,12 @@ status checks are green, never by a direct push. The required checks are:
 
 `tests/contracts/test_required_ci_checks.py` pins this list to `ci.yml`: every
 required job runs unconditionally on each PR. If the branch-protection set
-changes, update that test and this table in the same commit.
+changes, update that test and this table in the same commit. The test cannot
+read the repository setting itself; check it with:
+
+```bash
+gh api repos/bengizmo/voxint/branches/main/protection/required_status_checks --jq '.contexts'
+```
 Force-pushes to `main` and branch deletion are rejected. Protection binds
 everyone, maintainers included. No human reviewer is required, so once a PR's
 checks are green it is ready to merge.

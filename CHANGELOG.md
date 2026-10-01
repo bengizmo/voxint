@@ -14,8 +14,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   schema migration is needed. SQLAlchemy 2.1 no longer installs `greenlet`,
   which Voxint does not use.
 - **The frontend CI check now runs the vitest suite and blocks merges** (#698).
-  Until now the `frontend` job ran lint, typecheck, and the build but never the
-  island unit tests, and it was not a required check. It now runs `npm test`
+  Until now the `frontend` job ran lint, typecheck, the build, and an audit but
+  never the island unit tests, and it was not a required check. It now runs `npm test`
   and joins `lint-test`, `secrets-scan`, and `coverage` in the required set. A
   new contract test keeps every required job unconditional on each PR. The
   editor-claim request also gets its first test.

@@ -70,6 +70,8 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   vi.stubGlobal("CSS", { escape: (s: string) => s.replaceAll(":", "\\:") });
   vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+  // clearAllMocks keeps queued Once implementations; reset so none can leak.
+  vi.mocked(apiFetch).mockReset();
   vi.mocked(apiFetch).mockResolvedValue({
     json: async () => ({ segments, progress: { verified: 0, total: 2 }, labels: [] }),
   } as unknown as Response);
@@ -93,10 +95,7 @@ it("assigns the clicked segment rather than the previous cursor", async () => {
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
-it("auto-claims the editor for a single operator and adopts the token", async () => {
-  vi.mocked(apiFetch).mockResolvedValue({
-    json: async () => ({ token: "fresh-token", tagCsrf: "tag", clipCsrf: "clip" }),
-  } as unknown as Response);
+function renderUnclaimed(overrides: Partial<MediaEditorProps> = {}) {
   render(<MediaEditor
     mediaId="media" runId="run" mediaUrl="/audio"
     segments={segments}
@@ -106,15 +105,36 @@ it("auto-claims the editor for a single operator and adopts the token", async ()
     initialProgress={{ verified: 0, total: 2 }}
     speakers={[]}
     claimCsrf="claim-csrf"
+    {...overrides}
   />);
+}
+
+it("auto-claims the editor for a single operator and adopts the token", async () => {
+  vi.mocked(apiFetch).mockResolvedValue({
+    json: async () => ({ token: "fresh-token", tagCsrf: "tag", clipCsrf: "clip" }),
+  } as unknown as Response);
+  renderUnclaimed();
   await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
   const [url, init] = vi.mocked(apiFetch).mock.calls[0];
   expect(url).toBe("/media/media/editor/claim");
   expect(init?.method).toBe("POST");
+  expect(init?.headers).toMatchObject({
+    "content-type": "application/x-www-form-urlencoded",
+  });
   expect(body().get("run_id")).toBe("run");
   expect(body().get("csrf_token")).toBe("claim-csrf");
   await waitFor(() =>
     expect(new URLSearchParams(window.location.search).get("token")).toBe("fresh-token"));
+  expect(screen.queryByText("Read-only view.", { exact: false })).toBeNull();
+});
+
+it.each([
+  ["several operators share the console", { multiUser: true }],
+  ["a review token is already held", { reviewToken: "held" }],
+])("does not auto-claim when %s", async (_case, overrides) => {
+  renderUnclaimed(overrides);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(apiFetch).not.toHaveBeenCalled();
 });
 
 it("encodes label-scope assignment paths", async () => {
