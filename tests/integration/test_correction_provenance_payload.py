@@ -1,11 +1,12 @@
 """Read-time correction provenance over real Postgres (issue #83).
 
-The pure ``test_corrections_view.py`` unit tests cover the resolution/reconciliation
-logic on hand-built envelopes; this asserts the DURABLE round-trip the console
-actually reads: ``enhance_match.run`` persists a real ``correction_trace`` +
+The pure ``test_corrections_view.py`` unit tests cover the resolution logic on
+hand-built envelopes; this asserts the DURABLE round-trip the console actually
+reads: ``enhance_match.run`` persists a real ``correction_trace`` +
 ``corrector_version``, the run's frozen ``domain_pack`` snapshot resolves the fired
-rule to its pack, and the shared ``_island_segment`` builder + ``run_reconciliation``
-surface it — from the stored columns, no re-diffing of text.
+rule to its pack, and the shared ``_island_segment`` builder surfaces it — from the
+stored columns, no re-diffing of text. The payload carries no ``rawText`` (#674):
+the editor's raw compare / reset-to-raw was retired, so the field is pinned absent.
 """
 
 import uuid
@@ -13,11 +14,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder
-from voxint.adjudication.corrections_view import run_reconciliation
 from voxint.adjudication.review_state import set_correction
 from voxint.adjudication.transcript import TranscriptText, attributed_transcript
 from voxint.api.transcript_view import (
@@ -95,8 +94,12 @@ def test_island_payload_resolves_fired_rule_to_its_pack(session: Session) -> Non
     assert index is not None and index.pack == "newsroom"
     payload = [_island_segment(ln, {}, index) for ln in lines]
 
-    fired = next(p for p in payload if p["rawText"] == _FIRES_RAW)
-    quiet = next(p for p in payload if p["rawText"] == _QUIET_RAW)
+    # The raw ASR text is not part of the island payload (#674).
+    assert all("rawText" not in p for p in payload)
+    fired = next(p for p in payload if p["start"] == 0.0)
+    quiet = next(p for p in payload if p["start"] == 1.0)
+    assert fired["text"] == "the Zoning Board met"
+    assert quiet["text"] == _QUIET_RAW
 
     # The fired segment carries resolved provenance from the stored trace + snapshot.
     assert fired["corrections"]["status"] == "shown"
@@ -108,9 +111,8 @@ def test_island_payload_resolves_fired_rule_to_its_pack(session: Session) -> Non
     assert entry["to"] == "Zoning Board"
     assert entry["resolved"] is True
 
-    # The untouched segment materially corrected nothing -> no marker, raw present.
+    # The untouched segment materially corrected nothing -> no marker.
     assert quiet["corrections"] is None
-    assert quiet["rawText"] == _QUIET_RAW
 
 
 def test_operator_correction_supersedes_pipeline_provenance(session: Session) -> None:
@@ -118,7 +120,7 @@ def test_operator_correction_supersedes_pipeline_provenance(session: Session) ->
     # pipeline trace's spans address the enhanced text, not the operator-effective
     # text now shown. The SERVER (not just client memory) must drop the marker, or a
     # reload / whole-run reconcile resurrects a stale "corrected by domain pack" chip
-    # over the operator's own wording. rawText MUST stay for the compare/reset path.
+    # over the operator's own wording.
     run_id = _make_run(session, NEWSROOM)
     fired_seg_id = _add_segment(session, run_id, index=0, raw=_FIRES_RAW)
     enhance_match.run(_ctx(NEWSROOM), session, run_id)
@@ -154,38 +156,10 @@ def test_operator_correction_supersedes_pipeline_provenance(session: Session) ->
         {},
         _load_run_rule_index(session, run_id),
     )
-    # Marker suppressed server-side; raw evidence still exposed.
+    # Marker suppressed server-side; no raw text in the payload (#674).
     assert after["corrected"] is True
     assert after["corrections"] is None
-    assert after["rawText"] == _FIRES_RAW
-
-
-def test_reconciliation_surfaces_applied_and_declared_but_never_fired(
-    session: Session,
-) -> None:
-    run_id = _make_run(session, NEWSROOM)
-    _add_segment(session, run_id, index=0, raw=_FIRES_RAW)
-    _add_segment(session, run_id, index=1, raw=_QUIET_RAW)
-    enhance_match.run(_ctx(NEWSROOM), session, run_id)
-    session.expire_all()
-
-    index = _load_run_rule_index(session, run_id)
-    raw_texts = (
-        session.execute(
-            select(TranscriptSegment.raw_text).where(
-                TranscriptSegment.pipeline_run_id == run_id
-            )
-        )
-        .scalars()
-        .all()
-    )
-    recon = {r["id"]: r for r in run_reconciliation(index, raw_texts)}
-
-    assert recon["zb"]["status"] == "applied"
-    assert recon["zb"]["appliedCount"] == 1
-    # ghost is declared in the pack but never matches any segment's raw text.
-    assert recon["ghost"]["status"] == "no_raw_match"
-    assert recon["ghost"]["appliedCount"] == 0
+    assert "rawText" not in after
 
 
 def test_null_snapshot_yields_no_provenance_not_a_default_pack(session: Session) -> None:
@@ -200,4 +174,3 @@ def test_null_snapshot_yields_no_provenance_not_a_default_pack(session: Session)
     _add_segment(session, run.id, index=0, raw=_FIRES_RAW)
 
     assert _load_run_rule_index(session, run.id) is None
-    assert run_reconciliation(_load_run_rule_index(session, run.id), [_FIRES_RAW]) == []

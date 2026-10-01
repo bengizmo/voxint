@@ -111,13 +111,12 @@ _SEED_SEGMENTS: tuple[tuple[str, str, float | None], ...] = (
 
 # Deterministic domain-pack correction provenance (issue #83) for the browser lane.
 # The run freezes this ONE pack; the browser lane asserts the "corrected by domain
-# pack" marker, the raw-compare affordance, and the run-level reconciliation panel.
-# `greet` fires on segment 0's raw ("everyone" → applied, appliedCount 1); `ghost`
-# matches no segment's raw ("declared but never fired" → no_raw_match) — so the
-# reconciliation panel shows both statuses. A high-confidence, non-uncertain segment
-# is corrected (index 0) so the two `.tp-uncertain-chip` assertions on segments 1 & 3
-# stay untouched. Kept as an unmistakable-but-plausible edit so the raw-vs-corrected
-# compare is visibly different.
+# pack" marker. `greet` fires on segment 0's raw ("everyone" → "everybody"); `ghost`
+# matches no segment's raw, so the pack also declares a rule that never fires and
+# must leave no marker anywhere. A high-confidence, non-uncertain segment is
+# corrected (index 0) so the two `.tp-uncertain-chip` assertions on segments 1 & 3
+# stay untouched. Kept as an unmistakable-but-plausible edit so the corrected text
+# is visibly different from the raw variant.
 _E2E_PACK_NAME = "e2e-corrections"
 _E2E_CORRECTIONS: tuple[dict[str, str], ...] = (
     {"id": "greet", "match": "everyone", "replace": "everybody"},

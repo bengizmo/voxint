@@ -134,8 +134,8 @@ touch the network:
 The seed freezes a two-rule pack (`_E2E_PACK_NAME`/`_E2E_CORRECTIONS` in the
 lifecycle tool) and corrects **segment 0** (`everyone` → `everybody`, an
 `input_base:"raw"` trace); the second rule (`quarterly synergies`) matches nothing,
-so reconciliation carries one `applied` and one `no_raw_match`. All server-side
-tests stay green without this, so assert it in the browser:
+so it never fires and no line carries it (the editor lists only rules that fired;
+#674). All server-side tests stay green without this, so assert it in the browser:
 
 - **Marker present + distinct from "edited".** Navigate to segment 0 (click its
   transcript line, or step there). A `button.tp-corrected-chip` reading "corrected by
