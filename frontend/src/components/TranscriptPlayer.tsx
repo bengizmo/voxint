@@ -449,8 +449,11 @@ const TranscriptRow = memo(function TranscriptRow({
         reassignSpeakers != null &&
         seg.wordStart != null &&
         seg.wordEnd != null && (
+          // Dim with color, never opacity (#717): opacity makes this span a
+          // stacking context, which traps the open list's z-index under the
+          // following lines and the sticky segment-actions bar.
           <span
-            className="tp-reassign ml-2 text-xs opacity-80"
+            className="tp-reassign muted ml-2 text-xs"
             onClick={(e) => e.stopPropagation()}
           >
             {" · "}speaker:{" "}
