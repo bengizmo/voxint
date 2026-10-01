@@ -181,12 +181,20 @@ to…** picker. Press **Hide** to close the actions again.
 ### Hear a voice before assigning (popover preview)
 
 When the speaker menu is open (click a speaker name in the transcript, or press
-`s`), each speaker option shows a **Hear this voice** button. Clicking it plays
-a representative segment of that speaker without moving your place in the
-transcript or closing the menu. Listen, then pick the right person.
+`s`), **Hear this voice** plays the line you opened the menu on.
 
-The button only appears when audio playback is available. Playback stops
-automatically when you close the menu or make your choice.
+Below it, **Compare with a voice named in this recording** lists the people
+from your speaker list who speak elsewhere in this recording, under a different
+detected voice. Click a name to hear one of their lines, then compare it with
+the voice you are assigning. Voxint picks a line you assigned yourself when
+there is one, and prefers a line of a couple of seconds or more. The person the
+line is currently assigned to is listed too when they speak elsewhere, so you
+can check a doubtful match. People with no other line in this recording are not
+listed.
+
+Neither button moves your place in the transcript or closes the menu, and each
+plays one line and then stops. Both appear only when audio playback is
+available.
 
 ### Undo a ruling
 

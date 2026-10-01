@@ -132,6 +132,20 @@ describe("SpeakerAssignPopover", () => {
     expect(props.onClose).toHaveBeenCalledOnce();
   });
 
+  it("keeps the speaker list in place when a control below it is pressed", () => {
+    // The list is laid out in flow here. If a mousedown on a control below it
+    // collapsed the list, that control would move before mouseup and a real
+    // click would land outside the popover and close it.
+    setup();
+    for (const control of [
+      screen.getByRole("radio", { name: "Just this segment" }),
+      screen.getByRole("button", { name: /Reset/ }),
+    ]) {
+      fireEvent.mouseDown(control);
+      expect(screen.getByRole("listbox")).toBeTruthy();
+    }
+  });
+
   it("flips above near the bottom and clamps horizontally", () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
       new DOMRect(0, 0, 320, 300),
@@ -155,6 +169,34 @@ describe("SpeakerAssignPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: /Hear this voice/ }));
     expect(onHearVoice).toHaveBeenCalledOnce();
     expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it("lists comparison voices and plays the chosen one without closing", () => {
+    const onHearSpeaker = vi.fn();
+    const { props } = setup({
+      comparableSpeakers: [
+        { id: "alice", displayName: "Alice Chen" },
+        { id: "bo", displayName: "Bo Diaz" },
+      ],
+      onHearSpeaker,
+    });
+    const list = screen.getByRole("list", {
+      name: "Compare with a voice named in this recording:",
+    });
+    expect(list.querySelectorAll("button")).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Hear Bo Diaz" }));
+
+    expect(onHearSpeaker).toHaveBeenCalledExactlyOnceWith("bo");
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no handler", { comparableSpeakers: [{ id: "alice", displayName: "Alice Chen" }] }],
+    ["no voices", { comparableSpeakers: [], onHearSpeaker: vi.fn() }],
+  ])("renders no comparison list with %s", (_case, overrides) => {
+    setup(overrides);
+    expect(screen.queryByText(/Compare with a voice/)).toBeNull();
   });
 
   it("does not render the hear button when onHearVoice is omitted", () => {

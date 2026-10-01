@@ -3,7 +3,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MediaEditor, type MediaEditorProps } from "./MediaEditor";
 import { apiFetch } from "../lib/api-client";
-import type { Segment, TranscriptPlayerProps } from "./TranscriptPlayer";
+import type {
+  Segment,
+  TranscriptPlayerHandle,
+  TranscriptPlayerProps,
+} from "./TranscriptPlayer";
 
 vi.mock("../lib/api-client", async (original) => ({
   ...await original<typeof import("../lib/api-client")>(),
@@ -15,16 +19,29 @@ vi.mock("./AnnotationLayer", () => ({
 vi.mock("./SpeakerRail", () => ({ SpeakerRail: () => null }));
 vi.mock("./OutlinePanel", () => ({ OutlinePanel: () => null }));
 vi.mock("./KeymapHelp", () => ({ KeymapHelp: () => null }));
-vi.mock("./TranscriptPlayer", () => ({
-  TranscriptPlayer: (props: TranscriptPlayerProps) => (
-    <div>{props.segments.map((seg, index) => (
-      <button key={index} onClick={(event) => {
-        event.currentTarget.focus();
-        props.onSpeakerClick?.(index, new DOMRect(0, 0, 100, 20));
-      }}>Speaker {index}: {seg.speaker}</button>
-    ))}</div>
-  ),
-}));
+const player = vi.hoisted(() => ({ previewSegment: vi.fn() }));
+vi.mock("./TranscriptPlayer", async () => {
+  const { useImperativeHandle } = await import("react");
+  return {
+    TranscriptPlayer: (
+      props: TranscriptPlayerProps & { ref?: React.Ref<TranscriptPlayerHandle> },
+    ) => {
+      useImperativeHandle(props.ref, () => ({
+        playSegment: () => {},
+        previewSegment: player.previewSegment,
+        focusCursorRow: () => null,
+      }));
+      return (
+        <div>{props.segments.map((seg, index) => (
+          <button key={index} onClick={(event) => {
+            event.currentTarget.focus();
+            props.onSpeakerClick?.(index, new DOMRect(0, 0, 100, 20));
+          }}>Speaker {index}: {seg.speaker}</button>
+        ))}</div>
+      );
+    },
+  };
+});
 
 const segments = [0, 1].map((index) => ({
   start: index, end: index + 1, speaker: "Alice",
@@ -130,6 +147,118 @@ it("offers undo for a segment relabel and adopts the undo result", async () => {
   expect(screen.queryByText("Segment speaker changed.")).toBeNull();
   // The live region no longer claims the undone assignment.
   expect(screen.queryByText("Assigned to Bob.")).toBeNull();
+});
+
+function line(index: number, label: string, speaker: string, seconds = 1, extra = {}) {
+  return {
+    ...segments[0], start: index * 10, end: index * 10 + seconds, label, speaker,
+    segmentId: `seg-${index}`, sourceSegmentId: `seg-${index}`, ...extra,
+  };
+}
+
+function labelState(label: string, resolution: string, speakerId: string | null, speakerName: string | null) {
+  return { ...defaultLabelStates[0], label, resolution, speakerId, speakerName };
+}
+
+const roster = [
+  { id: "alice", displayName: "Alice" },
+  { id: "bob", displayName: "Bob" },
+  { id: "voice2", displayName: "Voice 2" },
+  { id: "cass", displayName: "Cass" },
+];
+
+function openComparison(lines: Segment[], labelStates: ReturnType<typeof labelState>[], at: number) {
+  player.previewSegment.mockClear();
+  render(<MediaEditor
+    mediaId="media" runId="run" mediaUrl="/audio" segments={lines}
+    capability={{ seekEnabled: true, reasons: [], mediaDuration: 60 }}
+    lowConfidenceThreshold={0.5} reviewToken="claim"
+    initialProgress={{ verified: 0, total: lines.length }}
+    speakers={roster} labelStates={labelStates}
+  />);
+  fireEvent.click(screen.getByRole("button", { name: `Speaker ${at}: ${lines[at].speaker}` }));
+}
+
+function compareNames(): string[] {
+  return screen.queryAllByRole("button", { name: /^Hear (?!this voice)/ })
+    .map((button) => button.getAttribute("aria-label") ?? "");
+}
+
+it("compares against roster voices speaking under other labels", () => {
+  const lines = [
+    line(0, "S0", "Alice"),           // machine-matched to Alice, short
+    line(1, "S1", "Bob"),             // operator-assigned to Bob
+    line(2, "S0", "Alice", 3),        // machine, long
+    line(3, "S2", "Voice 2"),         // unresolved placeholder, not roster Voice 2
+    line(4, "S3", "Alice", 1),        // operator-assigned Alice, short
+    line(5, "S3", "Alice", 4),        // operator-assigned Alice, long: preferred
+  ];
+  const states = [
+    labelState("S0", "grounded_cosine", "alice", "Alice"),
+    labelState("S1", "human_assign", "bob", "Bob"),
+    labelState("S2", "unresolved", null, null),
+    labelState("S3", "human_assign", "alice", "Alice"),
+  ];
+  openComparison(lines, states, 0);
+
+  // Alice is the speaker on the opened line, yet she is offered: her S3 lines
+  // are a different voice cluster. The placeholder "Voice 2" maps to nobody.
+  expect(compareNames()).toEqual(["Hear Alice", "Hear Bob"]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Hear Alice" }));
+  expect(player.previewSegment).toHaveBeenLastCalledWith(5);
+  fireEvent.click(screen.getByRole("button", { name: "Hear Bob" }));
+  expect(player.previewSegment).toHaveBeenLastCalledWith(1);
+  expect(screen.getByRole("dialog")).toBeTruthy();
+});
+
+it("leaves out voices heard only under the opened line's label", () => {
+  const lines = [line(0, "S0", "Alice"), line(1, "S0", "Bob"), line(2, "S1", "Cass")];
+  const states = [
+    labelState("S0", "human_assign", "alice", "Alice"),
+    labelState("S1", "human_assign", "cass", "Cass"),
+  ];
+  openComparison(lines, states, 0);
+
+  expect(compareNames()).toEqual(["Hear Cass"]);
+});
+
+it("maps a whole-segment override by the name it shows", () => {
+  const lines = [line(0, "S0", "Alice"), line(1, "S1", "Bob"), line(2, "S1", "Alice")];
+  const states = [
+    labelState("S0", "human_assign", "alice", "Alice"),
+    // S1 resolves to Cass, but its lines were overridden to Bob and Alice.
+    labelState("S1", "human_assign", "cass", "Cass"),
+  ];
+  openComparison(lines, states, 0);
+
+  expect(compareNames()).toEqual(["Hear Alice", "Hear Bob"]);
+  fireEvent.click(screen.getByRole("button", { name: "Hear Alice" }));
+  expect(player.previewSegment).toHaveBeenLastCalledWith(2);
+});
+
+it("uses a split child's own override", () => {
+  const lines = [
+    line(0, "S0", "Alice"),
+    line(1, "S1", "Bob", 1, { wordStart: 0, wordEnd: 2, wordRangeSpeakerId: "bob" }),
+    line(2, "S1", "Voice 2", 1, { wordStart: 2, wordEnd: 4 }),
+  ];
+  const states = [
+    labelState("S0", "human_assign", "alice", "Alice"),
+    labelState("S1", "unresolved", null, null),
+  ];
+  openComparison(lines, states, 0);
+
+  expect(compareNames()).toEqual(["Hear Bob"]);
+});
+
+it("offers no comparison when playback cannot seek", () => {
+  setup({
+    segments: [{ ...segments[0], speaker: "Bob" }, segments[1]],
+    capability: { seekEnabled: false, reasons: [], mediaDuration: 2 },
+    speakers: [{ id: "alice", displayName: "Alice" }, { id: "bob", displayName: "Bob" }],
+  });
+  expect(screen.queryByRole("button", { name: "Hear Bob" })).toBeNull();
 });
 
 function renderUnclaimed(overrides: Partial<MediaEditorProps> = {}) {

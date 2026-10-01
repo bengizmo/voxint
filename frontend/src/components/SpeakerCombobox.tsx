@@ -28,6 +28,11 @@ interface SpeakerComboboxProps {
   disabled?: boolean;
   digitPrefixes?: boolean;
   autoFocus?: boolean;
+  // Close the list on a press outside it. A host that lays the list out in
+  // flow (the assign popover) turns this off: collapsing the list on mousedown
+  // moves everything below it, so the mouseup lands elsewhere and the click
+  // the operator aimed at a control under the list is lost.
+  dismissOnOutsidePress?: boolean;
 }
 
 export function SpeakerCombobox({
@@ -42,6 +47,7 @@ export function SpeakerCombobox({
   disabled = false,
   digitPrefixes = false,
   autoFocus = false,
+  dismissOnOutsidePress = true,
 }: SpeakerComboboxProps) {
   const uid = useId();
   const listboxId = `${uid}-listbox`;
@@ -149,7 +155,7 @@ export function SpeakerCombobox({
   }, [activeIndex, open, uid]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !dismissOnOutsidePress) return;
     const handler = (e: MouseEvent) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
         close();
@@ -157,7 +163,7 @@ export function SpeakerCombobox({
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [open, close]);
+  }, [open, close, dismissOnOutsidePress]);
 
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
