@@ -24,7 +24,7 @@ export default defineConfig({
     manifest: true, // emits dist/.vite/manifest.json
     outDir: "dist",
     emptyOutDir: true,
-    rollupOptions: {
+    rolldownOptions: {
       input: {
         main: "src/main.ts",
         tailwind: "src/styles/tailwind.css",
