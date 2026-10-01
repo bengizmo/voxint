@@ -34,6 +34,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   one-active-operation-per-media-item unique index. Nothing behaved
   differently at runtime; a new integration test runs the `alembic check`
   comparison against a database at head and fails on any future drift.
+- **A pyannote service that cannot unpickle its checkpoints now says why**
+  (#697). When `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` is missing, startup fails
+  with an error naming that setting instead of reporting corrupt vendored files
+  and suggesting a rebuild.
 
 ### Security
 - **Frontend development tooling clears three Dependabot advisories.** vitest
@@ -44,20 +48,24 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   ships in the wheel or an image, and the compiled review-console bundles are
   byte-identical before and after.
 - **The pyannote CPU image and the native macOS diarizer move from torch 2.5.0 to
-  2.8.0** (#697), the version the CUDA image already runs. This clears
-  CVE-2025-32434 (`torch.load` with `weights_only=True` can still run code),
-  CVE-2025-3730 and CVE-2025-2953. scikit-learn moves from 1.3.2 to 1.5.2 in
-  every pyannote flavor (CVE-2024-5206). The practical exposure was small:
-  pyannote loads only its vendored checkpoints, which the image build and the
-  native setup check by sha256, and it loads them with full unpickling, so the
-  `weights_only` bypass never applied. torch 2.6 and later need
-  `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` for the pyannote 3.1 checkpoints; the CPU
-  image and the native launcher now set it, as the CUDA image already did.
-  Diarization output is unchanged: the new CPU image returns byte-identical
-  results to the old one and to the committed CUDA reference.
-  scikit-learn is never called while diarizing. torch stays below 2.9 because
+  2.8.0** (#697), the version the CUDA image already runs, and scikit-learn moves
+  from 1.3.2 to 1.5.2 in every pyannote flavor. The scanners stop flagging
+  CVE-2025-32434, CVE-2025-3730, CVE-2025-2953 and CVE-2024-5206 for the
+  diarizer. In practice little changes. CVE-2025-32434 is a bypass of
+  `torch.load(weights_only=True)`, and pyannote never loads that way: torch 2.6
+  and later refuse the pyannote 3.1 checkpoints in that mode, so every flavor
+  sets `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` and unpickles them in full (the CPU
+  image and the native launcher now set it, as the CUDA image already did). What
+  protects the default install is that its checkpoints are vendored and checked
+  by sha256 at image build and native setup. The optional online path
+  (`DIARIZER_MODEL_NAME`) downloads checkpoints from Hugging Face without that
+  check, before and after this change. torch stays below 2.9 because
   pyannote.audio 3.1.1 needs a torchaudio function that 2.9 removed, so torch
   advisories fixed only in 2.9.1 or later stay open for the diarizer.
+  Diarization output is unchanged, measured on maintainer hardware: on CPU and
+  CUDA the rebuilt images return byte-identical results to the released ones
+  and to the committed CUDA reference, including four 10-minute multi-speaker
+  recordings on CUDA. A profiled diarization makes no scikit-learn calls.
 
 ## [0.48.0] - 2026-09-30
 

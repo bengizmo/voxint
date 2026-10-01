@@ -61,6 +61,12 @@ the `use_auth_token=` kwarg pyannote 3.1.1 uses). torch stays below 2.9 because
 torchaudio 2.9 removed `set_audio_backend()`, which pyannote 3.1.1 calls. VRAM:
 ~1-2 GB loaded.
 
+torch 2.6 and later refuse to load the pyannote 3.1 checkpoints by default. The
+images and the native macOS launcher set `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`;
+set it yourself if you start the service another way (for example `uvicorn`
+from a venv). Without it the service exits at startup with an error naming the
+setting.
+
 ```bash
 docker pull ghcr.io/bengizmo/voxint-pyannote:0.6.0  # prebuilt release image
 docker build -t voxint-pyannote services/pyannote   # …or build from source

@@ -584,7 +584,7 @@ jobs:
             "${owner}/voxint-pyannote@sha256:$(ls /tmp/digests/pyannote)"
       - name: Wait for healthz
         run: |
-          trap 'echo "--- whisper logs:"; docker logs whisper || true; echo "--- titanet logs:"; docker logs titanet || true; docker logs pyannote 2>/dev/null || true' ERR
+          trap 'echo "--- whisper logs:"; docker logs whisper || true; echo "--- titanet logs:"; docker logs titanet || true; echo "--- pyannote logs:"; docker logs pyannote 2>&1 || true' ERR
           wait_for() {  # name url max_iterations (5s apart)
             for i in $(seq 1 "$3"); do
               curl -sf "$2/healthz" > /dev/null && return 0
@@ -598,7 +598,7 @@ jobs:
           wait_for pyannote http://localhost:8024 90
       - name: Smoke (real inference vs committed references)
         run: |
-          trap 'echo "--- whisper logs:"; docker logs whisper || true; echo "--- titanet logs:"; docker logs titanet || true; docker logs pyannote 2>/dev/null || true' ERR
+          trap 'echo "--- whisper logs:"; docker logs whisper || true; echo "--- titanet logs:"; docker logs titanet || true; echo "--- pyannote logs:"; docker logs pyannote 2>&1 || true' ERR
           python3 tools/smoke_cpu_services.py \
             --fixtures tests/parity/fixtures \
             --whisper http://localhost:8022 \

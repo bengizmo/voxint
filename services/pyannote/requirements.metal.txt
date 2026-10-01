@@ -5,8 +5,9 @@
 # Dockerfiles install outside that file:
 #
 # - torch/torchaudio 2.8.0: the exact versions Dockerfile.cpu (and the CUDA
-#   Dockerfile) pin. pyannote.audio 3.1.1 caps torch below 2.9 (torchaudio
-#   2.9 removed set_audio_backend). torch >= 2.6 needs
+#   Dockerfile) pin. Voxint keeps torch below 2.9 because torchaudio 2.9
+#   removed set_audio_backend(), which pyannote.audio 3.1.1 calls (its own
+#   metadata sets no upper bound). torch >= 2.6 needs
 #   TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 to load the vendored checkpoints;
 #   scripts/metal/voxint-metal.sh sets it in the service environment. On
 #   macOS arm64 the default PyPI wheels ARE the Metal-capable build, so no

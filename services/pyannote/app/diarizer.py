@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import pickle
 import re
 import threading
 import time
@@ -283,6 +284,31 @@ def select_device() -> str:
     return "cpu"
 
 
+WEIGHTS_ONLY_HINT = (
+    "torch >= 2.6 refuses to unpickle the pyannote 3.1 checkpoints under its "
+    "weights_only default; set TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 in this "
+    "service's environment (the images and the metal launcher set it)"
+)
+
+
+def _is_weights_only_rejection(exc: BaseException) -> bool:
+    """True when ``exc`` (or anything it wraps) is torch's weights_only refusal.
+
+    torch raises ``pickle.UnpicklingError("Weights only load failed...")``;
+    loaders above it may wrap it, so the whole cause/context chain is checked.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, pickle.UnpicklingError) and (
+            "Weights only load failed" in str(current)
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def _from_pretrained_adaptive(
     pipeline_cls: Any, source: str, revision: str | None, token: str | None
 ) -> Any:
@@ -447,6 +473,12 @@ class Diarizer:
                 Pipeline, self.model_source, self.model_revision, self.hf_token
             )
         except Exception as exc:
+            if _is_weights_only_rejection(exc):
+                # Not a corrupt file: the process lacks the setting every
+                # shipped flavor sets. Say so instead of "rebuild the image".
+                raise RuntimeError(
+                    f"Failed to load {self.model_source}: {WEIGHTS_ONLY_HINT}"
+                ) from exc
             # A missing/truncated checkpoint behind an existing vendored config
             # surfaces as a raw torch/FileNotFound error; keep the actionable
             # hint attached instead of letting it read like a code bug.

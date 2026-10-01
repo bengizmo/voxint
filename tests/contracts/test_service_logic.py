@@ -5,6 +5,7 @@ Not wire-schema tests, but they pin the behaviors the contract documents
 titanet window-cap sub-windowing and pooling).
 """
 
+import pickle
 import sys
 from itertools import pairwise
 from pathlib import Path
@@ -759,6 +760,67 @@ class TestDiarizerFromPretrainedAdaptive:
 
         with pytest.raises(TypeError, match="something else"):
             diarizer._from_pretrained_adaptive(Boom(), "org/pipe", "d" * 40, "tok")
+
+
+class TestWeightsOnlyRejectionHint:
+    """torch >= 2.6 rejects the pyannote 3.1 checkpoints under weights_only
+    (#697). That failure must name the missing setting, not tell the operator
+    the vendored files are corrupt (which misdirected the v0.36.0 diagnosis)."""
+
+    REJECTION = pickle.UnpicklingError(
+        "Weights only load failed. This file can still be loaded, ..."
+    )
+
+    def test_detects_the_rejection_directly_and_through_wrappers(self) -> None:
+        assert diarizer._is_weights_only_rejection(self.REJECTION)
+        try:
+            try:
+                raise self.REJECTION
+            except pickle.UnpicklingError as inner:
+                raise RuntimeError("loader wrapper") from inner
+        except RuntimeError as wrapped:
+            assert diarizer._is_weights_only_rejection(wrapped)
+
+    def test_other_load_failures_are_not_misread(self) -> None:
+        assert not diarizer._is_weights_only_rejection(
+            pickle.UnpicklingError("invalid load key, 'x'.")
+        )
+        assert not diarizer._is_weights_only_rejection(FileNotFoundError("x.bin"))
+
+    @staticmethod
+    def _load_with(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: Exception
+    ) -> pytest.ExceptionInfo[RuntimeError]:
+        vendored = tmp_path / "config.yaml"
+        vendored.write_text("version: 3.1.0\n")
+        monkeypatch.delenv("DIARIZER_MODEL_NAME", raising=False)
+        monkeypatch.setenv("VOXINT_VENDORED_PIPELINE", str(vendored))
+        audio = SimpleNamespace(Pipeline=object, __version__="3.1.1")
+        monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(__version__="2.8.0"))
+        monkeypatch.setitem(sys.modules, "pyannote", SimpleNamespace(audio=audio))
+        monkeypatch.setitem(sys.modules, "pyannote.audio", audio)
+
+        def boom(*_a: object, **_k: object) -> object:
+            raise failure
+
+        monkeypatch.setattr(diarizer, "_from_pretrained_adaptive", boom)
+        d = diarizer.Diarizer()
+        with pytest.raises(RuntimeError) as info:
+            d.load_model()
+        return info
+
+    def test_load_model_names_the_setting(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        info = self._load_with(monkeypatch, tmp_path, self.REJECTION)
+        assert "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1" in str(info.value)
+        assert "rebuild" not in str(info.value)
+
+    def test_load_model_keeps_the_corrupt_file_hint_otherwise(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        info = self._load_with(monkeypatch, tmp_path, FileNotFoundError("x.bin"))
+        assert "corrupt or incomplete vendored files" in str(info.value)
 
 
 class TestDeviceCascade:
@@ -2513,14 +2575,22 @@ class TestCpuImageProvenance:
 
         from tests.contracts.conftest import REPO_ROOT
 
-        for dockerfile in ("Dockerfile", "Dockerfile.cpu"):
-            text = (REPO_ROOT / "services" / "pyannote" / dockerfile).read_text()
+        dockerfiles = sorted((REPO_ROOT / "services" / "pyannote").glob("Dockerfile*"))
+        assert len(dockerfiles) >= 2, dockerfiles  # CUDA + CPU at least
+        for dockerfile in dockerfiles:
             assert re.search(
-                r"^ENV TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1$", text, re.MULTILINE
-            ), f"services/pyannote/{dockerfile} must set TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1"
+                r"""^ENV\s+TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=["']?1["']?\s*$""",
+                dockerfile.read_text(),
+                re.MULTILINE,
+            ), f"{dockerfile.name} must set TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1"
         launcher = (REPO_ROOT / "scripts" / "metal" / "voxint-metal.sh").read_text()
-        pyannote_env = launcher.split("    pyannote)\n", 1)[1].split(";;", 1)[0]
-        assert "printf 'TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1\\n'" in pyannote_env, (
+        arm = re.search(
+            r"^\s*service_env\(\)\s*\{.*?^\s+pyannote\)\n(.*?)^\s+;;",
+            launcher,
+            re.MULTILINE | re.DOTALL,
+        )
+        assert arm is not None, "voxint-metal.sh service_env has no pyannote) arm"
+        assert "printf 'TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1\\n'" in arm.group(1), (
             "voxint-metal.sh service_env must set TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 "
             "for pyannote (launchd passes no shell environment)"
         )
