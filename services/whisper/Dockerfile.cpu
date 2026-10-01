@@ -1,6 +1,6 @@
 # Voxint whisper service — CPU flavor (multi-arch: amd64 + arm64).
 # Same engine as the CUDA image (faster-whisper / CTranslate2 int8, large-v2
-# baked at build); only the torch flavor and base image differ. Contract:
+# baked at build, torch-free); only the base image differs. Contract:
 # docs/gpu-contracts.md (POST /v1/transcribe, GET /healthz).
 #
 # Expect CPU-tier speed: long media takes hours, not minutes. Run the stack
@@ -16,14 +16,7 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements.txt .
-# torch first, pinned to the CPU wheel index on BOTH arches: on amd64 the
-# PyPI default torch drags the full CUDA runtime into a CPU image, and the
-# explicit index keeps the two arches on the same build. requirements.txt's
-# torch pin is then already satisfied (2.8.0+cpu / 2.8.0 aarch64 == 2.8.0),
-# mirroring how the CUDA Dockerfile layers cu128 wheels under the same file.
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir torch==2.8.0 torchaudio==2.8.0 \
-        --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
 
 # Bake the model at build time so the image needs no network at runtime.

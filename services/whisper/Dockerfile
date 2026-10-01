@@ -1,7 +1,7 @@
 # Voxint whisper service — faster-whisper large-v2 int8, model baked at build.
 # Contract: docs/gpu-contracts.md (POST /v1/transcribe, GET /healthz).
 #
-# CUDA 12.8.1 base + torch 2.8.0/cu128 + CTranslate2 4.8.2: one image serves
+# CUDA 12.8.1 base + CTranslate2 4.8.2, torch-free (#701): one image serves
 # sm_86 (RTX 3060/3090) through sm_120 (RTX 5090). The CT2 wheel dlopens
 # libcublas.so.12 (provided by the 12.8.1 runtime image) and carries sm_86
 # PTX only, which the driver JIT-compiles for sm_120 — CUDA_CACHE_PATH keeps
@@ -23,8 +23,6 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir torch==2.8.0 torchaudio==2.8.0 \
-        --index-url https://download.pytorch.org/whl/cu128 && \
     pip install --no-cache-dir -r requirements.txt
 
 # Bake the model at build time so the image needs no network at runtime.
@@ -39,7 +37,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:256
 ENV OMP_NUM_THREADS=4
 ENV HF_HOME=/app/.cache/huggingface
 ENV XDG_CACHE_HOME=/app/.cache

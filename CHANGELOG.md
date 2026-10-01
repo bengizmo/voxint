@@ -73,6 +73,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   CUDA the rebuilt images return byte-identical results to the released ones
   and to the committed CUDA reference, including four 10-minute multi-speaker
   recordings on CUDA. A profiled diarization makes no scikit-learn calls.
+- **The whisper CUDA and CPU images no longer install torch** (#701), like the
+  rocm and macOS flavors already. This closes the three torch advisories
+  scanners report against the transcriber (fixed upstream in torch 2.9.1, 2.10.0
+  and 2.13.0) and any later ones. Transcription has not used torch since
+  faster-whisper 1.2, which runs its speech detection on onnxruntime, and CTranslate2 now loads cuBLAS
+  12.8.4.1 from the CUDA base image instead of the identical copy torch bundled.
+  The CUDA image shrinks from 18.5 GB to 11.7 GB unpacked, the CPU image from
+  8.2 GB to 7.3 GB. GPU telemetry in `/healthz` still reports the card's UUID
+  when the container sees one GPU, as the shipped `compose.gpu.yaml` arranges.
+  A whisper container given several GPUs now reports GPU telemetry as
+  `unsupported`, as titanet already does; torch used to identify the card.
+  Transcripts are unchanged, measured on maintainer hardware: on CUDA the
+  rebuilt image returns byte-identical results to the released 0.47.0 image for
+  both parity variants and four 10-minute recordings, with the same peak and
+  settled GPU memory. On CPU (amd64) the rebuilt image matches the released one
+  byte for byte on the parity clip and a 10-minute recording.
 
 ## [0.48.0] - 2026-09-30
 

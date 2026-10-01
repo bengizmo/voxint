@@ -29,13 +29,13 @@ non-baked model downloads at startup and needs network plus a writable cache).
 
 ## Image matrix
 
-**CUDA** (`Dockerfile`): Python 3.10 · CUDA 12.4.1 runtime (cuDNN 9,
-symlinked to cuDNN-8 names for CTranslate2) · torch/torchaudio 2.1.1+cu121 ·
-faster-whisper 1.2.1 · numpy 1.24.3. VRAM: ~1.5 GB (large-v2 int8) + batch
-overhead.
+**CUDA** (`Dockerfile`): Python 3.10 · CUDA 12.8.1 runtime (sm_86 through
+sm_120) · CTranslate2 4.8.x, which loads `libcublas.so.12` from the base image ·
+torch-free · faster-whisper 1.2.1 · numpy 1.24.3. VRAM: ~1.5 GB (large-v2
+int8) + batch overhead.
 
 **CPU** (`Dockerfile.cpu`, `-cpu` tag): Python 3.11 · multi-arch
-(amd64 + arm64) · torch 2.1.1 CPU wheels · same faster-whisper pin.
+(amd64 + arm64) · torch-free · same faster-whisper pin.
 
 **ROCm** (`Dockerfile.rocm`, `-rocm` tag): Python 3.12 · amd64 only ·
 CTranslate2 4.8.1 **ROCm build** (GitHub release wheel, sha256-pinned, not on

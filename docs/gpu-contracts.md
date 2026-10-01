@@ -238,7 +238,11 @@ same contract.
       differ from torch's `CUDA_VISIBLE_DEVICES`-remapped ordinals, so an
       index-based read can report the wrong card. Three services on one host
       commonly report the same physical GPU, so a consumer aggregates by
-      `gpu_uuid` into one device. NVML memory is device-global, never one
+      `gpu_uuid` into one device. The torch-free CUDA images (whisper and
+      titanet) cannot map the engine's device ordinal to a UUID without torch,
+      so they report a UUID only when the container sees exactly one GPU, which the shipped
+      `compose.gpu.yaml` arranges (`count: 1` per service); with several
+      visible GPUs they report `unsupported`. NVML memory is device-global, never one
       service's usage.
     - Bytes are integers on the wire (convert for display). `utilization_percent`
       is bounded 0-100, `vram_used_bytes <= vram_total_bytes`, and NaN/inf are
