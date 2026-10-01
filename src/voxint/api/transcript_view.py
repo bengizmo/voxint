@@ -173,12 +173,13 @@ def _island_segment(
     one line per parent — the queue entry — so the N-of-M loop counts one target
     per parent and never double-counts children.
 
-    ``corrections`` / ``rawText`` (#83) carry deterministic domain-pack correction
-    provenance and the immutable raw evidence for the compare/reset affordance.
-    Both are whole-segment concerns: a split child (``word_start`` set) never
-    carries them (the parent's spans address its full enhanced text, not a child
+    ``corrections`` (#83) carries deterministic domain-pack correction provenance.
+    It is a whole-segment concern: a split child (``word_start`` set) never
+    carries it (the parent's spans address its full enhanced text, not a child
     slice), and ``correction_trace`` is ``None`` there anyway (a corrected segment
-    is never split).
+    is never split). The raw ASR text is deliberately not in this payload (#674):
+    the editor has no raw compare, and the raw variant stays available in the
+    reading view and the export menu.
     """
     is_split_child = ln.word_start is not None
     # Operator edit supersedes pipeline provenance (#83): once the operator saves
@@ -187,8 +188,7 @@ def _island_segment(
     # "corrected by domain pack" marker would be stale and misleading. The client
     # clears it locally on a /text save, but the SERVER must own the rule too, or a
     # page reload (and any whole-run reconcile via /split or /relabel, which reuse
-    # this builder) resurrects the stale marker. `rawText` stays exposed — the
-    # compare / reset-to-raw affordance remains honest and useful after an edit.
+    # this builder) resurrects the stale marker.
     corrections = (
         None
         if is_split_child or ln.corrected
@@ -237,10 +237,6 @@ def _island_segment(
         # materially fired (or on a split child). Never a text diff — driven by the
         # persisted trace (trace_has_entries) alone.
         "corrections": corrections,
-        # The immutable raw ASR text for the whole segment (#83), for the console's
-        # compare / reset-to-raw affordance. None on split children (raw is a
-        # whole-segment concern) and synthetic export lines.
-        "rawText": None if is_split_child else ln.raw_text,
     }
 
 

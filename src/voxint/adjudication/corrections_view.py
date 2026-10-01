@@ -1,59 +1,40 @@
 """Read-time deterministic-correction provenance for the review console (#83).
 
-Pure, DB-free helpers that turn what #82 already persists — the per-segment
+Pure, DB-free helpers that turn what #82 already persists (the per-segment
 ``correction_trace`` envelope + ``corrector_version``, and the run's one frozen
-``pipeline_runs.domain_pack`` snapshot — into (a) per-segment provenance the island
-can display and (b) a run-level declared-rule reconciliation ("declared but never
-fired"). No migration: everything is reconstructed from immutable evidence.
+``pipeline_runs.domain_pack`` snapshot) into per-segment provenance the island can
+display as the "corrected by domain pack" marker. No migration: everything is
+reconstructed from immutable evidence.
 
 Numerics doctrine: reuse :func:`trace_has_entries` as the canonical "did a rule
-materially fire" predicate; NEVER re-diff effective text. Reconciliation replays
-the corrector over the immutable ``raw_text`` with the SAME growth ceiling the
-pipeline used (:func:`enhanced_size_ceiling`), so the reconstructed fire-set is
-byte-faithful to the raw pass in ``enhance_match.run``.
+materially fire" predicate; NEVER re-diff effective text.
 
-Reconciliation truth table (#83 Step 0a — the design contract these helpers pin):
+Provenance truth table (#83 Step 0a, the design contract these helpers pin):
 
-  Per-segment provenance (the "corrected by domain pack" marker):
     trace == [] / absent ............... None (segment not materially corrected)
     envelope, version == CURRENT ....... shown; each entry resolved against the
                                          snapshot (pack/match/replace), an id absent
                                          from the snapshot stays VISIBLE as unresolved
-    envelope, version != CURRENT ....... unavailable(version_mismatch) — never replay
+    envelope, version != CURRENT ....... unavailable(version_mismatch), never replay
                                          with mismatched semantics
     envelope, snapshot missing/corrupt . shown, entries unresolved (id/from/to/span
                                          come from the trace itself; pack name absent)
     split-child line ................... None (provenance is PARENT-scoped; a child
                                          slice must never claim parent-coordinate spans)
 
-  Per-run reconciliation (the "declared but never fired" panel), per DECLARED rule,
-  aggregated across every segment's immutable raw_text with precedence
-  applied > growth_rejected > no_raw_match:
-    fired on >=1 segment's raw ......... applied (with the count of segments)
-    would-fire but that segment's raw
-      transformation is growth-rejected . growth_rejected (raw pass; exact)
-    matched no segment's raw ........... no_raw_match
-
-  Out of v1 (honest, documented gaps — design report §6/§12-F5): LLM-enforcement-pass
-  growth rejection (its deciding input is not persisted) and ``cross_segment``
-  (a term ASR-split across a pause) — steer such terms to pack ``vocabulary``.
-
-Reconciliation reflects the CURRENT corrector's semantics; with only
-``CORRECTOR_VERSION == 1`` in the field today it is exact. A future engine bump must
-version-dispatch replay (or report honestly) rather than reinterpret old runs.
+The run-level "declared but never fired" reconciliation that once lived here was
+retired with the legacy transcript review page (#158) and removed in #674; the
+media editor never rendered it.
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from voxint.adjudication.splits import trace_has_entries
-from voxint.clients.llm import enhanced_size_ceiling
 from voxint.domain_packs.base import DomainPackError
-from voxint.domain_packs.corrections import CorrectionRule, parse_corrections
-from voxint.domain_packs.corrector import CORRECTOR_VERSION, apply_corrections
-
-ReconStatus = Literal["applied", "no_raw_match", "growth_rejected"]
+from voxint.domain_packs.corrections import parse_corrections
+from voxint.domain_packs.corrector import CORRECTOR_VERSION
 
 
 @dataclass(frozen=True)
@@ -70,13 +51,10 @@ class RuleDisplay:
 class DeclaredRuleIndex:
     """A run's one frozen pack resolved for read-time provenance.
 
-    ``by_id`` resolves a fired/declared rule id to its display identity; ``rules``
-    keeps manifest order for the reconciliation replay (order is the corrector's
-    final tie-break, so it must match what the pipeline used).
+    ``by_id`` resolves a fired rule id to its display identity.
     """
 
     pack: str
-    rules: tuple[CorrectionRule, ...]
     by_id: Mapping[str, RuleDisplay]
 
 
@@ -106,7 +84,7 @@ def build_declared_rule_index(
         )
         for rule in rules
     }
-    return DeclaredRuleIndex(pack=name, rules=rules, by_id=by_id)
+    return DeclaredRuleIndex(pack=name, by_id=by_id)
 
 
 def resolve_segment_provenance(
@@ -194,67 +172,3 @@ def resolve_segment_provenance(
         "inputBase": input_base if isinstance(input_base, str) else "",
         "entries": entries,
     }
-
-
-def _raw_fired_ids(raw_text: str, rules: Sequence[CorrectionRule]) -> tuple[set[str], bool]:
-    """Which declared rule ids fire on one segment's immutable raw text.
-
-    Replays the corrector with the SAME growth ceiling ``enhance_match`` used, so
-    the fire-set and growth decision are byte-faithful to the pipeline's raw pass.
-    On a growth-rejected segment the capped pass returns an empty trace, so re-run
-    UNCAPPED to recover the ids that *would* have fired — those are the segment's
-    ``growth_rejected`` candidates. Returns ``(fired_ids, growth_rejected)``.
-    """
-    capped = apply_corrections(
-        raw_text, rules, max_output_chars=enhanced_size_ceiling(raw_text)
-    )
-    if not capped.growth_rejected:
-        return {entry.id for entry in capped.trace}, False
-    uncapped = apply_corrections(raw_text, rules)
-    return {entry.id for entry in uncapped.trace}, True
-
-
-def run_reconciliation(
-    index: DeclaredRuleIndex | None,
-    raw_texts: Iterable[str],
-) -> list[dict[str, Any]]:
-    """Per-declared-rule reconciliation for the run-level "declared but never fired"
-    panel, aggregated over every segment's immutable ``raw_text``.
-
-    ``[]`` when the snapshot is unavailable or declares no corrections (the panel
-    simply does not render). Otherwise one entry per declared rule with its status
-    (precedence ``applied`` > ``growth_rejected`` > ``no_raw_match``) and, for an
-    applied rule, ``appliedCount`` — how many segments it fired on. Computed once
-    per run by the caller; not per segment per request.
-    """
-    if index is None or not index.rules:
-        return []
-    applied_counts: dict[str, int] = {rule.id: 0 for rule in index.rules}
-    growth_rejected: set[str] = set()
-    for raw_text in raw_texts:
-        fired, was_growth_rejected = _raw_fired_ids(raw_text, index.rules)
-        for rule_id in fired:
-            if was_growth_rejected:
-                growth_rejected.add(rule_id)
-            else:
-                applied_counts[rule_id] += 1
-    out: list[dict[str, Any]] = []
-    for rule in index.rules:
-        count = applied_counts[rule.id]
-        if count > 0:
-            status: ReconStatus = "applied"
-        elif rule.id in growth_rejected:
-            status = "growth_rejected"
-        else:
-            status = "no_raw_match"
-        out.append(
-            {
-                "id": rule.id,
-                "pack": index.pack,
-                "match": rule.match,
-                "replace": rule.replace,
-                "status": status,
-                "appliedCount": count,
-            }
-        )
-    return out

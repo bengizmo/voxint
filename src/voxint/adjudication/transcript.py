@@ -82,17 +82,14 @@ class TranscriptLine:
     # as a child ruling, and "inherit" is selected exactly when this is ``None``.
     word_range_speaker_id: uuid.UUID | None = None
     # Deterministic domain-pack correction provenance (#83). Carried straight from
-    # the segment so the console can show which pack/rule produced each edit and
-    # offer the immutable raw text one action away. Set on a WHOLE segment only —
-    # a split parent's derived children leave these ``None`` (provenance is
-    # parent-scoped; a corrected segment is never split, and a child slice must
-    # never claim the parent's enhanced-text-coordinate spans). ``correction_trace``
-    # is the persisted envelope (or ``[]``); ``corrector_version`` gates read-time
-    # reconstruction; ``raw_text`` is the immutable ASR evidence for the compare/
-    # reset affordance.
+    # the segment so the console can show which pack/rule produced each edit. Set
+    # on a WHOLE segment only — a split parent's derived children leave these
+    # ``None`` (provenance is parent-scoped; a corrected segment is never split,
+    # and a child slice must never claim the parent's enhanced-text-coordinate
+    # spans). ``correction_trace`` is the persisted envelope (or ``[]``);
+    # ``corrector_version`` gates read-time reconstruction.
     correction_trace: dict[str, object] | list[object] | None = None
     corrector_version: int | None = None
-    raw_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -316,7 +313,6 @@ def attributed_transcript(
                     # above deliberately omit these (parent-scoped).
                     correction_trace=seg.correction_trace,
                     corrector_version=seg.corrector_version,
-                    raw_text=seg.raw_text,
                 )
             )
     return lines

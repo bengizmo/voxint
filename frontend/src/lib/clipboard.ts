@@ -4,8 +4,8 @@
 // exactly where a self-hosted operator often runs, and `writeText` can also reject
 // (permissions, focus). Both paths resolve to `false` so every caller can fall back
 // to an honest manual-copy affordance rather than claiming a success it did not
-// achieve. Extracted from ReviewStepper's #83 "Copy raw text" handler so the raw-copy
-// and the annotation pull-quote copy share one path.
+// achieve. Originally extracted from the retired review page's #83 "Copy raw text"
+// handler; the annotation pull-quote copy is its caller now.
 export async function writeClipboard(text: string): Promise<boolean> {
   try {
     if (!navigator.clipboard?.writeText) return false;

@@ -52,20 +52,6 @@ export type SegmentCorrections =
   | { status: "shown"; version: number; inputBase: string; entries: CorrectionEntry[] }
   | { status: "unavailable"; reason: string; recordedVersion: number | null };
 
-// One row of the run-level "declared but never fired" reconciliation (issue #83).
-// Mirrors the server's `run_reconciliation` entry shape (contract-pinned). status:
-// `applied` (fired on >=1 segment's raw, appliedCount>0), `no_raw_match` (matched no
-// segment's raw), or `growth_rejected` (would fire but the raw transformation
-// overflowed the growth ceiling). appliedCount is 0 for the non-applied statuses.
-export interface ReconciliationEntry {
-  id: string;
-  pack: string;
-  match: string;
-  replace: string;
-  status: "applied" | "no_raw_match" | "growth_rejected";
-  appliedCount: number;
-}
-
 export interface Segment {
   start: number;
   end: number;
@@ -113,10 +99,6 @@ export interface Segment {
   // no rule materially fired (keyed off the persisted trace, never a text diff) or
   // on a split child (spans are parent-scoped, never a child slice).
   corrections: SegmentCorrections | null;
-  // The immutable raw ASR text for the WHOLE segment (issue #83), for the console's
-  // compare / reset-to-raw affordance. null on split children (raw is a
-  // whole-segment concern) and synthetic/blank export lines.
-  rawText: string | null;
 }
 
 // Paint a line's text with its annotation highlights (issue #86). A sweep over the

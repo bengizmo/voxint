@@ -48,7 +48,7 @@ const segments = [0, 1].map((index) => ({
   label: "VOICE/A", segmentId: `seg-${index}`, sourceSegmentId: `seg-${index}`,
   text: `Text ${index}`, reviewTarget: true, verified: false, corrected: false,
   wordStart: null, wordEnd: null, wordRangeSpeakerId: null,
-  paletteIndex: null, confidence: null, corrections: null, rawText: null,
+  paletteIndex: null, confidence: null, corrections: null,
 })) satisfies Segment[];
 
 const defaultLabelStates = [{
