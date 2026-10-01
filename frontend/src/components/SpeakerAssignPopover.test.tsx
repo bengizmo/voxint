@@ -132,6 +132,20 @@ describe("SpeakerAssignPopover", () => {
     expect(props.onClose).toHaveBeenCalledOnce();
   });
 
+  it("keeps the speaker list in place when a control below it is pressed", () => {
+    // The list is laid out in flow here. If a mousedown on a control below it
+    // collapsed the list, that control would move before mouseup and a real
+    // click would land outside the popover and close it.
+    setup();
+    for (const control of [
+      screen.getByRole("radio", { name: "Just this segment" }),
+      screen.getByRole("button", { name: /Reset/ }),
+    ]) {
+      fireEvent.mouseDown(control);
+      expect(screen.getByRole("listbox")).toBeTruthy();
+    }
+  });
+
   it("flips above near the bottom and clamps horizontally", () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
       new DOMRect(0, 0, 320, 300),
