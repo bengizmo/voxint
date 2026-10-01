@@ -21,7 +21,6 @@ function seg(overrides: Partial<Segment> = {}): Segment {
     wordEnd: null,
     wordRangeSpeakerId: null,
     corrections: null,
-    rawText: null,
     ...overrides,
   };
 }

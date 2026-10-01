@@ -345,10 +345,12 @@ name.](../images/correction-provenance.png)
   off once a correction has fired on it; Voxint tells you why rather than offering a
   cut that wouldn't work.
 
-If a rule you expected never shows up, the recording may not contain the term,
-or the term was broken across a pause. For terms that get broken across pauses,
-add them to the pack's **vocabulary** (which nudges the transcriber up front)
-instead of relying on a correction after the fact.
+The editor only lists rules that fired. A rule that never matched anything in
+the recording leaves no trace in the console. If a rule you expected never shows
+up, the recording may not contain the term, or the term was broken across a
+pause. For terms that get broken across pauses, add them to the pack's
+**vocabulary** (which nudges the transcriber up front) instead of relying on a
+correction after the fact.
 
 ### The waveform strip
 

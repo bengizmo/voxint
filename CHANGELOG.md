@@ -20,6 +20,19 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   check a doubtful automatic match. The reviewing guide described this as a
   per-option button that never existed; it now describes what the menu does.
 
+### Removed
+- **Leftover code from the retired correction-rules summary and raw compare**
+  (#674). When the old transcript review page was retired (#158), its run-level
+  **Correction rules** summary and per-line **Original (raw) transcript** compare
+  and **Reset edit to raw** did not move to the media editor, and they are not
+  coming back. The unused server helper behind the summary and the per-line raw
+  text the editor received but never showed are gone. To compare a line against
+  the raw transcript, open **Download transcript**, then **Read on screen**, and
+  pick the `raw` tab, or download a raw file from **Other text variants**. The
+  **corrected by domain pack** marker still lists the rules that fired on each
+  line. The editor does not list rules that never fired; the domain-pack guide
+  covers the usual reasons a rule stays quiet.
+
 ### Fixed
 - **Mouse clicks in the speaker menu no longer get lost.** In the menu that
   opens from a speaker name in the editor, clicking **Just this segment** or

@@ -1,11 +1,11 @@
-"""Unit tests for read-time correction provenance + reconciliation (issue #83).
+"""Unit tests for read-time correction provenance (issue #83).
 
 Covers every branch of the #83 truth table in
 ``src/voxint/adjudication/corrections_view.py``: snapshot-index resolution
-(present / missing / corrupt), per-segment provenance (fired / no-fire / version
-mismatch / unresolved id / snapshot missing / malformed entry), and run-level
-reconciliation (applied / no_raw_match / raw-pass growth_rejected + the
-applied > growth_rejected > no_raw_match precedence). All pure — no DB, no I/O.
+(present / missing / corrupt) and per-segment provenance (fired / no-fire /
+version mismatch / unresolved id / snapshot missing / malformed entry). All pure,
+no DB, no I/O. The run-level reconciliation tests went with the dead
+``run_reconciliation`` helper (#674).
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from voxint.adjudication.corrections_view import (
     RuleDisplay,
     build_declared_rule_index,
     resolve_segment_provenance,
-    run_reconciliation,
 )
 from voxint.domain_packs.corrector import CORRECTOR_VERSION
 
@@ -93,7 +92,7 @@ def test_index_valid_resolves_pack_rules_and_by_id() -> None:
     index = build_declared_rule_index(snap)
     assert index is not None
     assert index.pack == "town"
-    assert [r.id for r in index.rules] == ["r1", "r2"]  # manifest order preserved
+    assert list(index.by_id) == ["r1", "r2"]  # every declared rule resolvable
     assert index.by_id["r1"] == RuleDisplay(
         id="r1", pack="town", match="selectboard", replace="Selectboard"
     )
@@ -102,7 +101,6 @@ def test_index_valid_resolves_pack_rules_and_by_id() -> None:
 def test_index_empty_corrections_is_valid_empty_index() -> None:
     index = build_declared_rule_index(_snapshot("bare", []))
     assert index is not None
-    assert index.rules == ()
     assert index.by_id == {}
 
 
@@ -239,61 +237,3 @@ def test_provenance_malformed_entry_is_skipped() -> None:
     result = resolve_segment_provenance(trace, CORRECTOR_VERSION, idx)
     assert result is not None
     assert len(result["entries"]) == 1  # the junk entry is dropped
-
-
-# --- run_reconciliation -----------------------------------------------------
-
-_GROWTH_REPLACE = "z" * 300  # long enough to overflow enhanced_size_ceiling on short raw
-
-
-def test_reconciliation_none_index_is_empty() -> None:
-    assert run_reconciliation(None, ["some raw text"]) == []
-
-
-def test_reconciliation_no_rules_is_empty() -> None:
-    idx = _index("bare", [])
-    assert run_reconciliation(idx, ["some raw text"]) == []
-
-
-def test_reconciliation_applied_counts_segments() -> None:
-    idx = _index("town", [_rule("r1", "abbr", "abbreviation")])
-    result = run_reconciliation(idx, ["the abbr here", "no match", "abbr again"])
-    assert result == [
-        {
-            "id": "r1",
-            "pack": "town",
-            "match": "abbr",
-            "replace": "abbreviation",
-            "status": "applied",
-            "appliedCount": 2,
-        }
-    ]
-
-
-def test_reconciliation_no_raw_match() -> None:
-    idx = _index("town", [_rule("r1", "abbr", "abbreviation")])
-    result = run_reconciliation(idx, ["nothing relevant", "still nothing"])
-    assert result[0]["status"] == "no_raw_match"
-    assert result[0]["appliedCount"] == 0
-
-
-def test_reconciliation_raw_pass_growth_rejected() -> None:
-    # A short raw with a huge replacement overflows enhanced_size_ceiling: the
-    # segment's raw transformation is growth-rejected, yet the rule DID match raw.
-    idx = _index("town", [_rule("r1", "abbr", _GROWTH_REPLACE)])
-    result = run_reconciliation(idx, ["the abbr here"])
-    assert result[0]["status"] == "growth_rejected"
-    assert result[0]["appliedCount"] == 0
-
-
-def test_reconciliation_applied_beats_growth_rejected() -> None:
-    # Same rule fires cleanly on one segment (short replacement fits) but would be
-    # growth-rejected on another: precedence applied > growth_rejected.
-    idx = _index("town", [_rule("r1", "x", "y" * 300)])
-    # First segment: raw long enough that y*300 fits under the ceiling; second:
-    # raw so short the replacement overflows.
-    long_raw = "x " + ("q" * 100)  # ceiling = (2+100)*4+200 = 608 > ~301 output
-    short_raw = "x"  # ceiling = 1*4+200 = 204 < 300 output -> rejected
-    result = run_reconciliation(idx, [long_raw, short_raw])
-    assert result[0]["status"] == "applied"
-    assert result[0]["appliedCount"] == 1
