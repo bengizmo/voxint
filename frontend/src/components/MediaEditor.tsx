@@ -409,7 +409,10 @@ export function MediaEditor({
     }
   }, [popoverTarget]);
 
-  const undoWriteGuard = useMemo(() => ({ busyRef, setBusy }), [busyRef, setBusy]);
+  const undoWriteGuard = useMemo(
+    () => ({ busy, busyRef, setBusy }),
+    [busy, busyRef, setBusy],
+  );
 
   // Roster voices to compare against in the popover (issue #571), each with one
   // line to preview. Only lines under a different diarization label than the

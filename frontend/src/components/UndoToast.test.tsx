@@ -149,7 +149,7 @@ describe("UndoToast", () => {
     );
     const busyRef = { current: false };
     const setBusy = vi.fn();
-    const { props } = setup({ writeGuard: { busyRef, setBusy } });
+    const { props } = setup({ writeGuard: { busy: false, busyRef, setBusy } });
 
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
 
@@ -165,12 +165,32 @@ describe("UndoToast", () => {
 
   it("does not start while another editor write holds the guard", () => {
     const busyRef = { current: true };
-    setup({ writeGuard: { busyRef, setBusy: vi.fn() } });
+    setup({ writeGuard: { busy: false, busyRef, setBusy: vi.fn() } });
 
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
 
     expect(apiFetch).not.toHaveBeenCalled();
     expect(busyRef.current).toBe(true);
+  });
+
+  it("disables Undo while another editor write is in flight", () => {
+    const busyRef = { current: true };
+    const { rerender, props } = setup({
+      writeGuard: { busy: true, busyRef, setBusy: vi.fn() },
+    });
+
+    const undoButton = () =>
+      screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement;
+    expect(undoButton().disabled).toBe(true);
+
+    busyRef.current = false;
+    rerender(
+      <UndoToast
+        {...props}
+        writeGuard={{ busy: false, busyRef, setBusy: vi.fn() }}
+      />,
+    );
+    expect(undoButton().disabled).toBe(false);
   });
 
   it("does nothing without a claim CSRF token", () => {

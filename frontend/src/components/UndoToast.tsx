@@ -14,8 +14,14 @@ interface UndoToastProps {
   onUndone: (data: LabelsResult) => void;
   onDismiss: () => void;
   // The editor's write guard. An undo holds it so no other edit can be in
-  // flight at the same time and land its response out of order.
-  writeGuard?: { busyRef: RefObject<boolean>; setBusy: (busy: boolean) => void };
+  // flight at the same time and land its response out of order. `busy` disables
+  // the button while another edit holds it, so a click there is never silently
+  // dropped.
+  writeGuard?: {
+    busy: boolean;
+    busyRef: RefObject<boolean>;
+    setBusy: (busy: boolean) => void;
+  };
 }
 
 const UNDO_COPY: Record<UndoPayload["kind"], string> = {
@@ -141,7 +147,7 @@ export function UndoToast({
         <button
           type="button"
           onClick={doUndo}
-          disabled={busy}
+          disabled={busy || (writeGuard?.busy ?? false)}
           style={{
             background: "none",
             border: "none",

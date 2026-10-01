@@ -359,9 +359,12 @@ def undo_segment_decision(
     if position != 0:
         raise UndoDriftError("this segment's speaker was changed again after this ruling")
     segment = session.get(TranscriptSegment, original.transcript_segment_id)
+    if segment is None:
+        # Unreachable while the FK's ON DELETE SET NULL detaches rulings (0066);
+        # fail closed rather than write a ruling nothing would apply.
+        raise UndoDriftError("the segment this ruling applied to no longer exists")
     if (
         original.start_word_index is not None
-        and segment is not None
         and (original.start_word_index, original.end_word_index)
         not in child_ranges(session, segment)
     ):
