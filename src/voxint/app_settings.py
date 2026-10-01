@@ -680,11 +680,17 @@ def ready_tutorial_run_id(session: Session) -> uuid.UUID | None:
     a tutorial run is configured AND present, so callers (the launch redirect, the
     Settings page, the banner resolver, the complete/replay routes) share ONE
     "is the tutorial actually available?" answer instead of each re-deriving it.
+
+    A run whose recording was permanently deleted (``media_items.purged_at``)
+    is not available either (#676): purge keeps the run row but removes its
+    audio, so the tutorial reads as "not set up" and Settings offers set-up,
+    which builds a fresh run, instead of replaying onto missing audio.
     """
     row = session.get(AppSettings, SINGLETON_ID)
     if row is None or row.tutorial_run_id is None:
         return None
-    if session.get(PipelineRun, row.tutorial_run_id) is None:
+    run = session.get(PipelineRun, row.tutorial_run_id)
+    if run is None or run.media_item.purged_at is not None:
         return None
     return row.tutorial_run_id
 

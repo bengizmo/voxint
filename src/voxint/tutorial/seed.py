@@ -20,11 +20,19 @@ Design notes:
   hypothetical re-match would reproduce the same outcome.
 * The roster speaker is created directly (no ``AdjudicationDecision``) — a decision
   would resolve the label as ``HUMAN_ASSIGN`` instead of ``GROUNDED_COSINE``.
+* The run also carries authored ``match_candidates`` evidence (#675), mirroring
+  what ``evaluate_run`` records for this geometry against the one-speaker
+  tutorial roster: accepted for the grounded label, ``below_cosine`` rejections
+  for the other two. Without it the speaker rail reports "Voice matching did not
+  run" beside a voice it lists as matched.
 * Idempotency is keyed on ``app_settings.tutorial_run_id`` (FK ``ON DELETE SET
   NULL``): a second seed returns the existing run untouched; a deleted run is
-  rebuilt with a fresh id; a missing WAV file (media_root wiped) is repaired in
-  place. The bundled ``MediaItem`` is reused across rebuilds so its UNIQUE
-  ``source_path`` never collides.
+  rebuilt with a fresh id; a missing WAV file (media_root wiped) or missing
+  match evidence (a run seeded before #675) is repaired in place. The bundled
+  ``MediaItem`` is reused across rebuilds so its UNIQUE ``source_path`` never
+  collides. A permanently deleted (purged) tutorial is not repaired: the operator
+  asked to start over, so the item is revived, its old run archived, and a fresh
+  run built (#676).
 * The caller owns the transaction — this module flushes, never commits. The WAV is
   copied to media_root before any DB write and cannot be rolled back with the
   transaction; a rolled-back seed leaves a harmless orphan artifact directory.
@@ -57,22 +65,33 @@ from voxint.db.models import (
     EMBEDDING_DIM,
     STAGE_ORDER,
     ArtifactKind,
+    AssignmentMethod,
     AudioArtifact,
     DiarizationTurn,
+    MatchCandidate,
     MediaItem,
     PipelineRun,
     RunStatus,
     Speaker,
+    SpeakerAssignment,
     SpeakerEmbedding,
     StageRun,
     StageStatus,
     TranscriptSegment,
 )
 from voxint.domain_packs.base import load_default
+from voxint.ingest.service import archive_run
+from voxint.media.operations import has_active_operation, lock_media_row
 from voxint.pipeline.stages.context import normalized_audio_path
 from voxint.speakers.matching import (
+    DECISION_ACCEPTED,
+    DECISION_REJECTED,
+    REASON_ACCEPTED,
+    REASON_BELOW_COSINE,
     CosineProposal,
+    LabelDecision,
     NameHintProposal,
+    replace_run_match_candidates,
     replace_run_proposals,
 )
 from voxint.speakers.roster import canonicalize, merge_map
@@ -153,6 +172,34 @@ def _atomic_copy(wav_bytes: bytes, dest: Path) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def _revive_purged_media(session: Session, media: MediaItem) -> None:
+    """Bring a permanently deleted tutorial item back for a fresh run (#676).
+
+    Purge keeps the ``MediaItem`` (its UNIQUE ``source_path`` is the tutorial's
+    reserved identity) and the old run's rows, but deletes every artifact and
+    file. Reached only from an explicit set-up (CLI or Settings), so reviving is
+    the operator's choice, not a silent undo of "Delete permanently". Every old
+    run on the item is soft-archived so it leaves the review queue and /runs;
+    the caller then builds a fresh run and rewrites the original file.
+    """
+    if lock_media_row(session, media.id) is None:
+        raise TutorialSeedError("tutorial media item vanished during revive")
+    if has_active_operation(session, media.id):
+        raise TutorialSeedError("tutorial media item has a media operation in progress")
+    old_runs = session.execute(
+        select(PipelineRun.id).where(
+            PipelineRun.media_item_id == media.id,
+            PipelineRun.archived_at.is_(None),
+        )
+    ).scalars()
+    for run_id in old_runs:
+        archive_run(session, run_id)
+    media.purged_at = None
+    media.trashed_at = None
+    media.current_path = media.source_path
+    session.flush()
+
+
 def _get_or_create_media(
     session: Session, provenance: dict[str, Any], size_bytes: int
 ) -> MediaItem:
@@ -161,12 +208,15 @@ def _get_or_create_media(
     Mirrors ``ingest.service._get_or_create_media`` / ``app_settings.get_or_create``:
     two concurrent seeds can both observe no row and both insert; the SAVEPOINT
     rolls back only the loser's insert — not the caller's transaction — so we
-    re-read and adopt the winner's row instead of crashing on UNIQUE.
+    re-read and adopt the winner's row instead of crashing on UNIQUE. A purged
+    row is revived (see :func:`_revive_purged_media`).
     """
     media = session.execute(
         select(MediaItem).where(MediaItem.source_path == TUTORIAL_SOURCE_PATH)
     ).scalar_one_or_none()
     if media is not None:
+        if media.purged_at is not None:
+            _revive_purged_media(session, media)
         return media
     media = MediaItem(
         source_path=TUTORIAL_SOURCE_PATH,
@@ -257,6 +307,83 @@ def _get_or_create_roster_speaker(
         )
         session.flush()
     return speaker
+
+
+def _grounded_proposal(label: str, speaker_id: uuid.UUID) -> CosineProposal:
+    return CosineProposal(
+        diarization_label=label,
+        speaker_id=speaker_id,
+        similarity=_GROUNDED_SIMILARITY,
+        margin=math.inf,  # single-speaker roster: no runner-up
+        vote_agreement=1.0,
+        grounded=True,
+    )
+
+
+def _match_decisions(
+    layout: dict[str, Any], speaker_id: uuid.UUID
+) -> tuple[LabelDecision, ...]:
+    """The evidence ``evaluate_run`` records for the tutorial geometry (#675).
+
+    One-speaker roster, so margin is stored as None and every turn votes for the
+    only candidate (vote agreement 1.0). The grounded label sits at cosine 0.95;
+    the other two are orthogonal (cosine 0.0), so they fail the cosine gate.
+    Authored rather than recomputed for the same reason as the proposals: an
+    operator's earlier tutorial rulings grow the tutorial roster, and a live
+    re-match would then disagree with the authored proposals.
+    """
+    roster_label = layout["roster_speaker"]["label"]
+    space = layout["embedding_space"]
+    durations: dict[str, list[float]] = {}
+    for utt in layout["utterances"]:
+        durations.setdefault(utt["label"], []).append(
+            float(utt["end"]) - float(utt["start"])
+        )
+    decisions: list[LabelDecision] = []
+    for label in sorted(durations):
+        accepted = label == roster_label
+        decisions.append(
+            LabelDecision(
+                diarization_label=label,
+                decision=DECISION_ACCEPTED if accepted else DECISION_REJECTED,
+                reason=REASON_ACCEPTED if accepted else REASON_BELOW_COSINE,
+                embedding_space=space,
+                top_speaker_id=speaker_id,
+                similarity=_GROUNDED_SIMILARITY if accepted else 0.0,
+                margin=None,
+                vote_agreement=1.0,
+                grounded=True if accepted else None,
+                eligible_turns=len(durations[label]),
+                eligible_seconds=sum(durations[label]),
+                roster_size=1,
+                proposal=_grounded_proposal(label, speaker_id) if accepted else None,
+            )
+        )
+    return tuple(decisions)
+
+
+def _backfill_match_candidates(
+    session: Session, run_id: uuid.UUID, layout: dict[str, Any]
+) -> None:
+    """Add the #675 match evidence to a tutorial run seeded without it."""
+    has_rows = session.execute(
+        select(MatchCandidate.id).where(MatchCandidate.pipeline_run_id == run_id)
+    ).first()
+    if has_rows is not None:
+        return
+    speaker_id = session.execute(
+        select(SpeakerAssignment.speaker_id).where(
+            SpeakerAssignment.pipeline_run_id == run_id,
+            SpeakerAssignment.diarization_label == layout["roster_speaker"]["label"],
+            SpeakerAssignment.method == AssignmentMethod.COSINE.value,
+        )
+    ).scalar_one_or_none()
+    if speaker_id is None:
+        raise TutorialSeedError(
+            f"tutorial run {run_id} has no grounded cosine assignment to backfill from"
+        )
+    replace_run_match_candidates(session, run_id, _match_decisions(layout, speaker_id))
+    session.flush()
 
 
 def _build_run(
@@ -353,16 +480,7 @@ def _build_run(
     replace_run_proposals(
         session,
         run_id,
-        (
-            CosineProposal(
-                diarization_label=roster["label"],
-                speaker_id=speaker.id,
-                similarity=_GROUNDED_SIMILARITY,
-                margin=math.inf,  # single-speaker roster: no runner-up
-                vote_agreement=1.0,
-                grounded=True,
-            ),
-        ),
+        (_grounded_proposal(roster["label"], speaker.id),),
         (
             NameHintProposal(
                 diarization_label=heard["label"],
@@ -370,6 +488,7 @@ def _build_run(
             ),
         ),
     )
+    replace_run_match_candidates(session, run_id, _match_decisions(layout, speaker.id))
     session.flush()
     return run_id
 
@@ -404,6 +523,17 @@ def _verify_states(session: Session, run_id: uuid.UUID, layout: dict[str, Any]) 
         or plain.llm_hint_name is not None
     ):
         raise TutorialSeedError(f"label {unresolved_label!r} is not purely unresolved")
+    # #675: the speaker rail reads "matching did not run" unless every label
+    # carries match evidence that agrees with its resolution.
+    expected = {
+        label: DECISION_ACCEPTED if label == roster_label else DECISION_REJECTED
+        for label in states
+    }
+    recorded = {label: state.match_decision for label, state in states.items()}
+    if recorded != expected:
+        raise TutorialSeedError(
+            f"match evidence {recorded!r} does not match the tutorial states {expected!r}"
+        )
 
 
 def _ensure_wav_present(session: Session, run_id: uuid.UUID, media_root: Path) -> None:
@@ -418,7 +548,8 @@ def _ensure_source_present(media: MediaItem, media_root: Path) -> None:
 
     Follows the live pointer (``current_path``, else ``source_path``), so a
     trashed or archived tutorial is repaired in place rather than resurrected at
-    its old path. A purged item stays deleted: "Delete permanently" is final.
+    its old path. A purged item is never written here: only
+    :func:`_revive_purged_media` brings one back, as an explicit decision.
     """
     if media.purged_at is not None:
         return
@@ -454,9 +585,12 @@ def seed_tutorial_run(
     existing = get_app_settings(session)
     if existing is not None and existing.tutorial_run_id is not None:
         run = session.get(PipelineRun, existing.tutorial_run_id)
-        if run is not None:
+        # A purged run has lost its audio for good; fall through to a fresh
+        # build, which revives the item and archives this run (#676).
+        if run is not None and run.media_item.purged_at is None:
             _ensure_wav_present(session, run.id, media_root)
             _ensure_source_present(run.media_item, media_root)
+            _backfill_match_candidates(session, run.id, layout)
             return run.id
 
     wav_bytes = resources.load_sample_wav_bytes()

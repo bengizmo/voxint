@@ -345,6 +345,42 @@ describe("summary", () => {
     );
   });
 
+  it("summarises the seeded tutorial run without claiming matching did not run", () => {
+    // Mirrors the label states the tutorial seed produces (#675): one grounded
+    // match and two below-cosine rejections against a one-speaker roster.
+    const states = [
+      make({
+        label: "SPEAKER_00",
+        resolution: "grounded_cosine",
+        speakerId: "jordan",
+        speakerName: "Jordan Rivera (Tutorial)",
+        cosineGrounded: true,
+        band: "auto_attribute",
+        candidatePromptAllowed: true,
+        candidateSpeakerId: "jordan",
+        matchDecision: "accepted",
+        matchReason: "accepted",
+        matchSimilarity: 0.95,
+        matchVoteAgreement: 1,
+      }),
+      ...["SPEAKER_01", "SPEAKER_02"].map((label) =>
+        make({
+          label,
+          band: "abstain",
+          bandReason: "Voice not distinctive enough to match.",
+          candidateSpeakerId: "jordan",
+          matchDecision: "rejected",
+          matchReason: "below_cosine",
+          matchSimilarity: 0,
+          matchVoteAgreement: 1,
+        }),
+      ),
+    ];
+    expect(summary(partition(states), coverage(states))).toBe(
+      "2 voices need you. 1 matched automatically.",
+    );
+  });
+
   it("lets the finish line beat a coverage override", () => {
     expect(summary(emptyPartition({ yourRulings: [make()] }), { kind: "no_roster" })).toBe(
       "Every voice has a ruling.",
