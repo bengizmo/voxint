@@ -12,6 +12,9 @@ import {
   type SpeakerAssignPopoverProps,
 } from "./SpeakerAssignPopover";
 
+// jsdom has no scrollIntoView, so give vi.spyOn a function to wrap.
+Element.prototype.scrollIntoView ??= () => {};
+
 beforeEach(() => {
   vi.stubGlobal(
     "ResizeObserver",
@@ -23,7 +26,7 @@ beforeEach(() => {
   vi.stubGlobal("CSS", {
     escape: (value: string) => value.replaceAll(":", "\\:"),
   });
-  Element.prototype.scrollIntoView = vi.fn();
+  vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
 });
 afterEach(() => {
   cleanup();
@@ -158,49 +161,49 @@ describe("SpeakerAssignPopover", () => {
     setup();
     expect(screen.queryByRole("button", { name: /Hear this voice/ })).toBeNull();
   });
-});
 
-it("preserves focus moved to an outside control on unmount", () => {
-  const outside = document.createElement("button");
-  document.body.append(outside);
-  const { unmount } = setup();
-  outside.focus();
-  unmount();
-  expect(document.activeElement).toBe(outside);
-  outside.remove();
-});
-
-it("closes on captured scroll and removes the listener on unmount", () => {
-  const { props, unmount } = setup();
-  fireEvent.scroll(document.body);
-  expect(props.onClose).toHaveBeenCalledOnce();
-  unmount();
-  fireEvent.scroll(document.body);
-  expect(props.onClose).toHaveBeenCalledOnce();
-});
-
-it("closes after focus leaves but permits focus moves within the panel", () => {
-  const frames: FrameRequestCallback[] = [];
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    frames.push(callback);
-    return frames.length;
+  it("preserves focus moved to an outside control on unmount", () => {
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    const { unmount } = setup();
+    outside.focus();
+    unmount();
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
   });
-  const flushFrames = () => act(() => {
-    for (const callback of frames.splice(0)) callback(0);
+
+  it("closes on captured scroll and removes the listener on unmount", () => {
+    const { props, unmount } = setup();
+    fireEvent.scroll(document.body);
+    expect(props.onClose).toHaveBeenCalledOnce();
+    unmount();
+    fireEvent.scroll(document.body);
+    expect(props.onClose).toHaveBeenCalledOnce();
   });
-  const outside = document.createElement("button");
-  document.body.append(outside);
-  const { props, unmount } = setup();
-  screen.getByRole("radio", { name: "Just this segment" }).focus();
-  flushFrames();
-  expect(props.onClose).not.toHaveBeenCalled();
-  outside.focus();
-  flushFrames();
-  expect(props.onClose).toHaveBeenCalledOnce();
-  screen.getByRole("combobox").focus();
-  outside.focus();
-  unmount();
-  flushFrames();
-  expect(props.onClose).toHaveBeenCalledOnce();
-  outside.remove();
+
+  it("closes after focus leaves but permits focus moves within the panel", () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const flushFrames = () => act(() => {
+      for (const callback of frames.splice(0)) callback(0);
+    });
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    const { props, unmount } = setup();
+    screen.getByRole("radio", { name: "Just this segment" }).focus();
+    flushFrames();
+    expect(props.onClose).not.toHaveBeenCalled();
+    outside.focus();
+    flushFrames();
+    expect(props.onClose).toHaveBeenCalledOnce();
+    screen.getByRole("combobox").focus();
+    outside.focus();
+    unmount();
+    flushFrames();
+    expect(props.onClose).toHaveBeenCalledOnce();
+    outside.remove();
+  });
 });

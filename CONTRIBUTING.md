@@ -62,9 +62,16 @@ status checks are green, never by a direct push. The required checks are:
 | `lint-test` | `ruff`, `mypy` (strict), and `pytest` (unit + integration) against a pgvector Postgres service. |
 | `secrets-scan` | Pinned gitleaks over history and the working tree, using `.gitleaks.toml`. |
 | `coverage` | The full `pytest` suite under `--cov`, failing below an 85% floor. Runs in parallel with `lint-test`, off the fast path. |
+| `frontend` | In `frontend/`: `npm ci`, lint, typecheck, the vitest suite, `npm run build` (with the no-CDN check), and `npm audit` at high severity. |
 
-The `frontend` job (lint, typecheck, build, audit) also runs on every push and
-PR; it is not currently a required check but should still pass before you merge.
+`tests/contracts/test_required_ci_checks.py` pins this list to `ci.yml`: every
+required job runs unconditionally on each PR. If the branch-protection set
+changes, update that test and this table in the same commit. The test cannot
+read the repository setting itself; check it with:
+
+```bash
+gh api repos/bengizmo/voxint/branches/main/protection/required_status_checks --jq '.contexts'
+```
 Force-pushes to `main` and branch deletion are rejected. Protection binds
 everyone, maintainers included. No human reviewer is required, so once a PR's
 checks are green it is ready to merge.

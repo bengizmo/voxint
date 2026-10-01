@@ -19,6 +19,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   without one can only come from a manual edit or an explicit NULL insert. Any
   such row gets one during the upgrade: its start time if the job started,
   otherwise the upgrade time. The migration logs how many rows it repaired.
+- **The frontend CI check now runs the vitest suite and blocks merges** (#698).
+  Until now the `frontend` job ran lint, typecheck, the build, and an audit but
+  never the island unit tests, and it was not a required check. It now runs `npm test`
+  and joins `lint-test`, `secrets-scan`, and `coverage` in the required set. A
+  new contract test keeps every required job unconditional on each PR. The
+  editor-claim request also gets its first test.
 
 ### Fixed
 - **The website deploy workflow no longer fails on every docs push** (#648). The
