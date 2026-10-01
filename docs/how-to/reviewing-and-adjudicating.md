@@ -194,12 +194,13 @@ After assigning a speaker, excluding a voice, or ruling "can't tell," an **undo
 toast** appears at the bottom of the screen. Click **Undo** within five minutes
 to reverse the ruling and restore the label to its previous state.
 
-The undo window is enforced on the server: if the label was re-ruled by another
-action before you click Undo, the toast tells you so. Closing the toast, waiting
-past the deadline, or making another ruling dismisses it.
+Changing the speaker of a single line (or of one part of a split line) shows the
+same toast. **Undo** puts that line back to the speaker it had just before your
+change.
 
-Undo is available for label-scope rulings only. Segment-scope corrections
-(reassigning a single line) do not offer undo yet.
+The undo window is enforced on the server: if the label or line was changed
+again before you click Undo, the toast tells you so. Closing the toast, waiting
+past the deadline, or making another ruling dismisses it.
 
 ### Merge suggestions
 

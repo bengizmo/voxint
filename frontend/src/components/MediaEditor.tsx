@@ -47,6 +47,10 @@ import {
   type TranscriptPlayerHandle,
 } from "./TranscriptPlayer";
 
+// The whole-run reconcile a segment relabel returns; a fresh ruling carries
+// its undo (issue #573).
+type RelabelResult = Pick<LabelsResult, "segments" | "progress" | "undo">;
+
 export interface MediaEditorProps {
   mediaId: string;
   runId: string;
@@ -623,10 +627,7 @@ export function MediaEditor({
           end_word_index: String(seg.wordEnd),
         };
         if (speakerId !== null) body.speaker_id = speakerId;
-        const result = await postForm<{
-          segments: Segment[];
-          progress: { verified: number; total: number };
-        }>(
+        const result = await postForm<RelabelResult>(
           `/review/${runId}/segments/${seg.sourceSegmentId}/relabel`,
           body,
           { claimLostOnConflict: false },
@@ -634,6 +635,7 @@ export function MediaEditor({
         if (!result) return;
         setSegments(result.segments);
         setProgress(result.progress);
+        setUndoInfo(result.undo ?? null);
         void reloadAnnotationsRef.current?.();
       } finally {
         busyRef.current = false;
@@ -663,10 +665,7 @@ export function MediaEditor({
           action: speakerId === null ? "inherit" : "assign",
         };
         if (speakerId !== null) body.speaker_id = speakerId;
-        const result = await postForm<{
-          segments: Segment[];
-          progress: { verified: number; total: number };
-        }>(
+        const result = await postForm<RelabelResult>(
           `/review/${runId}/segments/${targetParentId}/relabel`,
           body,
           { claimLostOnConflict: false },
@@ -674,6 +673,7 @@ export function MediaEditor({
         if (!result) return;
         setSegments(result.segments);
         setProgress(result.progress);
+        setUndoInfo(result.undo ?? null);
         void reloadAnnotationsRef.current?.();
         const name = speakers.find((s) => s.id === speakerId)?.displayName;
         setAssignStatus(

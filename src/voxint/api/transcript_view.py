@@ -254,19 +254,23 @@ def _run_island_segments(session: Session, run_id: uuid.UUID) -> list[dict[str, 
     return [_island_segment(ln, palette, rule_index) for ln in lines]
 
 
-def _run_reconcile_response(session: Session, run_id: uuid.UUID) -> JSONResponse:
+def _run_reconcile_response(
+    session: Session, run_id: uuid.UUID, *, undo: dict[str, str] | None = None
+) -> JSONResponse:
     """The whole-run island reconcile — every segment (split parents expanded) plus
     the run's N-of-M counter — the shape a STRUCTURAL write returns so the console
     adopts server truth wholesale rather than patching one line. Shared by /split
     and the island /relabel path (a reassignment changes a child's speaker string,
-    which a per-segment patch cannot express, so both re-render the whole run)."""
+    which a per-segment patch cannot express, so both re-render the whole run).
+    ``undo`` rides along for a fresh relabel (issue #573)."""
     verified_n, total = verified_progress(session, run_id)
-    return JSONResponse(
-        {
-            "segments": _run_island_segments(session, run_id),
-            "progress": {"verified": verified_n, "total": total},
-        }
-    )
+    payload: dict[str, Any] = {
+        "segments": _run_island_segments(session, run_id),
+        "progress": {"verified": verified_n, "total": total},
+    }
+    if undo is not None:
+        payload["undo"] = undo
+    return JSONResponse(payload)
 
 
 def _segment_is_split(session: Session, segment_id: uuid.UUID) -> bool:

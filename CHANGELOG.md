@@ -6,6 +6,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Undo for single-line speaker changes** (#573). Changing the speaker of one
+  line, or of one part of a split line, now shows the same undo toast as a
+  whole-label ruling. **Undo** within five minutes puts the line back to the
+  speaker it had just before the change. If the line was changed again in the
+  meantime, the toast says it is too late instead.
+
 ### Fixed
 - **The tutorial's speaker rail no longer says voice matching did not run**
   (#675). The bundled tutorial run listed one voice as matched automatically

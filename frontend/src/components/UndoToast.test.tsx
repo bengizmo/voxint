@@ -79,6 +79,10 @@ describe("UndoToast", () => {
       { kind: "merge", mergeNonce: "merge-1", expiresAt: inMinutes(5) },
       "Labels merged.",
     ],
+    [
+      { kind: "relabel", decisionId: "dec-1", expiresAt: inMinutes(5) },
+      "Segment speaker changed.",
+    ],
   ])("labels a %o undo", (undo, text) => {
     setup({ undo });
     expect(screen.getByRole("status").textContent).toContain(text);
@@ -99,6 +103,11 @@ describe("UndoToast", () => {
       { kind: "merge", mergeNonce: "merge-1", expiresAt: inMinutes(5) },
       "/review/run-1/undo/merge",
       { merge_nonce: "merge-1", nonce: "undo:merge-1" },
+    ],
+    [
+      { kind: "relabel", decisionId: "dec-3", expiresAt: inMinutes(5) },
+      "/review/run-1/undo/relabel",
+      { decision_id: "dec-3", nonce: "undo:dec-3" },
     ],
   ])(
     "posts a %o undo to its endpoint and hands back the labels",
@@ -174,7 +183,9 @@ describe("UndoToast", () => {
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
 
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toMatch(/Too late to undo/);
+      expect(screen.getByRole("status").textContent).toContain(
+        "Too late to undo. The speaker was changed again since.",
+      );
     });
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
     expect(props.onClaimLost).not.toHaveBeenCalled();

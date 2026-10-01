@@ -4,6 +4,13 @@ Undo appends a REVOKE decision that voids the original ruling. The resolver
 excludes both the voided row and the REVOKE row from effective_decisions, so
 the pre-void effective state is restored automatically. No snapshot storage
 needed.
+
+Segment-scope rulings (issue #573) cannot carry a REVOKE: the schema keeps
+REVOKE label-scope only, and the segment resolvers reduce newest-wins without
+consulting voids. Their undo instead appends a compensating ruling in the same
+scope that re-asserts what the scope followed before: the prior ASSIGN's
+speaker, or INHERIT when there was no earlier ruling or the earlier one was
+an INHERIT. Newest-wins then yields the pre-ruling state.
 """
 
 import uuid
@@ -12,13 +19,16 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 
-from voxint.adjudication.ledger import record_decision
+from voxint.adjudication.ledger import ConflictingReplayError, record_decision
 from voxint.adjudication.resolver import effective_decisions
+from voxint.adjudication.splits import derive_children
 from voxint.db.models import (
     AdjudicationDecision,
     Decision,
+    SegmentSplitBoundary,
     Speaker,
     SpeakerEmbedding,
+    TranscriptSegment,
 )
 from voxint.speakers.roster import archive_speaker
 
@@ -241,6 +251,166 @@ def undo_decision(
     return {
         "revoke_decision_id": revoke.id,
         "voided_decision_id": decision_id,
+        "is_replay": False,
+    }
+
+
+def _check_grace(created_at: datetime, grace_seconds: float, message: str) -> None:
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    if created_at + timedelta(seconds=grace_seconds) <= datetime.now(UTC):
+        raise UndoExpiredError(message)
+
+
+def _same_scope(row: AdjudicationDecision, original: AdjudicationDecision) -> bool:
+    return (
+        row.pipeline_run_id == original.pipeline_run_id
+        and row.transcript_segment_id == original.transcript_segment_id
+        and row.start_word_index == original.start_word_index
+        and row.end_word_index == original.end_word_index
+    )
+
+
+def _scope_history(
+    session: Session, original: AdjudicationDecision
+) -> list[AdjudicationDecision]:
+    """Every ruling in ``original``'s exact scope, newest first.
+
+    The same reduction order as ``segment_states`` / ``word_range_states``
+    (created_at, then id, descending), so ``[0]`` is what the read path applies.
+    """
+    start = AdjudicationDecision.start_word_index
+    end = AdjudicationDecision.end_word_index
+    return list(
+        session.execute(
+            select(AdjudicationDecision)
+            .where(
+                AdjudicationDecision.pipeline_run_id == original.pipeline_run_id,
+                AdjudicationDecision.transcript_segment_id
+                == original.transcript_segment_id,
+                start.is_(None)
+                if original.start_word_index is None
+                else start == original.start_word_index,
+                end.is_(None)
+                if original.end_word_index is None
+                else end == original.end_word_index,
+            )
+            .order_by(
+                AdjudicationDecision.created_at.desc(),
+                AdjudicationDecision.id.desc(),
+            )
+        ).scalars()
+    )
+
+
+def _range_is_current_child(
+    session: Session, segment_id: uuid.UUID, start: int, end: int
+) -> bool:
+    """Whether ``[start, end)`` is still one of the segment's split children.
+
+    Splits only ever add cuts, so a later split can subdivide the range. The
+    read path matches children by exact coordinates, so a ruling on a range
+    that no longer renders would change nothing the operator can see.
+    """
+    segment = session.get(TranscriptSegment, segment_id)
+    if segment is None:
+        return False
+    cuts = list(
+        session.execute(
+            select(SegmentSplitBoundary.word_index).where(
+                SegmentSplitBoundary.parent_segment_id == segment_id
+            )
+        ).scalars()
+    )
+    children = derive_children(segment, cuts) if cuts else None
+    if children is None or len(children) < 2:
+        return False
+    return (start, end) in {(child.word_start, child.word_end) for child in children}
+
+
+def undo_segment_decision(
+    session: Session,
+    run_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    operator: str,
+    idempotency_key: str,
+    grace_seconds: float,
+    user_id: uuid.UUID | None = None,
+) -> dict[str, object]:
+    """Undo a segment- or word-range-scope relabel; the caller owns the transaction.
+
+    Appends a compensating ruling in the original's exact scope (see the module
+    docstring). Replaying the same ``idempotency_key`` returns the compensating
+    row it already wrote, even after the grace window, so a retried request
+    whose first attempt committed reports success.
+    """
+    original = session.get(AdjudicationDecision, decision_id)
+    if original is None:
+        raise UndoError(f"no adjudication decision {decision_id}")
+    if original.pipeline_run_id != run_id:
+        raise UndoError("only a segment-scope ruling from this run can be undone")
+    if original.detached_at is not None:
+        raise UndoDriftError("the segment this ruling applied to no longer exists")
+    if original.transcript_segment_id is None or original.decision not in (
+        Decision.ASSIGN.value,
+        Decision.INHERIT.value,
+    ):
+        raise UndoError("only a segment-scope ruling from this run can be undone")
+
+    existing = session.execute(
+        select(AdjudicationDecision).where(
+            AdjudicationDecision.idempotency_key == idempotency_key
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if existing.id == original.id or not _same_scope(existing, original):
+            raise ConflictingReplayError(idempotency_key)
+        return {
+            "compensating_decision_id": existing.id,
+            "undone_decision_id": decision_id,
+            "is_replay": True,
+        }
+
+    _check_grace(original.created_at, grace_seconds, "the undo grace window has passed")
+
+    history = _scope_history(session, original)
+    if not history or history[0].id != original.id:
+        raise UndoDriftError("this segment's speaker was changed again after this ruling")
+    if (
+        original.start_word_index is not None
+        and original.end_word_index is not None
+        and not _range_is_current_child(
+            session,
+            original.transcript_segment_id,
+            original.start_word_index,
+            original.end_word_index,
+        )
+    ):
+        raise UndoDriftError("this part of the segment was split again after this ruling")
+
+    prior = history[1] if len(history) > 1 else None
+    restore_speaker = (
+        prior.speaker_id
+        if prior is not None and prior.decision == Decision.ASSIGN.value
+        else None
+    )
+    compensating = record_decision(
+        session,
+        pipeline_run_id=run_id,
+        diarization_label=original.diarization_label,
+        decision=Decision.ASSIGN if restore_speaker is not None else Decision.INHERIT,
+        operator=operator,
+        idempotency_key=idempotency_key,
+        speaker_id=restore_speaker,
+        transcript_segment_id=original.transcript_segment_id,
+        start_word_index=original.start_word_index,
+        end_word_index=original.end_word_index,
+        user_id=user_id,
+    )
+    session.flush()
+    return {
+        "compensating_decision_id": compensating.id,
+        "undone_decision_id": decision_id,
         "is_replay": False,
     }
 

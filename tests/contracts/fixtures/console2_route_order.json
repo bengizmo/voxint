@@ -708,6 +708,12 @@
     ]
   ],
   [
+    "/review/{run_id}/undo/relabel",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/review",
     [
       "GET"
