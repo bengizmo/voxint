@@ -418,6 +418,12 @@ model assets) voids it for the gate it feeds.
 
 ## Gotchas
 
+- **A model service that "never became healthy" in smoke-cpu crashed before you
+  assume it was slow.** Read its container log in the job output first (the
+  traps print all three services' logs, stderr included). v0.36.1 reverted the
+  pyannote CPU image to torch 2.5.0 believing 2.8.0 started too slowly; the real
+  cause was the missing `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`, and the trap of
+  that time discarded pyannote's stderr, which hid the traceback (#697).
 - **Workflow smoke-testing**: a pre-release tag like `v0.0.0-test` runs the
   whole pipeline safely (no `X.Y` mutable tag). GHCR versions of public
   container packages can NOT be deleted through the REST API (422), only via

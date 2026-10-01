@@ -4,16 +4,20 @@
 # source — flavor drift is impossible); this file adds only what the
 # Dockerfiles install outside that file:
 #
-# - torch/torchaudio 2.5.0: the exact versions Dockerfile.cpu pins, and the
-#   versions the Phase 0 MPS spike measured (DER identical to CPU on the
-#   spike corpus, 3x repeat runs bit-stable). On macOS arm64 the default
-#   PyPI wheels ARE the Metal-capable build — no special wheel index needed.
+# - torch/torchaudio 2.8.0: the exact versions Dockerfile.cpu (and the CUDA
+#   Dockerfile) pin. Voxint keeps torch below 2.9 because torchaudio 2.9
+#   removed set_audio_backend(), which pyannote.audio 3.1.1 calls (its own
+#   metadata sets no upper bound). torch >= 2.6 needs
+#   TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 to load the vendored checkpoints;
+#   scripts/metal/voxint-metal.sh sets it in the service environment. On
+#   macOS arm64 the default PyPI wheels ARE the Metal-capable build, so no
+#   special wheel index is needed.
 # - setuptools >=70,<81: pyannote.database imports pkg_resources, which
 #   setuptools 81 removed. The pip-based images inherit setuptools from
 #   their base image (same pin + boot canary in the Dockerfiles); uv venvs
 #   ship no setuptools at all, so the pin must be explicit here
 #   (84.x confirmed broken, 80.10.2 verified working).
 -r requirements.txt
-torch==2.5.0
-torchaudio==2.5.0
+torch==2.8.0
+torchaudio==2.8.0
 setuptools>=70,<81

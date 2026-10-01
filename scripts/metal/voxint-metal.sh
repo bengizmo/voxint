@@ -334,6 +334,12 @@ service_env() {
       # fails the tensor probe -- no silent CPU degradation. Override with
       # VOXINT_METAL_DIARIZER_DEVICE=cpu for A/B parity measurement.
       printf 'DIARIZER_DEVICE=%s\n' "${VOXINT_METAL_DIARIZER_DEVICE:-mps}"
+      # torch >= 2.6 defaults torch.load to weights_only=True, which rejects
+      # the pyannote 3.1.x checkpoints (they pickle TorchVersion). Same
+      # setting as both pyannote images; the checkpoints setup installs are
+      # sha256-verified against models/provenance.json. launchd passes no
+      # shell environment, so it must be set here.
+      printf 'TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1\n'
       ;;
     titanet)
       printf 'EMBED_ENGINE=onnx\n'

@@ -5,6 +5,7 @@ Not wire-schema tests, but they pin the behaviors the contract documents
 titanet window-cap sub-windowing and pooling).
 """
 
+import pickle
 import sys
 from itertools import pairwise
 from pathlib import Path
@@ -759,6 +760,91 @@ class TestDiarizerFromPretrainedAdaptive:
 
         with pytest.raises(TypeError, match="something else"):
             diarizer._from_pretrained_adaptive(Boom(), "org/pipe", "d" * 40, "tok")
+
+
+class TestWeightsOnlyRejectionHint:
+    """torch >= 2.6 rejects the pyannote 3.1 checkpoints under weights_only
+    (#697). That failure must name the missing setting, not tell the operator
+    the vendored files are corrupt (which misdirected the v0.36.0 diagnosis)."""
+
+    # Shape of torch 2.8's message for the vendored checkpoints.
+    REJECTION = pickle.UnpicklingError(
+        "Weights only load failed. This file can still be loaded, ...\n"
+        "\tWeightsUnpickler error: Unsupported global: GLOBAL "
+        "torch.torch_version.TorchVersion was not an allowed global by default."
+    )
+
+    def test_detects_the_rejection_directly_and_through_wrappers(self) -> None:
+        assert diarizer._is_weights_only_rejection(self.REJECTION)
+        try:
+            try:
+                raise self.REJECTION
+            except pickle.UnpicklingError as inner:
+                raise RuntimeError("loader wrapper") from inner
+        except RuntimeError as wrapped:
+            assert diarizer._is_weights_only_rejection(wrapped)
+
+    def test_detects_the_rejection_on_the_context_chain(self) -> None:
+        # Raised while handling the rejection, with an unrelated explicit cause.
+        try:
+            try:
+                raise self.REJECTION
+            except pickle.UnpicklingError:
+                raise RuntimeError("wrapper") from OSError("unrelated")
+        except RuntimeError as wrapped:
+            assert wrapped.__cause__ is not None
+            assert diarizer._is_weights_only_rejection(wrapped)
+
+    def test_other_load_failures_are_not_misread(self) -> None:
+        assert not diarizer._is_weights_only_rejection(
+            pickle.UnpicklingError("invalid load key, 'x'.")
+        )
+        # torch's generic weights-only wrapper around a broken pickle.
+        assert not diarizer._is_weights_only_rejection(
+            pickle.UnpicklingError(
+                "Weights only load failed. ...\n\tWeightsUnpickler error: "
+                "Unsupported operand 149"
+            )
+        )
+        assert not diarizer._is_weights_only_rejection(FileNotFoundError("x.bin"))
+
+    @staticmethod
+    def _load_with(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: Exception
+    ) -> pytest.ExceptionInfo[RuntimeError]:
+        vendored = tmp_path / "config.yaml"
+        vendored.write_text("version: 3.1.0\n")
+        monkeypatch.delenv("DIARIZER_MODEL_NAME", raising=False)
+        monkeypatch.setenv("VOXINT_VENDORED_PIPELINE", str(vendored))
+        audio = SimpleNamespace(Pipeline=object, __version__="3.1.1")
+        monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(__version__="2.8.0"))
+        monkeypatch.setitem(sys.modules, "pyannote", SimpleNamespace(audio=audio))
+        monkeypatch.setitem(sys.modules, "pyannote.audio", audio)
+
+        def boom(*_a: object, **_k: object) -> object:
+            raise failure
+
+        monkeypatch.setattr(diarizer, "_from_pretrained_adaptive", boom)
+        d = diarizer.Diarizer()
+        with pytest.raises(RuntimeError) as info:
+            d.load_model()
+        return info
+
+    def test_load_model_names_the_setting(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        info = self._load_with(monkeypatch, tmp_path, self.REJECTION)
+        message = str(info.value)
+        # Leads with the weights-only diagnosis, not the corrupt-file wrapper.
+        assert message.startswith(f"Failed to load {tmp_path / 'config.yaml'}: torch >= 2.6")
+        assert "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1" in message
+        assert "Failed to load the vendored pipeline" not in message
+
+    def test_load_model_keeps_the_corrupt_file_hint_otherwise(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        info = self._load_with(monkeypatch, tmp_path, FileNotFoundError("x.bin"))
+        assert "corrupt or incomplete vendored files" in str(info.value)
 
 
 class TestDeviceCascade:
@@ -2479,16 +2565,16 @@ class TestCpuImageProvenance:
         assert torch_base("services/whisper/Dockerfile") == torch_base(
             "services/whisper/Dockerfile.cpu"
         )
-        # pyannote CUDA uses torch 2.8.0 (Blackwell/CUDA 12.8.1); the CPU
-        # image stays on 2.5.0 because torch 2.8.0 CPU exceeds the CI smoke
-        # startup timeout. The numerics contract is maintained by the vendored
-        # weights + pyannote.audio 3.1.1 pin, not by torch version parity.
+        # Every pyannote flavor runs the same torch (#697). 2.8.0 is also the
+        # ceiling: torchaudio 2.9 removed set_audio_backend(), which
+        # pyannote.audio 3.1.1 calls at import.
         assert torch_base("services/pyannote/Dockerfile") == "2.8.0"
-        assert torch_base("services/pyannote/Dockerfile.cpu") == "2.5.0"
+        assert torch_base("services/pyannote/Dockerfile.cpu") == torch_base(
+            "services/pyannote/Dockerfile"
+        )
         # The metal venv joins the same parity set: its torch/torchaudio must
-        # track Dockerfile.cpu exactly (the MPS spike measured 2.5.0; a
-        # one-sided bump would fork numerics between the container and native
-        # deployments of the same service).
+        # track Dockerfile.cpu exactly (a one-sided bump would fork numerics
+        # between the container and native deployments of the same service).
         assert torch_base("services/pyannote/requirements.metal.txt") == torch_base(
             "services/pyannote/Dockerfile.cpu"
         )
@@ -2501,6 +2587,42 @@ class TestCpuImageProvenance:
 
         assert torchaudio_base("services/pyannote/requirements.metal.txt") == torchaudio_base(
             "services/pyannote/Dockerfile.cpu"
+        )
+
+    def test_every_pyannote_flavor_allows_full_checkpoint_unpickling(self) -> None:
+        # torch >= 2.6 defaults torch.load to weights_only=True, which rejects
+        # the vendored pyannote 3.1.x checkpoints (they pickle TorchVersion):
+        # the service exits at startup and never turns healthy. That is what
+        # failed the v0.36.0 CPU smoke. Each flavor on torch >= 2.6 must set
+        # TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 where its service process starts.
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        dockerfiles = sorted((REPO_ROOT / "services" / "pyannote").glob("Dockerfile*"))
+        assert len(dockerfiles) >= 2, dockerfiles  # CUDA + CPU at least
+        for dockerfile in dockerfiles:
+            assert re.search(
+                r"""^ENV\s+TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=["']?1["']?\s*$""",
+                dockerfile.read_text(),
+                re.MULTILINE,
+            ), f"{dockerfile.name} must set TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1"
+        launcher = (REPO_ROOT / "scripts" / "metal" / "voxint-metal.sh").read_text()
+        body = re.search(
+            r"^service_env\(\)\s*\{\n(.*?)^\}", launcher, re.MULTILINE | re.DOTALL
+        )
+        assert body is not None, "voxint-metal.sh has no service_env() function"
+        arm = re.search(
+            r"^\s+pyannote\)\n(.*?)^\s+;;", body.group(1), re.MULTILINE | re.DOTALL
+        )
+        assert arm is not None, "voxint-metal.sh service_env has no pyannote) arm"
+        assert re.search(
+            r"^\s*printf 'TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1\\n'",
+            arm.group(1),
+            re.MULTILINE,
+        ), (
+            "voxint-metal.sh service_env must set TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 "
+            "for pyannote (launchd passes no shell environment)"
         )
 
     def test_pyannote_metal_requirements_include_shared_stack(self) -> None:

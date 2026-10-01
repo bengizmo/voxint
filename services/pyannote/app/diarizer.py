@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import pickle
 import re
 import threading
 import time
@@ -283,6 +284,43 @@ def select_device() -> str:
     return "cpu"
 
 
+WEIGHTS_ONLY_HINT = (
+    "torch >= 2.6 refuses to unpickle the pyannote 3.1 checkpoints under its "
+    "weights_only default; set TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 in this "
+    "service's environment (the images and the metal launcher set it). If it "
+    "is already set, the vendored files are corrupt or incomplete: rebuild or "
+    "re-pull the image"
+)
+
+
+def _is_weights_only_rejection(exc: BaseException) -> bool:
+    """True when ``exc`` (or anything it wraps) is torch's weights_only refusal
+    of a global the checkpoint pickles.
+
+    torch raises ``pickle.UnpicklingError("Weights only load failed ...
+    WeightsUnpickler error: Unsupported global: ...")``. The "Weights only load
+    failed" prefix alone also wraps other unpickling failures, so the
+    unsupported-global detail is required too. Loaders above torch may wrap the
+    error, so both the cause and the context chains are searched.
+    """
+    seen: set[int] = set()
+    pending: list[BaseException] = [exc]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        message = str(current)
+        if (
+            isinstance(current, pickle.UnpicklingError)
+            and "Weights only load failed" in message
+            and "Unsupported global" in message
+        ):
+            return True
+        pending.extend(e for e in (current.__cause__, current.__context__) if e is not None)
+    return False
+
+
 def _from_pretrained_adaptive(
     pipeline_cls: Any, source: str, revision: str | None, token: str | None
 ) -> Any:
@@ -447,6 +485,13 @@ class Diarizer:
                 Pipeline, self.model_source, self.model_revision, self.hf_token
             )
         except Exception as exc:
+            if _is_weights_only_rejection(exc):
+                # torch refused a global the checkpoint pickles: the process
+                # most likely lacks the setting every shipped flavor sets, so
+                # lead with that instead of "rebuild the image".
+                raise RuntimeError(
+                    f"Failed to load {self.model_source}: {WEIGHTS_ONLY_HINT}"
+                ) from exc
             # A missing/truncated checkpoint behind an existing vendored config
             # surfaces as a raw torch/FileNotFound error; keep the actionable
             # hint attached instead of letting it read like a code bug.
