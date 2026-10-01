@@ -767,8 +767,11 @@ class TestWeightsOnlyRejectionHint:
     (#697). That failure must name the missing setting, not tell the operator
     the vendored files are corrupt (which misdirected the v0.36.0 diagnosis)."""
 
+    # Shape of torch 2.8's message for the vendored checkpoints.
     REJECTION = pickle.UnpicklingError(
-        "Weights only load failed. This file can still be loaded, ..."
+        "Weights only load failed. This file can still be loaded, ...\n"
+        "\tWeightsUnpickler error: Unsupported global: GLOBAL "
+        "torch.torch_version.TorchVersion was not an allowed global by default."
     )
 
     def test_detects_the_rejection_directly_and_through_wrappers(self) -> None:
@@ -781,9 +784,27 @@ class TestWeightsOnlyRejectionHint:
         except RuntimeError as wrapped:
             assert diarizer._is_weights_only_rejection(wrapped)
 
+    def test_detects_the_rejection_on_the_context_chain(self) -> None:
+        # Raised while handling the rejection, with an unrelated explicit cause.
+        try:
+            try:
+                raise self.REJECTION
+            except pickle.UnpicklingError:
+                raise RuntimeError("wrapper") from OSError("unrelated")
+        except RuntimeError as wrapped:
+            assert wrapped.__cause__ is not None
+            assert diarizer._is_weights_only_rejection(wrapped)
+
     def test_other_load_failures_are_not_misread(self) -> None:
         assert not diarizer._is_weights_only_rejection(
             pickle.UnpicklingError("invalid load key, 'x'.")
+        )
+        # torch's generic weights-only wrapper around a broken pickle.
+        assert not diarizer._is_weights_only_rejection(
+            pickle.UnpicklingError(
+                "Weights only load failed. ...\n\tWeightsUnpickler error: "
+                "Unsupported operand 149"
+            )
         )
         assert not diarizer._is_weights_only_rejection(FileNotFoundError("x.bin"))
 
@@ -813,8 +834,11 @@ class TestWeightsOnlyRejectionHint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         info = self._load_with(monkeypatch, tmp_path, self.REJECTION)
-        assert "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1" in str(info.value)
-        assert "rebuild" not in str(info.value)
+        message = str(info.value)
+        # Leads with the weights-only diagnosis, not the corrupt-file wrapper.
+        assert message.startswith(f"Failed to load {tmp_path / 'config.yaml'}: torch >= 2.6")
+        assert "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1" in message
+        assert "Failed to load the vendored pipeline" not in message
 
     def test_load_model_keeps_the_corrupt_file_hint_otherwise(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -2584,13 +2608,19 @@ class TestCpuImageProvenance:
                 re.MULTILINE,
             ), f"{dockerfile.name} must set TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1"
         launcher = (REPO_ROOT / "scripts" / "metal" / "voxint-metal.sh").read_text()
+        body = re.search(
+            r"^service_env\(\)\s*\{\n(.*?)^\}", launcher, re.MULTILINE | re.DOTALL
+        )
+        assert body is not None, "voxint-metal.sh has no service_env() function"
         arm = re.search(
-            r"^\s*service_env\(\)\s*\{.*?^\s+pyannote\)\n(.*?)^\s+;;",
-            launcher,
-            re.MULTILINE | re.DOTALL,
+            r"^\s+pyannote\)\n(.*?)^\s+;;", body.group(1), re.MULTILINE | re.DOTALL
         )
         assert arm is not None, "voxint-metal.sh service_env has no pyannote) arm"
-        assert "printf 'TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1\\n'" in arm.group(1), (
+        assert re.search(
+            r"^\s*printf 'TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1\\n'",
+            arm.group(1),
+            re.MULTILINE,
+        ), (
             "voxint-metal.sh service_env must set TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 "
             "for pyannote (launchd passes no shell environment)"
         )

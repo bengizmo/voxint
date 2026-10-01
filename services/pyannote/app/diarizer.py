@@ -287,25 +287,37 @@ def select_device() -> str:
 WEIGHTS_ONLY_HINT = (
     "torch >= 2.6 refuses to unpickle the pyannote 3.1 checkpoints under its "
     "weights_only default; set TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 in this "
-    "service's environment (the images and the metal launcher set it)"
+    "service's environment (the images and the metal launcher set it). If it "
+    "is already set, the vendored files are corrupt or incomplete: rebuild or "
+    "re-pull the image"
 )
 
 
 def _is_weights_only_rejection(exc: BaseException) -> bool:
-    """True when ``exc`` (or anything it wraps) is torch's weights_only refusal.
+    """True when ``exc`` (or anything it wraps) is torch's weights_only refusal
+    of a global the checkpoint pickles.
 
-    torch raises ``pickle.UnpicklingError("Weights only load failed...")``;
-    loaders above it may wrap it, so the whole cause/context chain is checked.
+    torch raises ``pickle.UnpicklingError("Weights only load failed ...
+    WeightsUnpickler error: Unsupported global: ...")``. The "Weights only load
+    failed" prefix alone also wraps other unpickling failures, so the
+    unsupported-global detail is required too. Loaders above torch may wrap the
+    error, so both the cause and the context chains are searched.
     """
     seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
+    pending: list[BaseException] = [exc]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
         seen.add(id(current))
-        if isinstance(current, pickle.UnpicklingError) and (
-            "Weights only load failed" in str(current)
+        message = str(current)
+        if (
+            isinstance(current, pickle.UnpicklingError)
+            and "Weights only load failed" in message
+            and "Unsupported global" in message
         ):
             return True
-        current = current.__cause__ or current.__context__
+        pending.extend(e for e in (current.__cause__, current.__context__) if e is not None)
     return False
 
 
@@ -474,8 +486,9 @@ class Diarizer:
             )
         except Exception as exc:
             if _is_weights_only_rejection(exc):
-                # Not a corrupt file: the process lacks the setting every
-                # shipped flavor sets. Say so instead of "rebuild the image".
+                # torch refused a global the checkpoint pickles: the process
+                # most likely lacks the setting every shipped flavor sets, so
+                # lead with that instead of "rebuild the image".
                 raise RuntimeError(
                     f"Failed to load {self.model_source}: {WEIGHTS_ONLY_HINT}"
                 ) from exc
