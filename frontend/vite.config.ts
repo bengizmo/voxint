@@ -1,6 +1,13 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+// Vite 6's default browser targets. Vite 7 raised its default to
+// "baseline-widely-available" (Chrome 111, Firefox 114, Safari 16.4), which
+// rewrites media queries into range syntax older Safari ignores. Pinning these
+// keeps a toolchain bump from silently dropping browsers; raising the floor is a
+// separate decision (#655). scripts/check-browser-targets.mjs guards the output.
+const BROWSER_TARGETS = ["edge88", "firefox78", "chrome87", "safari14"];
+
 // Multi-entry static compiler (NO Astro, NO SSR): every entry becomes a
 // content-hashed bundle plus a `.vite/manifest.json` the Python side reads to
 // resolve entry -> hashed file. `vite build` has no server-runtime concept, so
@@ -16,11 +23,10 @@ export default defineConfig({
   base: "/static/app/",
   plugins: [react()],
   build: {
-    // Vite 7 raised its default target to "baseline-widely-available" (Chrome
-    // 111, Firefox 114, Safari 16.4), which rewrites media queries into range
-    // syntax older Safari ignores. Keep Vite 6's targets so a toolchain bump does
-    // not silently drop browsers; raising the floor is a separate decision (#655).
-    target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"],
+    target: ["es2020", ...BROWSER_TARGETS],
+    // Set explicitly rather than inherited from `target`, so the CSS minifier's
+    // floor can't drift on its own.
+    cssTarget: BROWSER_TARGETS,
     manifest: true, // emits dist/.vite/manifest.json
     outDir: "dist",
     emptyOutDir: true,

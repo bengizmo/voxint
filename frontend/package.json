@@ -6,7 +6,7 @@
     "node": ">=22.12 <23"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json --noEmit && vite build && node scripts/check-no-cdn-urls.mjs",
+    "build": "tsc -p tsconfig.json --noEmit && vite build && node scripts/check-no-cdn-urls.mjs && node scripts/check-browser-targets.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src --max-warnings=0",
