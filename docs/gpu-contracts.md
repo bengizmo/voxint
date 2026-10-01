@@ -1194,6 +1194,74 @@ That triggers the browser acceptance lane and not the pipeline lane.
   browser-verified at the landing commit `af60c45`, which is the release
   content minus version pins, changelog, docs, and screenshots.
 
+#### Verdict: v0.50.0, Gate E pipeline, LLM, and browser lanes run fresh (PASS), Gate M run fresh on the CI lane (PASS), Gates A/R carry (2026-10-01)
+
+v0.50.0 adds undo for single-line and word-range speaker changes (#573), voice
+comparison from the speaker menu (#571), two speaker-menu click fixes (#711,
+#716) and the split-part speaker list fix (#717), removes the dead
+correction-rules reconciliation (#674), and moves the island toolchain to Vite 8
+(#655, first slice).
+
+`git diff v0.49.0..v0.50.0 -- services/` touches only the whisper, pyannote,
+and titanet READMEs: no Dockerfile, requirements, model asset, or service code
+changed, and no parity fixture or reference payload moved.
+
+- **Gate A (CUDA)**: **carries** from the v0.49.0 run on RTX 5090 recorded
+  below (diarize byte-identical, embed min cosine 0.999996369, transcribe drift
+  identical to v0.42.0). The service images this release builds are
+  source-identical to v0.49.0's.
+- **Gate R (ROCm)**: the `-rocm` whisper image is unchanged. **Carries**,
+  standing since v0.33.0. No AMD hardware available.
+- **Gate E (whole-pipeline E2E)**: `frontend/` (the Vite 8 toolchain and the
+  review-console islands), `src/voxint/api/` (the segment undo endpoint and the
+  transcript view), and `tools/e2e_browser_lifecycle.py` changed, so every lane
+  ran fresh on the release content.
+  - **Pipeline lane: PASS** on `VOXINT_E2E_LANE=cuda`, maintainer hardware,
+    RTX 5090, serial, disposable `voxint_e2e` database, against the published
+    v0.49.0 CUDA service images (source-identical, see above).
+    `test_real_pipeline_persists_invariants` and
+    `test_real_pipeline_repeats_cleanly`: **2 passed** in 54.53 s, zero
+    service restarts.
+  - **Real-LLM enrichment sub-lane: PASS** against a local OpenAI-compatible
+    endpoint serving Qwen3.8-27B. `test_real_llm_summary_chain` and the three
+    malformed-reply cases: **4 passed** in 44.20 s.
+  - **Browser review lane: PASS**, run with the shipped defaults (no `.env`),
+    maintainer hardware (Linux, Chromium), serial, Playwright over
+    `tools/e2e_browser_lifecycle.py`, with islands built by Vite 8. The review
+    fixture passed the full `voxint-e2e-review` sequence: two uncertain chips,
+    verify-and-advance with replay still firing afterwards, skip and replay
+    with no network, the waveform strip (one `/peaks` fetch, region click
+    selects without writing, playhead sync), click-to-edit, the discard
+    warning, edit and save, keymap suppression on a focused select, the
+    shortcuts dialog (14 rows; opened by key and button; dismissed by Escape,
+    close control, and backdrop, focus returning to the button), and
+    domain-pack provenance (present on segment 0, absent on segment 2,
+    superseded by an operator save). **RECONCILE PASS** (1 of 5 verified, both
+    corrections matched). The Media library surfaces passed: every review
+    entry point lands on the media editor, `/review` lands on `/media`, the
+    upload and fetch panels render, and trash, restore, and **Empty trash
+    permanently** (dismissed sends nothing, accepted sends exactly one POST)
+    behave. The speaker-rail fixture passed: the initial partition and card
+    copy, Hear this voice, Confirm on the unresolved and auto-saved paths,
+    Can't tell, Not a person, the honest `enroll` 400 with the card and typed
+    name kept, and "Every voice has a ruling." **RECONCILE PASS** (0 of 12
+    verified, 5 label rulings matched). The editor fixture checked #717 on the
+    release build: with segment 4 split, every visible option of both parts'
+    speaker lists is on top, including a part directly under the sticky bar,
+    and real clicks post `relabel` 200 with each part's word range. No server
+    5xx; the only console errors are the expected `enroll` 400 and harness
+    artifacts (a stale claim-release beacon after re-seeding).
+- **Gate M (Metal)**: **run fresh, PASS**, on the CI lane. No metal path
+  (`scripts/metal/`, the metal parity lanes, `metal-lane.yml`) changed since
+  v0.49.0. The `metal-lane` workflow was dispatched on `b01785f` (the release
+  content minus version strings) on GitHub's `macos-15` arm64 runner with MPS
+  available: <https://github.com/bengizmo/voxint/actions/runs/36923510112>.
+  `launcher-unit` passed; `metal-parity` junit: whisper 3 collected, 0
+  skipped, 3 ran; titanet 7, 0, 7; pyannote 7, 0, 7; no failures.
+
+Gates E and M ran fresh and green on the release content; A and R carry on
+service images unchanged since v0.49.0. Clear to tag v0.50.0.
+
 #### Verdict: v0.49.0, Gate A run fresh (PASS), Gate E pipeline, LLM, and browser lanes run fresh (PASS), Gate M run fresh on the CI lane (PASS), Gate R carries (2026-10-01)
 
 v0.49.0 moves to SQLAlchemy 2.1 (#683), adds database migration 0067 (#692),
