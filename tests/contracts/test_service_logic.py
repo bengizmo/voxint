@@ -606,6 +606,38 @@ class TestWhisperFlavorPinParity:
             "wheel would float inside faster-whisper's range"
         )
 
+    def test_every_flavor_is_torch_free(self) -> None:
+        # #701: no whisper flavor installs torch. faster-whisper 1.2.x runs its
+        # Silero VAD on onnxruntime, CTranslate2 loads cuBLAS from the CUDA base
+        # image, and the app's torch imports are guarded. A torch line coming
+        # back (in a requirements file or a Dockerfile pip install) would
+        # reintroduce ~5.8 GB per CUDA image and torch's Dependabot alerts, and
+        # could let CT2 bind torch's bundled cuBLAS instead of the base image's.
+        # It reads the declared pins only: a new dependency that pulls torch in
+        # transitively would pass here (closing that gap is #649's lockfile).
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        whisper = REPO_ROOT / "services" / "whisper"
+        files = sorted(whisper.glob("requirements*.txt")) + sorted(whisper.glob("Dockerfile*"))
+        assert {f.name for f in files} >= {
+            "requirements.txt",
+            "requirements.rocm.txt",
+            "requirements.metal.txt",
+            "Dockerfile",
+            "Dockerfile.cpu",
+            "Dockerfile.rocm",
+        }, "a whisper flavor file moved; update this contract"
+        for path in files:
+            for lineno, line in enumerate(path.read_text().splitlines(), 1):
+                if line.lstrip().startswith("#"):
+                    continue
+                assert not re.search(r"\b(py)?torch(audio|vision)?\b", line, re.IGNORECASE), (
+                    f"{path.name}:{lineno} installs torch; every whisper flavor "
+                    f"is torch-free by design (#701): {line.strip()}"
+                )
+
 
 class TestDiarizerModelResolution:
     """The offline-by-default model resolution that closes issue #24: explicit
@@ -2562,9 +2594,8 @@ class TestCpuImageProvenance:
             assert match is not None, f"{path} has no torch pin"
             return match.group(1)
 
-        assert torch_base("services/whisper/Dockerfile") == torch_base(
-            "services/whisper/Dockerfile.cpu"
-        )
+        # whisper has no leg here: every whisper flavor is torch-free (#701),
+        # pinned by TestWhisperFlavorPinParity.test_every_flavor_is_torch_free.
         # Every pyannote flavor runs the same torch (#697). 2.8.0 is also the
         # ceiling: torchaudio 2.9 removed set_audio_backend(), which
         # pyannote.audio 3.1.1 calls at import.
