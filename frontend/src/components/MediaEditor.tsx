@@ -211,7 +211,7 @@ export function MediaEditor({
   // Heartbeat: refresh the claim TTL without rotating the token.  A stale
   // tab whose token no longer matches gets 409 and drops to claimLost.
   // The interval keeps running in background tabs (browsers throttle to
-  // ~1/min, well within the default 600s TTL).  An immediate catch-up
+  // ~1/min, well within the default 1800s TTL).  An immediate catch-up
   // refresh fires when the tab becomes visible again.
   useEffect(() => {
     if (!claimed || !claimCsrf) return;

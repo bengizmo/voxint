@@ -305,3 +305,62 @@ def test_editor_label_states_carry_rail_partition_keys(
         assert key in state
     assert state["candidateSpeakerId"] is None
     assert state["matchDecision"] is None
+
+
+# ---- Claim release mode (#722) ----
+
+
+def _editor_props(resp_text: str) -> dict[str, object]:
+    import json
+
+    anchor = resp_text.find('data-island="media-editor"')
+    start = resp_text.find("data-props='", anchor) + len("data-props='")
+    end = resp_text.find("'", start)
+    props: dict[str, object] = json.loads(resp_text[start:end])
+    return props
+
+
+def test_editor_island_multi_user_false_for_single_operator(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The island releases its claim on unload only when ``multiUser`` is
+    true, so a single-operator page must say so explicitly (#722)."""
+    media_id, _ = _seed_media_with_run(session_factory)
+    client = _app(session_factory)
+    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
+    assert resp.status_code == 200
+    assert _editor_props(resp.text)["multiUser"] is False
+
+
+def test_editor_island_multi_user_true_in_multi_user_mode(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A multi-user deployment must hydrate ``multiUser: true`` or closing the
+    editor would stop releasing the claim for the next operator (#722)."""
+    from voxint.api.auth import SESSION_COOKIE, create_session, new_session_token
+    from voxint.db.models import UserRole
+    from voxint.users import create_user
+
+    media_id, _ = _seed_media_with_run(session_factory)
+    with TemporaryDirectory() as tmpdir:
+        settings = Settings(
+            _env_file=None,  # type: ignore[call-arg]
+            voxint_multi_user=True,
+            media_root=Path(tmpdir),
+            csrf_secret=_CSRF_KEY,
+        )
+        seed_onboarded(session_factory)
+        app = create_app(settings=settings, session_factory=session_factory)
+    with session_factory() as session:
+        user = create_user(
+            session, username="editor", password="editorpass", role=UserRole.REVIEWER
+        )
+        session.commit()
+        cookie = new_session_token()
+        create_session(session, user_id=user.id, token=cookie, ttl_seconds=3600)
+        session.commit()
+
+    client = TestClient(app, cookies={SESSION_COOKIE: cookie})
+    resp = client.get(f"/media/{media_id}/editor", follow_redirects=False)
+    assert resp.status_code == 200
+    assert _editor_props(resp.text)["multiUser"] is True
