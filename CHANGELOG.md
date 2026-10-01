@@ -28,6 +28,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `mkdocs build --strict` and skip the deploy; a partial configuration fails the
   run.
 
+### Security
+- **Frontend development tooling clears three Dependabot advisories.** vitest
+  3.2.7 to 4.1.11, the test runner (GHSA-82fw-gwwq-j7x9, a file read through the
+  `@vitest/mocker` redirect mock), plus lockfile bumps of js-yaml 4.3.1 to 4.3.2
+  (GHSA-2883-xcg3-v3hh) and brace-expansion 1.1.18 to 1.1.21
+  (GHSA-q2hr-2g5m-vwhr), which only the eslint linter uses. None of the three
+  ships in the wheel or an image, and the compiled review-console bundles are
+  byte-identical before and after.
+
 ## [0.48.0] - 2026-09-30
 
 ### Removed
