@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, apiFetch } from "../lib/api-client";
 import type { LabelsResult } from "./SpeakerRail";
@@ -13,6 +13,37 @@ interface UndoToastProps {
   onClaimLost: () => void;
   onUndone: (data: LabelsResult) => void;
   onDismiss: () => void;
+  // The editor's write guard. An undo holds it so no other edit can be in
+  // flight at the same time and land its response out of order. `busy` disables
+  // the button while another edit holds it, so a click there is never silently
+  // dropped.
+  writeGuard?: {
+    busy: boolean;
+    busyRef: RefObject<boolean>;
+    setBusy: (busy: boolean) => void;
+  };
+}
+
+const UNDO_COPY: Record<UndoPayload["kind"], string> = {
+  enroll: "Enrollment applied.",
+  decide: "Decision applied.",
+  merge: "Labels merged.",
+  relabel: "Segment speaker changed.",
+};
+
+// The undo route and its form fields for each kind. The nonce is derived from
+// the undone action, so a retried click replays instead of undoing twice.
+function undoRequest(undo: UndoPayload): [string, Record<string, string>] {
+  if (undo.kind === "merge") {
+    return [
+      "merge",
+      { merge_nonce: undo.mergeNonce, nonce: `undo:${undo.mergeNonce}` },
+    ];
+  }
+  return [
+    undo.kind,
+    { decision_id: undo.decisionId, nonce: `undo:${undo.decisionId}` },
+  ];
 }
 
 export function UndoToast({
@@ -23,8 +54,10 @@ export function UndoToast({
   onClaimLost,
   onUndone,
   onDismiss,
+  writeGuard,
 }: UndoToastProps) {
-  const busyRef = useRef(false);
+  const localBusyRef = useRef(false);
+  const busyRef = writeGuard?.busyRef ?? localBusyRef;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -45,48 +78,23 @@ export function UndoToast({
     if (busyRef.current || !claimCsrf) return;
     busyRef.current = true;
     setBusy(true);
+    writeGuard?.setBusy(true);
     setError(null);
     try {
       const body = new URLSearchParams();
       body.append("token", reviewToken);
       body.append("csrf_token", claimCsrf);
-      if (undo.kind === "enroll") {
-        body.append("decision_id", undo.decisionId);
-        body.append("nonce", `undo:${undo.decisionId}`);
-        const res = await apiFetch(`/review/${runId}/undo/enroll`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/x-www-form-urlencoded",
-            accept: "application/json",
-          },
-          body: body.toString(),
-        });
-        onUndone((await res.json()) as LabelsResult);
-      } else if (undo.kind === "decide") {
-        body.append("decision_id", undo.decisionId);
-        body.append("nonce", `undo:${undo.decisionId}`);
-        const res = await apiFetch(`/review/${runId}/undo/decide`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/x-www-form-urlencoded",
-            accept: "application/json",
-          },
-          body: body.toString(),
-        });
-        onUndone((await res.json()) as LabelsResult);
-      } else {
-        body.append("merge_nonce", undo.mergeNonce);
-        body.append("nonce", `undo:${undo.mergeNonce}`);
-        const res = await apiFetch(`/review/${runId}/undo/merge`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/x-www-form-urlencoded",
-            accept: "application/json",
-          },
-          body: body.toString(),
-        });
-        onUndone((await res.json()) as LabelsResult);
-      }
+      const [action, fields] = undoRequest(undo);
+      for (const [key, value] of Object.entries(fields)) body.append(key, value);
+      const res = await apiFetch(`/review/${runId}/undo/${action}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          accept: "application/json",
+        },
+        body: body.toString(),
+      });
+      onUndone((await res.json()) as LabelsResult);
     } catch (err) {
       if (err instanceof ApiError && err.conflictKind === "claim") {
         onClaimLost();
@@ -96,7 +104,7 @@ export function UndoToast({
         setError(
           expired
             ? "Undo window expired."
-            : "Too late to undo — the attribution was changed since.",
+            : "Too late to undo. This was changed again since.",
         );
       } else {
         setError(err instanceof ApiError ? err.detail : "Undo failed.");
@@ -104,15 +112,11 @@ export function UndoToast({
     } finally {
       busyRef.current = false;
       setBusy(false);
+      writeGuard?.setBusy(false);
     }
-  }, [claimCsrf, reviewToken, undo, runId, onUndone, onClaimLost, onDismiss]);
+  }, [claimCsrf, reviewToken, undo, runId, onUndone, onClaimLost, onDismiss, busyRef, writeGuard]);
 
-  const label =
-    undo.kind === "enroll"
-      ? "Enrollment applied."
-      : undo.kind === "decide"
-        ? "Decision applied."
-        : "Labels merged.";
+  const label = UNDO_COPY[undo.kind];
 
   return (
     <div
@@ -143,7 +147,7 @@ export function UndoToast({
         <button
           type="button"
           onClick={doUndo}
-          disabled={busy}
+          disabled={busy || (writeGuard?.busy ?? false)}
           style={{
             background: "none",
             border: "none",

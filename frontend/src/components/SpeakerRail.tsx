@@ -27,7 +27,8 @@ export interface LabelsResult {
 export type UndoPayload =
   | { kind: "enroll"; decisionId: string; expiresAt: string }
   | { kind: "merge"; mergeNonce: string; expiresAt: string }
-  | { kind: "decide"; decisionId: string; expiresAt: string };
+  | { kind: "decide"; decisionId: string; expiresAt: string }
+  | { kind: "relabel"; decisionId: string; expiresAt: string };
 
 interface SpeakerRailProps {
   runId: string;

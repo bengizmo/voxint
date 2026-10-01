@@ -47,6 +47,10 @@ import {
   type TranscriptPlayerHandle,
 } from "./TranscriptPlayer";
 
+// The whole-run reconcile a segment relabel returns; a fresh ruling carries
+// its undo (issue #573).
+type RelabelResult = Pick<LabelsResult, "segments" | "progress" | "undo">;
+
 export interface MediaEditorProps {
   mediaId: string;
   runId: string;
@@ -405,6 +409,11 @@ export function MediaEditor({
     }
   }, [popoverTarget]);
 
+  const undoWriteGuard = useMemo(
+    () => ({ busy, busyRef, setBusy }),
+    [busy, busyRef, setBusy],
+  );
+
   // Roster voices to compare against in the popover (issue #571), each with one
   // line to preview. Only lines under a different diarization label than the
   // popover's count: those are a different voice cluster, so the speaker the
@@ -680,10 +689,7 @@ export function MediaEditor({
           end_word_index: String(seg.wordEnd),
         };
         if (speakerId !== null) body.speaker_id = speakerId;
-        const result = await postForm<{
-          segments: Segment[];
-          progress: { verified: number; total: number };
-        }>(
+        const result = await postForm<RelabelResult>(
           `/review/${runId}/segments/${seg.sourceSegmentId}/relabel`,
           body,
           { claimLostOnConflict: false },
@@ -691,6 +697,8 @@ export function MediaEditor({
         if (!result) return;
         setSegments(result.segments);
         setProgress(result.progress);
+        // A replay carries no undo; keep any toast that is still valid.
+        if (result.undo) setUndoInfo(result.undo);
         void reloadAnnotationsRef.current?.();
       } finally {
         busyRef.current = false;
@@ -720,10 +728,7 @@ export function MediaEditor({
           action: speakerId === null ? "inherit" : "assign",
         };
         if (speakerId !== null) body.speaker_id = speakerId;
-        const result = await postForm<{
-          segments: Segment[];
-          progress: { verified: number; total: number };
-        }>(
+        const result = await postForm<RelabelResult>(
           `/review/${runId}/segments/${targetParentId}/relabel`,
           body,
           { claimLostOnConflict: false },
@@ -731,6 +736,8 @@ export function MediaEditor({
         if (!result) return;
         setSegments(result.segments);
         setProgress(result.progress);
+        // A replay carries no undo; keep any toast that is still valid.
+        if (result.undo) setUndoInfo(result.undo);
         void reloadAnnotationsRef.current?.();
         const name = speakers.find((s) => s.id === speakerId)?.displayName;
         setAssignStatus(
@@ -1732,8 +1739,9 @@ export function MediaEditor({
           ]}
         />
       </div>
-      {undoInfo && reviewToken && (
+      {undoInfo && writable && reviewToken && (
         <UndoToast
+          key={undoInfo.kind === "merge" ? undoInfo.mergeNonce : undoInfo.decisionId}
           undo={undoInfo}
           runId={runId}
           reviewToken={reviewToken}
@@ -1741,9 +1749,11 @@ export function MediaEditor({
           onClaimLost={onAnnotationClaimLost}
           onUndone={(data) => {
             setUndoInfo(null);
+            setAssignStatus(null);
             onLabelsChanged(data);
           }}
           onDismiss={() => setUndoInfo(null)}
+          writeGuard={undoWriteGuard}
         />
       )}
       {mergeSuggestion && reviewToken && (
