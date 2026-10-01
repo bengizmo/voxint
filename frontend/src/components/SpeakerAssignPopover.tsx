@@ -171,7 +171,26 @@ export function SpeakerAssignPopover({
         onClose();
       }
     };
-    const onScroll = () => onClose();
+    // The menu is placed against its anchor, so a scroll that moves the anchor
+    // closes it. Scrolls that leave the anchor where it was don't (#716): one
+    // inside the panel (its list, a focused input), or the browser bringing the
+    // focused opener into view. That scroll lands before the anchor is measured,
+    // but its event only fires on the next frame, after this listener exists.
+    const onScroll = (event: Event) => {
+      const panel = panelRef.current;
+      if (event.target instanceof Node && panel?.contains(event.target)) return;
+      const anchor = triggerRef.current;
+      if (anchor?.isConnected) {
+        const now = anchor.getBoundingClientRect();
+        if (
+          Math.abs(now.top - anchorRect.top) < 1 &&
+          Math.abs(now.left - anchorRect.left) < 1
+        ) {
+          return;
+        }
+      }
+      onClose();
+    };
     window.addEventListener("scroll", onScroll, { capture: true, passive: true });
     document.addEventListener("click", onClick);
     document.addEventListener("keydown", onKeyDown, true);
@@ -180,7 +199,7 @@ export function SpeakerAssignPopover({
       document.removeEventListener("click", onClick);
       document.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [onClose]);
+  }, [onClose, anchorRect]);
 
   useEffect(() => {
     if (renaming) {
