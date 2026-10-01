@@ -31,8 +31,17 @@ regexes = [
 # N8 SSRF destination policy tests: RFC1918 addresses are the subject under test
 # (verifying they pass the LLM destination policy for local LLM deployments).
 # These are fake test IPs, not internal infrastructure references.
+#
+# The #664 voiceclone target-voice generator's PEP 723 script lockfile, written
+# by `uv lock --script`: it holds only registry URLs, versions and hashes, and
+# nvidia-curand-cu12's version 10.3.9.90 reads as a 10.x address. It sits on an
+# unmerged feature branch, which CI's full-ref history scan reads. Exempt from
+# this rule only, by exact path: the hostname, NAS-path and domain-string rules
+# still scan it, but a real private address added to this file would be missed,
+# so keep it generated-only.
 paths = [
     '''(^|/)tests/unit/test_llm_destination\.py$''',
+    '''^tools/generate_voiceclone_target_voices\.py\.lock$''',
 ]
 
 [[rules]]
