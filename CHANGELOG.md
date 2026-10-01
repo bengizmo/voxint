@@ -8,12 +8,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ### Fixed
 - **Mouse clicks in the speaker menu no longer get lost.** In the menu that
-  opens from a speaker name in the editor, clicking **Just this segment**, **All
-  segments with this voice**, **Hear this voice**, or **Reset to detected
-  speaker** while the speaker list was open often closed the whole menu or did
-  nothing. Pressing the mouse button collapsed the list, the controls below it
-  moved up, and the click landed somewhere else. The list now stays in place
-  until you pick a speaker or close the menu.
+  opens from a speaker name in the editor, clicking **Just this segment** or
+  **All segments with this voice** closed the whole menu, and clicking **Hear
+  this voice** played nothing. Pressing the mouse button collapsed the speaker
+  list, the controls below it moved up, and the click landed somewhere else.
+  The list now stays in place until you pick a speaker or close the menu.
 - **The tutorial's speaker rail no longer says voice matching did not run**
   (#675). The bundled tutorial run listed one voice as matched automatically
   while the rail's summary said "Voice matching did not run on this recording."
