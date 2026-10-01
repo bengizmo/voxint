@@ -405,6 +405,39 @@ export function MediaEditor({
     }
   }, [popoverTarget]);
 
+  // Roster voices with at least one line in this recording, each mapped to its
+  // first line (issue #571). Lines carry the speaker's display name, which is
+  // unique on the roster. The voice on the popover's own line is left out:
+  // "Hear this voice" already plays it.
+  const speakerExemplars = useMemo(() => {
+    const firstLine = new Map<string, number>();
+    segments.forEach((segment, index) => {
+      if (!firstLine.has(segment.speaker)) firstLine.set(segment.speaker, index);
+    });
+    const exemplars = new Map<string, number>();
+    for (const speaker of speakers) {
+      const index = firstLine.get(speaker.displayName);
+      if (index !== undefined) exemplars.set(speaker.id, index);
+    }
+    return exemplars;
+  }, [segments, speakers]);
+  const comparableSpeakers = useMemo(
+    () =>
+      speakers.filter(
+        (speaker) =>
+          speakerExemplars.has(speaker.id) &&
+          speaker.displayName !== popoverSegment?.speaker,
+      ),
+    [speakers, speakerExemplars, popoverSegment?.speaker],
+  );
+  const hearSpeaker = useCallback(
+    (speakerId: string) => {
+      const index = speakerExemplars.get(speakerId);
+      if (index !== undefined) playerRef.current?.previewSegment(index);
+    },
+    [speakerExemplars],
+  );
+
   const postForm = useFormPost(
     reviewToken,
     writable,
@@ -1624,6 +1657,8 @@ export function MediaEditor({
                 onRename={handlePopoverRename}
                 onClose={closePopover}
                 onHearVoice={capability.seekEnabled ? hearPopoverVoice : undefined}
+                comparableSpeakers={comparableSpeakers}
+                onHearSpeaker={capability.seekEnabled ? hearSpeaker : undefined}
                 disabled={busy || !writable}
               />
             )}

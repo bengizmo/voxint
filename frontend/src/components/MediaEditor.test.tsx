@@ -3,7 +3,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MediaEditor, type MediaEditorProps } from "./MediaEditor";
 import { apiFetch } from "../lib/api-client";
-import type { Segment, TranscriptPlayerProps } from "./TranscriptPlayer";
+import type {
+  Segment,
+  TranscriptPlayerHandle,
+  TranscriptPlayerProps,
+} from "./TranscriptPlayer";
 
 vi.mock("../lib/api-client", async (original) => ({
   ...await original<typeof import("../lib/api-client")>(),
@@ -15,16 +19,29 @@ vi.mock("./AnnotationLayer", () => ({
 vi.mock("./SpeakerRail", () => ({ SpeakerRail: () => null }));
 vi.mock("./OutlinePanel", () => ({ OutlinePanel: () => null }));
 vi.mock("./KeymapHelp", () => ({ KeymapHelp: () => null }));
-vi.mock("./TranscriptPlayer", () => ({
-  TranscriptPlayer: (props: TranscriptPlayerProps) => (
-    <div>{props.segments.map((seg, index) => (
-      <button key={index} onClick={(event) => {
-        event.currentTarget.focus();
-        props.onSpeakerClick?.(index, new DOMRect(0, 0, 100, 20));
-      }}>Speaker {index}: {seg.speaker}</button>
-    ))}</div>
-  ),
-}));
+const player = vi.hoisted(() => ({ previewSegment: vi.fn() }));
+vi.mock("./TranscriptPlayer", async () => {
+  const { useImperativeHandle } = await import("react");
+  return {
+    TranscriptPlayer: (
+      props: TranscriptPlayerProps & { ref?: React.Ref<TranscriptPlayerHandle> },
+    ) => {
+      useImperativeHandle(props.ref, () => ({
+        playSegment: () => {},
+        previewSegment: player.previewSegment,
+        focusCursorRow: () => null,
+      }));
+      return (
+        <div>{props.segments.map((seg, index) => (
+          <button key={index} onClick={(event) => {
+            event.currentTarget.focus();
+            props.onSpeakerClick?.(index, new DOMRect(0, 0, 100, 20));
+          }}>Speaker {index}: {seg.speaker}</button>
+        ))}</div>
+      );
+    },
+  };
+});
 
 const segments = [0, 1].map((index) => ({
   start: index, end: index + 1, speaker: "Alice",
@@ -93,6 +110,41 @@ it("assigns the clicked segment rather than the previous cursor", async () => {
   expect(body().get("speaker_id")).toBe("bob");
   expect(body().get("token")).toBe("claim");
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("offers the other voices named in this recording for comparison", () => {
+  const named = [
+    { ...segments[0], speaker: "Bob" },
+    { ...segments[1], speaker: "Alice" },
+    { ...segments[1], segmentId: "seg-2", sourceSegmentId: "seg-2", speaker: "Bob" },
+  ];
+  player.previewSegment.mockClear();
+  setup({
+    segments: named,
+    speakers: [
+      { id: "alice", displayName: "Alice" },
+      { id: "bob", displayName: "Bob" },
+      { id: "cass", displayName: "Cass" },
+    ],
+  });
+  // The popover opened on line 1 (Alice). Bob has lines here; Cass has none.
+  expect(screen.queryByRole("button", { name: "Hear Alice" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Hear Cass" })).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "Hear Bob" }));
+
+  // Bob's first line, played as a preview (no cursor move, popover stays).
+  expect(player.previewSegment).toHaveBeenCalledExactlyOnceWith(0);
+  expect(screen.getByRole("dialog")).toBeTruthy();
+});
+
+it("offers no comparison when playback cannot seek", () => {
+  setup({
+    segments: [{ ...segments[0], speaker: "Bob" }, segments[1]],
+    capability: { seekEnabled: false, reasons: [], mediaDuration: 2 },
+    speakers: [{ id: "alice", displayName: "Alice" }, { id: "bob", displayName: "Bob" }],
+  });
+  expect(screen.queryByRole("button", { name: "Hear Bob" })).toBeNull();
 });
 
 function renderUnclaimed(overrides: Partial<MediaEditorProps> = {}) {

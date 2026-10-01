@@ -17,6 +17,11 @@ export interface SpeakerAssignPopoverProps {
   onRename: (newName: string) => void;
   onClose: () => void;
   onHearVoice?: () => void;
+  // Roster voices already heard in this recording (issue #571). Each gets a
+  // button that plays one of that speaker's lines, so the operator can compare
+  // before choosing. Omitted when playback cannot seek.
+  comparableSpeakers?: readonly Speaker[];
+  onHearSpeaker?: (speakerId: string) => void;
   disabled?: boolean;
 }
 
@@ -56,6 +61,15 @@ const styles = `
   border: 1px solid var(--line); border-radius: var(--r-sm, 4px);
 }
 .sp-rename-buttons { display: flex; justify-content: flex-end; gap: .25rem; }
+.sp-compare { margin: .25rem 0 0; padding: 0 .5rem; }
+.sp-compare p { margin: 0 0 .25rem; color: var(--ink-2, inherit); }
+.sp-compare ul { display: flex; flex-wrap: wrap; gap: .25rem; margin: 0; padding: 0; list-style: none; }
+.sp-compare button {
+  border: 1px solid var(--line); border-radius: var(--r-sm, 4px);
+  background: transparent; color: inherit; font: inherit;
+  padding: .25rem .5rem; cursor: pointer; overflow-wrap: anywhere;
+}
+.sp-compare button:hover { background: var(--surface-2); }
 `;
 
 export function SpeakerAssignPopover({
@@ -72,6 +86,8 @@ export function SpeakerAssignPopover({
   onRename,
   onClose,
   onHearVoice,
+  comparableSpeakers = [],
+  onHearSpeaker,
   disabled = false,
 }: SpeakerAssignPopoverProps) {
   const uid = useId();
@@ -220,6 +236,25 @@ export function SpeakerAssignPopover({
           >
             ▸ Hear this voice
           </button>
+        )}
+        {onHearSpeaker && comparableSpeakers.length > 0 && (
+          <div className="sp-compare">
+            <p id={`${uid}-compare`}>Compare with a voice named in this recording:</p>
+            <ul aria-labelledby={`${uid}-compare`}>
+              {comparableSpeakers.map((speaker) => (
+                <li key={speaker.id}>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    aria-label={`Hear ${speaker.displayName}`}
+                    onClick={() => onHearSpeaker(speaker.id)}
+                  >
+                    ▸ {speaker.displayName}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
         {currentSpeakerId !== null &&
           (renaming ? (
