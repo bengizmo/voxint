@@ -115,14 +115,15 @@ Dockerfile's `sha256sum -c` gate rejects any mismatch.
 
 ### Release gates wired into the workflow
 
-- **`frontend`** (CI, issue #48) runs `npm ci` → lint → typecheck → `npm run
-  build` (which includes `tsc --noEmit`, `vite build`, and the no-CDN
-  `check-no-cdn-urls.mjs` offline-self-host check over the built `dist/` bytes)
-  → `npm audit --omit=dev --audit-level=high`. It runs independently (no Postgres
-  coupling) on the same footing as `ruff`/`mypy`/`pytest`, on every push and PR.
-  The required status checks enforced on `main` are `lint-test` and `secrets-scan`
-  only; `frontend` is not currently in the required set (a candidate to add). The Dockerfile runs
-  the identical frontend build stage as part of the single image build, so no
+- **`frontend`** (CI, issue #48) runs `npm ci` → lint → typecheck → `npm test`
+  (the vitest suite) → `npm run build` (which includes `tsc --noEmit`,
+  `vite build`, and the no-CDN `check-no-cdn-urls.mjs` offline-self-host check
+  over the built `dist/` bytes) → `npm audit --omit=dev --audit-level=high`. It
+  runs independently (no Postgres coupling) on the same footing as
+  `ruff`/`mypy`/`pytest`, on every push and PR. The required status checks
+  enforced on `main` are `lint-test`, `secrets-scan`, `coverage`, and
+  `frontend` (pinned by `tests/contracts/test_required_ci_checks.py`). The
+  Dockerfile runs the identical frontend build stage as part of the single image build, so no
   standalone release job is needed. Building in both CI and the Dockerfile is
   intentional (CI fails fast without a full Docker build; the Dockerfile stage
   is what ships). A version bump needs **no** frontend rebuild unless
@@ -350,8 +351,8 @@ model assets) voids it for the gate it feeds.
    [`security/audit-2026-08-18.md`](security/audit-2026-08-18.md) for the standing
    findings still open (web console, research, supply chain, media) before cutting.
 2. Open a PR against GitHub `main` with the release commit; when the required
-   checks (`lint-test` + `secrets-scan`) are green, merge it (no reviewer is
-   required). Then sync the private origin: `git fetch github && git push origin
+   checks (`lint-test`, `secrets-scan`, `coverage`, `frontend`) are green, merge
+   it (no reviewer is required). Then sync the private origin: `git fetch github && git push origin
    github/main:main`. GitHub `main` is branch-protected, so the release commit
    lands through the PR, not a direct push.
 3. **Tag**: `git tag -a vX.Y.Z -m "Voxint vX.Y.Z" && git push github vX.Y.Z`

@@ -136,8 +136,8 @@ judged independently:
   multi-model review. A clear fix in a familiar pattern gets a single-model
   review. A change with no plausible blast radius gets no formal panel, only the
   standard gates that already run on every change (local `ruff`, `mypy`, and
-  `pytest`, plus the required CI checks `lint-test`, `secrets-scan`, and
-  `coverage`). When two rows both fit, take the deeper one.
+  `pytest`, plus the required CI checks `lint-test`, `secrets-scan`,
+  `coverage`, and `frontend`). When two rows both fit, take the deeper one.
 - **Browser lane.** Run the [browser E2E lane](#automated-e2e-testse2e) when a
   change alters observable review-console behaviour or a delivery, data, or auth
   contract a console island depends on, or when it changes the browser acceptance
