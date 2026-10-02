@@ -28,9 +28,10 @@ from voxint.adjudication.resolver import (
 from voxint.adjudication.undo import (
     UndoArchivedSpeakerError,
     UndoDriftError,
-    segment_undo_key,
     UndoError,
     UndoExpiredError,
+    segment_undo_key,
+    undo_decision,
     undo_enrollment,
     undo_segment_decision,
 )
@@ -469,6 +470,41 @@ def test_only_undo_writes_may_use_the_undo_key_namespace(
         result = _undo(session, seeded, z.id)
         assert result["is_replay"] is False
         assert _compensation(session, result).idempotency_key == segment_undo_key(z.id)
+
+
+def test_a_label_revoke_under_a_segment_undo_key_is_not_read_as_that_undo(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # Label-scope undos also write under the undo prefix with a client nonce, so
+    # one can occupy a segment ruling's undo key. The replay checks still reject
+    # it: a label REVOKE is not in the segment's scope.
+    seeded = _seed(session_factory)
+    with session_factory() as session:
+        label_rule = record_decision(
+            session,
+            pipeline_run_id=seeded.run_id,
+            diarization_label="S0",
+            decision=Decision.ASSIGN,
+            operator="ben",
+            idempotency_key=uuid.uuid4().hex,
+            speaker_id=seeded.bob,
+        )
+        session.commit()
+        ruling = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
+        undo_decision(
+            session,
+            run_id=seeded.run_id,
+            decision_id=label_rule.id,
+            operator="ben",
+            idempotency_key=segment_undo_key(ruling.id),
+            grace_seconds=_GRACE,
+        )
+        session.commit()
+
+        with pytest.raises(ConflictingReplayError):
+            _undo(session, seeded, ruling.id)
+        session.rollback()
+        assert _segment_speaker(session, seeded) == seeded.alice
 
 
 def test_undoing_an_undo_redoes_the_ruling(

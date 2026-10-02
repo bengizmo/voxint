@@ -733,8 +733,12 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   segment resolvers reduce newest-wins without consulting voids. The
   compensating row records no link to the ruling it undoes, so its idempotency
   key carries that link: a segment undo must use `undo:<decision id>`, and
-  `record_decision` refuses any other write under the `undo:` prefix, so an
-  existing row under that key is always that ruling's undo (issue #726). When any undo
+  `record_decision` refuses a non-undo write under the `undo:` prefix (issue
+  #726). A row under that key is then either that ruling's undo or another
+  undo's row, which the replay checks reject (a label-scope REVOKE is outside
+  the segment's scope). Rows written before this change are not re-checked: a
+  hand-crafted request could have stored a plain ruling under such a key,
+  which the review console never does. When any undo
   is refused with a non-claim 409, the editor refetches
   `GET /review/{run_id}/labels` (the shape every undo returns, read without a
   claim) while it still holds its write guard, and adopts it without clearing
