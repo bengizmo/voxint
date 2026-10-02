@@ -46,7 +46,6 @@ export function useFormPost(
     async <T,>(
       path: string,
       body: Record<string, string>,
-      opts?: { claimLostOnConflict?: boolean },
     ): Promise<T | null> => {
       if (!writable || reviewToken === null) return null;
       try {
@@ -60,14 +59,10 @@ export function useFormPost(
         });
         return (await res.json()) as T;
       } catch (err) {
-        if (err instanceof ApiError && err.status === 409) {
-          if (err.conflictKind === "claim") {
-            onClaimLost();
-          } else if (opts?.claimLostOnConflict === false) {
-            onError(err.detail);
-          } else {
-            onClaimLost();
-          }
+        // Every review write marks a lost claim (#728); any other 409 is a
+        // state conflict the operator can read and act on.
+        if (err instanceof ApiError && err.conflictKind === "claim") {
+          onClaimLost();
         } else {
           onError(err instanceof ApiError ? err.detail : "Request failed.");
         }

@@ -743,3 +743,24 @@ it("clears the overtaken notice when the kept edit is saved as the line's text",
 
   expect(screen.queryByText(/This line changed while you were editing/)).toBeNull();
 });
+
+it.each([
+  ["an unmarked 409 as a state conflict", new ApiError(409, "cannot correct a split segment; remove the split first"), false],
+  ["a marked 409 as a lost claim", new ApiError(409, "Claim taken.", "claim"), true],
+])("reads %s on a text save (#728)", async (_name, error, lost) => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  fireEvent.change(editBox(), { target: { value: "My correction" } });
+  vi.mocked(apiFetch).mockRejectedValueOnce(error);
+
+  fireEvent.keyDown(editBox(), { key: "Enter", ctrlKey: true });
+
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
+  if (lost) {
+    expect(await screen.findByText(/Your claim expired or was taken over/)).toBeTruthy();
+  } else {
+    expect(await screen.findByText(error.detail)).toBeTruthy();
+    expect(screen.queryByText(/Your claim expired or was taken over/)).toBeNull();
+    expect(editBox().value).toBe("My correction");
+  }
+});

@@ -359,6 +359,8 @@ function MergePanel({
       if (err instanceof ApiError && err.conflictKind === "claim") {
         onClaimLost();
       } else {
+        // Never leave an earlier preview confirmable after a failed refresh.
+        setPreview(null);
         setError(err instanceof ApiError ? err.detail : "Preview failed.");
       }
     } finally {

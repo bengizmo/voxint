@@ -171,7 +171,7 @@ it.each(["decide", "enroll"])("%s treats a marked 409 as a lost claim", async (a
 });
 
 it("keeps the claim and clears the preview when the merge drifted (unmarked 409)", async () => {
-  const { props } = setup();
+  const { props, writeGuard } = setup();
   const confirm = await previewMerge();
   vi.mocked(apiFetch).mockRejectedValueOnce(
     new ApiError(409, "label 'SPEAKER_01' changed since you previewed"),
@@ -184,6 +184,9 @@ it("keeps the claim and clears the preview when the merge drifted (unmarked 409)
   expect(props.onLabelsChanged).not.toHaveBeenCalled();
   expect(screen.queryByRole("button", { name: "Confirm merge" })).toBeNull();
   expect(screen.getByRole("button", { name: "Preview merge…" })).toBeTruthy();
+  // The shared guard is released, so the operator can preview again.
+  expect(writeGuard.busyRef.current).toBe(false);
+  expect(writeGuard.setBusy).toHaveBeenLastCalledWith(false);
 });
 
 it.each(["preview", "merge"])("treats a marked 409 on %s as a lost claim", async (stage) => {
@@ -202,4 +205,13 @@ it.each(["preview", "merge"])("treats a marked 409 on %s as a lost claim", async
     fireEvent.click(screen.getByRole("button", { name: "Preview merge…" }));
   }
   await waitFor(() => expect(props.onClaimLost).toHaveBeenCalledOnce());
+});
+
+it("clears an earlier preview when a new preview fails", async () => {
+  setup();
+  await previewMerge();
+  vi.mocked(apiFetch).mockRejectedValueOnce(new ApiError(400, "that speaker no longer exists"));
+  fireEvent.click(screen.getByRole("button", { name: "Preview merge…" }));
+  expect(await screen.findByText("that speaker no longer exists")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Confirm merge" })).toBeNull();
 });

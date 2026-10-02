@@ -618,8 +618,9 @@ def test_merge_validation_and_auth(
 
 _ANY_ID = "00000000-0000-0000-0000-000000000001"
 
-# Every claim-gated write on the review router, with just enough form data to
-# pass validation and reach the claim check (issue #728).
+# The review router's label, merge, segment, enrichment and undo writes, with
+# just enough form data to pass validation and reach the claim check (issue
+# #728). The annotation layer pins its own claim marker in test_annotations_api.
 _CLAIM_GATED_WRITES: list[tuple[str, dict[str, object]]] = [
     ("labels/S0/decision", {"nonce": uuid.uuid4().hex, "action": "exclude"}),
     ("labels/S0/enroll", {"nonce": uuid.uuid4().hex, "display_name": "New Voice"}),
@@ -629,6 +630,15 @@ _CLAIM_GATED_WRITES: list[tuple[str, dict[str, object]]] = [
     (f"segments/{_ANY_ID}/text", {"text": "edited"}),
     ("enrich/names", {}),
     (f"candidates/{_ANY_ID}/decision", {"nonce": uuid.uuid4().hex, "verdict": "accept"}),
+    (f"segments/{_ANY_ID}/relabel", {"nonce": uuid.uuid4().hex, "action": "inherit"}),
+    (f"segments/{_ANY_ID}/split", {"word_index": "1"}),
+    ("undo/enroll", {"csrf_token": "x", "decision_id": _ANY_ID, "nonce": uuid.uuid4().hex}),
+    ("undo/decide", {"csrf_token": "x", "decision_id": _ANY_ID, "nonce": uuid.uuid4().hex}),
+    ("undo/relabel", {"csrf_token": "x", "decision_id": _ANY_ID, "nonce": uuid.uuid4().hex}),
+    (
+        "undo/merge",
+        {"csrf_token": "x", "merge_nonce": uuid.uuid4().hex, "nonce": uuid.uuid4().hex},
+    ),
 ]
 
 
