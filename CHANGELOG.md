@@ -7,17 +7,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
-- **A Markdown export laid out as speaker turns** (#741). `voxint export
-  --format md --style turns`, or `?style=turns` on the Markdown download and
-  on `/api/v1/runs/{id}/transcript?format=md`, writes
-  `[HH:MM:SS] **Name:** text` paragraphs instead of a heading and a
-  blockquote. Speakers are assigned word by word from the stored word timings
-  and diarization turns, so two people who trade remarks inside one transcript
-  segment no longer appear under one name. Speaker assignments and splits you
-  made in review are kept as they are. Long turns break into paragraphs at
-  pauses, and a paragraph that crosses a minute boundary carries an inline
-  minute marker. The default Markdown layout is unchanged; `--style blocks`
-  names it. `docs/operations.md` has the rules and the limits.
+- **A Markdown export laid out as speaker turns** (#741). The Markdown
+  export and the on-screen reading view now show `[HH:MM:SS] **Name:** text`
+  paragraphs, and the Markdown file opens with the recording's title. Speakers are assigned word by word
+  from the stored word timings and diarization turns, so two people who trade
+  remarks inside one transcript segment no longer appear under one name.
+  Speaker assignments and splits you made in review are kept as they are.
+  Long turns break into paragraphs at pauses, and a paragraph that crosses a
+  minute boundary carries an inline minute marker. `voxint export --style`
+  and `?style=` on the Markdown download and on
+  `/api/v1/runs/{id}/transcript?format=md` select the layout.
+  `docs/operations.md` has the rules and the limits.
 - **Compare with a voice from another recording** (#714). The speaker menu
   could only play people who already have a line in the recording you are
   reviewing. It now has a second list, "Compare with a voice from another
@@ -113,6 +113,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   when the undo window runs out.
 
 ### Changed
+- **The default Markdown export is the speaker-turn layout** (#741). A
+  `.md` download, `voxint export --format md` and
+  `/api/v1/runs/{id}/transcript?format=md` now produce the turn layout
+  described under Added, and the reading view renders the same paragraphs.
+  The previous layout, a `##` heading per speaker over a `>` blockquote
+  paragraph, is still available as `--style blocks` (`?style=blocks` over
+  HTTP) and remains the body of annotation pull-quotes. Plain text,
+  subtitle, JSON and RTTM exports are unchanged.
 - **The review console is typechecked with TypeScript 6** (#655, second
   slice). The frontend toolchain moves to typescript 6.0.3 and
   typescript-eslint 8.71.0. TypeScript 7 has to wait: its npm package ships

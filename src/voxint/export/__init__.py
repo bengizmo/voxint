@@ -219,18 +219,13 @@ _MD_ORDERED_LIST = re.compile(r"^(\s*)(\d+)([.)])(?=\s|$)")
 _MD_BLOCK_LEADERS = frozenset({"#", "=", "-", "+"})
 
 
-# EN DASH for the Markdown time range, matching the on-screen transcript view's
-# ``[start-end]``. Written as an escape so it is unambiguous in source (ruff
-# RUF001) while emitting the same byte the reading view uses.
+# EN DASH preserves the legacy blocks Markdown time range bytes.
+# Written as an escape so it is unambiguous in source (ruff RUF001).
 _TIME_RANGE_DASH = "\u2013"
 
 
 def format_timespan(start_seconds: float, end_seconds: float) -> str:
-    """``[HH:MM:SS.mmm\u2013HH:MM:SS.mmm]`` reading-timestamp range.
-
-    The single formatting truth shared by the Markdown export and the on-screen
-    read mode, so the two can never drift on how a paragraph's time span reads.
-    """
+    """``[HH:MM:SS.mmm\u2013HH:MM:SS.mmm]`` range for blocks Markdown exports."""
     start = _timestamp(start_seconds, sep=".")
     end = _timestamp(end_seconds, sep=".")
     return f"[{start}{_TIME_RANGE_DASH}{end}]"
@@ -455,7 +450,11 @@ def to_markdown_turns(
     """Render escaped speaker paragraphs on one physical line each."""
     blocks: list[str] = []
     if header is not None:
-        blocks.append("# " + _md_escape(_normalize_line_breaks(header).replace("\n", " ")))
+        # A title is heading content, so `#` must be escaped too: a trailing
+        # run of hashes is an ATX closing sequence that a renderer would drop
+        # (`# Report ###` renders as "Report"; `# ###` as an empty heading).
+        title = _md_escape(_normalize_line_breaks(header).replace("\n", " "))
+        blocks.append("# " + title.replace("#", "\\#"))
     for paragraph in paragraphs:
         parts: list[str] = []
         if timestamps:

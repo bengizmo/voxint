@@ -293,7 +293,7 @@ contract, ledger writes, a migration, an ASR input).
 | Slice | Content | Gates beyond lint, types, tests and CI |
 |---|---|---|
 | S1 (PR #745) | Projection, reading layout with minute markers, `to_markdown_turns`, shared export entry, `--style turns` as an opt-in with blocks still the default | Old goldens untouched, new goldens, CLI and HTTP parity for both styles |
-| S2 | Default change, header title, read mode, pull-quote contract wording, docs, CHANGELOG Changed entry naming `--style blocks` | Browser acceptance lane, measured numbers on real recordings |
+| S2 (branch `feat/741-s2-default-turns`) | Default change, header title, read mode, pull-quote contract wording, docs, CHANGELOG Changed entry naming `--style blocks` | Browser acceptance lane, measured numbers on real recordings |
 | S3 | `voxint speakers name` | Integration tests on a real database |
 | S4 | Fillers | |
 | S5 | Recording date: migration, PREPARE probe, sidecar key, backfill | Migration up and down |
@@ -421,3 +421,24 @@ Refinements made while implementing, all inside the rules above:
   paragraph timestamps follow.
 - The pull-quote contract wording moved from S2 into S1, because the rename
   to `to_markdown_blocks` lands here.
+
+### Slice 2 acceptance (2026-10-02)
+
+- **Measured on the two reference recordings** with the slice 2 code
+  (corrected text, counts only): 94.4% and 94.3% of words attributed at
+  word level; 179 and 82 paragraphs against the commercial tool's 173 and
+  84; median paragraph 24 and 25 words (reference 22 to 24); longest 111
+  and 115 words. Speaker turns 67 and 30 against 28 and 14 single-name
+  blocks in the old layout, whose longest blocks were 177 s and 132 s. The
+  coarse remainder is two segments that fail word validation (E3) and three
+  reworded two-speaker segments (E6); the manual read found no other
+  paragraph holding two speakers.
+- **Browser lane** (`voxint-e2e-review`, `--fixture editor`, 30 segments,
+  four labels): read mode renders 28 paragraphs with the name in bold and a
+  clock each, no `<h2>`, no transcript island; the reading-view toggles keep
+  their hrefs; `timestamps=false` removes every clock; the export menu's
+  Markdown links download the turn layout under a `# <title>` header, with
+  and without timestamps; `style=blocks` reproduces the old layout; `style`
+  on `.txt` answers 422. No writes, so no reconcile; teardown left the tree
+  clean.
+- The header carries the title only. The date arrives with slice 5.

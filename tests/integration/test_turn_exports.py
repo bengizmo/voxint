@@ -1,4 +1,4 @@
-"""Real-database parity for opt-in speaker-turn exports and translations."""
+"""Real-database parity for default speaker-turn exports and translations."""
 
 import uuid
 from pathlib import Path
@@ -11,8 +11,9 @@ from tests.integration.test_translation_jobs import record_spanish, seed_run
 from tests.integration.test_translation_view_export import _build_client, _stale_edit
 from voxint.adjudication.ledger import record_decision
 from voxint.adjudication.splits import record_split
+from voxint.api.presentation import friendly_media_label
 from voxint.cli import main
-from voxint.db.models import Decision, DiarizationTurn, Speaker, TranscriptSegment
+from voxint.db.models import Decision, DiarizationTurn, PipelineRun, Speaker, TranscriptSegment
 
 
 def seed_words(session: Session, *, split: bool = False) -> uuid.UUID:
@@ -57,6 +58,10 @@ def test_three_surface_parity_and_default(
 ) -> None:
     with session_factory() as session:
         run_id = seed_words(session)
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        # The production title rule, not an ad hoc basename.
+        title = friendly_media_label(None, run.media_item.source_path)
     client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
     # Use the fixture's disposable DB, including its worker-specific name.
     monkeypatch.setattr("voxint.cli._engine_or_report", lambda: (
@@ -79,11 +84,11 @@ def test_three_surface_parity_and_default(
         assert console.status_code == public.status_code == 200
         assert cli_body == console.content == public.content
         bodies[style] = cli_body
-    assert bodies[""] == bodies["blocks"]
+    assert bodies[""] == bodies["turns"]
     bracket = "[00:00:00.000\u201300:00:05.000] " if timestamps else ""
-    assert bodies[""] == f"## Alex\n\n> {bracket}Hello there.\n".encode()
+    assert bodies["blocks"] == f"## Alex\n\n> {bracket}Hello there.\n".encode()
     a, b = ("[00:00:00] ", "[00:00:01] ") if timestamps else ("", "")
-    assert bodies["turns"] == f"{a}**Alex:** Hello\n\n{b}**Sam:** there.\n".encode()
+    assert bodies["turns"] == f"# {title}\n\n{a}**Alex:** Hello\n\n{b}**Sam:** there.\n".encode()
 
 
 def test_invalid_style_options(
@@ -113,14 +118,20 @@ def test_invalid_style_options(
         assert missing.status_code == 404
 
 
+@pytest.mark.parametrize("timestamps", [True, False])
 @pytest.mark.parametrize("split", [False, True])
 def test_translated_turns_and_staleness(
     session_factory: sessionmaker[Session], split: bool, monkeypatch: pytest.MonkeyPatch,
+    timestamps: bool,
 ) -> None:
     with session_factory() as session:
         run_id = seed_words(session, split=split)
         record_spanish(session, run_id)
         session.commit()
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        # The production title rule, not an ad hoc basename.
+        title = friendly_media_label(None, run.media_item.source_path)
     client = _build_client(session_factory)
     def no_job_lookup(*args: object) -> None:
         pytest.fail("fresh or stale translation must not query job history")
@@ -128,13 +139,19 @@ def test_translated_turns_and_staleness(
     monkeypatch.setattr(
         "voxint.api.routers.adjudication_api.active_or_last_translation_job", no_job_lookup,
     )
-    response = client.get(f"/review/{run_id}/export.md?lang=es&style=turns")
+    params = {"lang": "es", "timestamps": str(timestamps).lower()}
+    response = client.get(f"/review/{run_id}/export.md", params={**params, "style": "turns"})
+    default = client.get(f"/review/{run_id}/export.md", params=params)
+    assert default.status_code == 200
+    assert default.content == response.content
     assert response.status_code == 200
     expected = (
         "[00:00:00] **Alex:** ES:Hello\n\n[00:00:01] **Sam:** ES:there.\n"
         if split else "[00:00:00] **Alex:** ES:Hello there.\n"
     )
-    assert response.text == expected
+    if not timestamps:
+        expected = expected.replace("[00:00:00] ", "").replace("[00:00:01] ", "")
+    assert response.text == f"# {title}\n\n{expected}"
     # Directly alter evidence to exercise the existing stale hash response.
     with session_factory() as session:
         segment = session.scalars(select(TranscriptSegment).where(
@@ -164,3 +181,27 @@ def test_translation_count_mismatch_is_same_409(
     _stale_edit(session_factory, run_id)
     stale = client.get(f"/review/{run_id}/export.md?lang=es&style={style}")
     assert mismatch.json() == stale.json()
+
+
+@pytest.mark.parametrize("snapshot, expected_title", [
+    ({"title": "  Synthetic title  "}, "Synthetic title"),
+    ({"title": "Report ###"}, "Report \\#\\#\\#"),
+    ({"title": "   "}, "Synthetic recording.wav"),
+    ({"title": 42}, "Synthetic recording.wav"),
+])
+def test_turn_header_title_selection(
+    session_factory: sessionmaker[Session], snapshot: dict[str, object], expected_title: str,
+) -> None:
+    with session_factory() as session:
+        run_id = seed_words(session)
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        run.sidecar = snapshot
+        run.media_item.source_path = "incoming/Synthetic%20recording.wav"
+        session.commit()
+    client = _build_client(session_factory)
+    response = client.get(f"/review/{run_id}/export.md", params={"timestamps": "false"})
+    assert response.status_code == 200
+    assert response.content == (
+        f"# {expected_title}\n\n**Alex:** Hello\n\n**Sam:** there.\n"
+    ).encode()
