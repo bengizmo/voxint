@@ -688,20 +688,24 @@ export function MediaEditor({
     setError(null);
     try {
       const index = cursor;
+      const segmentId = current.segmentId;
       const edit = editText;
       const result = await postJson(
-        `/review/${runId}/segments/${current.segmentId}/verify`,
+        `/review/${runId}/segments/${segmentId}/verify`,
         { verified: "true" },
       );
       if (!result) return;
       const patched = applyResult(index, result);
       setConfirmDiscard(false);
       if (walkMode) {
-        // Typing during the verify is an edit the operator never agreed to
-        // drop, so stay with it. A warning raised meanwhile by another move
-        // is not consent for this advance either.
+        // Advance only from the verified line with the box as it was: a move
+        // or typing during the verify belongs to the operator, and a warning
+        // another move raised meanwhile is not consent for this advance.
         const next = nextTarget(patched, index + 1);
-        if (next >= 0 && editTextRef.current === edit && goTo(next)) {
+        const unchanged =
+          currentRef.current?.segmentId === segmentId &&
+          editTextRef.current === edit;
+        if (next >= 0 && unchanged && goTo(next)) {
           keyboardNavRef.current = true;
         }
       }

@@ -948,3 +948,30 @@ it("discards on a second press that lands before React re-renders", () => {
   });
   expect(editBox().value).toBe("Text 1");
 });
+
+it("does not advance from a line the operator moved to during a verify", async () => {
+  const three = [0, 1, 2].map((index) => ({ ...segments[0], start: index,
+    end: index + 1, segmentId: `seg-${index}`, sourceSegmentId: `seg-${index}`,
+    text: `Text ${index}` }));
+  setup({ segments: three, initialProgress: { verified: 0, total: 3 } });
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  let respond: (value: Response) => void = () => {};
+  vi.mocked(apiFetch).mockReturnValueOnce(new Promise<Response>((r) => { respond = r; }));
+  fireEvent.keyDown(document.body, { key: "v" });
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
+  // Move to line 2 and leave the very text line 0 had, then warn once.
+  act(() => { player.onSegmentSelect?.(2); });
+  fireEvent.change(editBox(), { target: { value: "Text 0" } });
+  act(() => { player.onSegmentSelect?.(1); });
+
+  await act(async () => {
+    respond({
+      json: async () => ({
+        verified: true, corrected: false, text: "Text 0", progress: { verified: 1, total: 3 },
+      }),
+    } as unknown as Response);
+  });
+
+  expect(editBox().value).toBe("Text 0");
+  expect(screen.getByText(/segment at 2\.00s/)).toBeTruthy();
+});
