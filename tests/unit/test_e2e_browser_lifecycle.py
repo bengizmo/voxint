@@ -10,11 +10,14 @@ derivation, and the build (un)staging that must always preserve ``.gitkeep``.
 from __future__ import annotations
 
 import argparse
+import io
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import wave
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -24,14 +27,18 @@ from tools.e2e_browser_lifecycle import (
     _EDITOR_SPLIT_ELIGIBLE,
     FIXTURE_CHOICES,
     GITKEEP,
+    VOICE_BLAIR_HZ,
+    VOICE_DANA_HZ,
     Expectation,
     _admin_url,
     _benchmark_segments,
     _faithful_word_timings,
     _guarded,
     _silent_wav_bytes,
+    _tone_wav_bytes,
     assert_disposable_db,
     build_parser,
+    cmd_reclaim_source,
     cmd_reconcile,
     cmd_seed,
     cmd_serve,
@@ -212,6 +219,7 @@ def test_cmd_reconcile_exits_on_bad_run_id() -> None:
             ["reconcile", "--database-url", _DISPOSABLE, "--run-id", "x", "--expect", "{}"],
             cmd_reconcile,
         ),
+        (["reclaim-source", "--database-url", _DISPOSABLE, "--run-id", "x"], cmd_reclaim_source),
         (["teardown"], cmd_teardown),
     ],
 )
@@ -280,7 +288,7 @@ def test_benchmark_segments_custom_count() -> None:
 
 
 def test_fixture_choices_tuple() -> None:
-    assert FIXTURE_CHOICES == ("review", "editor", "benchmark", "rail")
+    assert FIXTURE_CHOICES == ("review", "editor", "benchmark", "rail", "voices")
 
 
 def test_parser_seed_fixture_flag() -> None:
@@ -447,3 +455,32 @@ def test_stop_port_keeps_signalling_past_a_foreign_listener(
     monkeypatch.setattr("tools.e2e_browser_lifecycle._port_accepting", lambda port: False)
     stop_port(8099)
     assert signalled == [4242]
+
+
+def test_tone_wav_bytes_has_distinct_deterministic_speaker_frequencies() -> None:
+    spans = ((5.0, VOICE_DANA_HZ), (5.0, VOICE_BLAIR_HZ))
+    payload = _tone_wav_bytes(spans)
+    assert payload == _tone_wav_bytes(spans)
+    with wave.open(io.BytesIO(payload), "rb") as wav:
+        assert (wav.getframerate(), wav.getnchannels(), wav.getsampwidth()) == (16000, 1, 2)
+        assert wav.getnframes() == 160000
+        halves = [wav.readframes(80000), wav.readframes(80000)]
+    assert halves[0] != halves[1]
+    for pcm, (seconds, hz) in zip(halves, spans, strict=True):
+        samples = [value for (value,) in struct.iter_unpack("<h", pcm) if value != 0]
+        crossings = sum((a < 0) != (b < 0) for a, b in pairwise(samples))
+        assert crossings == pytest.approx(2 * hz * seconds, abs=2)
+
+
+def test_cmd_reclaim_source_exits_on_bad_run_id() -> None:
+    args = argparse.Namespace(database_url=_DISPOSABLE, run_id="not-a-uuid")
+    with pytest.raises(SystemExit) as exc:
+        cmd_reclaim_source(args)
+    assert exc.value.code == 1
+
+
+def test_cmd_reclaim_source_exits_on_non_disposable_url() -> None:
+    args = argparse.Namespace(database_url="postgresql+psycopg://localhost/voxint")
+    with pytest.raises(SystemExit) as exc:
+        cmd_reclaim_source(args)
+    assert exc.value.code == 1

@@ -12,21 +12,31 @@ production write path is caught here.
 
 from __future__ import annotations
 
+import io
 import uuid
+import wave
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 from tools.e2e_browser_lifecycle import (
     _EDITOR_SEGMENTS,
     _EDITOR_SPLIT_ELIGIBLE,
     _RAIL_SEGMENTS,
     _SEED_SEGMENTS,
+    VOICE_BLAIR_NAME,
+    VOICE_DANA_NAME,
     Expectation,
+    _silent_wav_bytes,
+    reclaim_source_run,
     reconcile_run,
     seed_browser_run,
+    seed_voice_source,
 )
 
+from tests.integration.conftest import seed_onboarded
 from voxint.adjudication.ledger import record_decision
 from voxint.adjudication.resolver import (
     Resolution,
@@ -35,6 +45,8 @@ from voxint.adjudication.resolver import (
 )
 from voxint.adjudication.review_state import set_correction, set_verified
 from voxint.adjudication.splits import splittable_words
+from voxint.api.app import create_app
+from voxint.config import Settings
 from voxint.db.models import (
     ArtifactKind,
     AudioArtifact,
@@ -46,6 +58,7 @@ from voxint.db.models import (
     Speaker,
     TranscriptSegment,
 )
+from voxint.media.reclaim import run_intermediate_reclaimed_at
 from voxint.speakers.matching import MatchingGates
 from voxint.speakers.policy import MatchBand
 
@@ -540,3 +553,148 @@ def test_reconcile_passes_with_zero_annotations_expected(
     )
     with session_factory() as session:
         assert reconcile_run(session, run_id, expect) == []
+
+
+@pytest.fixture()
+def voice_client(session_factory: sessionmaker[Session], tmp_path: Path) -> TestClient:
+    seed_onboarded(session_factory)
+    client = TestClient(
+        create_app(
+            settings=Settings(
+                voxint_user="reviewer",
+                voxint_password="s3cret",
+                media_root=tmp_path,
+                csrf_secret="e2e-voices-test-key",
+            ),
+            session_factory=session_factory,
+        )
+    )
+    client.auth = ("reviewer", "s3cret")
+    return client
+
+
+def test_voices_seed_serves_exact_samples_and_reclaims_source(
+    session_factory: sessionmaker[Session], tmp_path: Path, voice_client: TestClient
+) -> None:
+    with session_factory() as session:
+        run_id, media_id = seed_browser_run(session, tmp_path, fixture="voices")
+        speakers = {s.display_name: s.id for s in session.query(Speaker).all()}
+        assert set(speakers) == {"Ada Roster", VOICE_DANA_NAME, VOICE_BLAIR_NAME}
+        source = session.query(PipelineRun).filter(PipelineRun.id != run_id).one()
+        source_id = source.id
+        assert source.status == RunStatus.COMPLETED.value
+        source_media = session.get(MediaItem, source.media_item_id)
+        assert source_media is not None
+        assert source_media.duration_seconds == 10.0
+        assert source_media.created_at < datetime.now(UTC) - timedelta(days=29)
+        assert source.updated_at < datetime.now(UTC) - timedelta(days=29)
+        source_path = tmp_path / f"artifacts/{source_id}/normalized.wav"
+        assert (tmp_path / source_media.source_path).read_bytes() == source_path.read_bytes()
+        current_path = tmp_path / f"artifacts/{run_id}/normalized.wav"
+        assert current_path.read_bytes() == _silent_wav_bytes(25.0)
+        assert [
+            (s.diarization_label, s.raw_text, s.confidence) for s in _segments(session, run_id)
+        ] == list(_SEED_SEGMENTS)
+        assert _segments(session, run_id)[0].correction_trace is not None
+        states = {state.label: state for state in label_states(session, run_id)}
+        assert states["S0"].resolution is Resolution.UNRESOLVED
+        assert states["S1"].speaker_name == VOICE_BLAIR_NAME
+
+    with wave.open(str(source_path), "rb") as wav:
+        assert wav.getnframes() == 160000
+        expected = [wav.readframes(80000), wav.readframes(80000)]
+    assert expected[0] != expected[1]
+    base = f"/media/{media_id}/editor"
+    wanted = {str(speakers[VOICE_DANA_NAME]), str(speakers[VOICE_BLAIR_NAME])}
+    listed = voice_client.get(f"{base}/voice-samples")
+    assert listed.status_code == 200
+    assert set(listed.json()["speakerIds"]) == wanted
+    for name, pcm in zip((VOICE_DANA_NAME, VOICE_BLAIR_NAME), expected, strict=True):
+        response = voice_client.get(f"{base}/voice-sample/{speakers[name]}")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "audio/wav"
+        with wave.open(io.BytesIO(response.content), "rb") as wav:
+            assert (wav.getframerate(), wav.getnchannels(), wav.getsampwidth()) == (16000, 1, 2)
+            assert wav.getnframes() == 80000
+            assert wav.readframes(80000) == pcm
+    absent = voice_client.get(f"{base}/voice-sample/{speakers['Ada Roster']}")
+    assert absent.status_code == 404
+    assert absent.json() == {"detail": "no_voice_sample"}
+
+    with session_factory() as session:
+        assert reclaim_source_run(session, tmp_path, source_id) == []
+        assert run_intermediate_reclaimed_at(session, source_id) is not None
+        assert run_intermediate_reclaimed_at(session, run_id) is None
+    assert not source_path.exists()
+    assert current_path.is_file()
+    listed = voice_client.get(f"{base}/voice-samples")
+    assert listed.status_code == 200
+    assert set(listed.json()["speakerIds"]) == wanted
+    for speaker_id in wanted:
+        response = voice_client.get(f"{base}/voice-sample/{speaker_id}")
+        assert response.status_code == 410
+        assert response.json() == {"detail": "voice_sample_gone"}
+
+
+def test_voices_seed_reconciles_only_with_seeded_ruling(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory() as session:
+        run_id, _ = seed_browser_run(session, tmp_path, fixture="voices")
+        expect = Expectation(
+            verified_indexes=frozenset(),
+            corrections={},
+            progress=(0, 5),
+            label_rulings={"S1": ("assign", VOICE_BLAIR_NAME)},
+        )
+        assert reconcile_run(session, run_id, expect) == []
+        empty = Expectation(
+            verified_indexes=frozenset(),
+            corrections={},
+            progress=(0, 5),
+            label_rulings={},
+        )
+        assert reconcile_run(session, run_id, empty) == [
+            "label S1: unexpected unlisted ruling 'assign'"
+        ]
+
+
+def test_reclaim_source_unknown_run_leaves_all_audio_untouched(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory() as session:
+        seed_browser_run(session, tmp_path, fixture="voices")
+        unknown = uuid.uuid4()
+        assert reclaim_source_run(session, tmp_path, unknown) == [
+            f"no preprocessed audio found for run {unknown}"
+        ]
+        for artifact in session.query(AudioArtifact).all():
+            assert artifact.reclaimed_at is None
+            assert (tmp_path / artifact.path).is_file()
+
+
+def test_reclaim_source_reports_other_newly_reclaimed_runs(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory() as session:
+        current, _ = seed_browser_run(session, tmp_path, fixture="voices")
+        source = session.query(PipelineRun).filter(PipelineRun.id != current).one().id
+        speakers = {s.display_name: s.id for s in session.query(Speaker).all()}
+        other = seed_voice_source(session, tmp_path, speakers)
+        session.commit()
+        assert reclaim_source_run(session, tmp_path, source) == [
+            f"unexpectedly reclaimed preprocessed audio of run {other}"
+        ]
+        # Already stamped artifacts are not collateral changes on a later call.
+        assert reclaim_source_run(session, tmp_path, source) == []
+
+
+def test_reclaim_source_reports_unaged_target(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory() as session:
+        run_id, _ = seed_browser_run(session, tmp_path)
+        assert reclaim_source_run(session, tmp_path, run_id) == [
+            f"normalized audio of run {run_id} was not reclaimed"
+        ]
+        assert (tmp_path / f"artifacts/{run_id}/normalized.wav").is_file()
