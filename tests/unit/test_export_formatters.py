@@ -570,6 +570,9 @@ def test_turn_markdown_goldens() -> None:
         "**Alex:** Hello.\n\n**Sam:** Hi. Still here.\n\nContinuing.\n"
     )
     assert to_markdown_turns([], "Title | 2 Oct 2026") == "# Title \\| 2 Oct 2026\n"
+    # Hashes in a title are content, never an ATX closing sequence.
+    assert to_markdown_turns([], "Report ###") == "# Report \\#\\#\\#\n"
+    assert to_markdown_turns([], "###") == "# \\#\\#\\#\n"
     assert to_markdown_turns([]) == ""
 
 
@@ -586,7 +589,7 @@ def test_turn_markdown_hostile_and_multiline() -> None:
         "\\*\\_\\[\\]\\|&lt;&gt;&amp; # forged final\n\n"
         "\\# forged\n\n1\\. forged\n"
     )
-    assert to_markdown_turns([], "Title\r\n# forged") == "# Title # forged\n"
+    assert to_markdown_turns([], "Title\r\n# forged") == "# Title \\# forged\n"
 
 
 def test_turn_markdown_header_with_paragraph() -> None:

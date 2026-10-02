@@ -8,8 +8,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ### Added
 - **A Markdown export laid out as speaker turns** (#741). The Markdown
-  export and the on-screen reading view now write `[HH:MM:SS] **Name:** text`
-  paragraphs under the recording's title. Speakers are assigned word by word
+  export and the on-screen reading view now show `[HH:MM:SS] **Name:** text`
+  paragraphs, and the Markdown file opens with the recording's title. Speakers are assigned word by word
   from the stored word timings and diarization turns, so two people who trade
   remarks inside one transcript segment no longer appear under one name.
   Speaker assignments and splits you made in review are kept as they are.

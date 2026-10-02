@@ -30,6 +30,7 @@ from voxint.adjudication.resolver import (
 )
 from voxint.adjudication.transcript import TranscriptText, parse_transcript_text
 from voxint.api.app import create_app
+from voxint.api.presentation import friendly_media_label
 from voxint.api.runs_query import Cursor, list_runs
 from voxint.config import Settings
 from voxint.db.models import (
@@ -1365,6 +1366,18 @@ def test_transcript_read_mode_escapes_hostile_text(
     assert "&lt;script&gt;" in body
 
 
+def test_transcript_read_mode_empty_projection_shows_empty_message(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # Read mode gates on its own rows: a run whose only segment renders no
+    # text yields the empty message, never an empty reading container.
+    with session_factory() as session:
+        run_id = make_run(session, labels=["S0"], segments=[("S0", "   ", None)])
+    body = client.get(f"/runs/{run_id}/transcript", params={"read": "1", "text": "raw"}).text
+    assert "No transcript segments for this run." in body
+    assert '<div class="read-mode">' not in body
+
+
 def test_transcript_read_mode_empty_run(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
@@ -1396,7 +1409,7 @@ def test_export_md_route_bytes_and_media_type(
         )
         run = session.get(PipelineRun, run_id)
         assert run is not None
-        title = run.media_item.source_path.rsplit("/", 1)[-1]
+        title = friendly_media_label(None, run.media_item.source_path)
     ts0 = format_timespan(0.0, 8.0)
     ts1 = format_timespan(10.0, 18.0)
     expected = f"## S0\n\n> {ts0} hello\n\n## S1\n\n> {ts1} bye\n"

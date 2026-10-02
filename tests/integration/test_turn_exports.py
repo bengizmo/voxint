@@ -11,6 +11,7 @@ from tests.integration.test_translation_jobs import record_spanish, seed_run
 from tests.integration.test_translation_view_export import _build_client, _stale_edit
 from voxint.adjudication.ledger import record_decision
 from voxint.adjudication.splits import record_split
+from voxint.api.presentation import friendly_media_label
 from voxint.cli import main
 from voxint.db.models import Decision, DiarizationTurn, PipelineRun, Speaker, TranscriptSegment
 
@@ -59,7 +60,8 @@ def test_three_surface_parity_and_default(
         run_id = seed_words(session)
         run = session.get(PipelineRun, run_id)
         assert run is not None
-        title = Path(run.media_item.source_path).name
+        # The production title rule, not an ad hoc basename.
+        title = friendly_media_label(None, run.media_item.source_path)
     client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
     # Use the fixture's disposable DB, including its worker-specific name.
     monkeypatch.setattr("voxint.cli._engine_or_report", lambda: (
@@ -128,7 +130,8 @@ def test_translated_turns_and_staleness(
         session.commit()
         run = session.get(PipelineRun, run_id)
         assert run is not None
-        title = Path(run.media_item.source_path).name
+        # The production title rule, not an ad hoc basename.
+        title = friendly_media_label(None, run.media_item.source_path)
     client = _build_client(session_factory)
     def no_job_lookup(*args: object) -> None:
         pytest.fail("fresh or stale translation must not query job history")
@@ -182,6 +185,7 @@ def test_translation_count_mismatch_is_same_409(
 
 @pytest.mark.parametrize("snapshot, expected_title", [
     ({"title": "  Synthetic title  "}, "Synthetic title"),
+    ({"title": "Report ###"}, "Report \\#\\#\\#"),
     ({"title": "   "}, "Synthetic recording.wav"),
     ({"title": 42}, "Synthetic recording.wav"),
 ])

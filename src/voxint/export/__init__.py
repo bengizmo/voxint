@@ -450,7 +450,11 @@ def to_markdown_turns(
     """Render escaped speaker paragraphs on one physical line each."""
     blocks: list[str] = []
     if header is not None:
-        blocks.append("# " + _md_escape(_normalize_line_breaks(header).replace("\n", " ")))
+        # A title is heading content, so `#` must be escaped too: a trailing
+        # run of hashes is an ATX closing sequence that a renderer would drop
+        # (`# Report ###` renders as "Report"; `# ###` as an empty heading).
+        title = _md_escape(_normalize_line_breaks(header).replace("\n", " "))
+        blocks.append("# " + title.replace("#", "\\#"))
     for paragraph in paragraphs:
         parts: list[str] = []
         if timestamps:

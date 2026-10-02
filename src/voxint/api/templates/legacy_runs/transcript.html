@@ -63,7 +63,7 @@
 
 {{ export_menu(run, text, translation_ctx.fresh) }}
 
-{% if not lines %}
+{% if (read and not read_rows) or (not read and not lines) %}
 <p>No transcript segments for this run.</p>
 {% elif read %}
 {# Shared reading paragraphs: Python decides grouping, clocks and markers;

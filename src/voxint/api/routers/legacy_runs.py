@@ -1098,12 +1098,14 @@ def run_transcript(
         variant = parse_transcript_text(text)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    # Keep lines for the empty check and translation context; load them once.
-    lines = attributed_transcript(session, run_id, text=variant)
     settings: Settings = request.app.state.settings
     if read:
-        # Share the Markdown reading layout. Grouping and clock formatting stay
-        # in Python; the template lays out rows with Jinja autoescape.
+        # Read mode (issues #65, #741): the same paragraphs as the Markdown
+        # export, from the word-level turn projection, rendered server-side.
+        # Grouping, clocks and minute markers are decided in Python; the
+        # template only lays out rows, and Jinja autoescape keeps hostile
+        # transcript text literal. One attribution walk: the segment-level
+        # lines are not loaded here.
         read_rows = [
             {
                 "speaker": None if para.continuation else para.speaker,
@@ -1127,7 +1129,7 @@ def run_transcript(
             {
                 "request": request,
                 "run": run,
-                "lines": lines,
+                "lines": None,
                 "read": True,
                 "read_rows": read_rows,
                 "read_timestamps": timestamps,
@@ -1135,12 +1137,19 @@ def run_transcript(
                 "variants": list(TranscriptText),
                 # Reading view stays original-language (no interleave), but
                 # the export menu still lists fresh translated downloads.
+                # The line count only matters for an interleaved translation,
+                # which the reading view never shows.
                 "translation_ctx": _transcript_translation_context(
-                    session, run_id, variant, len(lines), None
+                    session, run_id, variant, 0, None
                 ),
                 "active_nav": "runs",
             },
         )
+    # Compute once, reuse for both the server-rendered fallback (`lines`) and
+    # the island props (avoids a double query). The transcript-player island
+    # (issue #48) reuses the already-auth-gated, Range-capable GET /media
+    # for its <audio src>; no new backend route.
+    lines = attributed_transcript(session, run_id, text=variant)
     # Fail-closed seek gating (issue #55): the island only offers per-line
     # playback when GET /media would truly serve and the timeline is sound.
     capability = playback_capability(session, run, settings, _get_media_gate(request))
