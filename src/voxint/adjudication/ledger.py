@@ -25,6 +25,13 @@ class ConflictingReplayError(Exception):
         self.idempotency_key = idempotency_key
 
 
+# Idempotency keys in this namespace belong to undo writes (issue #726). A
+# segment undo binds its key to the ruling it undoes, ``undo:<decision id>``,
+# and accepts an existing row under that key as its own replay, so no other
+# writer may store a key there.
+UNDO_KEY_PREFIX = "undo:"
+
+
 class WordRangeError(ValueError):
     """A word-range scope is malformed or out of the parent's word bounds.
 
@@ -91,6 +98,7 @@ def record_decision(
     end_word_index: int | None = None,
     voids_decision_id: uuid.UUID | None = None,
     user_id: uuid.UUID | None = None,
+    is_undo: bool = False,
 ) -> AdjudicationDecision:
     """Append a ruling; replaying an identical request returns the existing row.
 
@@ -111,7 +119,12 @@ def record_decision(
     derivable word count bounds ``end`` (``0 <= start < end <= word_count``). The
     DB CHECK backstops pairing and ``end > start >= 0``; the ``end <= word_count``
     upper bound lives here because the CHECK cannot count a segment's words.
+
+    Keys starting with ``UNDO_KEY_PREFIX`` are reserved for undo writes, which
+    pass ``is_undo=True``; any other write under one is a conflict (#726).
     """
+    if idempotency_key.startswith(UNDO_KEY_PREFIX) and not is_undo:
+        raise ConflictingReplayError(idempotency_key)
     _validate_word_range(
         session,
         pipeline_run_id,

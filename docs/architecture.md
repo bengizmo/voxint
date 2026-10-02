@@ -730,7 +730,11 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   `undo_segment_decision` appends a compensating row in the exact scope that
   re-asserts the previous newest row there (the earlier `assign`'s speaker, or
   `inherit` when there was none), because a REVOKE stays label-shaped and the
-  segment resolvers reduce newest-wins without consulting voids. When any undo
+  segment resolvers reduce newest-wins without consulting voids. The
+  compensating row records no link to the ruling it undoes, so its idempotency
+  key carries that link: a segment undo must use `undo:<decision id>`, and
+  `record_decision` refuses any other write under the `undo:` prefix, so an
+  existing row under that key is always that ruling's undo (issue #726). When any undo
   is refused with a non-claim 409, the editor refetches
   `GET /review/{run_id}/labels` (the shape every undo returns, read without a
   claim) while it still holds its write guard, and adopts it without clearing

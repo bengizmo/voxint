@@ -7,6 +7,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **A retried line undo can no longer report the wrong change as undone**
+  (#726). The request key of a line speaker undo is now tied to the change
+  it undoes, and other changes can no longer use keys reserved for undos,
+  so reusing one change's undo key for another is refused instead of being
+  read as a repeat of the first. The review console already sends matching
+  keys, so nothing changes in normal use.
 - **An unsaved edit survives a speaker change elsewhere** (#726). If the
   line you were editing got new text from a speaker-panel change, an undo
   or a reload of the recording's state, the edit box used to reset to that
