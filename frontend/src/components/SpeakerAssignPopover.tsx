@@ -68,7 +68,7 @@ const styles = `
 .sp-rename-buttons { display: flex; justify-content: flex-end; gap: .25rem; }
 .sp-compare { margin: .25rem 0 0; padding: 0 .5rem; }
 .sp-compare p { margin: 0 0 .25rem; color: var(--ink-2, inherit); }
-.sp-compare-other summary { cursor: pointer; color: var(--ink-2, inherit); }
+.sp-compare-other summary { margin: 0 0 .25rem; cursor: pointer; color: var(--ink-2, inherit); }
 .sp-compare ul { display: flex; flex-wrap: wrap; gap: .25rem; margin: 0; padding: 0; list-style: none; }
 .sp-compare button {
   border: 1px solid var(--line); border-radius: var(--r-sm, 4px);

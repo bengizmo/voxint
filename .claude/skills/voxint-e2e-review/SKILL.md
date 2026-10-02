@@ -11,8 +11,9 @@ description: >-
   controls, the keyboard-shortcuts cheat-sheet modal (#51: open via `?` or the
   button, focus trap, Escape/close/backdrop dismiss), or the waveform strip
   (#57: peaks fetch, region click → selection,
-  playhead/cursor sync) — or when a Gate E release check calls for the browser
-  lane. Serial only on maintainer hardware; never public CI.
+  playhead/cursor sync), or the speaker menu's voice from another recording
+  (#714: `--fixture voices`) — or when a Gate E release check calls for the
+  browser lane. Serial only on maintainer hardware; never public CI.
 ---
 
 # Voxint browser E2E review lane
@@ -246,6 +247,71 @@ Reconcile with the rulings you made, for example:
   "S5":{"decision":"assign","speaker":"Blair Roster"},"S3":{"decision":"unknown","speaker":null},
   "S4":{"decision":"exclude","speaker":null},"S2":{"decision":"unknown","speaker":null}}}'
 # → ok: 0 of 12 verified; corrections match; 5 label ruling(s) match / RECONCILE PASS
+```
+
+### Voice from another recording (#714)
+
+Seed with `--fixture voices`. It prints `RUN_ID`/`MEDIA_ID` for the run the lane
+opens (the 5-segment review run, with S1 already confirmed as Blair Roster) and
+`VOICE_SOURCE_RUN_ID` for a second, 30-day-old recording the lane never opens.
+In that recording Dana Roster and Blair Roster are confirmed over 5 s tones of
+440 Hz and 880 Hz. This flow is read-only: reconcile both runs **before and
+after** with the same expectation.
+
+Instrument before the first click (`browser_evaluate`): wrap `play()`/`pause()`
+on the main `audio[data-run-id]`, and replace `window.Audio` with a wrapper that
+records the element the sampler creates and its `play`/`pause`/`playing` events.
+Here the headless browser does decode the clip, so assert the `playing` event.
+
+- **Lazy, once.** No `/editor/voice-samples` request before the first speaker
+  menu opens; exactly one after, and none on later opens or other lines.
+- **Collapsed beside the in-recording list.** Open the menu on an S0 line
+  (`p.tp-line[data-seg-index="0"] .tp-speaker-btn`, a real click). The
+  in-recording list offers `Hear Blair Roster`. `details.sp-compare-other` is
+  closed and holds only `Hear Dana Roster from another recording` (Blair is not
+  repeated). Click the summary to expand; the menu stays open.
+- **Preview.** Type into the edit box first (an unsaved edit). Click Dana: one
+  `GET …/editor/voice-sample/<id>` → 200 `audio/wav`, `no-store`, 160,044 bytes;
+  the main element gets `pause()`, the sample element `play()` then `playing`
+  with `duration` 5. The menu stays open, the "Cursor on segment…" line and the
+  edit text are unchanged, and no unsaved-edit warning appears.
+- **Main player takes over.** Click `Hear Blair Roster` (in-recording): the main
+  element plays and the sample element is paused.
+- **Closing the menu keeps the clip.** Click Dana, press Escape: the sample
+  element is still playing.
+- **Expanded when alone, current speaker kept.** Open the menu on an S1 line
+  (Blair's). There is no in-recording list, the group is already open, and it
+  lists `▸ Blair Roster`, `▸ Dana Roster` in that order.
+- **Rate.** Set `select[aria-label="Playback speed"]` to 1.5, click a sample:
+  its `playbackRate` is 1.5.
+- **Whose voice.** `fetch` each listed speaker's clip in the page and count
+  zero crossings of the PCM (skip the 44-byte header): Dana's is 440 Hz and
+  Blair's 880 Hz, 80,000 frames each.
+- **Audio gone (410).** This covers the **reclaimed** path only (the artifact
+  row stamped by the product sweep), not a file deleted by hand:
+
+  ```bash
+  uv run python tools/e2e_browser_lifecycle.py reclaim-source --database-url "$DSN" \
+      --run-id "<VOICE_SOURCE_RUN_ID>"      # → RECLAIM PASS
+  ```
+
+  Without reloading, click Dana → 410, and a visible `p[role="status"]` inside
+  `.me-segment-actions` reads "The recordings with Dana Roster's confirmed lines
+  can't be played anymore." It stays after the menu closes. **Hear this voice**
+  still plays the open recording. Do not call `response.text()` on the 410 in
+  `browser_run_code_unsafe`; it never resolves there. Read the status only.
+
+Reconcile (same before and after; the only POSTs in the server log should be
+the editor's `claim` and `refresh`):
+
+```bash
+--run-id "<RUN_ID>" --expect '{"verified_segment_indexes":[],"corrections":{},
+  "progress":{"verified":0,"total":5},"expected_annotations":0,
+  "label_rulings":{"S1":{"decision":"assign","speaker":"Blair Roster"}}}'
+--run-id "<VOICE_SOURCE_RUN_ID>" --expect '{"verified_segment_indexes":[],"corrections":{},
+  "progress":{"verified":0,"total":2},"expected_annotations":0,
+  "label_rulings":{"S0":{"decision":"assign","speaker":"Dana Roster"},
+  "S1":{"decision":"assign","speaker":"Blair Roster"}}}'
 ```
 
 ### Media library (#646, #682)
