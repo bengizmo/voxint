@@ -10,6 +10,7 @@ from voxint.adjudication.resolver import Resolution
 from voxint.db.models import DiarizationTurn
 from voxint.media.clips import ClipBounds, cap_bounds, resolve_sample_bounds
 from voxint.speakers.voice_sample import (
+    SpanIndex,
     VoiceSample,
     best_span,
     choose_run_spans,
@@ -89,3 +90,20 @@ def test_labels_never_stitch_and_unwanted_rows_are_skipped() -> None:
     }
     assert choose_run_spans([first, second], turns, set()) == {}
     assert clean_spans(replace(first, diarization_label="missing"), index_turns(turns)) == []
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "expected"),
+    [
+        (2, 2, []),
+        (3, 2, []),
+        (4, 6, []),
+        (-1, 0, []),
+        (3, 6, [(3, 4)]),
+        (0, 4, [(0, 4)]),
+    ],
+)
+def test_span_index_intersect_is_half_open(
+    start: float, end: float, expected: list[tuple[float, float]]
+) -> None:
+    assert list(SpanIndex.build([(0, 4)]).intersect(start, end)) == expected

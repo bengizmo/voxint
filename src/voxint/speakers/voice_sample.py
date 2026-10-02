@@ -50,6 +50,8 @@ class SpanIndex:
         return cls(merged, tuple(end for _, end in merged))
 
     def intersect(self, start: float, end: float) -> Iterator[Span]:
+        if end <= start:
+            return
         index = bisect_right(self.ends, start)
         while index < len(self.spans):
             lo, hi = self.spans[index]
