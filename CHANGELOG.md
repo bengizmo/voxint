@@ -7,6 +7,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **A speaker merge that went stale no longer locks the editor** (#728).
+  If a label changed between previewing a merge in the speaker panel and
+  confirming it, the editor used to drop to read-only and say your claim
+  had expired. It now keeps your claim, clears the preview and asks you to
+  preview again. The merge suggestion that appears after an assignment now
+  shows its "labels changed" message instead of closing at once, and
+  reports a lost claim when the claim really was lost. Saving a line's text
+  that another tab has since split now shows why the save was refused
+  instead of locking the editor. Every review write now marks a lost-claim
+  409 with `X-Voxint-Conflict: claim`, and the console treats only a marked
+  409 as a lost claim.
 - **A retried line undo can no longer report the wrong change as undone**
   (#726). The request key of a line speaker undo is now tied to the change
   it undoes, and other changes can no longer use keys reserved for undos,

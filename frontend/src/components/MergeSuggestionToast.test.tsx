@@ -181,7 +181,7 @@ describe("MergeSuggestionToast", () => {
   );
 
   it.each(["preview", "merge"])(
-    "dismisses without claim loss when %s returns a non-claim 409",
+    "shows the drift message without claim loss when %s returns a non-claim 409",
     async (stage) => {
       if (stage === "merge") {
         vi.mocked(apiFetch).mockResolvedValueOnce(jsonResponse(preview));
@@ -193,11 +193,14 @@ describe("MergeSuggestionToast", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Merge" }));
 
-      await waitFor(() => {
-        expect(props.onDismiss).toHaveBeenCalledOnce();
-      });
+      expect(
+        await screen.findByText("Labels changed since the suggestion was shown."),
+      ).toBeTruthy();
+      // The message stays up until the operator dismisses it (#728).
+      expect(props.onDismiss).not.toHaveBeenCalled();
       expect(props.onClaimLost).not.toHaveBeenCalled();
       expect(props.onMerged).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: "Merge" })).toBeNull();
     },
   );
 

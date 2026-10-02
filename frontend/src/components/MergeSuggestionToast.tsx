@@ -100,7 +100,6 @@ export function MergeSuggestionToast({
         onDismiss();
       } else if (err instanceof ApiError && err.status === 409) {
         setError("Labels changed since the suggestion was shown.");
-        onDismiss();
       } else {
         setError(err instanceof ApiError ? err.detail : "Merge failed.");
       }

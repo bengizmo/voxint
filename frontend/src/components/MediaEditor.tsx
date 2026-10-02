@@ -735,7 +735,6 @@ export function MediaEditor({
         }>(
           `/review/${runId}/segments/${sourceSegmentId}/split`,
           { word_index: String(wordIndex) },
-          { claimLostOnConflict: false },
         );
         if (!result) return;
         setConfirmDiscard(false);
@@ -781,7 +780,6 @@ export function MediaEditor({
         const result = await postForm<RelabelResult>(
           `/review/${runId}/segments/${seg.sourceSegmentId}/relabel`,
           body,
-          { claimLostOnConflict: false },
         );
         if (!result) return;
         setSegments(result.segments);
@@ -820,7 +818,6 @@ export function MediaEditor({
         const result = await postForm<RelabelResult>(
           `/review/${runId}/segments/${targetParentId}/relabel`,
           body,
-          { claimLostOnConflict: false },
         );
         if (!result) return;
         setSegments(result.segments);
@@ -865,7 +862,6 @@ export function MediaEditor({
       const result = await postForm<LabelsResult>(
         `/review/${runId}/labels/${encodeURIComponent(popoverSegment.label)}/decision`,
         { nonce: makeNonce(), action: "assign", speaker_id: speakerId },
-        { claimLostOnConflict: false },
       );
       if (result) {
         onLabelsChanged(result);
@@ -924,7 +920,6 @@ export function MediaEditor({
       const result = await postForm<LabelsResult>(
         `/review/${runId}/labels/${encodeURIComponent(popoverSegment.label)}/enroll`,
         { nonce: makeNonce(), display_name: name },
-        { claimLostOnConflict: false },
       );
       if (!result) return false;
       onLabelsChanged(result);
