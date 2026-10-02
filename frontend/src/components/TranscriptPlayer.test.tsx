@@ -1,7 +1,22 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { TranscriptPlayer, type Segment } from "./TranscriptPlayer";
+
+vi.mock("../lib/peaks", async (original) => ({
+  ...await original<typeof import("../lib/peaks")>(),
+  fetchPeaks: vi.fn(async () => ({
+    version: 1, duration: 2, sampleRate: 16000, frameCount: 32000,
+    samplesPerBucket: 160, peaks: [0.1, 0.2],
+  })),
+}));
+// The strip's canvas needs layout jsdom lacks; a button stands in for a click
+// on line 1's region.
+vi.mock("./WaveformStrip", () => ({
+  WaveformStrip: (props: { onRegionActivate: (index: number) => void }) => (
+    <button onClick={() => props.onRegionActivate(1)}>Region 1</button>
+  ),
+}));
 
 const splitPart = {
   start: 0, end: 1, speaker: "Alice", label: "S0", paletteIndex: 0,
@@ -37,4 +52,38 @@ it("keeps the split-part speaker picker out of an opacity stacking context", () 
   for (let el: Element | null = picker; el && el !== line; el = el.parentElement) {
     expect(el.className).not.toMatch(/(^|\s)opacity-/);
   }
+});
+
+const twoLines = [0, 1].map((index) => ({
+  ...splitPart, start: index, end: index + 1, segmentId: `seg-${index}`,
+  sourceSegmentId: `seg-${index}`, text: `Line ${index}`, wordStart: null, wordEnd: null,
+})) satisfies Segment[];
+
+// #732: a region click the editor refuses (an unsaved edit) still plays the
+// line but leaves the list where it is, so a repeat click lands on the strip.
+it.each([
+  ["moves the cursor", true, 1],
+  ["keeps the cursor", false, 0],
+])("plays a region click that %s, scrolling to it only then", async (_name, selects, scrolls) => {
+  const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+  Element.prototype.scrollIntoView ??= () => {};
+  const scroll = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+  const select = vi.fn(() => selects);
+  render(<TranscriptPlayer
+    runId="run" mediaUrl="/audio" segments={twoLines}
+    capability={{ seekEnabled: true, reasons: [], mediaDuration: 2 }}
+    lowConfidenceThreshold={0.5}
+    peaksUrl="/peaks"
+    onSegmentSelect={select}
+  />);
+  const region = await screen.findByRole("button", { name: "Region 1" });
+  scroll.mockClear();
+
+  await act(async () => { fireEvent.click(region); });
+
+  expect(select).toHaveBeenCalledWith(1);
+  expect(play).toHaveBeenCalledOnce();
+  expect(scroll).toHaveBeenCalledTimes(scrolls);
+  play.mockRestore();
+  scroll.mockRestore();
 });

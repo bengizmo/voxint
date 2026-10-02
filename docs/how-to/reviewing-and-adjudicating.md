@@ -77,8 +77,10 @@ claiming step. A few related messages you may see:
 - **Read-only view** with a **Claim for editing** button: the editor is showing
   the run without a claim. Press the button to start making changes.
 - **Your claim expired or was taken over.** Everything you already saved is
-  safe. Copy any unsaved text from the edit box, then press **re-claim to
-  continue editing**.
+  safe. If the edit box held text you had not saved, the message shows it in a
+  box you can copy from, and the editor stays on that line until you press
+  **re-claim to keep editing it**, which puts your text back in the edit box.
+  With nothing unsaved, press **Re-claim to continue editing**.
 
 If a recording has been processed more than once, the **Run** card at the top
 of the editor lists the others under **Other runs**. The **Run details** link on
@@ -316,9 +318,11 @@ in the **edit box**. Correct the text and press **Save edit** (or **Ctrl+Enter**
 - Saving an empty box, or the model's original wording, removes your
   correction.
 - **Unsaved-edit warning:** if you have unsaved text in the box and try to
-  verify or move on, Voxint warns you once rather than silently throwing the
-  edit away. Save it (Ctrl/⌘+Enter), or repeat the action to discard and
-  continue.
+  verify, split, or move to another line (clicking a line or the waveform, a
+  navigation key, or a jump from the outline or a note), Voxint warns you once
+  rather than silently throwing the edit away. Save it (Ctrl/⌘+Enter), or
+  repeat the action to discard and continue. A click on another line or the
+  waveform still plays it, so you can listen around the line you are editing.
 
 ### Corrections your domain pack made
 
