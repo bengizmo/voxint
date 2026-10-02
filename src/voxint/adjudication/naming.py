@@ -71,6 +71,7 @@ class VoiceRow:
 @dataclass(frozen=True)
 class NamingResult:
     effects: tuple[str, ...]
+    renamed: bool = False
 
 
 def list_voices(session: Session, run_id: uuid.UUID) -> list[VoiceRow]:
@@ -112,13 +113,15 @@ def _other_runs(session: Session, run_id: uuid.UUID, speaker_id: uuid.UUID) -> i
     Count current label rulings, latest segment/range rulings and unopposed
     grounded machine assignments. This is not a transcript projection: it does
     not check surviving split geometry or whether overrides cover all text.
-    Machine fallback conservatively requires no label ledger history at all.
+    A machine assignment counts only while no effective label ruling exists.
     """
     ids = alias_ids(session, speaker_id)
     ruling = aliased(AdjudicationDecision)
     newer = aliased(AdjudicationDecision)
     revoke = aliased(AdjudicationDecision)
     newer_revoke = aliased(AdjudicationDecision)
+    opposing = aliased(AdjudicationDecision)
+    opposing_revoke = aliased(AdjudicationDecision)
     newer_label = (
         select(newer.id)
         .where(
@@ -151,11 +154,18 @@ def _other_runs(session: Session, run_id: uuid.UUID, speaker_id: uuid.UUID) -> i
         SpeakerAssignment.pipeline_run_id != run_id,
         SpeakerAssignment.grounded.is_(True),
         SpeakerAssignment.method == "cosine",
-        ~select(AdjudicationDecision.id)
+        # A machine assignment renders only while no EFFECTIVE label ruling
+        # exists: a revoked or detached ruling hands the label back to it.
+        ~select(opposing.id)
         .where(
-            AdjudicationDecision.pipeline_run_id == SpeakerAssignment.pipeline_run_id,
-            AdjudicationDecision.diarization_label == SpeakerAssignment.diarization_label,
-            AdjudicationDecision.transcript_segment_id.is_(None),
+            opposing.pipeline_run_id == SpeakerAssignment.pipeline_run_id,
+            opposing.diarization_label == SpeakerAssignment.diarization_label,
+            opposing.transcript_segment_id.is_(None),
+            opposing.detached_at.is_(None),
+            opposing.decision != Decision.REVOKE.value,
+            ~select(opposing_revoke.id)
+            .where(opposing_revoke.voids_decision_id == opposing.id)
+            .exists(),
         )
         .exists(),
     )
@@ -292,6 +302,6 @@ def name_voice(
                 speaker_name=speaker.display_name,
                 speaker_id=speaker.id,
             )
-        return NamingResult(tuple(effects))
+        return NamingResult(tuple(effects), renamed=any(e.startswith('renamed ') for e in effects))
     except (ClaimUnavailableError, EnrollmentError, RosterError, NamingError) as exc:
         raise NamingError(str(exc).replace("\u2014", ";")) from exc

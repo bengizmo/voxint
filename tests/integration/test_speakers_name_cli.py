@@ -459,7 +459,9 @@ def test_identity_creation_provenance(
             assert label_states(s, run)[0].speaker_id == old_id
     assert invoke(run) == 0
     out = capsys.readouterr().out
-    assert "a later ruling in the console supersedes this assignment; the rename stays" in out
+    closing = "a later ruling in the console supersedes this assignment"
+    # Only a rename branch may claim that a rename stays.
+    assert (closing + ("\n" if linked else "; the rename stays\n")) in out
     with session_factory() as s:
         rows, speakers = snapshot(s)
         assert len(rows) == 2 and len(speakers) == (2 if linked else 1)
@@ -475,7 +477,7 @@ def test_identity_creation_provenance(
         assert events[0].occurrence_key == f"decision:{current.effective_decision.id}:identified"
 
 
-@pytest.mark.parametrize("mode", ["superseded", "ungrounded", "alias", "opposed"])
+@pytest.mark.parametrize("mode", ["superseded", "ungrounded", "alias", "opposed", "revoked"])
 def test_current_impact_count(session_factory: sessionmaker[Session], mode: str) -> None:
     from voxint.adjudication.naming import _other_runs
 
@@ -507,9 +509,27 @@ def test_current_impact_count(session_factory: sessionmaker[Session], mode: str)
             )
             if mode == "opposed":
                 rule(s, other, bob)
+            if mode == "revoked":
+                # An assign to Bob, then undone: the label renders the machine
+                # assignment again, so the rename reaches this recording.
+                s.flush()
+                row = s.scalars(select(AdjudicationDecision).where(
+                    AdjudicationDecision.pipeline_run_id == other,
+                )).one_or_none()
+                assert row is None
+                rule(s, other, bob)
+                s.flush()
+                assigned = s.scalars(select(AdjudicationDecision).where(
+                    AdjudicationDecision.pipeline_run_id == other,
+                )).one()
+                record_decision(
+                    s, pipeline_run_id=other, diarization_label="SPEAKER_00",
+                    decision=Decision.REVOKE, operator="seed", idempotency_key=str(uuid.uuid4()),
+                    voids_decision_id=assigned.id,
+                )
         s.commit()
         before = snapshot(s)
-        assert _other_runs(s, run, speaker.id) == int(mode == "alias")
+        assert _other_runs(s, run, speaker.id) == int(mode in ("alias", "revoked"))
         assert snapshot(s) == before
 
 
