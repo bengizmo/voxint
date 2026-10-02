@@ -204,6 +204,18 @@
     ]
   ],
   [
+    "/media/{media_id}/editor/voice-samples",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/media/{media_id}/editor/voice-sample/{speaker_id}",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/projects",
     [
       "GET"

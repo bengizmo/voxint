@@ -59,7 +59,8 @@ voice_sample_candidates(session, *, exclude_media_id, speaker_id=None)
 1. **Source runs.** It walks `canonical_runs(session)` (`_canonical_runs` made public, unchanged semantics) newest media first, and skips the excluded current media and any media item with `trashed_at` or `purged_at` set.
    - Rationale: the app should not resurface material the operator deleted in a new place. Trash is not a privacy boundary elsewhere in the app, and the docs will say that rather than imply it.
 2. **Cheap DB pre-checks.** A run whose `preprocessed_audio` artifact is reclaimed or absent is recorded as a *gone* source, not a candidate. These checks need no file I/O and no ffprobe.
-3. **Clean spans.** For each surviving run, take every `attributed_intervals` row with `resolution is HUMAN_ASSIGN` and a canonical speaker id. Intersect the row with that run's diarization turns that carry the same raw label and `overlap = false`. The resulting clean spans are the only audio that may be offered as this person's voice.
+3. **Clean spans.** For each surviving run, take every `attributed_intervals` row with `resolution is HUMAN_ASSIGN` and a canonical speaker id. Intersect the row with the union of that run's diarization turns that carry the same raw label, then subtract the union of every turn with another label. The resulting clean spans are the only audio that may be offered as this person's voice.
+   - Revised at implementation (2026-10-02): the draft intersected with `overlap = false` turns, but `DiarizationTurn.overlap` flags a whole turn (`services/pyannote/app/postprocess.py`, `mark_overlaps`), and turns are not split at overlap boundaries. That rule would drop a lightly grazed turn entirely and could not trim an overlapped head. Subtracting other labels' turns trims exactly the overlapped audio.
    - A word-range split child is handled the same way, so a narrower override still wins under the resolver's precedence.
    - A span shorter than `VOICE_SAMPLE_MIN_SECONDS = 2.0` is discarded: a fragment that short is too little voice to compare and is worse than nothing (maintainer decision, 2026-10-02).
 4. **Choice per speaker.** The first run, newest first, that has a clean span of at least 2 s wins, and its longest clean span is used. Ties go to the earliest start.
@@ -281,7 +282,7 @@ Spec deltas: none (no living spec declared)
 ## Rollout, risks and open questions
 
 - **Cost.** The candidate walk runs `attributed_intervals` over every eligible canonical run: once per editor session for the list, and once per click for a clip. Slice 2 measures both on about 200 runs. The clip route stops at the first qualifying run; the list route must still visit every eligible run once per editor session.
-- **Clean spans depend on diarization overlap flags.** A speaker whose confirmed lines all overlap other speech gets no sample. That is preferable to playing a mixed clip, and the 404 copy stays true.
+- **Clean spans depend on diarization turns.** A speaker whose confirmed lines all overlap other speech, or leave no clean stretch of 2 s once it is removed, gets no sample. That is preferable to playing a mixed clip, and the 404 copy stays true.
 - **Privacy.** Playing B's audio on A's page is within what the same principal can already hear through `/media`. Trashed and purged media are excluded by design.
 - **Settled by the maintainer (2026-10-02):** a 10 s cap, a 2 s floor, and the group starts expanded when the in-recording list is empty.
 - **Open:** none.
@@ -312,4 +313,5 @@ z-ai/glm-5.3 and moonshotai/kimi-k3, 3 of 3 voices.
 | Multi-user visibility | codex, glm, kimi (3/3): match `/media` | **Closed.** Plus a docs note that status codes reveal adjudication state to viewers (kimi). |
 | Tests: real lifecycle transitions, distinguishable PCM, determinism, a worst-case latency measurement | codex, glm, kimi | **Accepted** into the testing strategy and slice 2. |
 | Cut mid-utterance at the cap | glm | **Partly accepted.** A whole span is used when it is 10 s or shorter; longer spans are cut at 10 s from onset (accepted trade-off). |
+| Implementation finding (2026-10-02): `overlap` is a whole-turn flag | Claude, verified in `postprocess.py` | **Clean spans revised** to (same-label turns) minus (other-label turns); see step 3. |
 | Maintainer decisions (2026-10-02) | Ben | 10 s cap (was 8 s), 2 s floor (was 1 s, which also removes the sub-floor fallback), and the group starts expanded when the in-recording list is empty. |

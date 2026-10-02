@@ -8,6 +8,7 @@ are the mutation surface; the island calls them directly.
 
 from __future__ import annotations
 
+import io
 import uuid
 from typing import Annotated
 
@@ -41,7 +42,7 @@ from voxint.api.csrf import (
 from voxint.api.editor_query import media_detail
 from voxint.api.languages import LANGUAGE_NAMES, language_label
 from voxint.api.palette import PaletteCommand, palette_actions
-from voxint.api.playback import playback_capability
+from voxint.api.playback import MediaResolutionError, playback_capability, resolve_servable_media
 from voxint.api.presentation import friendly_media_label
 from voxint.api.routers.deps import (
     _TRANSLATION_ACTIVE_STATUSES,
@@ -63,7 +64,7 @@ from voxint.api.transcript_view import _transcript_island_props
 from voxint.api.tutorial_view import _tutorial_banner
 from voxint.app_settings import get_app_settings, resolve_effective_translation_target_language
 from voxint.config import Settings
-from voxint.db.models import PipelineRun, RunStatus
+from voxint.db.models import MediaItem, PipelineRun, RunStatus
 from voxint.enrichment.translation_jobs import (
     active_or_last_job as active_or_last_translation_job,
 )
@@ -72,8 +73,23 @@ from voxint.enrichment.translation_jobs import (
     translation_gates_open,
 )
 from voxint.enrichment.translations import current_translations
+from voxint.media.clips import (
+    ClipBoundsError,
+    ClipSourceError,
+    cap_bounds,
+    read_clip_frames,
+    read_total_frames,
+    resolve_sample_bounds,
+    write_clip_wav,
+)
+from voxint.media.normalize import TARGET_SAMPLE_RATE
 from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import active_speakers
+from voxint.speakers.voice_sample import (
+    VOICE_SAMPLE_MAX_SECONDS,
+    voice_sample_availability,
+    voice_sample_candidates,
+)
 from voxint.tutorial.steps import TutorialPage
 
 router = APIRouter(dependencies=[Depends(require_onboarded)])
@@ -402,3 +418,64 @@ def editor_release(
     except ClaimUnavailableError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return JSONResponse({"released": True})
+
+
+@router.get("/media/{media_id}/editor/voice-samples")
+def editor_voice_samples(
+    media_id: uuid.UUID,
+    operator: OperatorDep,
+    session: SessionDep,
+) -> JSONResponse:
+    """List canonical identities with confirmed audio in another recording."""
+    if session.get(MediaItem, media_id) is None:
+        raise HTTPException(status_code=404, detail="not found")
+    availability = voice_sample_availability(session, exclude_media_id=media_id)
+    return JSONResponse({"speakerIds": sorted(str(speaker) for speaker in availability)})
+
+
+@router.get("/media/{media_id}/editor/voice-sample/{speaker_id}")
+def editor_voice_sample(
+    media_id: uuid.UUID,
+    speaker_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+) -> Response:
+    """Serve a bounded, metadata-free WAV from the first playable candidate."""
+    if session.get(MediaItem, media_id) is None:
+        raise HTTPException(status_code=404, detail="not found")
+    settings: Settings = request.app.state.settings
+    found = False
+    max_frames = int(VOICE_SAMPLE_MAX_SECONDS * TARGET_SAMPLE_RATE)
+    for candidate in voice_sample_candidates(
+        session, exclude_media_id=media_id, speaker_id=speaker_id
+    ):
+        found = True
+        if candidate.availability == "gone":
+            continue
+        try:
+            source, _ = resolve_servable_media(
+                session, candidate.run_id, settings, _get_media_gate(request)
+            )
+            try:
+                total = read_total_frames(source)
+                bounds = cap_bounds(
+                    resolve_sample_bounds(*candidate.window, total, max_clip_frames=max_frames + 1),
+                    max_frames,
+                )
+                frames = read_clip_frames(source, bounds)
+            finally:
+                source.close()
+        except (MediaResolutionError, ClipSourceError, ClipBoundsError):
+            continue
+        dest = io.BytesIO()
+        write_clip_wav(dest, frames)
+        return Response(
+            dest.getvalue(),
+            media_type="audio/wav",
+            headers={"Content-Disposition": "inline", "Cache-Control": "no-store"},
+        )
+    raise HTTPException(
+        status_code=410 if found else 404,
+        detail="voice_sample_gone" if found else "no_voice_sample",
+    )

@@ -51,9 +51,7 @@ def _samples(path: Path) -> list[int]:
 
 def test_bounds_floor_start_ceil_end() -> None:
     # 1.00003 s -> floor(16000.48) = 16000; 2.00007 s -> ceil(32001.12) = 32002.
-    bounds = resolve_sample_bounds(
-        1.00003, 2.00007, total_frames=SR * 10, max_clip_frames=SR * 300
-    )
+    bounds = resolve_sample_bounds(1.00003, 2.00007, total_frames=SR * 10, max_clip_frames=SR * 300)
     assert bounds.start_sample == 16000
     assert bounds.end_sample == 32002
     assert bounds.frame_count == 16002
@@ -68,9 +66,7 @@ def test_bounds_exact_second_boundaries() -> None:
 def test_bounds_tail_within_tolerance_clamps() -> None:
     total = SR * 5
     # end 0.04 s past the tail (< 0.05 tolerance) clamps to total_frames.
-    bounds = resolve_sample_bounds(
-        4.0, 5.04, total_frames=total, max_clip_frames=SR * 300
-    )
+    bounds = resolve_sample_bounds(4.0, 5.04, total_frames=total, max_clip_frames=SR * 300)
     assert bounds.end_sample == total
 
 
@@ -217,3 +213,36 @@ def test_extract_cleans_temp_on_failure(tmp_path: Path) -> None:
     with pytest.raises(ClipBoundsError):
         extract_clip(source, ClipBounds(start_sample=0, end_sample=999), tmp_path / "c.wav")
     assert list(tmp_path.iterdir()) == []
+
+
+def test_in_memory_frame_copy_has_only_audio_chunks() -> None:
+    from voxint.media.clips import read_clip_frames, write_clip_wav
+
+    source = _ramp_wav(80000)
+    dest = io.BytesIO()
+    frames = read_clip_frames(source, ClipBounds(123, 32123))
+    write_clip_wav(dest, frames)
+    assert not source.closed and not dest.closed
+    data = dest.getvalue()
+    chunks = []
+    offset = 12
+    while offset < len(data):
+        tag, size = struct.unpack_from("<4sI", data, offset)
+        chunks.append(tag)
+        offset += 8 + size + size % 2
+    assert chunks == [b"fmt ", b"data"]
+    with wave.open(io.BytesIO(data), "rb") as wav:
+        assert wav.getnframes() == 32000
+        assert wav.readframes(32000) == b"".join(
+            struct.pack("<h", i % 32768) for i in range(123, 32123)
+        )
+
+
+@pytest.mark.parametrize("data", [b"", b"not a wav", b"RIFF\x00\x00\x00\x00WAVE"])
+def test_malformed_source_is_clip_source_error(data: bytes) -> None:
+    from voxint.media.clips import read_clip_frames
+
+    with pytest.raises(ClipSourceError):
+        read_clip_frames(io.BytesIO(data), ClipBounds(0, 1))
+    with pytest.raises(ClipSourceError):
+        read_total_frames(io.BytesIO(data))

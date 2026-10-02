@@ -100,8 +100,7 @@ def resolve_sample_bounds(
             raise ClipBoundsError(f"{label}_seconds must be finite, got {value!r}")
     if end_seconds <= start_seconds:
         raise ClipBoundsError(
-            f"end_seconds ({end_seconds}) must be greater than start_seconds "
-            f"({start_seconds})"
+            f"end_seconds ({end_seconds}) must be greater than start_seconds ({start_seconds})"
         )
     if start_seconds < 0:
         raise ClipBoundsError(f"start_seconds must be >= 0, got {start_seconds}")
@@ -109,19 +108,13 @@ def resolve_sample_bounds(
         raise ClipSourceError(f"source has no frames (total_frames={total_frames})")
 
     rate = Decimal(sample_rate)
-    start_sample = int(
-        (Decimal(str(start_seconds)) * rate).to_integral_value(rounding=ROUND_FLOOR)
-    )
-    end_sample = int(
-        (Decimal(str(end_seconds)) * rate).to_integral_value(rounding=ROUND_CEILING)
-    )
+    start_sample = int((Decimal(str(start_seconds)) * rate).to_integral_value(rounding=ROUND_FLOOR))
+    end_sample = int((Decimal(str(end_seconds)) * rate).to_integral_value(rounding=ROUND_CEILING))
 
     # Tail slack: an end within tolerance of the recording's end is clamped to
     # the exact frame count; a genuine overrun is a bounds error.
     tail_slack_frames = int(
-        (Decimal(str(tail_tolerance_seconds)) * rate).to_integral_value(
-            rounding=ROUND_CEILING
-        )
+        (Decimal(str(tail_tolerance_seconds)) * rate).to_integral_value(rounding=ROUND_CEILING)
     )
     if end_sample > total_frames:
         if end_sample <= total_frames + tail_slack_frames:
@@ -132,9 +125,7 @@ def resolve_sample_bounds(
                 f"({total_frames / sample_rate:.3f}s) beyond tolerance"
             )
     if start_sample >= total_frames:
-        raise ClipBoundsError(
-            f"start_seconds ({start_seconds}) is at or past the recording end"
-        )
+        raise ClipBoundsError(f"start_seconds ({start_seconds}) is at or past the recording end")
     if end_sample <= start_sample:
         raise ClipBoundsError("clip collapses to zero frames after rounding")
     if end_sample - start_sample > max_clip_frames:
@@ -192,23 +183,20 @@ def read_total_frames(source: BinaryIO) -> int:
         with wave.open(source, "rb") as wav:
             _require_pcm_invariant(wav)
             frames = wav.getnframes()
-    except wave.Error as exc:
+    except (wave.Error, EOFError, OSError) as exc:
         raise ClipSourceError(f"source is not a readable PCM WAV: {exc}") from exc
     finally:
         source.seek(0)
     return frames
 
 
-def extract_clip(source: BinaryIO, bounds: ClipBounds, dest_path: Path) -> ClipFile:
-    """Frame-copy ``bounds`` from ``source`` into a conforming WAV at ``dest_path``.
+def cap_bounds(bounds: ClipBounds, max_frames: int) -> ClipBounds:
+    """Cap a half-open window in integer frames."""
+    return ClipBounds(bounds.start_sample, min(bounds.end_sample, bounds.start_sample + max_frames))
 
-    Writes a randomized temp sibling in the destination directory, verifies the
-    written frame count/format, ``fsync``s, then atomically ``os.replace``s into
-    place, so a crash or retry can never leave a half-written clip where the
-    resolver will look. ``source`` is an open, seekable, confined PCM WAV handle.
-    """
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = dest_path.with_name(f"{dest_path.name}.{uuid.uuid4().hex}.part")
+
+def read_clip_frames(source: BinaryIO, bounds: ClipBounds) -> bytes:
+    """Read exact PCM frames from an open normalized WAV handle."""
     try:
         source.seek(0)
         with wave.open(source, "rb") as reader:
@@ -223,15 +211,35 @@ def extract_clip(source: BinaryIO, bounds: ClipBounds, dest_path: Path) -> ClipF
             frames = reader.readframes(bounds.frame_count)
         expected_bytes = bounds.frame_count * TARGET_CHANNELS * SAMPLE_WIDTH_BYTES
         if len(frames) != expected_bytes:
-            raise ClipSourceError(
-                f"short read: got {len(frames)} bytes, expected {expected_bytes}"
-            )
+            raise ClipSourceError(f"short read: got {len(frames)} bytes, expected {expected_bytes}")
+    except (wave.Error, EOFError, OSError) as exc:
+        raise ClipSourceError(f"source is not a readable PCM WAV: {exc}") from exc
+    return frames
+
+
+def write_clip_wav(dest: BinaryIO, frames: bytes) -> None:
+    """Write only fmt and data chunks, leaving the caller's handle open."""
+    with wave.open(dest, "wb") as writer:
+        writer.setnchannels(TARGET_CHANNELS)
+        writer.setsampwidth(SAMPLE_WIDTH_BYTES)
+        writer.setframerate(TARGET_SAMPLE_RATE)
+        writer.writeframes(frames)
+
+
+def extract_clip(source: BinaryIO, bounds: ClipBounds, dest_path: Path) -> ClipFile:
+    """Frame-copy ``bounds`` from ``source`` into a conforming WAV at ``dest_path``.
+
+    Writes a randomized temp sibling in the destination directory, verifies the
+    written frame count/format, ``fsync``s, then atomically ``os.replace``s into
+    place, so a crash or retry can never leave a half-written clip where the
+    resolver will look. ``source`` is an open, seekable, confined PCM WAV handle.
+    """
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = dest_path.with_name(f"{dest_path.name}.{uuid.uuid4().hex}.part")
+    try:
+        frames = read_clip_frames(source, bounds)
         with open(tmp_path, "wb") as raw:
-            with wave.open(raw, "wb") as writer:
-                writer.setnchannels(TARGET_CHANNELS)
-                writer.setsampwidth(SAMPLE_WIDTH_BYTES)
-                writer.setframerate(TARGET_SAMPLE_RATE)
-                writer.writeframes(frames)
+            write_clip_wav(raw, frames)
             raw.flush()
             os.fsync(raw.fileno())
         _verify_written_clip(tmp_path, bounds.frame_count)
@@ -260,6 +268,5 @@ def _verify_written_clip(path: Path, expected_frames: int) -> None:
         _require_pcm_invariant(wav)
         if wav.getnframes() != expected_frames:
             raise ClipSourceError(
-                f"written clip has {wav.getnframes()} frames, expected "
-                f"{expected_frames}"
+                f"written clip has {wav.getnframes()} frames, expected {expected_frames}"
             )

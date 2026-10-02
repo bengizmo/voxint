@@ -959,6 +959,60 @@ subsystem and adds no page routing.
   the islands show in a visible banner, never a bare tooltip. Media servability
   reuses `resolve_servable_media()`, the **single seam** `GET /media` itself
   calls, so capability can never advertise seeking while `/media` would 404/410.
+- **Voice samples from other recordings (issue #714).** The speaker menu can
+  play a roster speaker's voice from another recording, for a speaker with no
+  line in the current one. `speakers/voice_sample.py` holds one candidate walk
+  that both routes consume, so the list and the clip cannot disagree:
+  - **Sources.** It walks `canonical_runs()` newest media first and skips the
+    current media item, trashed or purged media, and archived runs. Only
+    intervals a human assigned (`AttributedInterval.is_human_assign`, any
+    scope) count; grounded cosine and auto-enroll attributions are never a
+    source.
+  - **Clean spans.** Each such interval is intersected with that run's
+    diarization turns of the same label, and every turn of another label is
+    subtracted. The `overlap` flag marks a whole turn, so it cannot locate the
+    overlapped audio; subtracting the other labels' turns trims exactly that.
+    Pieces that touch are merged, and spans under
+    `VOICE_SAMPLE_MIN_SECONDS` (2 s) are dropped.
+  - **Choice.** The first run with a qualifying span wins and its longest span
+    is used (ties go to the earliest start). The clip is the whole span, or the
+    first `VOICE_SAMPLE_MAX_SECONDS` (10 s) of it, capped in integer frames
+    (160,000). Both values are module constants describing the preview's
+    shape, not settings.
+  - **Speakers.** A requested id is canonicalized through merges; only an
+    active canonical speaker can have a sample.
+  - **Routes.** `GET /media/{media_id}/editor/voice-samples` returns
+    `{"speakerIds": [...]}`, and
+    `GET /media/{media_id}/editor/voice-sample/{speaker_id}` returns an
+    in-memory `audio/wav` clip (`Content-Disposition: inline`, `no-store`, no
+    range support, no HEAD) holding only `fmt ` and `data` chunks. The
+    `{media_id}` names the **current** recording and is used only as the
+    exclusion key; it is never the source. No source media id, run id, title
+    or path appears in either response.
+  - **Errors.** 404 `not found` for an unknown current media item; 404
+    `no_voice_sample` when no human-confirmed clean span exists outside it
+    (machine-only, trashed, purged, archived, unknown); 410
+    `voice_sample_gone` when such spans exist but every candidate's audio is
+    reclaimed, missing or fails the media gate. A run whose audio is
+    reclaimed or has no single preprocessed-audio artifact is marked gone
+    from the database alone; the clip route opens audio only through
+    `resolve_servable_media()`, closes the handle on every path, and falls
+    through to the next run on a media, PCM or bounds failure.
+  - **Auth.** Identical to `GET /media/{run_id}`: `OperatorDep` plus
+    `require_onboarded`, so a viewer may listen. The 200, 404 and 410 status
+    codes tell a viewer whether a speaker has confirmed lines elsewhere, which
+    is within what that role can already see. If per-project visibility is
+    ever added, `/media` and these routes must be bounded together.
+  - **Cost.** One ledger query first narrows the canonical runs to those
+    holding an `assign` row (for a clip, one whose speaker is among the
+    target's merge aliases). That is a necessary condition only: human-assign
+    attribution arises solely from `assign` rows, and the resolver walk still
+    decides eligibility. Only the wanted speakers' intervals are cleaned,
+    against per-label span indexes. The clip route stops at the first run that
+    serves; the list walk skips a run once every speaker it holds is already
+    available. Measured on 200 runs with 300 segments and about 350 turns
+    each: 0.30 s for the list and 0.32 s for a clip whose only source is the
+    oldest run, and under 0.2 s for both when the same speakers recur.
 - **Follow-along highlight + per-speaker colors (issues #50/#47).** The
   `transcript-player` island keeps the active line in view as playback advances:
   a callback ref on the active `<p>` plus a `scrollIntoView({ block: "nearest" })`

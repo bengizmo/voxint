@@ -81,7 +81,7 @@ class AggregateResult:
     runs_scanned: int
 
 
-def _canonical_runs(session: Session) -> list[tuple[uuid.UUID, uuid.UUID, datetime]]:
+def canonical_runs(session: Session) -> list[tuple[uuid.UUID, uuid.UUID, datetime]]:
     """(run_id, media_id, media_created_at) for the newest completed,
     non-archived run of every media item — one bounded window-function SELECT
     (the ``media_query`` idiom), newest media first."""
@@ -128,7 +128,7 @@ def aggregate_speakers(session: Session) -> AggregateResult:
     """
     per_speaker: dict[uuid.UUID, list[SpeakerAppearance]] = {}
     grounded: dict[uuid.UUID, set[tuple[uuid.UUID, str]]] = {}
-    runs = _canonical_runs(session)
+    runs = canonical_runs(session)
     for run_id, media_id, media_created_at in runs:
         tallies: dict[uuid.UUID, _Tally] = {}
         for interval in attributed_intervals(session, run_id):
@@ -199,9 +199,7 @@ def empty_aggregate(speaker_id: uuid.UUID) -> SpeakerAggregate:
     )
 
 
-def aggregate_for_speaker(
-    session: Session, speaker_id: uuid.UUID
-) -> SpeakerAggregate:
+def aggregate_for_speaker(session: Session, speaker_id: uuid.UUID) -> SpeakerAggregate:
     """One speaker's aggregate (profile page), canonicalized first.
 
     Runs the same full fold: the per-run resolver output is shared across all
