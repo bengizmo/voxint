@@ -701,3 +701,27 @@ def test_undo_of_a_label_ruling_through_the_relabel_route_is_a_400(
     resp = _post_undo(client, seeded, token, label_rule_id)
 
     assert resp.status_code == 400  # type: ignore[attr-defined]
+
+
+def test_run_labels_returns_server_truth_without_a_claim(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # The editor refetches this after a refused undo (issue #718); it must
+    # reflect a ruling made elsewhere and need no claim token to read.
+    seeded = _seed(session_factory)
+    token = _claim(client, seeded.run_id)
+    _relabel(client, seeded, token, seeded.bob)
+
+    resp = client.get(f"/review/{seeded.run_id}/labels")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert _segment_speakers(body) == [_name(session_factory, seeded.bob)]
+    assert body["progress"] == {"verified": 0, "total": 1}
+    assert [label["label"] for label in body["labels"]] == []
+    assert str(seeded.bob) in {speaker["id"] for speaker in body["speakers"]}
+    assert "undo" not in body
+
+
+def test_run_labels_is_a_404_for_an_unknown_run(client: TestClient) -> None:
+    assert client.get(f"/review/{uuid.uuid4()}/labels").status_code == 404

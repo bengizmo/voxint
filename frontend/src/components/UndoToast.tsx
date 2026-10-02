@@ -13,6 +13,10 @@ interface UndoToastProps {
   onClaimLost: () => void;
   onUndone: (data: LabelsResult) => void;
   onDismiss: () => void;
+  // Called after a non-claim 409 (the action was re-ruled or the window ran
+  // out), while the write guard is still held, so the caller can refetch
+  // server truth before any other edit runs (issue #718).
+  onConflict?: () => Promise<void>;
   // The editor's write guard. An undo holds it so no other edit can be in
   // flight at the same time and land its response out of order. `busy` disables
   // the button while another edit holds it, so a click there is never silently
@@ -54,6 +58,7 @@ export function UndoToast({
   onClaimLost,
   onUndone,
   onDismiss,
+  onConflict,
   writeGuard,
 }: UndoToastProps) {
   const localBusyRef = useRef(false);
@@ -106,6 +111,7 @@ export function UndoToast({
             ? "Undo window expired."
             : "Too late to undo. This was changed again since.",
         );
+        await onConflict?.();
       } else {
         setError(err instanceof ApiError ? err.detail : "Undo failed.");
       }
@@ -114,7 +120,18 @@ export function UndoToast({
       setBusy(false);
       writeGuard?.setBusy(false);
     }
-  }, [claimCsrf, reviewToken, undo, runId, onUndone, onClaimLost, onDismiss, busyRef, writeGuard]);
+  }, [
+    claimCsrf,
+    reviewToken,
+    undo,
+    runId,
+    onUndone,
+    onClaimLost,
+    onDismiss,
+    onConflict,
+    busyRef,
+    writeGuard,
+  ]);
 
   const label = UNDO_COPY[undo.kind];
 

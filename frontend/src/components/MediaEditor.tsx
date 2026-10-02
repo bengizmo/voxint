@@ -483,8 +483,10 @@ export function MediaEditor({
   );
   const applyResult = useSegmentPatch(segments, setSegments, setProgress);
 
+  // `keepUndo` leaves the undo toast up: a refetch after a refused undo must
+  // not clear the toast that explains the refusal.
   const onLabelsChanged = useCallback(
-    (result: LabelsResult) => {
+    (result: LabelsResult, { keepUndo = false }: { keepUndo?: boolean } = {}) => {
       setMergeSuggestion(null);
       const changedLabels = new Set<string>();
       for (const newLs of result.labels) {
@@ -498,7 +500,7 @@ export function MediaEditor({
       setSegments(result.segments);
       setProgress(result.progress);
       setLabelStates(result.labels);
-      setUndoInfo(result.undo ?? null);
+      if (!keepUndo) setUndoInfo(result.undo ?? null);
       if (result.speakers) {
         setSpeakers((prev) => {
           const incoming = result.speakers!;
@@ -518,6 +520,22 @@ export function MediaEditor({
     },
     [setSegments, setProgress, labelStates],
   );
+
+  // After a refused undo (issue #718) the scope was re-ruled elsewhere, so this
+  // editor is stale. Adopt the whole run from the server. On failure the editor
+  // stays as it was until the next write or reload; the toast already says the
+  // undo did not apply.
+  const refetchAfterUndoConflict = useCallback(async () => {
+    try {
+      const res = await apiFetch(`/review/${runId}/labels`, {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+      });
+      onLabelsChanged((await res.json()) as LabelsResult, { keepUndo: true });
+    } catch (err) {
+      console.warn("Could not refresh the editor after a refused undo", err);
+    }
+  }, [runId, onLabelsChanged]);
 
   const current =
     cursor >= 0 && cursor < segments.length ? segments[cursor] : null;
@@ -1757,6 +1775,7 @@ export function MediaEditor({
             onLabelsChanged(data);
           }}
           onDismiss={() => setUndoInfo(null)}
+          onConflict={refetchAfterUndoConflict}
           writeGuard={undoWriteGuard}
         />
       )}

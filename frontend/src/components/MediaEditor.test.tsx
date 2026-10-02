@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MediaEditor, type MediaEditorProps } from "./MediaEditor";
-import { apiFetch } from "../lib/api-client";
+import { ApiError, apiFetch } from "../lib/api-client";
 import type {
   Segment,
   TranscriptPlayerHandle,
@@ -147,6 +147,61 @@ it("offers undo for a segment relabel and adopts the undo result", async () => {
   expect(screen.queryByText("Segment speaker changed.")).toBeNull();
   // The live region no longer claims the undone assignment.
   expect(screen.queryByText("Assigned to Bob.")).toBeNull();
+});
+
+async function relabelThenRefusedUndo() {
+  const expiresAt = new Date(Date.now() + 300_000).toISOString();
+  const relabeled = segments.map((seg, index) =>
+    index === 1 ? { ...seg, speaker: "Bob" } : seg);
+  vi.mocked(apiFetch)
+    .mockResolvedValueOnce({
+      json: async () => ({
+        segments: relabeled,
+        progress: { verified: 0, total: 2 },
+        undo: { kind: "relabel", decisionId: "dec-9", expiresAt },
+      }),
+    } as unknown as Response)
+    .mockRejectedValueOnce(new ApiError(409, "changed again"));
+  setup({ claimCsrf: "claim-csrf" });
+  fireEvent.click(screen.getByRole("radio", { name: "Just this segment" }));
+  fireEvent.click(screen.getByRole("option", { name: "Bob" }));
+  await screen.findByText("Segment speaker changed.");
+}
+
+it("refetches the run after a refused undo and keeps the toast", async () => {
+  await relabelThenRefusedUndo();
+  // Another tab moved line 1 on to Carol after the relabel.
+  const serverTruth = segments.map((seg, index) =>
+    index === 1 ? { ...seg, speaker: "Carol" } : seg);
+  vi.mocked(apiFetch).mockResolvedValueOnce({
+    json: async () => ({
+      segments: serverTruth,
+      progress: { verified: 1, total: 2 },
+      labels: defaultLabelStates,
+      speakers: [{ id: "alice", displayName: "Alice" }, { id: "carol", displayName: "Carol" }],
+    }),
+  } as unknown as Response);
+
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+  await screen.findByRole("button", { name: "Speaker 1: Carol" });
+  expect(vi.mocked(apiFetch).mock.calls[1][0]).toBe("/review/run/undo/relabel");
+  expect(vi.mocked(apiFetch).mock.calls[2][0]).toBe("/review/run/labels");
+  expect(vi.mocked(apiFetch).mock.calls[2][1]?.method).toBeUndefined();
+  expect(screen.getByText("Too late to undo. This was changed again since.")).toBeTruthy();
+});
+
+it("keeps the stale view and the toast when the refetch fails", async () => {
+  await relabelThenRefusedUndo();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.mocked(apiFetch).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+  await waitFor(() => expect(warn).toHaveBeenCalledOnce());
+  expect(vi.mocked(apiFetch).mock.calls[2][0]).toBe("/review/run/labels");
+  expect(screen.getByRole("button", { name: "Speaker 1: Bob" })).toBeTruthy();
+  expect(screen.getByText("Too late to undo. This was changed again since.")).toBeTruthy();
 });
 
 function line(index: number, label: string, speaker: string, seconds = 1, extra = {}) {

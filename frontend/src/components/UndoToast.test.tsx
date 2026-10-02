@@ -246,6 +246,58 @@ describe("UndoToast", () => {
     expect(props.onUndone).not.toHaveBeenCalled();
   });
 
+  it("refetches through onConflict on a drift 409, still holding the write guard", async () => {
+    vi.mocked(apiFetch).mockRejectedValueOnce(new ApiError(409, "drift"));
+    const busyRef = { current: false };
+    const setBusy = vi.fn();
+    let finish: () => void = () => {};
+    const onConflict = vi.fn(
+      () =>
+        new Promise<void>((r) => {
+          finish = r;
+        }),
+    );
+    const { props } = setup({
+      onConflict,
+      writeGuard: { busy: false, busyRef, setBusy },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+    await waitFor(() => {
+      expect(onConflict).toHaveBeenCalledOnce();
+    });
+    // No other edit may start until the refetch has landed.
+    expect(busyRef.current).toBe(true);
+    expect(screen.getByRole("status").textContent).toContain("Too late to undo.");
+    await act(async () => {
+      finish();
+    });
+    expect(busyRef.current).toBe(false);
+    expect(setBusy).toHaveBeenLastCalledWith(false);
+    expect(props.onUndone).not.toHaveBeenCalled();
+    expect(props.onDismiss).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, ApiError | Error]>([
+    ["a claim-conflict 409", new ApiError(409, "Claim taken.", "claim")],
+    ["a 400", new ApiError(400, "use the merge undo endpoint")],
+    ["a network failure", new TypeError("Failed to fetch")],
+  ])("does not refetch after %s", async (_name, error) => {
+    vi.mocked(apiFetch).mockRejectedValueOnce(error);
+    const onConflict = vi.fn(() => Promise.resolve());
+    const { props } = setup({ onConflict });
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getByRole("button", { name: "Undoing…" })).toBeTruthy();
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Undoing…" })).toBeNull();
+    });
+    expect(onConflict).not.toHaveBeenCalled();
+    expect(props.onUndone).not.toHaveBeenCalled();
+  });
+
   it("reports a 409 after the deadline as an expired window", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.mocked(apiFetch).mockImplementationOnce(() => {
