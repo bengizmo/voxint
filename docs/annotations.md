@@ -332,12 +332,13 @@ and ordering invariants.
 
 Stored and live pull-quotes (issue #86 Landing 2) build clipped `TranscriptLine`
 values (line text sliced to the annotation span, speaker preserved) and pass them
-through the existing `to_markdown` in `src/voxint/export/__init__.py`, so the quote
-bytes match the file export by construction. The projection lives beside the
-resolver (`clip_lines_for_export`); the markdown wrapper (`annotation_pull_quote`)
-lives in the pure export module and never imports the resolver.
+through the existing `to_markdown_blocks` in `src/voxint/export/__init__.py`, so the
+quote bytes match the `blocks`-style Markdown file export by construction. The
+projection lives beside the resolver (`clip_lines_for_export`); the markdown wrapper
+(`annotation_pull_quote`) lives in the pure export module and never imports the
+resolver.
 
-The body renders as the reading copy (`to_markdown(..., timestamps=False)`): timing
+The body renders as the reading copy (`to_markdown_blocks(..., timestamps=False)`): timing
 lives once, in the citation, so the body never shows a whole-segment bracket that
 would misstate a sub-segment highlight's span. A thin trailer follows the body:
 

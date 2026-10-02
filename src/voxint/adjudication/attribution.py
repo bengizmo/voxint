@@ -12,7 +12,7 @@ all live here exactly once, and the two projections can never disagree.
 
 import enum
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -89,13 +89,17 @@ class AttributedInterval:
         return self.resolution is Resolution.HUMAN_ASSIGN and self.speaker_id is not None
 
 
-def walk_attributions(session: Session, run_id: uuid.UUID) -> Iterator[Emission]:
+def walk_attributions(
+    session: Session, run_id: uuid.UUID, *, states: Mapping[str, LabelState] | None = None
+) -> Iterator[Emission]:
     """Walk a run's segments in order, expanding split children, yielding each
     with its resolver overlays. THE shared fold: every batch load and the
     split-expansion rule live here so no projection re-derives them. A split
     parent whose boundaries cannot derive >= 2 children is emitted whole
-    (fail-closed, matching the transcript rendering)."""
-    states = {s.label: s for s in label_states(session, run_id)}
+    (fail-closed, matching the transcript rendering). A supplied ``states`` map
+    reuses the caller's label resolution instead of loading it again."""
+    if states is None:
+        states = {s.label: s for s in label_states(session, run_id)}
     overrides = segment_states(session, run_id)
     range_overrides = word_range_states(session, run_id)
     review = review_states(session, run_id)

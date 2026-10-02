@@ -15,7 +15,6 @@ import tempfile
 import uuid
 import zipfile
 from collections.abc import Iterator, Sequence
-from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
@@ -160,7 +159,6 @@ from voxint.db.models import (
     AudioArtifact,
     ClaimField,
     Decision,
-    DiarizationTurn,
     EnrichmentCandidate,
     PipelineRun,
     ProfileDecision,
@@ -192,8 +190,6 @@ from voxint.export import (
     MEDIA_TYPES,
     TranscriptFormat,
     annotation_pull_quote,
-    render_transcript,
-    to_rttm,
 )
 from voxint.export.manifest import (
     ClipRef,
@@ -202,6 +198,13 @@ from voxint.export.manifest import (
     StageRole,
     build_quote_bundle,
     build_quote_manifest,
+)
+from voxint.export.service import (
+    ExportOptionError,
+    TranslationMismatchError,
+    parse_style,
+    render_run_rttm,
+    render_run_transcript,
 )
 from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import active_speakers
@@ -1223,15 +1226,13 @@ def enroll(
 # ?text=corrected|enhanced|raw (default corrected: operator corrections applied
 # over enhanced/raw; enhanced = pipeline text, no corrections; raw = immutable
 # ASR evidence), except RTTM which is speaker-label-only.
-def _export_translated_lines(
+def _export_translated_texts(
     session: Session,
     run_id: uuid.UUID,
-    lines: list[TranscriptLine],
     lang: str,
     variant: TranscriptText,
-) -> list[TranscriptLine]:
-    """The reviewed lines with translated text substituted, or an honest
-    HTTP failure — NEVER partial or mixed-language output (issue #133).
+) -> list[str]:
+    """Validated translated texts in emission order, or a fail-closed HTTP error.
 
     Fail-closed policy: 422 for an unknown code or a raw/enhanced variant
     (a translation is a rendition of the reviewed transcript only), 409
@@ -1278,18 +1279,9 @@ def _export_translated_lines(
     except TranslationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     texts = translation_texts(head)
-    if head.source_content_hash != current_hash or len(texts) != len(lines):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"the {label} translation is out of date — the transcript"
-                " changed since it was generated; re-translate from the run"
-                " page and retry"
-            ),
-        )
-    return [
-        dataclass_replace(ln, text=translated) for ln, translated in zip(lines, texts, strict=True)
-    ]
+    if head.source_content_hash != current_hash:
+        raise HTTPException(status_code=409, detail=_translation_stale_detail(target))
+    return texts
 
 
 def _export_transcript(
@@ -1300,18 +1292,32 @@ def _export_transcript(
     *,
     timestamps: bool = True,
     lang: str | None = None,
+    style: str | None = None,
 ) -> Response:
     _run_or_404(session, run_id)
     try:
         variant = parse_transcript_text(text)
+        selected_style = parse_style(style, fmt)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    lines = attributed_transcript(session, run_id, text=variant)
-    if lang is not None:
-        lines = _export_translated_lines(session, run_id, lines, lang, variant)
-    return Response(
-        content=render_transcript(lines, fmt, timestamps=timestamps),
-        media_type=MEDIA_TYPES[fmt.value],
+    texts = _export_translated_texts(session, run_id, lang, variant) if lang is not None else None
+    try:
+        content = render_run_transcript(
+            session, run_id, fmt, text=variant, timestamps=timestamps,
+            style=selected_style, translated_texts=texts,
+        )
+    except TranslationMismatchError as exc:
+        raise HTTPException(status_code=409, detail=_translation_stale_detail(lang or "")) from exc
+    return Response(content=content, media_type=MEDIA_TYPES[fmt.value])
+
+
+def _translation_stale_detail(lang: str) -> str:
+    """Use the same stale response for content and emission-count mismatches."""
+    label = language_label(normalized_language(lang) or lang)
+    return (
+        f"the {label} translation is out of date — the transcript"
+        " changed since it was generated; re-translate from the run"
+        " page and retry"
     )
 
 
@@ -1323,13 +1329,14 @@ def export_transcript_txt(
     text: str | None = None,
     timestamps: bool = True,
     lang: str | None = None,
+    style: str | None = None,
 ) -> Response:
     # ?timestamps=false drops the [start end] bracket column for a clean
     # reading copy (issue #52). Only txt and md honor the flag.
     # ?lang=<code> substitutes the current fresh translation (issue #133) —
-    # fail closed, see _export_translated_lines. All five formats take it.
+    # fail closed, see _export_translated_texts. All five formats take it.
     return _export_transcript(
-        run_id, session, TranscriptFormat.TXT, text, timestamps=timestamps, lang=lang
+        run_id, session, TranscriptFormat.TXT, text, timestamps=timestamps, lang=lang, style=style
     )
 
 
@@ -1341,6 +1348,7 @@ def export_transcript_md(
     text: str | None = None,
     timestamps: bool = True,
     lang: str | None = None,
+    style: str | None = None,
 ) -> Response:
     # Readable Markdown (issue #65): ## speaker headings + merged blockquotes.
     # ?timestamps=false drops the per-paragraph time range for a clean copy.
@@ -1351,6 +1359,7 @@ def export_transcript_md(
         text,
         timestamps=timestamps,
         lang=lang,
+        style=style,
     )
 
 
@@ -1361,8 +1370,9 @@ def export_transcript_srt(
     session: SessionDep,
     text: str | None = None,
     lang: str | None = None,
+    style: str | None = None,
 ) -> Response:
-    return _export_transcript(run_id, session, TranscriptFormat.SRT, text, lang=lang)
+    return _export_transcript(run_id, session, TranscriptFormat.SRT, text, lang=lang, style=style)
 
 
 @router.get("/review/{run_id}/export.vtt")
@@ -1372,8 +1382,9 @@ def export_transcript_vtt(
     session: SessionDep,
     text: str | None = None,
     lang: str | None = None,
+    style: str | None = None,
 ) -> Response:
-    return _export_transcript(run_id, session, TranscriptFormat.VTT, text, lang=lang)
+    return _export_transcript(run_id, session, TranscriptFormat.VTT, text, lang=lang, style=style)
 
 
 @router.get("/review/{run_id}/export.json")
@@ -1383,25 +1394,22 @@ def export_transcript_json(
     session: SessionDep,
     text: str | None = None,
     lang: str | None = None,
+    style: str | None = None,
 ) -> Response:
-    return _export_transcript(run_id, session, TranscriptFormat.JSON, text, lang=lang)
+    return _export_transcript(run_id, session, TranscriptFormat.JSON, text, lang=lang, style=style)
 
 
 @router.get("/review/{run_id}/export.rttm")
 def export_transcript_rttm(
-    run_id: uuid.UUID, operator: OperatorDep, session: SessionDep
+    run_id: uuid.UUID, operator: OperatorDep, session: SessionDep,
+    style: str | None = None,
 ) -> Response:
     _run_or_404(session, run_id)
-    turns = (
-        session.execute(
-            select(DiarizationTurn)
-            .where(DiarizationTurn.pipeline_run_id == run_id)
-            .order_by(DiarizationTurn.turn_index)
-        )
-        .scalars()
-        .all()
-    )
-    return Response(content=to_rttm(turns, str(run_id)), media_type=MEDIA_TYPES["rttm"])
+    try:
+        parse_style(style, None)
+    except ExportOptionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(content=render_run_rttm(session, run_id), media_type=MEDIA_TYPES["rttm"])
 
 
 # ---- Operator annotation layer (issue #86) --------------------------------

@@ -1965,18 +1965,20 @@ def _export(args: argparse.Namespace) -> int:
     """Write a run's transcript in a structured/subtitle format (or RTTM).
 
     Renders through the same ``voxint.export`` formatters the API export routes
-    use, so a piped export and a downloaded file are byte-identical. RTTM reads
-    diarization turns (raw labels); every other format reads attributed lines.
+    use, through the one ``voxint.export.service`` entry point, so a piped export
+    and a downloaded file are byte-identical. RTTM reads diarization turns (raw
+    labels); every other format reads the attributed transcript.
     """
-    from sqlalchemy import select
-
-    from voxint.adjudication.transcript import attributed_transcript, parse_transcript_text
-    from voxint.db.models import DiarizationTurn, PipelineRun
+    from voxint.adjudication.transcript import parse_transcript_text
+    from voxint.db.models import PipelineRun
     from voxint.db.session import build_session_factory
-    from voxint.export import TranscriptFormat, render_transcript, to_rttm
+    from voxint.export import TranscriptFormat
+    from voxint.export.service import parse_style, render_run_rttm, render_run_transcript
 
     try:
         variant = parse_transcript_text(args.text)
+        fmt = None if args.format == "rttm" else TranscriptFormat(args.format)
+        style = parse_style(args.style, fmt)
     except ValueError as exc:
         print(f"error: {exc}")
         return 2
@@ -1997,21 +1999,12 @@ def _export(args: argparse.Namespace) -> int:
             if session.get(PipelineRun, args.run_id) is None:
                 print(f"error: no run {args.run_id}")
                 return 2
-            if args.format == "rttm":
-                turns = (
-                    session.execute(
-                        select(DiarizationTurn)
-                        .where(DiarizationTurn.pipeline_run_id == args.run_id)
-                        .order_by(DiarizationTurn.turn_index)
-                    )
-                    .scalars()
-                    .all()
-                )
-                output = to_rttm(turns, str(args.run_id))
+            if fmt is None:
+                output = render_run_rttm(session, args.run_id)
             else:
-                lines = attributed_transcript(session, args.run_id, text=variant)
-                output = render_transcript(
-                    lines, TranscriptFormat(args.format), timestamps=args.timestamps
+                output = render_run_transcript(
+                    session, args.run_id, fmt, text=variant,
+                    timestamps=args.timestamps, style=style,
                 )
     finally:
         engine.dispose()
@@ -2927,6 +2920,16 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["txt", "md", "srt", "vtt", "json", "rttm"],
         default="txt",
         help="output format (default: txt)",
+    )
+    export_p.add_argument(
+        "--style",
+        choices=["turns", "blocks"],
+        help=(
+            "Markdown layout, --format md only (default: blocks, a speaker"
+            " heading over a blockquote per segment run; 'turns' assigns"
+            " speakers word by word and writes '[HH:MM:SS] **Name:** text'"
+            " paragraphs)"
+        ),
     )
     export_p.add_argument(
         "--text",

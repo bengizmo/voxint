@@ -1324,8 +1324,8 @@ def clip_lines_for_export(
 
     Each :class:`ResolvedSpan` is a code-point ``[start, end)`` slice of the current
     render line at ``line_index``; the clip preserves that line's speaker and seconds
-    so the export passes through :func:`voxint.export.to_markdown` byte-identically to
-    the transcript file export by construction (docs/annotations.md). A stale
+    so the export passes through :func:`voxint.export.to_markdown_blocks` byte-identically to
+    the ``--style blocks`` transcript export (docs/annotations.md). A stale
     annotation carries no spans and yields ``[]`` — the caller refuses the export
     rather than fabricating text from the captured copy."""
     clipped: list[TranscriptLine] = []

@@ -800,6 +800,7 @@ docker compose exec -T api voxint export <run-id> --format rttm  > out.rttm
 docker compose exec -T api voxint export <run-id> --format txt   > out.txt
 docker compose exec -T api voxint export <run-id> --format md    > out.md
 docker compose exec -T api voxint export <run-id> --format md --no-timestamps > reading.md
+docker compose exec -T api voxint export <run-id> --format md --style turns > turns.md
 ```
 
 - `--format`: `srt` (SubRip), `vtt` (WebVTT), `json` (array of
@@ -814,17 +815,71 @@ docker compose exec -T api voxint export <run-id> --format md --no-timestamps > 
   before corrections; `raw` is the immutable ASR output). Ignored for `rttm`,
   which carries raw diarization labels, not attributed text.
 - `--no-timestamps`: drop the per-line time column (`txt`) or per-paragraph time
-  range (`md`) for a clean reading copy. Ignored for the other formats, whose
-  timing is structural.
+  range (`md`) for a clean reading copy. In the `turns` style it also drops the
+  minute markers. Ignored for the other formats, whose timing is structural.
+- `--style turns|blocks`: the Markdown layout, for `md` only. `blocks` is the
+  default and is the layout described above. `turns` is described below. Passing
+  `--style` with any other format is an error.
 - `-o PATH`: write to a file instead of stdout (refuses to overwrite an
   existing file unless `--force`).
 
 The same exports are available over HTTP at
 `GET /review/{run_id}/export.{txt,md,srt,vtt,json,rttm}` (add `?text=raw` for the
-raw variant, or `?timestamps=false` on `txt`/`md` for the reading copy). RTTM
-uses the run's UUID as the file id and the raw diarization labels (`SPEAKER_00`
-…), so it round-trips against diarization scoring tools, and it deliberately
-does **not** substitute adjudicated speaker names.
+raw variant, `?timestamps=false` on `txt`/`md` for the reading copy, or
+`?style=turns` on `md`). The `/api/v1/runs/{run_id}/transcript` route takes the
+same `style` parameter with `format=md`. On either route, `style` with any
+other format is answered with 422.
+RTTM uses the run's UUID as the file id and the raw diarization labels
+(`SPEAKER_00` …), so it round-trips against diarization scoring tools, and it
+deliberately does **not** substitute adjudicated speaker names.
+
+#### The `turns` Markdown style
+
+The `blocks` style gives each transcript segment one speaker. A segment is 25 to
+50 seconds of audio, so when two people trade short remarks inside one segment,
+both end up under one name. The `turns` style assigns speakers word by word and
+lays the transcript out as a conversation:
+
+```markdown
+[00:00:12] **Alex:** Thanks for making time today.
+
+[00:00:15] **Sam:** Of course. Where should we start?
+
+[00:01:40] A later paragraph of a long turn has a timestamp and no name.
+```
+
+How it is built:
+
+- **Speakers per word.** Each word takes the speaker of the diarization turn it
+  overlaps most. This is computed when you export. Nothing stored changes, and
+  the other formats are unaffected.
+- **Your rulings win.** A segment you assigned to a speaker, and each piece of a
+  segment you split, stays whole under the speaker you chose. Excluded and
+  unknown voices keep their `(excluded)` and `Unknown` labels.
+- **Edited text.** Word timings belong to the raw transcript. If the enhanced or
+  corrected text differs from the raw text only in punctuation and
+  capitalization, the words still line up and the segment is split by speaker.
+  If the text was reworded and the segment holds two speakers, that segment
+  stays whole under its segment-level speaker, as in the `blocks` style.
+- **Paragraphs.** A turn starts a new paragraph after a pause of 3 seconds, and
+  after a sentence end once the paragraph has reached 20 words.
+- **Minute markers.** A paragraph that runs past a minute boundary carries an
+  inline `[HH:MM:00]` marker before the first word that starts in the new
+  minute.
+- **Translations.** With `?lang=`, each translated line stays whole under its
+  line's speaker. Translated text has no word timings.
+
+Limits:
+
+- The diarizer discards turns shorter than 0.5 seconds before they are stored,
+  so a one-word interjection inside another person's sentence can stay with
+  that person.
+- Word-level turns need text with spaces between words. Other scripts fall back
+  to one speaker per segment.
+- The style was validated on two-speaker recordings. Recordings with three or
+  more speakers are covered by synthetic tests only.
+- Word-level attribution is model output. It follows the stored evidence more
+  closely than the segment-level view, and it can still be wrong.
 
 The transcript view route serves the same attributed text as an on-screen
 **read mode**: `GET /runs/{run_id}/transcript?read=1` renders the transcript as
@@ -1906,7 +1961,7 @@ by their per-run claim token.
 | `GET /review/{run_id}` | 302 redirect into the run's media editor (`/media/{media_id}/editor?run=…`) |
 | `POST /review/{run_id}/labels/{label}/decision` | Record a human ruling for a label |
 | `POST /review/{run_id}/labels/{label}/enroll` | Enroll a label's audio as a roster speaker |
-| `GET /review/{run_id}/export.{txt,md,srt,vtt,json}?text=corrected\|raw\|enhanced` | Speaker-attributed transcript export (plain text, Markdown, SubRip, WebVTT, JSON); `txt`/`md` accept `&timestamps=false` for the reading copy |
+| `GET /review/{run_id}/export.{txt,md,srt,vtt,json}?text=corrected\|raw\|enhanced` | Speaker-attributed transcript export (plain text, Markdown, SubRip, WebVTT, JSON); `txt`/`md` accept `&timestamps=false` for the reading copy; `md` accepts `&style=turns\|blocks` |
 | `GET /review/{run_id}/export.rttm` | Diarization RTTM (raw labels, run-UUID file id) |
 | `GET /review/{run_id}/annotations/evidence-pack` | Printable evidence pack for the run's highlights and provenance; repeated `tag=` parameters filter it |
 | `GET /review/{run_id}/annotations/{annotation_id}/export.zip` | One highlight's Markdown quote, JSON provenance manifest, and extracted clip in a ZIP |
