@@ -55,6 +55,8 @@ export function MergeSuggestionToast({
 
   const doMerge = useCallback(async () => {
     if (busyRef.current) return;
+    // The guard covers the preview too: the merge sends the preview's expected
+    // rulings, so no other write may change them in between.
     busyRef.current = true;
     setBusy(true);
     writeGuard?.setBusy(true);

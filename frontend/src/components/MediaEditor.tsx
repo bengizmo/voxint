@@ -486,10 +486,17 @@ export function MediaEditor({
   );
   const applyResult = useSegmentPatch(segments, setSegments, setProgress);
 
-  // Counts whole-run adoptions, so a refetch can tell that a newer result (for
-  // example a speaker-rail ruling, which has its own write guard) landed while
-  // it was in flight.
+  // Counts whole-run adoptions, so a refetch can tell that a newer result landed
+  // while it was in flight. Every writer now shares the editor's write guard,
+  // which the refetch runs under, so this is a backstop (issue #726).
   const labelsAdoptedRef = useRef(0);
+  // The label states the next adoption diffs against. Updated on adoption, not
+  // only on render, so two results adopted before a re-render still compare
+  // each against the one before it (issue #726).
+  const labelStatesRef = useRef(labelStates);
+  useEffect(() => {
+    labelStatesRef.current = labelStates;
+  }, [labelStates]);
 
   // `keepUndo` leaves the undo toast up: a refetch after a refused undo must
   // not clear the toast that explains the refusal.
@@ -499,7 +506,7 @@ export function MediaEditor({
       setMergeSuggestion(null);
       const changedLabels = new Set<string>();
       for (const newLs of result.labels) {
-        const oldLs = labelStates.find((ls) => ls.label === newLs.label);
+        const oldLs = labelStatesRef.current.find((ls) => ls.label === newLs.label);
         if (!oldLs || oldLs.speakerId !== newLs.speakerId || oldLs.resolution !== newLs.resolution) {
           changedLabels.add(newLs.label);
         }
@@ -508,6 +515,7 @@ export function MediaEditor({
 
       setSegments(result.segments);
       setProgress(result.progress);
+      labelStatesRef.current = result.labels;
       setLabelStates(result.labels);
       if (!keepUndo) setUndoInfo(result.undo ?? null);
       if (result.speakers) {
@@ -527,7 +535,7 @@ export function MediaEditor({
       }
       void reloadAnnotationsRef.current?.();
     },
-    [setSegments, setProgress, labelStates],
+    [setSegments, setProgress],
   );
 
   // After a refused undo (issue #718) the scope was re-ruled elsewhere, so this
@@ -567,8 +575,33 @@ export function MediaEditor({
   const rawLabel = current?.label?.trim() ?? "";
   const showRawLabel = rawLabel !== "" && rawLabel !== speakerDisplayName;
 
+  // What the edit box last loaded, so a change to the current line's text
+  // (a whole-run result adopted from the rail, an undo or a refetch) can tell
+  // an unsaved edit from an untouched box (issue #726).
+  const loadedRef = useRef<{ segmentId: string | null; text: string }>({
+    segmentId: null,
+    text: "",
+  });
   useEffect(() => {
-    setEditText(current?.text ?? "");
+    const segmentId = current?.segmentId ?? null;
+    const text = current?.text ?? "";
+    const loaded = loadedRef.current;
+    loadedRef.current = { segmentId, text };
+    const edit = editTextRef.current;
+    if (
+      segmentId !== null &&
+      segmentId === loaded.segmentId &&
+      edit !== loaded.text &&
+      edit !== text
+    ) {
+      // Same line, new text, unsaved edit: keep the edit. Verify still warns
+      // before discarding it, and saving replaces the new text with it.
+      setAssignStatus(
+        "This line changed while you were editing. Your edit is kept; saving it replaces the new text.",
+      );
+      return;
+    }
+    setEditText(text);
     setConfirmDiscard(false);
     setAssignStatus(null);
     setMergeSuggestion(null);
@@ -659,6 +692,9 @@ export function MediaEditor({
       );
       if (!result) return;
       applyResult(index, result, { supersedeProvenance: true });
+      // Show what was saved: the server can return other text than was typed
+      // (an empty box reverts to the pipeline text), and a saved edit is clean.
+      setEditText(result.text);
       setConfirmDiscard(false);
       void reloadAnnotationsRef.current?.();
       editRef.current?.blur();

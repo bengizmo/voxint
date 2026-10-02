@@ -32,13 +32,17 @@ vi.mock("./SpeakerRail", () => ({
 }));
 vi.mock("./OutlinePanel", () => ({ OutlinePanel: () => null }));
 vi.mock("./KeymapHelp", () => ({ KeymapHelp: () => null }));
-const player = vi.hoisted(() => ({ previewSegment: vi.fn() }));
+const player = vi.hoisted(() => ({
+  previewSegment: vi.fn(),
+  highlightLabels: null as ReadonlySet<string> | null,
+}));
 vi.mock("./TranscriptPlayer", async () => {
   const { useImperativeHandle } = await import("react");
   return {
     TranscriptPlayer: (
       props: TranscriptPlayerProps & { ref?: React.Ref<TranscriptPlayerHandle> },
     ) => {
+      player.highlightLabels = props.highlightLabels ?? null;
       useImperativeHandle(props.ref, () => ({
         playSegment: () => {},
         previewSegment: player.previewSegment,
@@ -224,6 +228,20 @@ it("shares the editor guard with the rail through an undo conflict refetch", asy
   expect(busyRef?.current).toBe(false);
   expect(rail.writeGuard?.busy).toBe(false);
   expect(screen.getByRole("button", { name: "Verify & next v" })).toHaveProperty("disabled", false);
+});
+
+it("drops editor writes while a rail write holds the shared guard", () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  const guard = rail.writeGuard;
+  expect(guard).toBeDefined();
+  guard!.busyRef.current = true;
+
+  for (const key of ["v", "1"]) fireEvent.keyDown(document.body, { key });
+  fireEvent.click(screen.getByRole("button", { name: "Verify & next v" }));
+
+  expect(apiFetch).not.toHaveBeenCalled();
+  guard!.busyRef.current = false;
 });
 
 it("drops a refetch that a newer rail ruling overtook", async () => {
@@ -561,4 +579,92 @@ it("explains copying the previous speaker at the first segment", () => {
   fireEvent.keyDown(document.body, { key: "=" });
   expect(screen.getByText("No previous segment to copy from.")).toBeTruthy();
   expect(apiFetch).not.toHaveBeenCalled();
+});
+
+function adopt(result: Partial<LabelsResult>) {
+  act(() => {
+    rail.onLabelsChanged?.({
+      segments, progress: { verified: 0, total: 2 }, labels: defaultLabelStates, ...result,
+    });
+  });
+}
+
+function editBox(): HTMLTextAreaElement {
+  return screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Corrected transcript text for this segment",
+  });
+}
+
+const serverEdited = segments.map((seg, index) =>
+  index === 0 ? { ...seg, text: "Text 0 from elsewhere" } : seg);
+
+it("keeps an unsaved edit when an adopted result changes the line's text", () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  expect(editBox().value).toBe("Text 0");
+  fireEvent.change(editBox(), { target: { value: "My correction" } });
+
+  adopt({ segments: serverEdited });
+
+  expect(editBox().value).toBe("My correction");
+  expect(screen.getByText(
+    "This line changed while you were editing. Your edit is kept; saving it replaces the new text.",
+  )).toBeTruthy();
+});
+
+it("loads the new text into an untouched edit box", () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+
+  adopt({ segments: serverEdited });
+
+  expect(editBox().value).toBe("Text 0 from elsewhere");
+  expect(screen.queryByText(/This line changed while you were editing/)).toBeNull();
+});
+
+it.each([
+  ["the typed text", "Saved wording", "Saved wording"],
+  // An empty box reverts the line to its pipeline text.
+  ["other text than was typed", "", "Pipeline wording"],
+])("treats a save that returns %s as clean", async (_name, typed, saved) => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  fireEvent.change(editBox(), { target: { value: typed } });
+  vi.mocked(apiFetch).mockResolvedValueOnce({
+    json: async () => ({
+      verified: false, corrected: typed !== "", text: saved,
+      progress: { verified: 0, total: 2 },
+    }),
+  } as unknown as Response);
+
+  fireEvent.keyDown(editBox(), { key: "Enter", ctrlKey: true });
+
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
+  expect(String(vi.mocked(apiFetch).mock.calls[0][0])).toBe("/review/run/segments/seg-0/text");
+  await waitFor(() => expect(editBox().value).toBe(saved));
+  expect(screen.queryByText(/This line changed while you were editing/)).toBeNull();
+});
+
+it("highlights only the labels each adopted result changed", () => {
+  const twoLabels = [
+    { ...defaultLabelStates[0], label: "VOICE/A" },
+    { ...defaultLabelStates[0], label: "VOICE/B" },
+  ];
+  setup({ labelStates: twoLabels });
+  const toBob = (ls: (typeof twoLabels)[number]) =>
+    ({ ...ls, speakerId: "bob", speakerName: "Bob" });
+
+  // Two results adopted before a re-render: the second moved only VOICE/B.
+  act(() => {
+    rail.onLabelsChanged?.({
+      segments, progress: { verified: 0, total: 2 },
+      labels: [toBob(twoLabels[0]), twoLabels[1]],
+    });
+    rail.onLabelsChanged?.({
+      segments, progress: { verified: 0, total: 2 },
+      labels: [toBob(twoLabels[0]), toBob(twoLabels[1])],
+    });
+  });
+
+  expect([...(player.highlightLabels ?? [])]).toEqual(["VOICE/B"]);
 });
