@@ -66,16 +66,11 @@
 {% if not lines %}
 <p>No transcript segments for this run.</p>
 {% elif read %}
-{# Server-rendered reading view: one heading + paragraph per contiguous
-   same-speaker run. Grouping and timestamp formatting are done in Python
-   (paragraphize_transcript / format_timespan); the template only lays out the
-   supplied rows. Jinja autoescape keeps hostile transcript text literal. #}
+{# Shared reading paragraphs: Python decides grouping, clocks and markers;
+   Jinja autoescape keeps hostile transcript text literal. #}
 <div class="read-mode">
   {% for row in read_rows %}
-  <section class="read-para">
-    <h2>{{ row.speaker }}</h2>
-    <p class="read-body">{% if row.timespan %}<span class="t">{{ row.timespan }}</span> {% endif %}{% for tl in row.lines %}{% if not loop.first %}<br>{% endif %}{{ tl }}{% endfor %}</p>
-  </section>
+  <p class="read-para{% if row.speaker is none %} read-cont{% endif %}">{% if row.clock %}<span class="t">{{ row.clock }}</span> {% endif %}{% if row.speaker is not none %}<strong class="read-speaker">{{ row.speaker }}:</strong> {% endif %}{% for run in row.runs %}{% if not loop.first %} {% endif %}{% if run.marker %}<span class="t">{{ run.marker }}</span> {% endif %}{{ run.text }}{% endfor %}</p>
   {% endfor %}
 </div>
 {% else %}

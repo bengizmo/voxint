@@ -148,14 +148,22 @@ it in the format you need. Open the run from the workbench or the transcript pag
 ### Read it on screen
 
 Click **Read on screen** in the Download transcript menu. This opens a clean
-reading view: one heading per speaker followed by that speaker's words as plain
-paragraphs, with none of the per-line clutter the review player shows. It is the
-quickest way to read a finished transcript or share your screen with someone.
+reading view laid out like a conversation: each time the speaker changes, a new
+paragraph starts with that person's name in bold. A long turn is broken into
+paragraphs at pauses, and none of the per-line clutter of the review player
+shows. It is the quickest way to read a finished transcript or share your screen
+with someone.
+
+Speakers are worked out word by word from the recording's timing, so two people
+trading short remarks are kept apart even when the transcriber put them in one
+line. Any speaker you assigned or split yourself in the editor stays exactly as
+you set it.
 
 Two links let you adjust the view:
 
-- **Show timestamps** / **Hide timestamps** turns the per-paragraph times on and
-  off. The reading view opens without times, which reads best for sharing.
+- **Show timestamps** / **Hide timestamps** turns the paragraph times and the
+  minute markers on and off. The reading view opens without times, which reads
+  best for sharing.
 - **Exit reading view** returns you to the audio-synced player.
 
 ### Download a file
@@ -187,7 +195,7 @@ highlight shown by your current tag filter.
 | Format | Use this when… |
 |---|---|
 | **`.txt`** (plain text) | You want a readable transcript to open in a text editor or word processor, or to quote into a document. Choose the reading copy for clean pasting. |
-| **`.md`** (Markdown) | You want a formatted document with a heading for each speaker and their words as quoted paragraphs. Markdown opens in notes apps, wikis, and static-site tools, and reads fine as plain text too. |
+| **`.md`** (Markdown) | You want a document that reads like a conversation: a title, then one paragraph per speaker turn with the name in bold. Markdown opens in notes apps, wikis, and static-site tools, and reads fine as plain text too. |
 | **`.srt`** (SubRip subtitles) | You are captioning a video in most players, editors, or on video platforms. |
 | **`.vtt`** (WebVTT subtitles) | You are captioning video for a web page or web video player. |
 | **`.json`** (structured data) | You are feeding the transcript into another tool, or archiving it as structured segments (each with start time, end time, speaker, and text). |
@@ -195,21 +203,31 @@ highlight shown by your current tag filter.
 
 ### What a Markdown export looks like
 
-Each run of one speaker's lines becomes a heading followed by a single quoted
-paragraph. With timestamps on, the paragraph opens with the start and end time of
-that run in brackets:
+The file opens with the recording's title, then one paragraph per speaker turn.
+With timestamps on, each paragraph starts with the time it begins, and a
+paragraph that runs past a minute boundary carries a marker at that point:
 
 ```markdown
-## Maria Chen
+# Morning show, episode 12
 
-> [00:00:00.000–00:00:12.480] Thanks for having me on the show.
+[00:00:00] **Maria Chen:** Thanks for having me on the show.
 
-## Interviewer
-
-> [00:00:12.480–00:00:15.900] Glad you could make it.
+[00:00:12] **Interviewer:** Glad you could make it. Let's start with the
+question everyone asks. [00:01:00] How did you get into this work?
 ```
 
-The reading copy is the same, without the bracketed times. Special characters in
+When one person speaks for a long time, their turn is broken into paragraphs at
+pauses and sentence ends. A later paragraph of the same turn keeps its time and
+drops the name. The reading copy is the same, without the times and markers.
+
+Two limits are worth knowing. A very short interjection, under half a second,
+can stay inside the other person's turn, because the voice separation does not
+keep turns that short. And if you reworded a line in the editor so that it no
+longer matches the recording's words, that line stays whole under one speaker.
+
+The layout from before version 0.51 (a heading per speaker over a quoted
+paragraph) is still available from the command line with `--style blocks`, and
+over the web address by adding `&style=blocks` to the Markdown download link. Special characters in
 the transcript are written literally, so a stray symbol at the start of a line
 cannot turn into an accidental heading, list, or other formatting. A web address
 in the text stays as text, though some viewers will still make it clickable.

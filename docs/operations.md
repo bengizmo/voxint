@@ -800,33 +800,34 @@ docker compose exec -T api voxint export <run-id> --format rttm  > out.rttm
 docker compose exec -T api voxint export <run-id> --format txt   > out.txt
 docker compose exec -T api voxint export <run-id> --format md    > out.md
 docker compose exec -T api voxint export <run-id> --format md --no-timestamps > reading.md
-docker compose exec -T api voxint export <run-id> --format md --style turns > turns.md
+docker compose exec -T api voxint export <run-id> --format md --style blocks > blocks.md
 ```
 
 - `--format`: `srt` (SubRip), `vtt` (WebVTT), `json` (array of
   `{start_seconds, end_seconds, speaker, text}`), `rttm` (NIST diarization
-  format), `txt` (bracketed plain text), or `md` (Markdown: a `##` speaker
-  heading per contiguous same-speaker run over a `>` blockquote paragraph, with
-  a per-paragraph `[start-end]` time range gated by the timestamps flag).
-  Default `txt`.
+  format), `txt` (bracketed plain text), or `md` (Markdown laid out as speaker
+  turns, `[HH:MM:SS] **Name:** text`, under a title heading; see "The `turns`
+  Markdown style" below). Default `txt`.
 - `--text corrected|enhanced|raw`: which transcript variant to render (default
   `corrected`, the operator-effective text with review corrections applied over
   the enhanced or raw fallback; `enhanced` is the LLM-cleaned pipeline text
   before corrections; `raw` is the immutable ASR output). Ignored for `rttm`,
   which carries raw diarization labels, not attributed text.
-- `--no-timestamps`: drop the per-line time column (`txt`) or per-paragraph time
-  range (`md`) for a clean reading copy. In the `turns` style it also drops the
-  minute markers. Ignored for the other formats, whose timing is structural.
-- `--style turns|blocks`: the Markdown layout, for `md` only. `blocks` is the
-  default and is the layout described above. `turns` is described below. Passing
-  `--style` with any other format is an error.
+- `--no-timestamps`: drop the per-line time column (`txt`), or the paragraph
+  timestamps and minute markers (`md`), for a clean reading copy. Ignored for the
+  other formats, whose timing is structural.
+- `--style turns|blocks`: the Markdown layout, for `md` only. `turns` is the
+  default and is described below. `blocks` is the layout from before 0.51: a
+  `##` speaker heading per contiguous same-speaker run over a `>` blockquote
+  paragraph, with a per-paragraph `[start-end]` time range gated by the
+  timestamps flag. Passing `--style` with any other format is an error.
 - `-o PATH`: write to a file instead of stdout (refuses to overwrite an
   existing file unless `--force`).
 
 The same exports are available over HTTP at
 `GET /review/{run_id}/export.{txt,md,srt,vtt,json,rttm}` (add `?text=raw` for the
 raw variant, `?timestamps=false` on `txt`/`md` for the reading copy, or
-`?style=turns` on `md`). The `/api/v1/runs/{run_id}/transcript` route takes the
+`?style=blocks` on `md` for the older layout). The `/api/v1/runs/{run_id}/transcript` route takes the
 same `style` parameter with `format=md`. On either route, `style` with any
 other format is answered with 422.
 RTTM uses the run's UUID as the file id and the raw diarization labels
@@ -837,10 +838,13 @@ deliberately does **not** substitute adjudicated speaker names.
 
 The `blocks` style gives each transcript segment one speaker. A segment is 25 to
 50 seconds of audio, so when two people trade short remarks inside one segment,
-both end up under one name. The `turns` style assigns speakers word by word and
-lays the transcript out as a conversation:
+both end up under one name. The `turns` style, the default since 0.51, assigns
+speakers word by word and lays the transcript out as a conversation under a
+title heading (the recording's title from its sidecar, else its file name):
 
 ```markdown
+# Planning call
+
 [00:00:12] **Alex:** Thanks for making time today.
 
 [00:00:15] **Sam:** Of course. Where should we start?
@@ -881,12 +885,12 @@ Limits:
 - Word-level attribution is model output. It follows the stored evidence more
   closely than the segment-level view, and it can still be wrong.
 
-The transcript view route serves the same attributed text as an on-screen
-**read mode**: `GET /runs/{run_id}/transcript?read=1` renders the transcript as
-prose (one speaker heading over a merged paragraph), server-side with no
-JavaScript, gated by `&timestamps=false` for a timestamp-free reading view. Read
-mode and the Markdown export share one grouping helper (`paragraphize_transcript`)
-with the presentation seam, so neither can drift from the other exports.
+The transcript view route serves the same turns as an on-screen **read mode**:
+`GET /runs/{run_id}/transcript?read=1` renders the transcript as prose, one
+paragraph per speaker turn with the name in bold, server-side with no
+JavaScript, gated by `&timestamps=false` for a view without clocks or minute
+markers. Read mode and the `turns` Markdown export render the same
+`layout_turns` paragraphs, so neither can drift from the other.
 
 ### The browser console
 

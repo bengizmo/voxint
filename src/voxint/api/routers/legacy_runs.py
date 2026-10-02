@@ -32,9 +32,9 @@ from sqlalchemy.orm import Session
 from voxint.adjudication.transcript import (
     TranscriptText,
     attributed_transcript,
-    paragraphize_transcript,
     parse_transcript_text,
 )
+from voxint.adjudication.turns import attributed_turns
 from voxint.api.clip_service import ClipServiceError, resolve_servable_clip
 from voxint.api.csrf import (
     CSRF_ASSETS_CANCEL,
@@ -154,7 +154,8 @@ from voxint.enrichment.translations import (
     translation_source_hash,
     translation_texts,
 )
-from voxint.export import MEDIA_TYPES, format_timespan, transcript_payload
+from voxint.export import MEDIA_TYPES, format_clock, transcript_payload
+from voxint.export.reading import layout_turns
 from voxint.ingest import (
     MissingStageError,
     RestartPrerequisiteError,
@@ -1097,29 +1098,28 @@ def run_transcript(
         variant = parse_transcript_text(text)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    # Compute once, reuse for both the server-rendered fallback (`lines`) and
-    # the island props (avoids a double query). The transcript-player island
-    # (issue #48) reuses the already-auth-gated, Range-capable GET /media
-    # for its <audio src>; no new backend route.
+    # Keep lines for the empty check and translation context; load them once.
     lines = attributed_transcript(session, run_id, text=variant)
     settings: Settings = request.app.state.settings
     if read:
-        # Read mode (issue #65): a timestamp-optional, shareable reading view
-        # rendered purely server-side from the SAME presentation seam and the
-        # SAME paragraph grouping the Markdown export uses — no island, no
-        # second transcript truth. Grouping and timestamp formatting stay in
-        # Python; the template only lays out the supplied rows. Jinja
-        # autoescape (not the markdown-specific `_md_escape`) makes hostile
-        # transcript text render literally in the HTML view.
+        # Share the Markdown reading layout. Grouping and clock formatting stay
+        # in Python; the template lays out rows with Jinja autoescape.
         read_rows = [
             {
-                "speaker": para.speaker,
-                "lines": para.text.split("\n"),
-                "timespan": (
-                    format_timespan(para.start_seconds, para.end_seconds) if timestamps else None
-                ),
+                "speaker": None if para.continuation else para.speaker,
+                "clock": format_clock(para.start_seconds) if timestamps else None,
+                "runs": [
+                    {
+                        "marker": (
+                            format_clock(run.marker_seconds)
+                            if timestamps and run.marker_seconds is not None else None
+                        ),
+                        "text": run.text,
+                    }
+                    for run in para.runs
+                ],
             }
-            for para in paragraphize_transcript(lines)
+            for para in layout_turns(attributed_turns(session, run_id, text=variant))
         ]
         return templates.TemplateResponse(
             request,

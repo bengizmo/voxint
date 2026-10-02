@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from voxint.adjudication.transcript import TranscriptText, attributed_transcript
 from voxint.adjudication.turns import attributed_turns, translated_turns
-from voxint.db.models import DiarizationTurn
+from voxint.api.presentation import friendly_media_label, title_from_snapshot
+from voxint.db.models import DiarizationTurn, PipelineRun
 from voxint.export import TranscriptFormat, render_transcript, to_markdown_turns, to_rttm
 from voxint.export.reading import layout_turns
 
@@ -22,7 +23,8 @@ class MarkdownStyle(enum.StrEnum):
     BLOCKS = "blocks"
 
 
-DEFAULT_MARKDOWN_STYLE = MarkdownStyle.BLOCKS
+# Transcript Markdown defaults to the shared reading layout.
+DEFAULT_MARKDOWN_STYLE = MarkdownStyle.TURNS
 
 
 class ExportOptionError(ValueError):
@@ -45,6 +47,14 @@ def parse_style(raw: str | None, fmt: TranscriptFormat | None) -> MarkdownStyle 
         raise ExportOptionError(f"unknown style {raw!r}; valid: turns, blocks") from exc
 
 
+def export_title(session: Session, run_id: uuid.UUID) -> str:
+    """Use the frozen title or friendly source basename for the export header."""
+    run = session.get(PipelineRun, run_id)
+    if run is None:
+        raise ValueError(f"run {run_id} not found")
+    return friendly_media_label(title_from_snapshot(run.sidecar), run.media_item.source_path)
+
+
 def render_run_transcript(
     session: Session, run_id: uuid.UUID, fmt: TranscriptFormat, *, text: TranscriptText,
     timestamps: bool = True, style: MarkdownStyle | None = None,
@@ -60,7 +70,9 @@ def render_run_transcript(
                 turns = translated_turns(session, run_id, translated_texts)
             except ValueError as exc:
                 raise TranslationMismatchError from exc
-        return to_markdown_turns(layout_turns(turns), None, timestamps=timestamps)
+        return to_markdown_turns(
+            layout_turns(turns), header=export_title(session, run_id), timestamps=timestamps,
+        )
     lines = attributed_transcript(session, run_id, text=text)
     if translated_texts is not None:
         if len(lines) != len(translated_texts):

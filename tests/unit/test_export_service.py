@@ -3,12 +3,18 @@
 import pytest
 
 from voxint.export import TranscriptFormat
-from voxint.export.service import ExportOptionError, MarkdownStyle, parse_style
+from voxint.export.service import (
+    DEFAULT_MARKDOWN_STYLE,
+    ExportOptionError,
+    MarkdownStyle,
+    parse_style,
+)
 
 
 @pytest.mark.parametrize("raw", [None, ""])
-def test_style_defaults_to_blocks(raw: str | None) -> None:
-    assert parse_style(raw, TranscriptFormat.MARKDOWN) is MarkdownStyle.BLOCKS
+def test_style_defaults_to_turns(raw: str | None) -> None:
+    assert DEFAULT_MARKDOWN_STYLE is MarkdownStyle.TURNS
+    assert parse_style(raw, TranscriptFormat.MARKDOWN) is MarkdownStyle.TURNS
     assert parse_style(raw, TranscriptFormat.TXT) is None
     assert parse_style(raw, None) is None
 

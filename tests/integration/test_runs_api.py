@@ -1204,8 +1204,10 @@ def test_transcript_read_mode_groups_and_drops_island(
     assert resp.status_code == 200
     body = resp.text
     # Two paragraphs: S0's two lines merged, S1 alone.
-    assert body.count("<h2>S0</h2>") == 1
-    assert body.count("<h2>S1</h2>") == 1
+    assert body.count('<strong class="read-speaker">S0:</strong>') == 1
+    assert body.count('<p class="read-para">') == 2
+    assert "<h2>" not in body
+    assert body.count('<strong class="read-speaker">S1:</strong>') == 1
     assert "hello there" in body  # joined with a single ASCII space
     # Read mode is pure server-rendered HTML — no player island, no props JSON.
     assert 'data-island="transcript-player"' not in body
@@ -1222,13 +1224,75 @@ def test_transcript_read_mode_timestamps_toggle(
             labels=["S0"],
             segments=[("S0", "hello", None), ("S0", "there", None)],  # [0,8]+[10,18]
         )
-    # timestamps=true → the merged paragraph opens with the full run span.
+    # timestamps=true opens the merged paragraph with its start clock.
     on = client.get(f"/runs/{run_id}/transcript", params={"read": "1", "timestamps": "true"}).text
-    assert format_timespan(0.0, 18.0) in on
+    assert '<span class="t">[00:00:00]</span>' in on
+    assert format_timespan(0.0, 18.0) not in on
     # timestamps=false → no bracketed range.
     off = client.get(f"/runs/{run_id}/transcript", params={"read": "1", "timestamps": "false"}).text
     assert format_timespan(0.0, 18.0) not in off
     assert "[00:00:" not in off
+
+
+@pytest.mark.parametrize("continuation", [True, False])
+def test_transcript_read_mode_continuation_and_minute_marker(
+    client: TestClient, session_factory: sessionmaker[Session], continuation: bool,
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(
+            session, labels=["S0"],
+            segments=[("S0", "hello", None), ("S0", "there", None)],
+        )
+        segments = session.scalars(select(TranscriptSegment).where(
+            TranscriptSegment.pipeline_run_id == run_id,
+        ).order_by(TranscriptSegment.segment_index)).all()
+        segments[0].start_seconds = 55
+        segments[0].end_seconds = 56 if continuation else 59
+        segments[1].start_seconds = 61
+        segments[1].end_seconds = 65
+        session.commit()
+    for timestamps in (True, False):
+        body = client.get(f"/runs/{run_id}/transcript", params={
+            "read": "1", "timestamps": str(timestamps).lower(),
+        }).text
+        clock = '<span class="t">[00:00:55]</span> ' if timestamps else ""
+        speaker = '<strong class="read-speaker">S0:</strong> '
+        if continuation:
+            next_clock = '<span class="t">[00:01:01]</span> ' if timestamps else ""
+            assert f'<p class="read-para">{clock}{speaker}hello</p>' in body
+            assert f'<p class="read-para read-cont">{next_clock}there</p>' in body
+            assert body.count('<p class="read-para') == 2
+        else:
+            marker = '<span class="t">[00:01:00]</span> ' if timestamps else ""
+            assert f'<p class="read-para">{clock}{speaker}hello {marker}there</p>' in body
+            assert body.count('<p class="read-para') == 1
+        assert body.count(speaker) == 1
+        assert "<h2>" not in body
+        if not timestamps:
+            assert '<span class="t">' not in body
+            assert "[00:00:" not in body
+            assert "[00:01:" not in body
+
+
+def test_transcript_read_mode_word_timed_speaker_change(
+    client: TestClient, session_factory: sessionmaker[Session],
+) -> None:
+    from tests.integration.test_turn_exports import seed_words
+
+    with session_factory() as session:
+        run_id = seed_words(session)
+    body = client.get(f"/runs/{run_id}/transcript", params={"read": "1"}).text
+    assert body.count('<p class="read-para">') == 2
+    assert (
+        '<p class="read-para"><span class="t">[00:00:00]</span> '
+        '<strong class="read-speaker">Alex:</strong> Hello</p>'
+    ) in body
+    assert (
+        '<p class="read-para"><span class="t">[00:00:01]</span> '
+        '<strong class="read-speaker">Sam:</strong> there.</p>'
+    ) in body
+    assert "<h2>" not in body
+    assert 'data-island="transcript-player"' not in body
 
 
 def test_transcript_read_mode_preserves_query_in_toggles(
@@ -1257,7 +1321,7 @@ def test_transcript_read_mode_preserves_query_in_toggles(
 def test_transcript_read_mode_attribution_matches_export(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
-    # Read mode shares attributed_transcript with the exports: the SAME
+    # Read mode shares speaker resolution with the exports: the SAME
     # corrected→enhanced→raw precedence and the SAME speaker attribution, so a
     # grounded name and an excluded label read identically across both surfaces.
     with session_factory() as session:
@@ -1277,12 +1341,14 @@ def test_transcript_read_mode_attribution_matches_export(
             )
         ).scalar_one()
     read = client.get(f"/runs/{run_id}/transcript", params={"read": "1"}).text
-    assert f"<h2>{s0}</h2>" in read  # grounded → display name
+    assert f'<strong class="read-speaker">{s0}:</strong>' in read  # grounded → display name
     assert "s0 enh" in read  # default corrected → enhanced fallback
-    assert "<h2>(excluded) S1</h2>" in read
+    assert '<strong class="read-speaker">(excluded) S1:</strong>' in read
     assert "s1 raw" in read  # enhanced NULL → raw fallback
     export = client.get(f"/review/{run_id}/export.txt").text
     assert s0 in export and "(excluded) S1" in export
+    markdown = client.get(f"/review/{run_id}/export.md").text
+    assert f"**{s0}:**" in markdown and "**(excluded) S1:**" in markdown
     # A raw read view ignores the enhancement, exactly like the raw export.
     raw = client.get(f"/runs/{run_id}/transcript", params={"read": "1", "text": "raw"}).text
     assert "s0 raw" in raw and "s0 enh" not in raw
@@ -1321,25 +1387,35 @@ def test_transcript_read_mode_rejects_bad_text(
 def test_export_md_route_bytes_and_media_type(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
-    # The Markdown route funnels through the same render_transcript as every other
-    # export; assert byte-exact output (headings, merged blockquote, time range,
-    # trailing newline) and the Markdown media type.
+    # Pin both the deliberate turns default and the legacy blocks bytes.
     with session_factory() as session:
         run_id = make_run(
             session,
             labels=["S0", "S1"],
             segments=[("S0", "hello", None), ("S1", "bye", None)],
         )
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        title = run.media_item.source_path.rsplit("/", 1)[-1]
     ts0 = format_timespan(0.0, 8.0)
     ts1 = format_timespan(10.0, 18.0)
     expected = f"## S0\n\n> {ts0} hello\n\n## S1\n\n> {ts1} bye\n"
-    resp = client.get(f"/review/{run_id}/export.md")
+    resp = client.get(f"/review/{run_id}/export.md", params={"style": "blocks"})
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/markdown")
     assert resp.content == expected.encode()
-    # ?timestamps=false drops the per-paragraph range for a clean reading copy.
-    clean = client.get(f"/review/{run_id}/export.md", params={"timestamps": "false"}).text
-    assert ts0 not in clean and "hello" in clean
+    clean = client.get(
+        f"/review/{run_id}/export.md", params={"style": "blocks", "timestamps": "false"},
+    )
+    assert clean.content == b"## S0\n\n> hello\n\n## S1\n\n> bye\n"
+    for timestamps in (True, False):
+        default = client.get(
+            f"/review/{run_id}/export.md", params={"timestamps": str(timestamps).lower()},
+        )
+        assert default.status_code == 200
+        assert default.headers["content-type"].startswith("text/markdown")
+        a, b = ("[00:00:00] ", "[00:00:10] ") if timestamps else ("", "")
+        assert default.content == f"# {title}\n\n{a}**S0:** hello\n\n{b}**S1:** bye\n".encode()
 
 
 def test_list_runs_sidecar_title_wins_over_scraped(

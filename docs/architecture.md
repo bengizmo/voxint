@@ -775,15 +775,19 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   (keys are a frozen contract). The picker offers a **Read on screen** link above
   the format list. RTTM carries raw diarization labels only, so it takes no
   variant.
-- **Read mode + Markdown** (issue #65): a server-rendered on-screen reading view
-  (`GET /runs/{id}/transcript?read=1`, no island) and a `.md` export both render
-  from the same `attributed_transcript` seam through one grouping helper,
-  `paragraphize_transcript` (in `src/voxint/adjudication/transcript.py`), which
-  merges adjacent same-speaker lines into paragraphs. `to_markdown` writes `##`
-  speaker headings over `>` blockquotes with `format_timespan` time ranges, and
-  funnels through `render_transcript` for CLI/route byte parity; read mode renders
-  the same paragraphs via Jinja autoescape. So the two surfaces cannot drift from
-  each other or from the other exports. Deliberately not built: a speaker-name
+- **Read mode + Markdown** (issues #65, #741): a server-rendered on-screen
+  reading view (`GET /runs/{id}/transcript?read=1`, no island) and the `.md`
+  export both render the same speaker turns. `attributed_turns`
+  (`src/voxint/adjudication/turns.py`) joins the stored per-word timings to the
+  diarization turns at read time, composed with `walk_attributions` so every
+  operator ruling still wins; `layout_turns` (`src/voxint/export/reading.py`)
+  breaks turns into paragraphs with minute markers; `to_markdown_turns` writes
+  `[HH:MM:SS] **Name:** text` lines under a title heading, and read mode lays
+  out the same paragraphs via Jinja autoescape. Every export surface (CLI,
+  console download, `/api/v1`) goes through one entry point,
+  `src/voxint/export/service.py`, so bytes agree by construction. The pre-0.51
+  layout (`##` headings over `>` blockquotes from `paragraphize_transcript`)
+  stays as `--style blocks` and remains the body of annotation pull-quotes. Deliberately not built: a speaker-name
   omission toggle (caption guidance keeps speaker IDs; anonymization belongs in
   the roster, not the exporter) and a plain-`.txt` default flip (the timestamped
   default is a golden-pinned contract; the reading copy is surfaced in the UI

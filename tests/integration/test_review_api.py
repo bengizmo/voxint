@@ -832,6 +832,9 @@ def test_correct_segment_precedence_and_clears_verification(
 
     default_view = client.get(f"/runs/{run_id}/transcript", params={"read": "1"}).text
     raw_view = client.get(f"/runs/{run_id}/transcript", params={"text": "raw", "read": "1"}).text
+    assert '<strong class="read-speaker">' in default_view
+    assert '<span class="t">[00:00:00]</span>' in default_view
+    assert "<h2>" not in default_view
     assert "hello THERE (fixed)" in default_view
     assert "hello THERE (fixed)" not in raw_view
     assert "hello there" in raw_view
