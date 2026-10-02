@@ -700,6 +700,9 @@ export function MediaEditor({
       if (currentRef.current?.segmentId === segmentId) {
         loadedRef.current = { segmentId, text: result.text };
         if (editTextRef.current === submitted) setEditText(result.text);
+        // A save that leaves the line's text as it was never reruns the sync
+        // effect, so clear the overtaken note here.
+        setEditOvertaken(false);
       }
       applyResult(index, result, { supersedeProvenance: true });
       setConfirmDiscard(false);

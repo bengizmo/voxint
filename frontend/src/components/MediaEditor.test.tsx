@@ -726,3 +726,20 @@ it("keeps typing done while a save was pending, without the overtaken notice", a
   expect(editBox().value).toBe("First, then more");
   expect(screen.queryByText(/This line changed while you were editing/)).toBeNull();
 });
+
+it("clears the overtaken notice when the kept edit is saved as the line's text", async () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  fireEvent.change(editBox(), { target: { value: "My correction" } });
+  adopt({ segments: serverEdited });
+  expect(screen.getByText(/This line changed while you were editing/)).toBeTruthy();
+
+  // Settle on the new text and save it: the line's text does not change.
+  fireEvent.change(editBox(), { target: { value: "Text 0 from elsewhere" } });
+  const finish = deferredSave();
+  fireEvent.keyDown(editBox(), { key: "Enter", ctrlKey: true });
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
+  await finish("Text 0 from elsewhere");
+
+  expect(screen.queryByText(/This line changed while you were editing/)).toBeNull();
+});
