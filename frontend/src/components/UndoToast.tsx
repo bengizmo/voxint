@@ -1,6 +1,7 @@
-import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, apiFetch } from "../lib/api-client";
+import type { WriteGuard } from "../lib/editor-mutations";
 import type { LabelsResult } from "./SpeakerRail";
 
 type UndoPayload = NonNullable<LabelsResult["undo"]>;
@@ -18,15 +19,10 @@ interface UndoToastProps {
   // server truth before any other edit runs (issue #718). It must settle
   // promptly and never reject: the guard stays held until it does.
   onConflict?: () => Promise<void>;
-  // The editor's write guard. An undo holds it so no other edit can be in
-  // flight at the same time and land its response out of order. `busy` disables
-  // the button while another edit holds it, so a click there is never silently
-  // dropped.
-  writeGuard?: {
-    busy: boolean;
-    busyRef: RefObject<boolean>;
-    setBusy: (busy: boolean) => void;
-  };
+  // Shared by the editor, rail, and merge suggestion. Undo holds it through
+  // conflict refetches so whole-run responses cannot land out of order.
+  // `busy` disables the button while another edit holds it.
+  writeGuard?: WriteGuard;
 }
 
 const UNDO_COPY: Record<UndoPayload["kind"], string> = {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, apiFetch } from "../lib/api-client";
+import type { WriteGuard } from "../lib/editor-mutations";
 import { makeNonce } from "../lib/nonce";
 import { SpeakerCombobox } from "./SpeakerCombobox";
 import {
@@ -41,6 +42,7 @@ interface SpeakerRailProps {
   onAssignment?: (label: string, speakerId: string, freshLabels: LabelStateShape[]) => void;
   onHearVoice?: (label: string) => void;
   hearableLabels?: ReadonlySet<string>;
+  writeGuard?: WriteGuard;
 }
 
 type Speaker = { id: string; displayName: string };
@@ -301,12 +303,14 @@ function MergePanel({
   busy,
   onMerge,
   onClaimLost,
+  writeGuard,
 }: {
   runId: string;
   reviewToken: string | null;
   labelStates: LabelStateShape[];
   speakers: { id: string; displayName: string }[];
   busy: boolean;
+  writeGuard: WriteGuard;
   onMerge: (data: LabelsResult) => void;
   onClaimLost: () => void;
 }) {
@@ -363,8 +367,10 @@ function MergePanel({
   };
 
   const doMerge = async () => {
-    if (!reviewToken || !preview) return;
+    if (!reviewToken || !preview || writeGuard.busyRef.current) return;
+    writeGuard.busyRef.current = true;
     setMergeBusy(true);
+    writeGuard.setBusy(true);
     setError(null);
     try {
       const body = new URLSearchParams();
@@ -395,7 +401,9 @@ function MergePanel({
         setError(err instanceof ApiError ? err.detail : "Merge failed.");
       }
     } finally {
+      writeGuard.busyRef.current = false;
       setMergeBusy(false);
+      writeGuard.setBusy(false);
     }
   };
 
@@ -480,7 +488,7 @@ function MergePanel({
             <button
               type="button"
               onClick={() => void doMerge()}
-              disabled={mergeBusy}
+              disabled={busy || mergeBusy}
               className="secondary text-sm mr-2"
             >
               {mergeBusy ? "Merging…" : "Confirm merge"}
@@ -516,11 +524,14 @@ export function SpeakerRail({
   onAssignment,
   onHearVoice,
   hearableLabels,
+  writeGuard,
 }: SpeakerRailProps) {
   const [labelStates, setLabelStates] =
     useState<LabelStateShape[]>(initialStates);
-  const [busy, setBusy] = useState(false);
-  const busyRef = useRef(false);
+  const [localBusy, setBusy] = useState(false);
+  const localBusyRef = useRef(false);
+  const busyRef = writeGuard?.busyRef ?? localBusyRef;
+  const busy = localBusy || (writeGuard?.busy ?? false);
   const [error, setError] = useState<string | null>(null);
   const [reviewMode, setReviewMode] = useState<boolean>(false);
   const [reviewIndex, setReviewIndex] = useState<number>(0);
@@ -558,6 +569,7 @@ export function SpeakerRail({
       if (!reviewToken || busyRef.current) return;
       busyRef.current = true;
       setBusy(true);
+      writeGuard?.setBusy(true);
       setError(null);
       try {
         const body: Record<string, string> = {
@@ -591,9 +603,10 @@ export function SpeakerRail({
       } finally {
         busyRef.current = false;
         setBusy(false);
+        writeGuard?.setBusy(false);
       }
     },
-    [reviewToken, runId, onClaimLost, adoptResult, onAssignment],
+    [reviewToken, runId, onClaimLost, adoptResult, onAssignment, busyRef, writeGuard],
   );
 
   const enroll = useCallback(
@@ -601,6 +614,7 @@ export function SpeakerRail({
       if (!reviewToken || busyRef.current) return false;
       busyRef.current = true;
       setBusy(true);
+      writeGuard?.setBusy(true);
       setError(null);
       try {
         const body: Record<string, string> = {
@@ -632,9 +646,10 @@ export function SpeakerRail({
       } finally {
         busyRef.current = false;
         setBusy(false);
+        writeGuard?.setBusy(false);
       }
     },
-    [reviewToken, runId, onClaimLost, adoptResult],
+    [reviewToken, runId, onClaimLost, adoptResult, busyRef, writeGuard],
   );
 
   const groups = partition(labelStates);
@@ -834,6 +849,7 @@ export function SpeakerRail({
           labelStates={labelStates}
           speakers={speakers}
           busy={busy}
+          writeGuard={writeGuard ?? { busy, busyRef, setBusy }}
           onMerge={adoptResult}
           onClaimLost={onClaimLost}
         />

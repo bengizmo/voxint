@@ -416,7 +416,7 @@ export function MediaEditor({
     }
   }, [popoverTarget]);
 
-  const undoWriteGuard = useMemo(
+  const writeGuard = useMemo(
     () => ({ busy, busyRef, setBusy }),
     [busy, busyRef, setBusy],
   );
@@ -1750,6 +1750,7 @@ export function MediaEditor({
             onAssignment={handleRailAssignment}
             onHearVoice={capability.seekEnabled ? hearVoice : undefined}
             hearableLabels={hearableLabels}
+            writeGuard={writeGuard}
           />
         </div>
 
@@ -1797,7 +1798,7 @@ export function MediaEditor({
           }}
           onDismiss={() => setUndoInfo(null)}
           onConflict={refetchAfterUndoConflict}
-          writeGuard={undoWriteGuard}
+          writeGuard={writeGuard}
         />
       )}
       {mergeSuggestion && reviewToken && (
@@ -1810,6 +1811,7 @@ export function MediaEditor({
           onMerged={handleMergeSuggestionMerged}
           onDismiss={dismissMergeSuggestion}
           stacked={!!undoInfo}
+          writeGuard={writeGuard}
         />
       )}
     </>

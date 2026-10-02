@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MediaEditor, type MediaEditorProps } from "./MediaEditor";
 import { ApiError, apiFetch } from "../lib/api-client";
+import type { WriteGuard } from "../lib/editor-mutations";
 import type { LabelsResult } from "./SpeakerRail";
 import type {
   Segment,
@@ -19,11 +20,13 @@ vi.mock("./AnnotationLayer", () => ({
 }));
 // The rail renders nothing; tests reach its onLabelsChanged through `rail`.
 const rail = vi.hoisted(() => ({
+  writeGuard: undefined as WriteGuard | undefined,
   onLabelsChanged: null as ((result: LabelsResult) => void) | null,
 }));
 vi.mock("./SpeakerRail", () => ({
-  SpeakerRail: (props: { onLabelsChanged: (result: LabelsResult) => void }) => {
+  SpeakerRail: (props: { writeGuard?: WriteGuard; onLabelsChanged: (result: LabelsResult) => void }) => {
     rail.onLabelsChanged = props.onLabelsChanged;
+    rail.writeGuard = props.writeGuard;
     return null;
   },
 }));
@@ -202,6 +205,27 @@ it("refetches the run after a refused undo and keeps the toast", async () => {
   expect(screen.getByText("Too late to undo. This was changed again since.")).toBeTruthy();
 });
 
+it("shares the editor guard with the rail through an undo conflict refetch", async () => {
+  await relabelThenRefusedUndo();
+  const busyRef = rail.writeGuard?.busyRef;
+  expect(busyRef?.current).toBe(false);
+  let respond!: (value: Response) => void;
+  vi.mocked(apiFetch).mockReturnValueOnce(new Promise<Response>((resolve) => { respond = resolve; }));
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(3));
+  expect(vi.mocked(apiFetch).mock.calls[2][0]).toBe("/review/run/labels");
+  expect(rail.writeGuard?.busyRef).toBe(busyRef);
+  expect(busyRef?.current).toBe(true);
+  expect(rail.writeGuard?.busy).toBe(true);
+  expect(screen.getByRole("button", { name: "Verify & next v" })).toHaveProperty("disabled", true);
+  await act(async () => respond({
+    json: async () => ({ segments, labels: defaultLabelStates, progress: { verified: 0, total: 2 } }),
+  } as Response));
+  expect(busyRef?.current).toBe(false);
+  expect(rail.writeGuard?.busy).toBe(false);
+  expect(screen.getByRole("button", { name: "Verify & next v" })).toHaveProperty("disabled", false);
+});
+
 it("drops a refetch that a newer rail ruling overtook", async () => {
   await relabelThenRefusedUndo();
   let respond: (value: Response) => void = () => {};
@@ -213,7 +237,8 @@ it("drops a refetch that a newer rail ruling overtook", async () => {
 
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(3));
-  // A rail ruling (own write guard) lands while the GET is in flight.
+  // Inject an adoption directly to exercise the #725 counter drop; the real
+  // rail now shares the editor guard and cannot write while this GET is in flight.
   const ruled = segments.map((seg, index) =>
     index === 1 ? { ...seg, speaker: "Dana" } : seg);
   act(() => {
