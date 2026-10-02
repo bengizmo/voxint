@@ -1755,7 +1755,10 @@ finished, so the review flow below becomes reachable only after onboarding compl
    redirects) shows the ones awaiting a human ruling.
 2. **Claim**: claiming a run gives you an exclusive slot for
    `REVIEW_CLAIM_TTL_SECONDS` (default 30 min); a closed tab self-releases
-   when the TTL lapses, so the queue never dams.
+   when the TTL lapses, so the queue never dams. With several operators,
+   closing the editor tab also releases the claim straight away. A single
+   operator's claim is kept until the TTL lapses, so reloading the editor
+   keeps editing, and reopening the run claims it again.
 3. **Workbench**: the media editor (`/media/{media_id}/editor?run=…`;
    `/review/{run_id}` redirects there): per-label transcript previews and
    audio playback; record a **decision** per diarization label (confirm /

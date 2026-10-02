@@ -6,6 +6,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **Reloading the media editor no longer loses your claim** (#722). With one
+  operator, refreshing the editor page (or following a tutorial step) used to
+  release the editing claim while the new page carried on with it, so the next
+  save, verify or speaker change failed with "Your claim expired or was taken
+  over." A single operator's claim now stays held until its time limit lapses
+  (`REVIEW_CLAIM_TTL_SECONDS`). With several operators (`VOXINT_MULTI_USER`),
+  closing the editor still releases the claim right away so someone else can
+  pick it up, and a reload in that mode can still lose it.
+
 ## [0.50.0] - 2026-10-01
 
 ### Added

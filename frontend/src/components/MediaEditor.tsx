@@ -211,7 +211,7 @@ export function MediaEditor({
   // Heartbeat: refresh the claim TTL without rotating the token.  A stale
   // tab whose token no longer matches gets 409 and drops to claimLost.
   // The interval keeps running in background tabs (browsers throttle to
-  // ~1/min, well within the default 600s TTL).  An immediate catch-up
+  // ~1/min, well within the default 1800s TTL).  An immediate catch-up
   // refresh fires when the tab becomes visible again.
   useEffect(() => {
     if (!claimed || !claimCsrf) return;
@@ -261,9 +261,13 @@ export function MediaEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only
   }, []);
 
-  // Release on unload (best-effort — sendBeacon for reliability).
+  // Release on unload (best-effort — sendBeacon for reliability) so another
+  // operator can claim sooner.  A single operator has nobody to hand off to
+  // and can always re-claim their own run, so the claim lapses by TTL
+  // instead: releasing would race a reload or tutorial step that carries the
+  // same token in its URL and leave the new page on a dead claim (#722).
   useEffect(() => {
-    if (!claimed) return;
+    if (!claimed || !multiUser) return;
     const onUnload = () => {
       const tok = reviewTokenRef.current;
       if (!tok) return;
@@ -282,7 +286,7 @@ export function MediaEditor({
       window.removeEventListener("beforeunload", onUnload);
       window.removeEventListener("pagehide", onUnload);
     };
-  }, [claimed, runId, mediaId]);
+  }, [claimed, multiUser, runId, mediaId]);
 
   const editTextRef = useRef(editText);
   editTextRef.current = editText;

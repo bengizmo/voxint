@@ -303,6 +303,42 @@ it.each([
   expect(apiFetch).not.toHaveBeenCalled();
 });
 
+it("keeps a single operator's claim across a reload", async () => {
+  // #722: the reloaded page adopts the token from its URL, so releasing on
+  // unload would leave it holding a dead claim.
+  const beacon = vi.fn(() => true);
+  vi.stubGlobal("navigator", { ...navigator, sendBeacon: beacon });
+  renderUnclaimed({ reviewToken: "held" });
+  window.dispatchEvent(new Event("beforeunload"));
+  window.dispatchEvent(new Event("pagehide"));
+  expect(beacon).not.toHaveBeenCalled();
+
+  // The reloaded page mounts with the same token and edits with it.
+  cleanup();
+  renderUnclaimed({ reviewToken: "held" });
+  fireEvent.keyDown(document.body, { key: "v" });
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
+  expect(vi.mocked(apiFetch).mock.calls[0][0]).toBe("/review/run/segments/seg-0/verify");
+  expect(body().get("token")).toBe("held");
+  expect(screen.queryByText(/expired or was taken over/)).toBeNull();
+});
+
+it.each(["beforeunload", "pagehide"])(
+  "releases a multi-user claim on %s",
+  (event) => {
+    const beacon = vi.fn<typeof navigator.sendBeacon>(() => true);
+    vi.stubGlobal("navigator", { ...navigator, sendBeacon: beacon });
+    renderUnclaimed({ reviewToken: "held", multiUser: true });
+    window.dispatchEvent(new Event(event));
+    expect(beacon).toHaveBeenCalledOnce();
+    const [url, data] = beacon.mock.calls[0];
+    expect(url).toBe("/media/media/editor/release");
+    const sent = new URLSearchParams(data as URLSearchParams);
+    expect(sent.get("run_id")).toBe("run");
+    expect(sent.get("token")).toBe("held");
+  },
+);
+
 it("encodes label-scope assignment paths", async () => {
   setup();
   fireEvent.click(screen.getByRole("radio", { name: /All segments/ }));
