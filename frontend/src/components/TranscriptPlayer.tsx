@@ -778,8 +778,10 @@ export const TranscriptPlayer = forwardRef<
     const seg = segments[index];
     if (!seg) return;
     if (onSegmentSelect?.(index) === false) {
-      // The cursor stayed: play it as a preview does, without following.
-      suppressFollowOnceRef.current = true;
+      // The cursor stayed: play it as a preview does, without following. The
+      // line already playing changes nothing to follow, and an unspent flag
+      // would skip a later follow.
+      if (index !== activeIndex) suppressFollowOnceRef.current = true;
     } else {
       ensureRendered(index);
       setPendingScrollTarget(index);

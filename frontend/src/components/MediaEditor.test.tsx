@@ -42,6 +42,7 @@ vi.mock("./KeymapHelp", () => ({ KeymapHelp: () => null }));
 const player = vi.hoisted(() => ({
   previewSegment: vi.fn(),
   playSegment: vi.fn(),
+  focusCursorRow: vi.fn(() => null),
   highlightLabels: null as ReadonlySet<string> | null,
   // A transcript line or waveform-region click selects through this.
   onSegmentSelect: undefined as ((index: number) => boolean | void) | undefined,
@@ -57,7 +58,7 @@ vi.mock("./TranscriptPlayer", async () => {
       useImperativeHandle(props.ref, () => ({
         playSegment: player.playSegment,
         previewSegment: player.previewSegment,
-        focusCursorRow: () => null,
+        focusCursorRow: player.focusCursorRow,
       }));
       return (
         <div>{props.segments.map((seg, index) => (
@@ -705,7 +706,10 @@ it("does not write a late save reply into another line's edit box", async () => 
   await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
 
   // Skip to line 1 (navigation stays live) and start a draft there before
-  // the save replies.
+  // the save replies. The pending save could still fail, so the first skip
+  // warns and the second leaves.
+  fireEvent.keyDown(document.body, { key: "n" });
+  expect(screen.getByText(/You have an unsaved edit/)).toBeTruthy();
   fireEvent.keyDown(document.body, { key: "n" });
   await waitFor(() => expect(editBox().value).toBe("Text 1"));
   fireEvent.change(editBox(), { target: { value: "Line 1 draft" } });
@@ -831,7 +835,10 @@ it("moves at once when the edit box holds no unsaved edit", () => {
   expect(screen.queryByText(UNSAVED_WARNING)).toBeNull();
 });
 
-it("does not advance past an edit typed while a verify was pending", async () => {
+it.each([
+  ["", false],
+  [" even after a move warned meanwhile", true],
+])("does not advance past an edit typed while a verify was pending%s", async (_name, clicked) => {
   setup();
   fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
   let respond: (value: Response) => void = () => {};
@@ -839,6 +846,8 @@ it("does not advance past an edit typed while a verify was pending", async () =>
   fireEvent.keyDown(document.body, { key: "v" });
   await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
   fireEvent.change(editBox(), { target: { value: "Typed during verify" } });
+  // That warning asked for a repeat of the click, not consent for the advance.
+  if (clicked) moveCalled("a transcript line or waveform-region click")();
 
   await act(async () => {
     respond({
@@ -849,8 +858,18 @@ it("does not advance past an edit typed while a verify was pending", async () =>
   });
 
   expect(editBox().value).toBe("Typed during verify");
-  expect(screen.getByText(UNSAVED_WARNING)).toBeTruthy();
   expect(screen.getByText(/segment at 0\.00s/)).toBeTruthy();
+});
+
+it("focuses the new line after a confirmed key move", async () => {
+  startEdit();
+  fireEvent.keyDown(document.body, { key: "j" });
+  expect(player.focusCursorRow).not.toHaveBeenCalled();
+
+  fireEvent.keyDown(document.body, { key: "j" });
+
+  await waitFor(() => expect(editBox().value).toBe("Text 1"));
+  await waitFor(() => expect(player.focusCursorRow).toHaveBeenCalled());
 });
 
 it("relabels another line from its popover without leaving an unsaved edit", async () => {
@@ -908,4 +927,24 @@ it("offers a plain re-claim when the claim is lost with no unsaved edit (#734)",
   expect(screen.getByRole("button", { name: "Re-claim to continue editing" })).toBeTruthy();
   expect(screen.queryByRole("textbox", { name: "Your unsaved edit" })).toBeNull();
   expect(screen.queryByText(/Your unsaved edit is below/)).toBeNull();
+});
+
+it("does not let a held key answer its own warning", () => {
+  startEdit();
+  fireEvent.keyDown(document.body, { key: "j" });
+  fireEvent.keyDown(document.body, { key: "j", repeat: true });
+  fireEvent.keyDown(document.body, { key: "j", repeat: true });
+  expect(editBox().value).toBe("My correction");
+
+  fireEvent.keyDown(document.body, { key: "j" });
+  expect(editBox().value).toBe("Text 1");
+});
+
+it("discards on a second press that lands before React re-renders", () => {
+  startEdit();
+  act(() => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "j" }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "j" }));
+  });
+  expect(editBox().value).toBe("Text 1");
 });

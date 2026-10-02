@@ -300,18 +300,12 @@ export function MediaEditor({
   const claimLostRef = useRef(claimLost);
   claimLostRef.current = claimLost;
   const currentRef = useRef<Segment | null>(null);
-  // The text of a save still in flight, so moving on while it saves is not
-  // leaving an unsaved edit behind.
-  const pendingSaveRef = useRef<{ segmentId: string; text: string } | null>(null);
 
-  // The box holds text the operator has not saved and is not saving.
+  // The box holds text the line does not have yet. A save still in flight
+  // counts: it can fail, and the box is the only copy until it lands.
   const hasUnsavedEdit = useCallback((): boolean => {
     const cur = currentRef.current;
-    if (!cur) return false;
-    const edit = editTextRef.current;
-    if (edit === (cur.text ?? "")) return false;
-    const pending = pendingSaveRef.current;
-    return !(pending?.segmentId === cur.segmentId && pending.text === edit);
+    return cur !== null && editTextRef.current !== (cur.text ?? "");
   }, []);
 
   // Asked before the cursor leaves its line (issue #732). An unsaved edit gets
@@ -321,11 +315,16 @@ export function MediaEditor({
   const canLeave = useCallback((): boolean => {
     if (!hasUnsavedEdit()) return true;
     if (claimLostRef.current) return false;
+    // Both the ref and the state, so two quick keys cannot both warn, and
+    // the render that moves the cursor does not copy a stale `true` back into
+    // the ref the keyboard focus effect reads.
     if (!confirmDiscardRef.current) {
+      confirmDiscardRef.current = true;
       setConfirmDiscard(true);
       return false;
     }
     confirmDiscardRef.current = false;
+    setConfirmDiscard(false);
     return true;
   }, [hasUnsavedEdit]);
 
@@ -689,6 +688,7 @@ export function MediaEditor({
     setError(null);
     try {
       const index = cursor;
+      const edit = editText;
       const result = await postJson(
         `/review/${runId}/segments/${current.segmentId}/verify`,
         { verified: "true" },
@@ -697,10 +697,13 @@ export function MediaEditor({
       const patched = applyResult(index, result);
       setConfirmDiscard(false);
       if (walkMode) {
-        // Typing during the verify leaves an edit the confirm never covered,
-        // so the advance warns instead of dropping it.
+        // Typing during the verify is an edit the operator never agreed to
+        // drop, so stay with it. A warning raised meanwhile by another move
+        // is not consent for this advance either.
         const next = nextTarget(patched, index + 1);
-        if (next >= 0 && goTo(next)) keyboardNavRef.current = true;
+        if (next >= 0 && editTextRef.current === edit && goTo(next)) {
+          keyboardNavRef.current = true;
+        }
       }
     } finally {
       busyRef.current = false;
@@ -730,7 +733,6 @@ export function MediaEditor({
       const index = cursor;
       const segmentId = current.segmentId;
       const submitted = editText;
-      pendingSaveRef.current = { segmentId, text: submitted };
       const result = await postJson(
         `/review/${runId}/segments/${segmentId}/text`,
         { text: submitted },
@@ -752,7 +754,6 @@ export function MediaEditor({
       applyResult(index, result, { supersedeProvenance: true });
       void reloadAnnotationsRef.current?.();
     } finally {
-      pendingSaveRef.current = null;
       busyRef.current = false;
       setBusy(false);
     }
@@ -1191,6 +1192,9 @@ export function MediaEditor({
     if (!writable) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.metaKey || event.altKey) return;
+      // A held key must not answer its own unsaved-edit warning: discarding
+      // takes a second, deliberate press.
+      if (event.repeat && hasUnsavedEdit()) return;
       if (helpOpenRef.current) return;
       if (popoverOpenRef.current) return;
       const el = event.target as HTMLElement | null;
@@ -1306,6 +1310,7 @@ export function MediaEditor({
     };
   }, [
     writable,
+    hasUnsavedEdit,
     verifyAndAdvance,
     jumpNext,
     play,
