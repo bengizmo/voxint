@@ -607,9 +607,11 @@ it("keeps an unsaved edit when an adopted result changes the line's text", () =>
   adopt({ segments: serverEdited });
 
   expect(editBox().value).toBe("My correction");
-  expect(screen.getByText(
+  const notice = screen.getByText(
     "This line changed while you were editing. Your edit is kept; saving it replaces the new text.",
-  )).toBeTruthy();
+  );
+  // Shown on screen, not only to screen readers.
+  expect(notice.closest(".visually-hidden")).toBeNull();
 });
 
 it("loads the new text into an untouched edit box", () => {
@@ -667,4 +669,60 @@ it("highlights only the labels each adopted result changed", () => {
   });
 
   expect([...(player.highlightLabels ?? [])]).toEqual(["VOICE/B"]);
+});
+
+function deferredSave(): (text: string) => Promise<void> {
+  let respond: (value: Response) => void = () => {};
+  vi.mocked(apiFetch).mockReturnValueOnce(new Promise<Response>((r) => { respond = r; }));
+  return async (text: string) => {
+    await act(async () => {
+      respond({
+        json: async () => ({
+          verified: false, corrected: true, text, progress: { verified: 0, total: 2 },
+        }),
+      } as unknown as Response);
+    });
+  };
+}
+
+it("does not write a late save reply into another line's edit box", async () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  fireEvent.change(editBox(), { target: { value: "Line 0 fixed" } });
+  const finish = deferredSave();
+  fireEvent.keyDown(editBox(), { key: "Enter", ctrlKey: true });
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
+
+  // Skip to line 1 (navigation stays live) and start a draft there before
+  // the save replies.
+  fireEvent.keyDown(document.body, { key: "n" });
+  await waitFor(() => expect(editBox().value).toBe("Text 1"));
+  fireEvent.change(editBox(), { target: { value: "Line 1 draft" } });
+
+  await finish("Line 0 fixed");
+
+  expect(editBox().value).toBe("Line 1 draft");
+  expect(screen.queryByText(/This line changed while you were editing/)).toBeNull();
+
+  // The late reply left line 1's baseline alone, so new text for line 1 still
+  // reads as overtaking the draft rather than replacing it.
+  adopt({ segments: segments.map((seg, index) =>
+    index === 1 ? { ...seg, text: "Text 1 from elsewhere" } : seg) });
+  expect(editBox().value).toBe("Line 1 draft");
+  expect(screen.getByText(/This line changed while you were editing/)).toBeTruthy();
+});
+
+it("keeps typing done while a save was pending, without the overtaken notice", async () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  fireEvent.change(editBox(), { target: { value: "First" } });
+  const finish = deferredSave();
+  fireEvent.keyDown(editBox(), { key: "Enter", ctrlKey: true });
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
+  fireEvent.change(editBox(), { target: { value: "First, then more" } });
+
+  await finish("First");
+
+  expect(editBox().value).toBe("First, then more");
+  expect(screen.queryByText(/This line changed while you were editing/)).toBeNull();
 });

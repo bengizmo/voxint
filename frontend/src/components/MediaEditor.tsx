@@ -121,6 +121,8 @@ export function MediaEditor({
   const [segments, setSegments] = useState<Segment[]>(initialSegments);
   const [progress, setProgress] = useState(initialProgress);
   const [editText, setEditText] = useState("");
+  // The current line got new text while the edit box held an unsaved edit.
+  const [editOvertaken, setEditOvertaken] = useState(false);
   const { busy, busyRef, setBusy } = useBusyGuard();
   const [reviewToken, setReviewToken] = useState<string | null>(
     initialReviewToken,
@@ -588,20 +590,18 @@ export function MediaEditor({
     const loaded = loadedRef.current;
     loadedRef.current = { segmentId, text };
     const edit = editTextRef.current;
-    if (
-      segmentId !== null &&
-      segmentId === loaded.segmentId &&
-      edit !== loaded.text &&
-      edit !== text
-    ) {
+    const sameLine = segmentId !== null && segmentId === loaded.segmentId;
+    // saveEdit records the saved text first, so the box's own save lands here
+    // as no change and never reads as an edit overtaken by new text.
+    const ownSave = sameLine && text === loaded.text;
+    if (sameLine && !ownSave && edit !== loaded.text && edit !== text) {
       // Same line, new text, unsaved edit: keep the edit. Verify still warns
       // before discarding it, and saving replaces the new text with it.
-      setAssignStatus(
-        "This line changed while you were editing. Your edit is kept; saving it replaces the new text.",
-      );
+      setEditOvertaken(true);
       return;
     }
-    setEditText(text);
+    if (!ownSave) setEditText(text);
+    setEditOvertaken(false);
     setConfirmDiscard(false);
     setAssignStatus(null);
     setMergeSuggestion(null);
@@ -686,15 +686,22 @@ export function MediaEditor({
     setError(null);
     try {
       const index = cursor;
+      const segmentId = current.segmentId;
+      const submitted = editText;
       const result = await postJson(
-        `/review/${runId}/segments/${current.segmentId}/text`,
-        { text: editText },
+        `/review/${runId}/segments/${segmentId}/text`,
+        { text: submitted },
       );
       if (!result) return;
+      // Navigation stays live during a save, so touch the box only if it still
+      // shows this line. Show what was saved unless the operator typed on: the
+      // server can return other text than was typed (an empty box reverts to
+      // the pipeline text).
+      if (currentRef.current?.segmentId === segmentId) {
+        loadedRef.current = { segmentId, text: result.text };
+        if (editTextRef.current === submitted) setEditText(result.text);
+      }
       applyResult(index, result, { supersedeProvenance: true });
-      // Show what was saved: the server can return other text than was typed
-      // (an empty box reverts to the pipeline text), and a saved edit is clean.
-      setEditText(result.text);
       setConfirmDiscard(false);
       void reloadAnnotationsRef.current?.();
       editRef.current?.blur();
@@ -1698,6 +1705,12 @@ export function MediaEditor({
                     You have an unsaved edit. Press{" "}
                     <kbd>{SAVE_EDIT_LABEL}</kbd> to save it, or repeat the
                     action to discard the edit and continue.
+                  </p>
+                )}
+                {editOvertaken && (
+                  <p role="status" className="text-sm">
+                    This line changed while you were editing. Your edit is
+                    kept; saving it replaces the new text.
                   </p>
                 )}
                 {error && (
