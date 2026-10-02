@@ -123,13 +123,16 @@ ships inside the images too). Rules:
   - **Code-review depth.** Judge impact first. Anything that could touch
     inference numerics, security, auth or CSRF, concurrency or locking, a DB
     migration, a public contract or seam, a released artifact, a dependency, or
-    the strength of a test or CI gate is high-risk and gets a full multi-model
-    panel, whatever files it edits. A change with real design choices or a new
-    cross-cutting seam gets a multi-model review. A clear fix in a familiar
+    the strength of a test or CI gate is high-risk and gets the **High** panel,
+    whatever files it edits. Otherwise, a change with real design choices or a
+    new non-public cross-cutting seam gets the **Medium** panel. A clear fix in a familiar
     pattern (a pure backend refactor with strong existing coverage included)
-    gets a single-model review. A change with no plausible blast radius (a typo,
-    a comment, a mechanical rename touching no public name) needs no formal
-    panel, only the standard gates. When unsure, pick the deeper tier.
+    gets the **Low** single-voice review. A change with no plausible blast radius
+    (a typo, a comment, a mechanical rename touching no public name) needs only
+    the standard gates when it is 5 changed lines or fewer, and the Low review
+    above that. When unsure, pick the deeper tier. Tiers, seats and models are
+    the fleet **Model collaboration policy** (`~/.claude/CLAUDE.md`); `/commit`
+    enforces the review gate.
   - **Browser acceptance lane.** Run it when a change alters observable
     review-console behavior or the delivery, data, or auth contracts a console
     island depends on (island code, the templates and routes islands hydrate
