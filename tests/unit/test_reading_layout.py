@@ -73,6 +73,17 @@ def test_paragraph_start_consumes_minute() -> None:
     assert result[1].runs[0].text == "New paragraph same minute"
 
 
+def test_marker_goes_before_the_first_piece_that_starts_in_the_new_minute() -> None:
+    # A word that straddles the boundary started in the old minute, so it stays
+    # before the marker: everything after a marker starts at or after it.
+    result = layout_turns([turn(
+        piece("Hello", 58, 59), piece("straddles", 59.5, 60.5), piece("world", 60.6, 61),
+    )])
+    assert [(r.marker_seconds, r.text) for r in result[0].runs] == [
+        (None, "Hello straddles"), (60, "world"),
+    ]
+
+
 def test_pause_below_threshold_does_not_break() -> None:
     just_under = 1 + PARAGRAPH_PAUSE_SECONDS - 0.001
     assert len(layout_turns([turn(piece("Early", 0, 1), piece("Later", just_under, 5))])) == 1

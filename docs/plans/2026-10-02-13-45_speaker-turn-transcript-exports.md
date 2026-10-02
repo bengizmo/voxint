@@ -415,5 +415,9 @@ Refinements made while implementing, all inside the rules above:
   28 and 14 single-name blocks to 67 and 30. The coarse remainder is two
   segments that fail word validation and three reworded two-speaker segments
   (E6). The S2 gate repeats this on the final code.
+- **Minute marker placement.** "Crosses into a new minute" is read as "starts
+  in a new minute". A word that straddles the boundary stays before the
+  marker, so everything after a marker starts at or after it, the same rule
+  paragraph timestamps follow.
 - The pull-quote contract wording moved from S2 into S1, because the rename
   to `to_markdown_blocks` lands here.

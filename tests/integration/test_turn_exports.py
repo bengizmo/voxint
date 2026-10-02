@@ -107,6 +107,10 @@ def test_invalid_style_options(
         console = client.get(f"/review/{run_id}/export.{fmt}", params={"style": style})
         assert console.status_code == 422
     assert client.get(f"/review/{run_id}/export.md?style=bogus").status_code == 422
+    # A missing run is a 404 on every console route, whatever the options say.
+    for ext in ("md", "txt", "rttm"):
+        missing = client.get(f"/review/{uuid.uuid4()}/export.{ext}", params={"style": "bogus"})
+        assert missing.status_code == 404
 
 
 @pytest.mark.parametrize("split", [False, True])

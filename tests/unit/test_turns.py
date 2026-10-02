@@ -112,6 +112,9 @@ def check(
         assert groups
         groups[-1] += piece.text
     assert [g.strip() for g in groups] == [b.strip() for b in bodies if b.strip()]
+    # Exact, not whitespace-normalised: the boundary rule adds one space at most,
+    # and only between emissions that do not already carry one.
+    assert join_pieces(pieces) == _join_segment_texts(groups)
     assert " ".join(join_pieces(pieces).split()) == " ".join(_join_segment_texts(bodies).split())
     # Exercise rendered bytes for every shared projection fixture as well.
     rendered = to_markdown_turns(layout_turns(result))
@@ -176,6 +179,38 @@ def test_glued_tokens_and_whitespace(tokens: tuple[str, ...]) -> None:
         assert pieces[0].text == "  hello" and pieces[-1].text == " world \n"
 
 
+def test_glued_token_keeps_the_longest_end() -> None:
+    # Validation orders token starts only, so glued punctuation can END before
+    # the word it attaches to. The unit must keep the word's full interval, or
+    # the short punctuation span decides the speaker.
+    e = emission((" hello", "!"))
+    e.seg.words = [
+        {"word": " hello", "start": 0, "end": 2},
+        {"word": "!", "start": 0.1, "end": 0.2},
+    ]
+    result = check([e], [Span(0, 0, 0.2, A), Span(1, 0.2, 2, B)])
+    assert [t.speaker for t in result] == ["Sam"]
+    piece = result[0].pieces[0]
+    assert (piece.text, piece.start_seconds, piece.end_seconds) == (" hello!", 0, 2)
+
+
+@pytest.mark.parametrize("leading", [False, True])
+def test_whitespace_token_timing_does_not_pick_the_speaker(leading: bool) -> None:
+    # A whitespace-only token keeps its bytes in the unit, but its timing is
+    # not evidence of who spoke the word next to it.
+    e = emission((" ", " hello") if leading else (" hello", " "))
+    blank = {"word": " ", "start": 0, "end": 2} if leading else {"word": " ", "start": 3, "end": 5}
+    word = {"word": " hello", "start": 2, "end": 3}
+    e.seg.words = [blank, word] if leading else [word, blank]
+    e.seg.end_seconds = 5  # the trailing blank must stay inside the segment
+    spans = [Span(0, 2, 3, A), Span(1, 0, 2, B), Span(2, 3, 5, B)]
+    result = check([e], spans)
+    assert [t.speaker for t in result] == ["Alex"]
+    piece = result[0].pieces[0]
+    assert piece.text == ("  hello" if leading else " hello ")
+    assert (piece.start_seconds, piece.end_seconds) == (2, 3)
+
+
 def test_curly_quotes_hyphens_and_nonempty_keys() -> None:
     e = emission((" \u2018Can\u2019t\u2019", " re\u2010enter"), enhanced='"CAN\'T" RE-ENTER!\n')
     result = check([e], [Span(0, 0, 1, A), Span(1, 1, 2, B)], text=TranscriptText.ENHANCED)
@@ -238,6 +273,7 @@ def test_supported_brackets(across: bool) -> None:
     result = check(emissions, [Span(0, 0, 1, A), Span(1, 3, 4, A)])
     assert len(result) == 1 and result[0].speaker == "Alex"
     assert len(result[0].pieces) == 4
+    assert {p.rule for p in result[0].pieces} == {PieceRule.SINGLE_IDENTITY}
 
 
 def test_different_brackets_edges_and_no_chaining() -> None:
@@ -294,6 +330,15 @@ def test_override_and_child_precedence() -> None:
         assert result[0].pieces[0].rule == PieceRule.SPLIT_CHILD
         assert not result[0].pieces[0].timed
         assert (result[0].pieces[0].start_seconds, result[0].pieces[0].end_seconds) == (0.25, 0.75)
+
+
+def test_range_override_without_a_child_stays_coarse() -> None:
+    # The walk never builds this (a range override rides on a split child), but
+    # the pure function fails closed toward the operator ruling if it is handed one.
+    e = replace(emission(), range_override=override(A))
+    result = check([e], [Span(0, 0, 1, B), Span(1, 1, 2, C)])
+    assert [t.speaker for t in result] == ["Alex"]
+    assert [p.rule for p in result[0].pieces] == [PieceRule.SEGMENT_OVERRIDE]
 
 
 def test_label_rulings_and_canonical_grouping() -> None:

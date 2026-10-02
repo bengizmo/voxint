@@ -864,7 +864,8 @@ How it is built:
 - **Paragraphs.** A turn starts a new paragraph after a pause of 3 seconds, and
   after a sentence end once the paragraph has reached 20 words.
 - **Minute markers.** A paragraph that runs past a minute boundary carries an
-  inline `[HH:MM:00]` marker at the crossing.
+  inline `[HH:MM:00]` marker before the first word that starts in the new
+  minute.
 - **Translations.** With `?lang=`, each translated line stays whole under its
   line's speaker. Translated text has no word timings.
 

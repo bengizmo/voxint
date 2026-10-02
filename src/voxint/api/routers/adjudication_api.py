@@ -1404,11 +1404,11 @@ def export_transcript_rttm(
     run_id: uuid.UUID, operator: OperatorDep, session: SessionDep,
     style: str | None = None,
 ) -> Response:
+    _run_or_404(session, run_id)
     try:
         parse_style(style, None)
     except ExportOptionError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    _run_or_404(session, run_id)
     return Response(content=render_run_rttm(session, run_id), media_type=MEDIA_TYPES["rttm"])
 
 

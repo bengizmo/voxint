@@ -179,12 +179,19 @@ def _existing_identity(emission: Emission) -> _Identity:
     if scope is AttributionScope.LABEL:
         return _label_identity(emission.label_state, emission.seg.diarization_label)
     override = emission.range_override or emission.seg_override
-    assert override is not None
+    if override is None:
+        raise RuntimeError("an override scope won without an override on the emission")
     return ("speaker", str(speaker_id)), segment_speaker(override, emission.seg)
 
 
 def _word_units(words: list[WordToken]) -> list[WordToken]:
-    """Keep glued tokens together and retain leading and trailing whitespace."""
+    """Keep glued tokens together and retain leading and trailing whitespace.
+
+    A unit's text is every constituent token verbatim. Its interval is the
+    envelope of the tokens that carry text: validation only orders token starts,
+    so a glued token can end before the word it attaches to, and a
+    whitespace-only token's timing says nothing about who spoke the word.
+    """
     groups: list[list[WordToken]] = []
     has_text = False
     for word in words:
@@ -197,7 +204,17 @@ def _word_units(words: list[WordToken]) -> list[WordToken]:
         has_text = has_text or bool(word.text.strip())
     if len(groups) > 1 and not has_text:
         groups[-2].extend(groups.pop())
-    return [WordToken(g[0].start, g[-1].end, "".join(w.text for w in g)) for g in groups]
+    units: list[WordToken] = []
+    for group in groups:
+        spoken = [w for w in group if w.text.strip()] or group
+        units.append(
+            WordToken(
+                spoken[0].start,
+                max(w.end for w in spoken),
+                "".join(w.text for w in group),
+            )
+        )
+    return units
 
 
 class _TurnLookup:
@@ -306,7 +323,10 @@ def project_turns(
         words = validated_words(seg, min_words=1)
         if child is not None:
             rule = PieceRule.SPLIT_CHILD
-        elif emission.seg_override is not None:
+        elif emission.seg_override is not None or emission.range_override is not None:
+            # The walk only attaches a range override to a split child (E1).
+            # Should one ever arrive on a whole segment, it is still an
+            # operator ruling: stay coarse under it, never subdivide.
             rule = PieceRule.SEGMENT_OVERRIDE
         elif (
             words is None
