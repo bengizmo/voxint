@@ -201,7 +201,12 @@ def display_name(state: LabelState | None, seg: TranscriptSegment) -> str:
     A grounded/assigned label shows its speaker name; exclude/unknown rulings
     annotate the humanized label; everything unresolved uses the humanized label.
     """
-    label = seg.diarization_label or "(no speaker)"
+    return label_display_name(state, seg.diarization_label)
+
+
+def label_display_name(state: LabelState | None, label: str | None) -> str:
+    """Render a label ruling, preserving exclude and unknown annotations."""
+    label = label or "(no speaker)"
     if state is None:
         return _humanize_label(label)
     if state.resolution in (
@@ -301,7 +306,7 @@ def attributed_transcript(
                     start_seconds=seg.start_seconds,
                     end_seconds=seg.end_seconds,
                     speaker=speaker,
-                    text=_resolve_body(seg, corrected_text, text),
+                    text=resolve_body(seg, corrected_text, text),
                     diarization_label=seg.diarization_label,
                     confidence=seg.confidence,
                     segment_id=seg.id,
@@ -318,7 +323,7 @@ def attributed_transcript(
     return lines
 
 
-def _resolve_body(
+def resolve_body(
     seg: TranscriptSegment, corrected_text: str | None, variant: TranscriptText
 ) -> str:
     """The text a variant renders for one segment. RAW is the immutable ASR

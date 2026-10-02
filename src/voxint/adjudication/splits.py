@@ -52,7 +52,7 @@ from voxint.db.models import SegmentSplitBoundary, TranscriptSegment
 
 
 @dataclass(frozen=True)
-class _Word:
+class WordToken:
     """A validated word token: verbatim string (incl. any leading space) + timing."""
 
     start: float
@@ -84,21 +84,21 @@ class UnsplittableError(ValueError):
     the request with this reason."""
 
 
-def _validated_words(seg: TranscriptSegment) -> list[_Word] | None:
-    """The parent's tokens as validated :class:`_Word`\\ s, or ``None`` if the stored
+def validated_words(seg: TranscriptSegment, *, min_words: int) -> list[WordToken] | None:
+    """The parent's tokens as validated :class:`WordToken`\\ s, or ``None`` if the stored
     ``words`` are absent or structurally unusable.
 
     Structural only: reconcatenation and enhanced-text checks live in
-    :func:`splittable_words`. Requires >= 2 tokens (one word has no interior cut),
+    :func:`splittable_words`. Requires at least ``min_words`` tokens,
     each a dict with a non-empty string ``word`` and finite ``start <= end``, with
     non-decreasing timings bounded by the parent interval.
     """
     raw: Any = seg.words
-    if not isinstance(raw, list) or len(raw) < 2:
+    if not isinstance(raw, list) or len(raw) < min_words:
         return None
     lo = seg.start_seconds
     hi = seg.end_seconds
-    out: list[_Word] = []
+    out: list[WordToken] = []
     prev_start = -math.inf
     for item in raw:
         if not isinstance(item, dict):
@@ -122,7 +122,7 @@ def _validated_words(seg: TranscriptSegment) -> list[_Word] | None:
         if start < prev_start or start < lo - _EPS or end > hi + _EPS:
             return None
         prev_start = start
-        out.append(_Word(start=start, end=end, text=text))
+        out.append(WordToken(start=start, end=end, text=text))
     return out
 
 
@@ -140,25 +140,30 @@ def trace_has_entries(trace: object) -> bool:
     return isinstance(entries, list) and len(entries) > 0
 
 
-def splittable_words(seg: TranscriptSegment) -> list[_Word] | None:
+def reconcatenates(words: list[WordToken], raw_text: str) -> bool:
+    """Whether verbatim tokens reproduce the raw text, ignoring outer whitespace."""
+    joined = "".join(w.text for w in words)
+    return joined == raw_text or joined.strip() == raw_text.strip()
+
+
+def splittable_words(seg: TranscriptSegment) -> list[WordToken] | None:
     """The parent's validated tokens iff the segment is word-splittable, else ``None``.
 
-    Adds the faithfulness checks on top of :func:`_validated_words`: no fired pack
+    Adds the faithfulness checks on top of :func:`validated_words`: no fired pack
     correction (``correction_trace`` entries empty, #82), the tokens must
     reconcatenate to ``raw_text`` (exact, or differing only by outer-edge
     whitespace on the whole joined string), and ``enhanced_text`` must be NULL or
     match ``raw_text`` (ignoring outer whitespace). Review-state correction (#58)
     is still NOT checked here — the routes own that guard.
     """
-    words = _validated_words(seg)
+    words = validated_words(seg, min_words=2)
     if words is None:
         return None
     # A materially corrected segment (a pack rule actually fired, #82) is
     # unsplittable — read the authoritative STORED trace signal, not a text diff.
     if trace_has_entries(seg.correction_trace):
         return None
-    joined = "".join(w.text for w in words)
-    if joined != seg.raw_text and joined.strip() != seg.raw_text.strip():
+    if not reconcatenates(words, seg.raw_text):
         return None
     if seg.enhanced_text is not None and seg.enhanced_text.strip() != seg.raw_text.strip():
         return None
