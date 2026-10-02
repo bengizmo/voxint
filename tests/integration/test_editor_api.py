@@ -112,6 +112,17 @@ def _claim_unknown_run(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUI
     return _post(client, f"/media/{media_id}/editor/claim", _claim_form(uuid.uuid4()))
 
 
+def _claim_tutorial_redirect(
+    client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID
+) -> Response:
+    form = _claim_form(run_id, tutorial="verify")
+    resp: Response = client.post(
+        f"/media/{media_id}/editor/claim", data=form, auth=CREDS, follow_redirects=False
+    )
+    assert "token=" in resp.headers["location"]
+    return resp
+
+
 def _claim_held(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID) -> Response:
     with client.app.state.session_factory() as session:  # type: ignore[attr-defined]
         claim_run(session, run_id, reviewer="someone-else", ttl_seconds=3600)
@@ -135,6 +146,15 @@ def _release_ok(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID) -> R
     return _post(client, f"/media/{media_id}/editor/release", form)
 
 
+def _claim_compact_uuid(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID) -> Response:
+    return _post(client, f"/media/{media_id.hex}/editor/claim", _claim_form(run_id))
+
+
+def _trailing_slash(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID) -> Response:
+    resp: Response = client.get(f"/media/{media_id}/editor/", auth=CREDS, follow_redirects=False)
+    return resp
+
+
 def _unknown_subroute(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID) -> Response:
     resp: Response = client.get(f"/media/{media_id}/editor/no-such-route", auth=CREDS)
     return resp
@@ -144,12 +164,15 @@ def _unknown_subroute(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID
     ("call", "status"),
     [
         (_claim_ok, 200),
+        (_claim_compact_uuid, 200),
+        (_claim_tutorial_redirect, 303),
         (_claim_bad_csrf, 403),
         (_claim_unknown_run, 404),
         (_claim_held, 409),
         (_claim_unauthenticated, 401),
         (_refresh_wrong_token, 409),
         (_release_ok, 200),
+        (_trailing_slash, 307),
         (_unknown_subroute, 404),
     ],
 )

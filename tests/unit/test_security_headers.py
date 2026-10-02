@@ -42,6 +42,11 @@ def _request(path: str) -> Request:
         "/media/00000000-0000-0000-0000-000000000001/editor/refresh",
         "/media/00000000-0000-0000-0000-000000000001/editor/release",
         "/media/00000000-0000-0000-0000-000000000001/editor/a/b",
+        # uuid.UUID path params also accept compact and braced spellings (#714 review).
+        "/media/00000000000000000000000000000001/editor/claim",
+        "/media/{00000000-0000-0000-0000-000000000001}/editor/claim",
+        "/media/urn:uuid:00000000-0000-0000-0000-000000000001/editor/claim",
+        "/media/not-a-uuid/editor",
     ],
 )
 def test_token_sensitive_paths_match(path: str) -> None:
@@ -65,8 +70,6 @@ def test_token_sensitive_paths_match(path: str) -> None:
         "/runs/abc123",
         "/settings",
         "/",
-        "/media/not-a-uuid/editor",
-        "/media/not-a-uuid/editor/claim",
         "/media/00000000-0000-0000-0000-000000000001/editorial",
         "/media/00000000-0000-0000-0000-000000000001/editor-claim",
         "/media/00000000-0000-0000-0000-000000000001/x/editor/claim",
