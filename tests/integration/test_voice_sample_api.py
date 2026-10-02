@@ -523,73 +523,261 @@ def test_word_range_override_uses_only_child_frames(
     assert audio(client.get(url(current, speaker)).content) == source.pcm[128000:256000]
 
 
-def test_seeded_library_latency(
+def test_prefilter_skips_decoys(
     client: TestClient,
     session_factory: sessionmaker[Session],
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Measure both routes, including a clip that must walk 200 canonical runs."""
-    from time import perf_counter
+    from voxint.adjudication.attribution import AttributedInterval, attributed_intervals
+    from voxint.speakers import voice_sample
 
+    with session_factory() as session:
+        current, speaker = identities(session)
+        other = Speaker(display_name="Other")
+        session.add(other)
+        session.flush()
+        other_id = other.id
+        oldest = seed(session, tmp_path, speaker, age=201)
+        for index in range(20):
+            decoy = seed(session, tmp_path, other_id, age=index, human=index % 2 == 0)
+            if index == 0:
+                newest_other = decoy
+        # An older human run must not replace this media's newer machine-only run.
+        noncanonical = seed(session, tmp_path, speaker)
+        session.add(
+            PipelineRun(
+                media_item_id=noncanonical.media_id,
+                status=RunStatus.COMPLETED.value,
+                created_at=datetime.now(UTC) + timedelta(seconds=1),
+            )
+        )
+        # Superseded ASSIGN still passes the prefilter; the resolver rejects it.
+        superseded = seed(session, tmp_path, speaker)
+        record_decision(
+            session,
+            pipeline_run_id=superseded.run_id,
+            diarization_label="S0",
+            decision=Decision.EXCLUDE,
+            operator=CREDS[0],
+            idempotency_key=str(uuid.uuid4()),
+        )
+        session.commit()
+    walked: list[uuid.UUID] = []
+    original = attributed_intervals
+
+    def spy(session: Session, run_id: uuid.UUID) -> list[AttributedInterval]:
+        walked.append(run_id)
+        return original(session, run_id)
+
+    monkeypatch.setattr(voice_sample, "attributed_intervals", spy)
+    clip = client.get(url(current, speaker))
+    assert clip.status_code == 200
+    assert audio(clip.content) == oldest.pcm[32000:192000]
+    assert walked == [superseded.run_id, oldest.run_id]
+    walked.clear()
+    listing = client.get(f"/media/{current}/editor/voice-samples")
+    assert set(listing.json()["speakerIds"]) == {str(speaker), str(other_id)}
+    assert walked == [newest_other.run_id, superseded.run_id, oldest.run_id]
+
+
+@pytest.mark.parametrize("include_unseen", [False, True])
+def test_list_skips_resolved_speakers(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    include_unseen: bool,
+) -> None:
+    from voxint.speakers import voice_sample
+
+    with session_factory() as session:
+        current, speaker = identities(session)
+        newest = seed(session, tmp_path, speaker, age=0)
+        for age in range(1, 11):
+            older = seed(session, tmp_path, speaker, age=age)
+        unseen = Speaker(display_name="Unseen")
+        session.add(unseen)
+        session.flush()
+        unseen_id = unseen.id
+        if include_unseen:
+            session.add_all(
+                [
+                    TranscriptSegment(
+                        pipeline_run_id=older.run_id,
+                        segment_index=1,
+                        start_seconds=7,
+                        end_seconds=10,
+                        raw_text="Unseen voice",
+                        diarization_label="S1",
+                    ),
+                    DiarizationTurn(
+                        pipeline_run_id=older.run_id,
+                        turn_index=1,
+                        start_seconds=7,
+                        end_seconds=10,
+                        label="S1",
+                        skip_reason="too_short",
+                    ),
+                ]
+            )
+            session.flush()
+            record_decision(
+                session,
+                pipeline_run_id=older.run_id,
+                diarization_label="S1",
+                decision=Decision.ASSIGN,
+                speaker_id=unseen_id,
+                operator=CREDS[0],
+                idempotency_key=str(uuid.uuid4()),
+            )
+        session.commit()
+    walked: list[tuple[uuid.UUID, set[uuid.UUID]]] = []
+    original = voice_sample.run_clean_spans
+
+    def spy(
+        session: Session, run_id: uuid.UUID, wanted: set[uuid.UUID]
+    ) -> dict[uuid.UUID, voice_sample.Span]:
+        walked.append((run_id, set(wanted)))
+        return original(session, run_id, wanted)
+
+    monkeypatch.setattr(voice_sample, "run_clean_spans", spy)
+    listing = client.get(f"/media/{current}/editor/voice-samples")
+    assert listing.status_code == 200
+    expected = [(newest.run_id, {speaker})]
+    expected_speakers = {str(speaker)}
+    if include_unseen:
+        expected.append((older.run_id, {unseen_id}))
+        expected_speakers.add(str(unseen_id))
+    assert walked == expected
+    assert set(listing.json()["speakerIds"]) == expected_speakers
+
+
+@pytest.mark.parametrize("second_end", [3.0, 4.5])
+def test_no_stitching_across_labels(
+    client: TestClient, session_factory: sessionmaker[Session], tmp_path: Path, second_end: float
+) -> None:
+    with session_factory() as session:
+        current, speaker = identities(session)
+        source = seed(session, tmp_path, speaker, start=0, end=1.5)
+        session.add_all(
+            [
+                TranscriptSegment(
+                    pipeline_run_id=source.run_id,
+                    segment_index=1,
+                    start_seconds=1.5,
+                    end_seconds=second_end,
+                    raw_text="Other cluster",
+                    diarization_label="S1",
+                ),
+                DiarizationTurn(
+                    pipeline_run_id=source.run_id,
+                    turn_index=1,
+                    start_seconds=1.5,
+                    end_seconds=second_end,
+                    label="S1",
+                    skip_reason="too_short",
+                ),
+            ]
+        )
+        session.flush()
+        record_decision(
+            session,
+            pipeline_run_id=source.run_id,
+            diarization_label="S1",
+            decision=Decision.ASSIGN,
+            operator=CREDS[0],
+            idempotency_key=str(uuid.uuid4()),
+            speaker_id=speaker,
+        )
+        session.commit()
+    response = client.get(url(current, speaker))
+    assert response.status_code == (404 if second_end == 3 else 200)
+    listed = client.get(f"/media/{current}/editor/voice-samples").json()["speakerIds"]
+    assert (str(speaker) in listed) == (second_end == 4.5)
+    if second_end == 4.5:
+        assert audio(response.content) == source.pcm[48000:144000]
+
+
+def test_missing_label_turns(
+    client: TestClient, session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
     from sqlalchemy import select
 
     with session_factory() as session:
         current, speaker = identities(session)
-        oldest = seed(session, tmp_path, speaker, age=201)
-        artifact = session.scalars(
-            select(AudioArtifact).where(AudioArtifact.pipeline_run_id == oldest.run_id)
+        source = seed(session, tmp_path, speaker, human=False)
+        segment = session.scalars(
+            select(TranscriptSegment).where(TranscriptSegment.pipeline_run_id == source.run_id)
         ).one()
-        for index in range(199):
-            media = MediaItem(
-                source_path=f"incoming/benchmark-{index}.wav",
-                created_at=datetime.now(UTC) - timedelta(days=index),
-            )
-            session.add(media)
-            session.flush()
-            run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
-            session.add(run)
-            session.flush()
-            session.add_all(
-                [
-                    AudioArtifact(
-                        pipeline_run_id=run.id,
-                        kind=ArtifactKind.PREPROCESSED_AUDIO.value,
-                        path=artifact.path,
-                    ),
-                    TranscriptSegment(
-                        pipeline_run_id=run.id,
-                        segment_index=0,
-                        start_seconds=1,
-                        end_seconds=6,
-                        raw_text="Machine only",
-                        diarization_label="S0",
-                    ),
-                    DiarizationTurn(
-                        pipeline_run_id=run.id,
-                        turn_index=0,
-                        start_seconds=1,
-                        end_seconds=6,
-                        label="S0",
-                        skip_reason="too_short",
-                    ),
-                    SpeakerAssignment(
-                        pipeline_run_id=run.id,
-                        diarization_label="S0",
-                        speaker_id=speaker,
-                        method="cosine",
-                        confidence=0.95,
-                        grounded=True,
-                    ),
-                ]
-            )
+        session.query(DiarizationTurn).filter_by(pipeline_run_id=source.run_id).delete()
+        record_decision(
+            session,
+            pipeline_run_id=source.run_id,
+            diarization_label="S0",
+            transcript_segment_id=segment.id,
+            decision=Decision.ASSIGN,
+            operator=CREDS[0],
+            idempotency_key=str(uuid.uuid4()),
+            speaker_id=speaker,
+        )
         session.commit()
-    start = perf_counter()
-    listing = client.get(f"/media/{current}/editor/voice-samples")
-    list_seconds = perf_counter() - start
-    start = perf_counter()
-    clip = client.get(url(current, speaker))
-    clip_seconds = perf_counter() - start
-    assert listing.json() == {"speakerIds": [str(speaker)]}
-    assert clip.status_code == 200
-    assert audio(clip.content) == oldest.pcm[32000:192000]
-    print(f"200-run latency: list={list_seconds:.3f}s; worst-case clip={clip_seconds:.3f}s")
+    assert client.get(url(current, speaker)).status_code == 404
+    assert client.get(f"/media/{current}/editor/voice-samples").json() == {"speakerIds": []}
+
+
+def test_overlapped_tail_exact_frames(
+    client: TestClient, session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory() as session:
+        current, speaker = identities(session)
+        source = seed(session, tmp_path, speaker, overlap=True)
+        other = (
+            session.query(DiarizationTurn)
+            .filter_by(pipeline_run_id=source.run_id, label="S1")
+            .one()
+        )
+        other.start_seconds, other.end_seconds = 4.5, 7
+        session.commit()
+    response = client.get(url(current, speaker))
+    assert response.status_code == 200
+    assert audio(response.content) == source.pcm[32000:144000]
+
+
+def test_resolution_failure_falls_through_without_handle_leak(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typing import BinaryIO
+
+    from voxint.api.playback import MediaResolutionError, resolve_servable_media
+    from voxint.api.routers import editor
+    from voxint.media.serving import MediaGate
+
+    with session_factory() as session:
+        current, speaker = identities(session)
+        newest = seed(session, tmp_path, speaker)
+        older = seed(session, tmp_path, speaker, age=2)
+    original = resolve_servable_media
+    handles: list[BinaryIO] = []
+    calls: list[uuid.UUID] = []
+
+    def resolve(
+        session: Session, run_id: uuid.UUID, settings: Settings, gate: MediaGate
+    ) -> tuple[BinaryIO, int]:
+        calls.append(run_id)
+        if run_id == newest.run_id:
+            raise MediaResolutionError("unservable")
+        handle, size = original(session, run_id, settings, gate)
+        handles.append(handle)
+        return handle, size
+
+    monkeypatch.setattr(editor, "resolve_servable_media", resolve)
+    response = client.get(url(current, speaker))
+    assert response.status_code == 200
+    assert audio(response.content) == older.pcm[32000:192000]
+    assert calls == [newest.run_id, older.run_id]
+    assert len(handles) == 1
+    assert all(handle.closed for handle in handles)

@@ -1,6 +1,7 @@
 """Exact clean intervals and deterministic voice sample windows."""
 
 import uuid
+from dataclasses import replace
 
 import pytest
 
@@ -8,7 +9,14 @@ from voxint.adjudication.attribution import AttributedInterval, AttributionScope
 from voxint.adjudication.resolver import Resolution
 from voxint.db.models import DiarizationTurn
 from voxint.media.clips import ClipBounds, cap_bounds, resolve_sample_bounds
-from voxint.speakers.voice_sample import VoiceSample, best_span, clean_spans, merge_spans
+from voxint.speakers.voice_sample import (
+    VoiceSample,
+    best_span,
+    choose_run_spans,
+    clean_spans,
+    index_turns,
+    merge_spans,
+)
 
 
 def row(start: float = 0, end: float = 20) -> AttributedInterval:
@@ -41,7 +49,7 @@ def turn(start: float, end: float, label: str = "S0") -> DiarizationTurn:
     ],
 )
 def test_clean_spans(turns: list[DiarizationTurn], expected: list[tuple[float, float]]) -> None:
-    assert clean_spans(row(), turns) == expected
+    assert clean_spans(row(), index_turns(turns)) == expected
 
 
 def test_floor_union_and_choice() -> None:
@@ -61,3 +69,23 @@ def test_fractional_window_exact_frame_cap() -> None:
     assert cap_bounds(bounds, 160000) == ClipBounds(0, 160000)
     assert cap_bounds(ClipBounds(42, 123), 160000) == ClipBounds(42, 123)
     assert VoiceSample(sample.speaker_id, sample.run_id, (2, 5), "gone").window == (2, 5)
+
+
+def test_decimal_floor_and_ties() -> None:
+    assert best_span([(0.3, 2.3)]) == (0.3, 2.3)
+    assert best_span([(10.1, 13.1), (1.1, 4.1)]) == (1.1, 4.1)
+
+
+def test_labels_never_stitch_and_unwanted_rows_are_skipped() -> None:
+    first = row(0, 1.5)
+    assert first.speaker_id is not None
+    second = replace(first, start_seconds=1.5, end_seconds=3, diarization_label="S1")
+    turns = [turn(0, 1.5), turn(1.5, 3, "S1")]
+    assert choose_run_spans([first, second], turns, {first.speaker_id}) == {}
+    second = replace(second, end_seconds=4.5)
+    turns[1].end_seconds = 4.5
+    assert choose_run_spans([first, second], turns, {first.speaker_id}) == {
+        first.speaker_id: (1.5, 4.5)
+    }
+    assert choose_run_spans([first, second], turns, set()) == {}
+    assert clean_spans(replace(first, diarization_label="missing"), index_turns(turns)) == []
