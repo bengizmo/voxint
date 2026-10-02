@@ -34,6 +34,14 @@ const labels = ["SPEAKER_00", "SPEAKER_01"].map((label) => ({
 const data: LabelsResult = {
   labels, segments: [], progress: { verified: 0, total: 2 },
 };
+// The shared ref's value each time a response was adopted.
+let guardAtAdopt: boolean[] = [];
+beforeEach(() => {
+  guardAtAdopt = [];
+});
+function heldDuringAdopt(props: ComponentProps<typeof SpeakerRail>): boolean {
+  return vi.mocked(props.onLabelsChanged).mock.calls.length > 0 && guardAtAdopt.every(Boolean);
+}
 function jsonResponse(value: unknown): Response {
   return { json: async () => value } as Response;
 }
@@ -42,7 +50,8 @@ function setup() {
   const props: ComponentProps<typeof SpeakerRail> = {
     runId: "run", reviewToken: "token", writable: true, labelStates: labels,
     speakers: [{ id: "alice", displayName: "Alice" }],
-    onClaimLost: vi.fn(), onLabelsChanged: vi.fn(), writeGuard,
+    onClaimLost: vi.fn(), writeGuard,
+    onLabelsChanged: vi.fn(() => { guardAtAdopt.push(writeGuard.busyRef.current); }),
   };
   return { ...render(<SpeakerRail {...props} />), props, writeGuard };
 }
@@ -93,6 +102,8 @@ it.each(["decide", "enroll"])("%s holds the shared guard until its response is a
   expect(props.onLabelsChanged).not.toHaveBeenCalled();
   await act(async () => respond(jsonResponse(data)));
   expect(props.onLabelsChanged).toHaveBeenCalledExactlyOnceWith(data);
+  // The response is adopted before the guard is released.
+  expect(heldDuringAdopt(props)).toBe(true);
   expect(writeGuard.busyRef.current).toBe(false);
   expect(writeGuard.setBusy).toHaveBeenLastCalledWith(false);
 });
@@ -121,6 +132,8 @@ it("holds the shared guard while confirm merge is in flight", async () => {
   expect(props.onLabelsChanged).not.toHaveBeenCalled();
   await act(async () => respond(jsonResponse(data)));
   expect(props.onLabelsChanged).toHaveBeenCalledExactlyOnceWith(data);
+  // The response is adopted before the guard is released.
+  expect(heldDuringAdopt(props)).toBe(true);
   expect(writeGuard.busyRef.current).toBe(false);
   expect(writeGuard.setBusy).toHaveBeenLastCalledWith(false);
 });
