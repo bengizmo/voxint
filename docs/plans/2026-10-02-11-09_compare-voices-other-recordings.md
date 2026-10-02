@@ -1,6 +1,6 @@
 # Plan: compare voices from other recordings (#714)
 
-Status: draft
+Status: in-progress
 
 ## Goal
 

@@ -5,16 +5,20 @@ handling, and the editor island mount point (#157).
 """
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
 from voxint.adjudication.slots import claim_run
 from voxint.api.app import create_app
+from voxint.api.csrf import CSRF_CLAIM, mint_csrf_token
 from voxint.config import Settings
 from voxint.db.models import EMBEDDING_DIM, DiarizationTurn, MediaItem, PipelineRun, RunStatus
 
@@ -83,6 +87,83 @@ def test_no_store_on_detail(
     media_id, _ = _seed_media_with_run(session_factory)
     client = _app(session_factory)
     resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
+    assert resp.headers.get("cache-control") == "no-store"
+
+
+def _post(client: TestClient, url: str, data: dict[str, str], *, authed: bool = True) -> Response:
+    resp: Response = client.post(url, data=data, auth=CREDS if authed else None)
+    return resp
+
+
+def _claim_form(run_id: uuid.UUID, **extra: str) -> dict[str, str]:
+    return {"run_id": str(run_id), "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_CLAIM), **extra}
+
+
+def _claim_ok(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID) -> Response:
+    return _post(client, f"/media/{media_id}/editor/claim", _claim_form(run_id))
+
+
+def _claim_bad_csrf(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID) -> Response:
+    form = {"run_id": str(run_id), "csrf_token": "forged"}
+    return _post(client, f"/media/{media_id}/editor/claim", form)
+
+
+def _claim_unknown_run(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID) -> Response:
+    return _post(client, f"/media/{media_id}/editor/claim", _claim_form(uuid.uuid4()))
+
+
+def _claim_held(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID) -> Response:
+    with client.app.state.session_factory() as session:  # type: ignore[attr-defined]
+        claim_run(session, run_id, reviewer="someone-else", ttl_seconds=3600)
+        session.commit()
+    return _claim_ok(client, media_id, run_id)
+
+
+def _claim_unauthenticated(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID) -> Response:
+    return _post(client, f"/media/{media_id}/editor/claim", _claim_form(run_id), authed=False)
+
+
+def _refresh_wrong_token(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID) -> Response:
+    _claim_ok(client, media_id, run_id)
+    form = _claim_form(run_id, token=str(uuid.uuid4()))
+    return _post(client, f"/media/{media_id}/editor/refresh", form)
+
+
+def _release_ok(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID) -> Response:
+    token = _claim_ok(client, media_id, run_id).json()["token"]
+    form = {"run_id": str(run_id), "token": token}
+    return _post(client, f"/media/{media_id}/editor/release", form)
+
+
+def _unknown_subroute(client: TestClient, media_id: uuid.UUID, run_id: uuid.UUID) -> Response:
+    resp: Response = client.get(f"/media/{media_id}/editor/no-such-route", auth=CREDS)
+    return resp
+
+
+@pytest.mark.parametrize(
+    ("call", "status"),
+    [
+        (_claim_ok, 200),
+        (_claim_bad_csrf, 403),
+        (_claim_unknown_run, 404),
+        (_claim_held, 409),
+        (_claim_unauthenticated, 401),
+        (_refresh_wrong_token, 409),
+        (_release_ok, 200),
+        (_unknown_subroute, 404),
+    ],
+)
+def test_no_store_on_editor_subroutes(
+    session_factory: sessionmaker[Session],
+    call: Callable[[TestClient, uuid.UUID, uuid.UUID], Response],
+    status: int,
+) -> None:
+    """Every ``/editor/...`` response is ``no-store``, errors included: the claim
+    POST returns the claim token in its JSON body, so a cached copy leaks it."""
+    media_id, run_id = _seed_media_with_run(session_factory)
+    client = _app(session_factory)
+    resp = call(client, media_id, run_id)
+    assert resp.status_code == status
     assert resp.headers.get("cache-control") == "no-store"
 
 
