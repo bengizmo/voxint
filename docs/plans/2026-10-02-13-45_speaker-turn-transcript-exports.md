@@ -453,6 +453,14 @@ Refinements made while implementing, all inside the rules above:
   name that still matches `Voice N`, whichever way the current label reached
   that speaker (a grounded cosine match included). Found by the review panel
   (3 of 3).
+- **Accepted residuals** (panel re-review, codex and deepseek): an auto-created
+  speaker a person renamed to another `Voice N` name still looks like a
+  placeholder, because no rename history is stored; closing it needs a
+  persisted flag, out of proportion for this slice. The no-op check reads the
+  label state before the owner lock, so a roster rename racing the command
+  can change which speaker owns the requested name (single operator). The
+  machine branch of the count skips a run whose label has any ledger history,
+  a revoke included, so it can undercount after a revoke.
 - **Other recordings.** The count reports recordings where the speaker, or
   a merged alias of it, is the current attribution of some label; superseded
   rulings and ungrounded machine assignments do not count.

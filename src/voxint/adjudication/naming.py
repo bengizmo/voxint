@@ -8,9 +8,18 @@ review. No claim is written here, so a crash leaves nothing behind.
 Branches, in order: the name belongs to an active roster speaker (assign it;
 a no-op when the label already resolves to that speaker); the name belongs to
 a merged or archived speaker (refuse with the roster's own wording); the
-label's speaker is an auto-enrolled placeholder, a ``Voice N`` created by an
-``AUTO_ENROLL`` ruling that nobody renamed (rename it and add a human ASSIGN);
-otherwise enroll a new speaker from the voice's audio. A fresh nonce per call,
+label's speaker is an auto-enrolled placeholder (rename it and add a human
+ASSIGN); otherwise enroll a new speaker from the voice's audio.
+
+A placeholder is a speaker that auto-enrollment CREATED (an evidence row with
+decision ``created`` joined to the ``AUTO_ENROLL`` ruling that names it; a
+speaker it merely linked does not qualify) whose name still looks like
+``Voice N``, whichever way the current label reached it. Accepted residual: a
+person who renames an auto-created speaker to another ``Voice N`` name keeps
+it looking like a placeholder, because no rename history is stored. The
+no-op check reads the label state before the owner lock, so a roster rename
+racing this command can change which speaker owns the requested name; the
+single-operator deployment makes that acceptable. A fresh nonce per call,
 so A then B then A records three rulings. The caller owns commit and rollback.
 """
 
