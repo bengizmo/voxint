@@ -1130,7 +1130,9 @@ def restart_impact(
         )
 
     # Effective overrides only (issue #718): scopes whose newest row is an
-    # ASSIGN, as segment_states reduces them. An assign then its undo leaves none. The
+    # ASSIGN, as segment_states reduces them. An assign then its undo leaves none.
+    # A word range that no longer matches a current split child still counts,
+    # as it would apply again if that boundary returned. The
     # superseded rows are still voided before the segments are deleted.
     segment_scope = (
         session.scalar(
@@ -1140,7 +1142,9 @@ def restart_impact(
                 AdjudicationDecision.pipeline_run_id == run_id,
                 AdjudicationDecision.transcript_segment_id.is_not(None),
                 AdjudicationDecision.decision == Decision.ASSIGN.value,
+                AdjudicationDecision.speaker_id.is_not(None),
                 AdjudicationDecision.id.not_in(revoked_ids),
+                AdjudicationDecision.detached_at.is_(None),
                 newest_in_scope(AdjudicationDecision),
             )
         )

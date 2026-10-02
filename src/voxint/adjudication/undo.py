@@ -383,7 +383,8 @@ def undo_segment_decision(
         restored = session.get(Speaker, canonicalize(restore_speaker, merge_map(session)))
         if restored is None or not is_active(restored):
             raise UndoDriftError(
-                "the speaker this segment had before was removed from the roster"
+                "the speaker this segment had before is archived; restore them"
+                " from the speaker list, then undo again"
             )
     segment = session.get(TranscriptSegment, original.transcript_segment_id)
     if segment is None:

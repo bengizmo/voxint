@@ -933,6 +933,8 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   The segment-scope column counts only overrides still in effect: a segment
   or word range whose newest ruling is an `assign`. A line whose speaker
   change was undone, or that was reset to follow its label, blocks nothing.
+  A word-range ruling still counts after a later split stops matching it,
+  because it applies again if that boundary comes back.
   The restart still voids those older rows before it deletes the segments,
   so the ledger keeps them as history.
 

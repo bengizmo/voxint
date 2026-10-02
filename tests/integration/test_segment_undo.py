@@ -47,6 +47,7 @@ from voxint.db.models import (
     SpeakerEmbedding,
     TranscriptSegment,
 )
+from voxint.speakers.roster import archive_speaker
 
 CREDS = ("reviewer", "s3cret")
 _CSRF_KEY = "segment-undo-test-csrf-key"
@@ -594,10 +595,48 @@ def test_undo_refuses_to_restore_an_archived_speaker(
         later = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
         assert _undo_enrollment(session, seeded, enrolled) is True
 
-        with pytest.raises(UndoDriftError, match="removed from the roster"):
+        with pytest.raises(UndoDriftError, match="archived"):
             _undo(session, seeded, later.id)
         session.rollback()
         assert _segment_speaker(session, seeded) == seeded.bob
+
+
+def test_enrollment_undo_keeps_a_speaker_an_undo_restored(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # Undoing the later ruling writes a compensating assign that names the
+    # enrolled speaker again, so the speaker is still in use.
+    seeded = _seed(session_factory)
+    with session_factory() as session:
+        enrolled = _enroll(session, seeded, "Carol")
+        _rule(session, seeded, Decision.ASSIGN, speaker_id=enrolled.speaker_id)
+        later = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
+        _undo(session, seeded, later.id)
+        assert _segment_speaker(session, seeded) == enrolled.speaker_id
+
+        assert _undo_enrollment(session, seeded, enrolled) is False
+
+
+def test_undo_refuses_a_merged_speaker_whose_target_is_archived(
+    session_factory: sessionmaker[Session],
+) -> None:
+    seeded = _seed(session_factory)
+    with session_factory() as session:
+        _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
+        later = _rule(session, seeded, Decision.INHERIT)
+        target = Speaker(display_name=f"Dana {uuid.uuid4().hex[:8]}")
+        session.add(target)
+        session.flush()
+        alice = session.get(Speaker, seeded.alice)
+        assert alice is not None
+        alice.merged_into_id = target.id
+        alice.merged_at = datetime.now(UTC)
+        session.flush()
+        archive_speaker(session, target.id)
+        session.commit()
+
+        with pytest.raises(UndoDriftError, match="archived"):
+            _undo(session, seeded, later.id)
 
 
 def test_undo_restores_a_merged_speaker_by_its_historical_id(
@@ -650,7 +689,9 @@ def test_newest_in_scope_matches_the_segment_resolvers(
         picked = set(
             session.execute(
                 select(ruling.id).where(
-                    ruling.pipeline_run_id == seeded.run_id, newest_in_scope(ruling)
+                    ruling.pipeline_run_id == seeded.run_id,
+                    ruling.transcript_segment_id.is_not(None),
+                    newest_in_scope(ruling),
                 )
             ).scalars()
         )
@@ -825,6 +866,25 @@ def test_undo_after_another_change_is_an_unmarked_409(
     resp = _post_undo(client, seeded, token, undo["decisionId"])
 
     assert resp.status_code == 409  # type: ignore[attr-defined]
+    assert "x-voxint-conflict" not in resp.headers  # type: ignore[attr-defined]
+
+
+def test_undo_that_would_restore_an_archived_speaker_is_an_unmarked_409(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    seeded = _seed(session_factory)
+    token = _claim(client, seeded.run_id)
+    _relabel(client, seeded, token, seeded.alice)
+    undo = _relabel(client, seeded, token, seeded.bob)["undo"]
+    assert isinstance(undo, dict)
+    with session_factory() as session:
+        archive_speaker(session, seeded.alice)
+        session.commit()
+
+    resp = _post_undo(client, seeded, token, undo["decisionId"])
+
+    assert resp.status_code == 409  # type: ignore[attr-defined]
+    assert "archived" in resp.json()["detail"]  # type: ignore[attr-defined]
     assert "x-voxint-conflict" not in resp.headers  # type: ignore[attr-defined]
 
 
