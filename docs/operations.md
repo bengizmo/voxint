@@ -570,6 +570,7 @@ docker compose exec api voxint watch <run-id>            # follow a run until it
 docker compose exec api voxint speakers auto-enroll-backfill --dry-run  # preview auto-enrollment on existing runs
 docker compose exec api voxint speakers dedup --dry-run               # report probable duplicate speakers (merge with --apply)
 docker compose exec api voxint speakers reconcile --dry-run           # re-derive proposals for cold-start-affected runs (apply with --apply)
+docker compose exec api voxint speakers name <run-id>                 # list a run's voices; add <voice> "<Name>" to name one (see below)
 ```
 
 `submit` records the media item, creates a run, and enqueues it for the
@@ -1755,6 +1756,41 @@ centroid, usually because every window was skipped. The row is retained in its
 old space. Manual imports and tutorial seed embeddings without a source run are
 reported as unmigratable and are also retained. Use `--run <uuid>` to restrict
 the migration to one completed run, and `--yes` to skip confirmation.
+
+## Naming a voice from the command line
+
+`voxint speakers name` names a voice in a finished recording without opening
+the console. It writes the same ledger the console writes, so the console, the
+exports and the read mode all show the result.
+
+```bash
+docker compose exec api voxint speakers name <run-id>                        # list the run's voices
+docker compose exec api voxint speakers name <run-id> SPEAKER_01 "Sam Ortiz"  # name one voice
+docker compose exec api voxint speakers name <run-id> "Voice 3" "Sam Ortiz"   # the current name works too
+```
+
+With only a run id, the command prints each diarization label, its current
+name, how that name was decided (`human_assign`, `auto_enroll`,
+`grounded_cosine`, `unresolved`, and so on) and its talk time.
+
+With a voice and a name it runs one transaction and reports each effect:
+
+- The name belongs to an active speaker on the roster: the label is assigned to
+  that speaker. Naming a voice with the name it already has changes nothing.
+- The voice is a placeholder, a `Voice N` speaker that Voxint created
+  automatically and nobody has renamed: the speaker is renamed and the label
+  gets a human assignment. The output says how many other recordings carry
+  that speaker, because the rename applies there too.
+- Otherwise a new speaker is enrolled from the voice's audio, as the console's
+  enroll action does. A voice with no usable audio cannot be enrolled.
+
+Refusals, with nothing written: the run is not completed; anyone holds a live
+review claim on the run, you included (a command-line claim would log the
+console tab out of its review); the voice is unknown or ambiguous; the name
+belongs to a merged or archived speaker. The command never claims the run.
+
+Undo in the console reverts an assignment. A rename stays, as it does when
+you rename on the roster page.
 
 ## Deduplicating the speaker roster
 
