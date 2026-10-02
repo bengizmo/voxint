@@ -87,3 +87,36 @@ it.each([
   play.mockRestore();
   scroll.mockRestore();
 });
+
+it("pausePlayback pauses the main audio and cancels its turn guard", async () => {
+  const { createRef } = await import("react");
+  const ref = createRef<import("./TranscriptPlayer").TranscriptPlayerHandle>();
+  const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+  const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+  const { container } = render(<TranscriptPlayer ref={ref}
+    runId="run" mediaUrl="/audio" segments={twoLines}
+    capability={{ seekEnabled: true, reasons: [], mediaDuration: 2 }} lowConfidenceThreshold={0.5}
+  />);
+  act(() => { ref.current!.previewSegment(0); });
+  act(() => { ref.current!.pausePlayback(); });
+  expect(pause).toHaveBeenCalledOnce();
+  const audio = container.querySelector("audio")!;
+  audio.currentTime = 2;
+  fireEvent.timeUpdate(audio);
+  expect(pause).toHaveBeenCalledOnce();
+  play.mockRestore();
+  pause.mockRestore();
+});
+it("onMainPlay listens for main audio play and removes its listener on unmount", () => {
+  const onMainPlay = vi.fn();
+  const { container, unmount } = render(<TranscriptPlayer onMainPlay={onMainPlay}
+    runId="run" mediaUrl="/audio" segments={twoLines}
+    capability={{ seekEnabled: true, reasons: [], mediaDuration: 2 }} lowConfidenceThreshold={0.5}
+  />);
+  const audio = container.querySelector("audio")!;
+  fireEvent.play(audio);
+  expect(onMainPlay).toHaveBeenCalledOnce();
+  unmount();
+  fireEvent.play(audio);
+  expect(onMainPlay).toHaveBeenCalledOnce();
+});
