@@ -14,8 +14,8 @@ interface UndoToastProps {
   onClaimLost: () => void;
   onUndone: (data: LabelsResult) => void;
   onDismiss: () => void;
-  // Called after a non-claim 409 (the action was re-ruled or the window ran
-  // out), while the write guard is still held, so the caller can refetch
+  // Called after a non-claim 409 (the action was re-ruled, the window ran
+  // out, or the speaker it would restore is archived), while the write guard is still held, so the caller can refetch
   // server truth before any other edit runs (issue #718). It must settle
   // promptly and never reject: the guard stays held until it does.
   onConflict?: () => Promise<void>;
@@ -62,22 +62,33 @@ export function UndoToast({
   const busyRef = writeGuard?.busyRef ?? localBusyRef;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The undo was refused only because the speaker it would restore is archived.
+  // Restoring that speaker lets the same undo succeed, so the button stays.
+  const [retryable, setRetryable] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Auto-dismiss at the deadline, but not once the toast shows why an undo
-  // failed: that stays until the operator closes it (issue #718).
+  // failed: that stays until the operator closes it (issue #718). A retryable
+  // failure still watches the deadline, and past it says the window closed and
+  // drops the Undo button rather than offer an undo that can only fail.
   useEffect(() => {
-    if (error !== null) return;
+    if (error !== null && !retryable) return;
+    const expire = retryable
+      ? () => {
+          setError("Undo window expired.");
+          setRetryable(false);
+        }
+      : onDismiss;
     const ms = new Date(undo.expiresAt).getTime() - Date.now();
     if (ms <= 0) {
-      onDismiss();
+      expire();
       return;
     }
-    timerRef.current = setTimeout(onDismiss, ms);
+    timerRef.current = setTimeout(expire, ms);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [undo.expiresAt, onDismiss, error]);
+  }, [undo.expiresAt, onDismiss, error, retryable]);
 
   const doUndo = useCallback(async () => {
     if (busyRef.current || !claimCsrf) return;
@@ -85,6 +96,7 @@ export function UndoToast({
     setBusy(true);
     writeGuard?.setBusy(true);
     setError(null);
+    setRetryable(false);
     try {
       const body = new URLSearchParams();
       body.append("token", reviewToken);
@@ -104,6 +116,12 @@ export function UndoToast({
       if (err instanceof ApiError && err.conflictKind === "claim") {
         onClaimLost();
         onDismiss();
+      } else if (err instanceof ApiError && err.conflictKind === "archived-speaker") {
+        // The server names the speaker to restore, which for a merged speaker
+        // is the one it was merged into.
+        setError(`Can't undo: ${err.detail}`);
+        setRetryable(true);
+        await onConflict?.();
       } else if (err instanceof ApiError && err.status === 409) {
         const expired = Date.now() >= new Date(undo.expiresAt).getTime();
         setError(
@@ -160,7 +178,7 @@ export function UndoToast({
       <span style={{ flex: 1, fontSize: "0.875rem" }}>
         {error ?? label}
       </span>
-      {!error && (
+      {(!error || retryable) && (
         <button
           type="button"
           onClick={doUndo}

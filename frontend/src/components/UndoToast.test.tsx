@@ -246,6 +246,97 @@ describe("UndoToast", () => {
     expect(props.onUndone).not.toHaveBeenCalled();
   });
 
+  it("explains an archived-speaker refusal, refetches, and lets the operator retry", async () => {
+    const relabel: UndoPayload = {
+      kind: "relabel",
+      decisionId: "dec-9",
+      expiresAt: inMinutes(5),
+    };
+    vi.mocked(apiFetch)
+      .mockRejectedValueOnce(
+        new ApiError(
+          409,
+          "Dana is archived. Restore them on the Speakers page, then undo again.",
+          "archived-speaker",
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse(labels));
+    const onConflict = vi.fn(() => Promise.resolve());
+    const { props } = setup({ undo: relabel, onConflict });
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain(
+        "Can't undo: Dana is archived. Restore them on the Speakers page, then undo again.",
+      );
+    });
+    expect(screen.getByRole("status").textContent).not.toContain("Too late");
+    expect(onConflict).toHaveBeenCalledOnce();
+    expect(props.onDismiss).not.toHaveBeenCalled();
+
+    // After restoring the speaker elsewhere, the same undo goes through.
+    const retry = await screen.findByRole<HTMLButtonElement>("button", { name: "Undo" });
+    expect(retry.disabled).toBe(false);
+    fireEvent.click(retry);
+
+    await waitFor(() => {
+      expect(props.onUndone).toHaveBeenCalledWith(labels);
+    });
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+    for (const call of vi.mocked(apiFetch).mock.calls) {
+      expect(call[0]).toBe("/review/run-1/undo/relabel");
+      expect(String(call[1]?.body)).toContain("nonce=undo%3Adec-9");
+    }
+  });
+
+  it("hides the retry button again when a retry fails for another reason", async () => {
+    vi.mocked(apiFetch)
+      .mockRejectedValueOnce(new ApiError(409, "archived", "archived-speaker"))
+      .mockRejectedValueOnce(new ApiError(409, "drift"));
+    setup({
+      undo: { kind: "relabel", decisionId: "dec-9", expiresAt: inMinutes(5) },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain("Too late to undo.");
+    });
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+
+  it("drops the retry once the window closes after an archived-speaker refusal", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.mocked(apiFetch).mockRejectedValueOnce(
+      new ApiError(409, "Dana is archived.", "archived-speaker"),
+    );
+    const { props } = setup({
+      undo: {
+        kind: "relabel",
+        decisionId: "dec-9",
+        expiresAt: new Date(Date.now() + 30_000).toISOString(),
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByRole("status").textContent).toContain("Dana is archived.");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeTruthy();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(screen.getByRole("status").textContent).toContain("Undo window expired.");
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+    expect(props.onDismiss).not.toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledOnce();
+  });
+
   it("refetches through onConflict on a drift 409, still holding the write guard", async () => {
     vi.mocked(apiFetch).mockRejectedValueOnce(new ApiError(409, "drift"));
     const busyRef = { current: false };

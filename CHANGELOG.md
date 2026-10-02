@@ -34,8 +34,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   on your speaker list. Lines assigned to a speaker that was later merged
   into this one now count as uses too, so that speaker is kept. Undoing a
   line change that would bring back a speaker who has since been archived
-  now refuses with "Too late to undo" instead of reassigning the line to
-  that archived speaker.
+  is now refused instead of reassigning the line to that archived speaker.
+  The message says the earlier speaker is archived and keeps the Undo
+  button, so you can restore the speaker on the Speakers page and undo
+  again within the undo window (#726).
 - **Restarting a run counts only line speaker changes still in effect**
   (#718). A line that was changed and then undone used to count as two
   rulings, and the restart asked you to confirm voiding them. It now counts
