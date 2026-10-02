@@ -623,6 +623,9 @@ def test_voices_seed_serves_exact_samples_and_reclaims_source(
 
     with session_factory() as session:
         assert reclaim_source_run(session, tmp_path, source_id) == []
+    # A fresh session: the stamp must be committed, or the 410 below would
+    # come from the missing file instead of the reclaimed row.
+    with session_factory() as session:
         assert run_intermediate_reclaimed_at(session, source_id) is not None
         assert run_intermediate_reclaimed_at(session, run_id) is None
     assert not source_path.exists()
