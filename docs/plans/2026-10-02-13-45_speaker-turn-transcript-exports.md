@@ -292,7 +292,7 @@ contract, ledger writes, a migration, an ASR input).
 
 | Slice | Content | Gates beyond lint, types, tests and CI |
 |---|---|---|
-| S1 | Projection, reading layout with minute markers, `to_markdown_turns`, shared export entry, `--style turns` as an opt-in with blocks still the default | Old goldens untouched, new goldens, CLI and HTTP parity for both styles |
+| S1 (PR #745) | Projection, reading layout with minute markers, `to_markdown_turns`, shared export entry, `--style turns` as an opt-in with blocks still the default | Old goldens untouched, new goldens, CLI and HTTP parity for both styles |
 | S2 | Default change, header title, read mode, pull-quote contract wording, docs, CHANGELOG Changed entry naming `--style blocks` | Browser acceptance lane, measured numbers on real recordings |
 | S3 | `voxint speakers name` | Integration tests on a real database |
 | S4 | Fillers | |
