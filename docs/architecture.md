@@ -1003,10 +1003,16 @@ subsystem and adds no page routing.
     codes tell a viewer whether a speaker has confirmed lines elsewhere, which
     is within what that role can already see. If per-project visibility is
     ever added, `/media` and these routes must be bounded together.
-  - **Cost.** Each call walks every eligible canonical run's attribution once
-    (the clip route stops at the first run that serves). Measured on a seeded
-    200-run library with one segment per run: about 1.7 s for the list and
-    1.9 s for a clip whose only source is the oldest run.
+  - **Cost.** One ledger query first narrows the canonical runs to those
+    holding an `assign` row (for a clip, one whose speaker is among the
+    target's merge aliases). That is a necessary condition only: human-assign
+    attribution arises solely from `assign` rows, and the resolver walk still
+    decides eligibility. Only the wanted speakers' intervals are cleaned,
+    against per-label span indexes. The clip route stops at the first run that
+    serves; the list walk skips a run once every speaker it holds is already
+    available. Measured on 200 runs with 300 segments and about 350 turns
+    each: 0.30 s for the list and 0.32 s for a clip whose only source is the
+    oldest run, and under 0.2 s for both when the same speakers recur.
 - **Follow-along highlight + per-speaker colors (issues #50/#47).** The
   `transcript-player` island keeps the active line in view as playback advances:
   a callback ref on the active `<p>` plus a `scrollIntoView({ block: "nearest" })`
