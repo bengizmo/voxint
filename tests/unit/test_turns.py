@@ -1,5 +1,7 @@
 """Synthetic projection fixtures with shared emission and run round trips."""
 
+import html
+import re
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -14,10 +16,13 @@ from voxint.adjudication.turns import (
     PieceRule,
     SpeakerTurn,
     TextMapping,
+    coarse_turns,
     join_pieces,
     project_turns,
 )
 from voxint.db.models import AdjudicationDecision, SegmentReviewState, TranscriptSegment
+from voxint.export import to_markdown_turns
+from voxint.export.reading import layout_turns
 
 
 @dataclass(frozen=True)
@@ -108,6 +113,12 @@ def check(
         groups[-1] += piece.text
     assert [g.strip() for g in groups] == [b.strip() for b in bodies if b.strip()]
     assert " ".join(join_pieces(pieces).split()) == " ".join(_join_segment_texts(bodies).split())
+    # Exercise rendered bytes for every shared projection fixture as well.
+    rendered = to_markdown_turns(layout_turns(result))
+    rendered = re.sub(r"\[\d+:\d{2}:\d{2}\] ?", "", rendered)
+    rendered = re.sub(r"(?m)^\*\*.*?:\*\* ?", "", rendered)
+    rendered = html.unescape(re.sub(r"\\(.)", r"\1", rendered))
+    assert " ".join(rendered.split()) == " ".join(_join_segment_texts(bodies).split())
     return result
 
 
@@ -377,3 +388,21 @@ def test_unsupported_fallback_never_becomes_a_bracket() -> None:
         [Span(0, 2, 3, A)],
     )
     assert [t.speaker for t in result] == ["Alex", "Sam", "Alex"]
+
+
+def test_coarse_translation_children_and_counts() -> None:
+    parent = emission()
+    children = [
+        replace(parent, child=DerivedChild(0, 1, 0, 1, "hello"), seg_override=override(A)),
+        replace(parent, child=DerivedChild(1, 2, 1, 2, "world"),
+                seg_override=override(A), range_override=override(B)),
+    ]
+    result = coarse_turns(children, ["Hola", "mundo"])
+    assert [t.speaker for t in result] == ["Alex", "Sam"]
+    assert all(p.rule == PieceRule.TRANSLATION and not p.timed and p.segment_start
+               for t in result for p in t.pieces)
+    assert [(p.start_seconds, p.end_seconds) for t in result for p in t.pieces] == [(0, 1), (1, 2)]
+    for bodies in (["one"], ["one", "two", "three"]):
+        with pytest.raises(ValueError):
+            coarse_turns(iter(children), bodies)
+    assert coarse_turns(children, ["", " "]) == []

@@ -1,6 +1,6 @@
 # Plan: transcript exports as speaker turns (#741)
 
-Status: draft
+Status: in-progress
 
 Spec deltas: none (this project declares no living spec).
 
@@ -138,7 +138,8 @@ deduplication, no clamping.
 - P1: a pause of 3.0 s or more between timed pieces starts a paragraph. So
   does time going backwards.
 - P2: after a sentence end (`.`, `?`, `!`, closing quotes allowed), a new
-  paragraph starts once the current one has 60 or more words. A coarse piece
+  paragraph starts once the current one has 20 or more words (60 as first
+  planned; see the slice 1 implementation notes). A coarse piece
   breaks only at its own boundaries. No maximum length is promised.
 - Minute markers: inside a paragraph, before the first timed piece that
   crosses into a new minute, emit that minute's `[HH:MM:00]`. A paragraph
@@ -371,3 +372,48 @@ Splits and the choice made:
 
 Follow-ups filed: #742 (show projected turn boundaries in the editor) and #743
 (the vocabulary prompt cap against the engine's token window).
+
+### Slice 1 implementation notes (2026-10-02)
+
+Refinements made while implementing, all inside the rules above:
+
+- **Word units.** A stored token with no leading whitespace is glued to the
+  token before it, and the unit is attributed and rendered whole. Without
+  this a speaker change, a paragraph break or a minute marker could land
+  inside a word. T2 compares whitespace tokens to units, which equals the
+  word count whenever every token has a leading space (the normal case).
+- **Bracketed gaps.** The search for the nearest turn-supported words on both
+  sides of an uncovered word may cross a segment boundary. It stops at an E1,
+  E2 or E3 emission. A within-segment search would hand an uncovered word at
+  a segment edge to the segment's speaker and create one-word turns there.
+- **`timed`.** P1 (the pause and backwards-time rule) and minute markers use
+  every piece's start and end, coarse pieces included, because a coarse
+  piece's interval is real. `timed` only records whether a piece carries its
+  own word timing. A marker is placed before a piece and never inside one.
+- **Translated `md`.** The route validates the translation and passes the
+  texts to the export entry point, which walks the emissions itself, so
+  translated turns keep identity-grade grouping.
+- The existing split validator rejects a segment when a word falls outside
+  the segment's interval or word starts go backwards. A numbers-only check on
+  the two reference recordings found 3 of 113 segments affected, so the
+  validator is reused unchanged.
+- **P2 threshold: 20 words, not 60.** Measured on the two reference
+  recordings with the branch code (corrected text, 3.0 s pause). The reference
+  tool has 173 and 84 paragraphs with a median of 22 to 24 words.
+
+  | Minimum words | Paragraphs | Median words | Longest |
+  |---|---|---|---|
+  | 60 | 110 and 51 | 53.5 and 46 | 111 and 163 |
+  | 40 | 129 and 60 | 43 and 41 | 111 and 118 |
+  | 30 | 149 and 68 | 34 and 34 | 111 and 118 |
+  | 20 | 179 and 82 | 24 and 25 | 111 and 115 |
+
+  Shortening the pause instead (2.0, 1.5, 1.0 s) added very short paragraphs
+  and did not bring the median down until 1.0 s. The pause stays at 3.0 s.
+- **Early measurement** (same run): 97% and 100% of words are attributed at
+  word level under raw text, 94% under enhanced text. Speaker turns rose from
+  28 and 14 single-name blocks to 67 and 30. The coarse remainder is two
+  segments that fail word validation and three reworded two-speaker segments
+  (E6). The S2 gate repeats this on the final code.
+- The pull-quote contract wording moved from S2 into S1, because the rename
+  to `to_markdown_blocks` lands here.

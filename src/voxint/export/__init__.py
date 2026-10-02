@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from typing import Protocol, assert_never
 
 from voxint.adjudication.transcript import TranscriptLine, paragraphize_transcript
+from voxint.export.reading import ReadingParagraph
 
 
 class TranscriptFormat(enum.StrEnum):
@@ -304,7 +305,7 @@ def _md_defuse_block_start(line: str) -> str:
     return line
 
 
-def to_markdown(lines: Sequence[TranscriptLine], *, timestamps: bool = True) -> str:
+def to_markdown_blocks(lines: Sequence[TranscriptLine], *, timestamps: bool = True) -> str:
     """Readable Markdown: an ``## Speaker`` heading per contiguous same-speaker run
     followed by one blockquote paragraph.
 
@@ -362,9 +363,9 @@ def annotation_pull_quote(
 ) -> str:
     """One highlight rendered as a Markdown pull-quote (issue #86).
 
-    The quote body is :func:`to_markdown` of the already-clipped lines (the reading
+    The quote body is :func:`to_markdown_blocks` of the already-clipped lines (the reading
     copy, ``timestamps=False``), so a pull-quote's quoted text is byte-identical to
-    the same span in a transcript file export by construction (docs/annotations.md,
+    the same span in a ``--style blocks`` transcript export (docs/annotations.md,
     "Pull-quote formatting"). Timing lives once, in the citation, so the body never
     shows a whole-segment bracket that would misstate a sub-segment highlight's span.
     The caller slices each covered line to the annotation span and preserves that
@@ -379,7 +380,7 @@ def annotation_pull_quote(
     with :func:`_md_escape` and their line breaks folded to spaces, so untrusted
     annotation text renders literally and can never forge Markdown or raw HTML.
     """
-    body = to_markdown(clipped_lines, timestamps=False)
+    body = to_markdown_blocks(clipped_lines, timestamps=False)
     approx = "≈ " if timing_precision != "word" else ""
     title = _md_escape(_normalize_line_breaks(source_title).replace("\n", " "))
     timespan = format_timespan(start_seconds, end_seconds)
@@ -437,6 +438,41 @@ def render_transcript(
         case TranscriptFormat.JSON:
             return to_json(lines)
         case TranscriptFormat.MARKDOWN:
-            return to_markdown(lines, timestamps=timestamps)
+            return to_markdown_blocks(lines, timestamps=timestamps)
         case _:  # a new TranscriptFormat member without a case is a bug, not a None body
             assert_never(fmt)
+
+
+def format_clock(seconds: float) -> str:
+    """Whole-second clock, flooring positive offsets and clamping negatives."""
+    total = int(max(seconds, 0))
+    return f"[{total // 3600:02d}:{total // 60 % 60:02d}:{total % 60:02d}]"
+
+
+def to_markdown_turns(
+    paragraphs: Sequence[ReadingParagraph], header: str | None = None, *, timestamps: bool = True,
+) -> str:
+    """Render escaped speaker paragraphs on one physical line each."""
+    blocks: list[str] = []
+    if header is not None:
+        blocks.append("# " + _md_escape(_normalize_line_breaks(header).replace("\n", " ")))
+    for paragraph in paragraphs:
+        parts: list[str] = []
+        if timestamps:
+            parts.append(format_clock(paragraph.start_seconds))
+        if not paragraph.continuation:
+            speaker = _md_escape(_normalize_line_breaks(paragraph.speaker).replace("\n", " "))
+            parts.append(f"**{speaker}:**")
+        for run in paragraph.runs:
+            if timestamps and run.marker_seconds is not None:
+                parts.append(format_clock(run.marker_seconds))
+            body = " ".join(
+                line.strip(" \t") for line in _normalize_line_breaks(run.text).split("\n")
+                if line.strip(" \t")
+            )
+            parts.append(_md_escape(body))
+        line = " ".join(parts)
+        if paragraph.continuation and not timestamps:
+            line = _md_defuse_block_start(line)
+        blocks.append(line)
+    return "\n\n".join(blocks) + ("\n" if blocks else "")

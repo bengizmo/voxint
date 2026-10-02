@@ -83,6 +83,7 @@ class PieceRule(enum.StrEnum):
     SINGLE_IDENTITY = "E4"
     WORD_LEVEL = "E5"
     UNMAPPED_TEXT = "E6"
+    TRANSLATION = "translation"
 
 
 class TextMapping(enum.StrEnum):
@@ -355,7 +356,7 @@ def project_turns(
             elif preceding is not None and following is not None and preceding[0] == following[0]:
                 item.identities[j] = preceding
 
-    groups: list[tuple[_Identity, list[TurnPiece]]] = []
+    all_pieces: list[tuple[_Identity, TurnPiece]] = []
     for item in prepared:
         mapping, texts = (
             _map_text(item.selected, item.units) if item.units else (TextMapping.COARSE, [])
@@ -395,13 +396,43 @@ def project_turns(
                     ),
                 )
             )
-        for identity, piece in emitted:
-            if not piece.text.strip():
-                continue
-            if not groups or groups[-1][0][0] != identity[0]:
-                groups.append((identity, []))
-            groups[-1][1].append(piece)
+        all_pieces.extend(emitted)
+    return _group_pieces(all_pieces)
+
+
+def _group_pieces(emitted: Iterable[tuple[_Identity, TurnPiece]]) -> list[SpeakerTurn]:
+    """Skip empty pieces and group adjacent canonical identities."""
+    groups: list[tuple[_Identity, list[TurnPiece]]] = []
+    for identity, piece in emitted:
+        if not piece.text.strip():
+            continue
+        if not groups or groups[-1][0][0] != identity[0]:
+            groups.append((identity, []))
+        groups[-1][1].append(piece)
     return [SpeakerTurn(identity[0], identity[1], tuple(pieces)) for identity, pieces in groups]
+
+
+def coarse_turns(emissions: Iterable[Emission], texts: Sequence[str]) -> list[SpeakerTurn]:
+    """Project translated text by emission order, retaining split-child rulings.
+
+    Translation bypasses word evidence. Counts must agree, including empty
+    translations; each non-empty body is one atomic coarse piece.
+    """
+    pieces: list[tuple[_Identity, TurnPiece]] = []
+    for emission, body in zip(emissions, texts, strict=True):
+        interval = emission.child if emission.child is not None else emission.seg
+        pieces.append((_existing_identity(emission), TurnPiece(
+            body, interval.start_seconds, interval.end_seconds, False, True,
+            PieceRule.TRANSLATION, TextMapping.COARSE,
+        )))
+    return _group_pieces(pieces)
+
+
+def translated_turns(
+    session: Session, run_id: uuid.UUID, texts: Sequence[str],
+) -> list[SpeakerTurn]:
+    """Load the attribution walk for a translation without loading word turns."""
+    return coarse_turns(walk_attributions(session, run_id), texts)
 
 
 def attributed_turns(

@@ -6,6 +6,19 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **A Markdown export laid out as speaker turns** (#741). `voxint export
+  --format md --style turns`, or `?style=turns` on the Markdown download and
+  on `/api/v1/runs/{id}/transcript?format=md`, writes
+  `[HH:MM:SS] **Name:** text` paragraphs instead of a heading and a
+  blockquote. Speakers are assigned word by word from the stored word timings
+  and diarization turns, so two people who trade remarks inside one transcript
+  segment no longer appear under one name. Speaker assignments and splits you
+  made in review are kept as they are. Long turns break into paragraphs at
+  pauses, and a paragraph that crosses a minute boundary carries an inline
+  minute marker. The default Markdown layout is unchanged; `--style blocks`
+  names it. `docs/operations.md` has the rules and the limits.
+
 ### Fixed
 - **Editor requests are no longer cacheable** (#714). The media editor page
   was sent with `Cache-Control: no-store`, but the requests under it were

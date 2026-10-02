@@ -19,14 +19,17 @@ from voxint.export import (
     MEDIA_TYPES,
     TranscriptFormat,
     annotation_pull_quote,
+    format_clock,
     render_transcript,
     to_json,
-    to_markdown,
+    to_markdown_blocks,
+    to_markdown_turns,
     to_rttm,
     to_srt,
     to_txt,
     to_vtt,
 )
+from voxint.export.reading import ReadingParagraph, ReadingRun
 
 
 class _Turn:
@@ -161,7 +164,7 @@ MD_LINES = [
 def test_markdown_headings_and_merged_blockquote() -> None:
     # An H2 per contiguous same-speaker run; adjacent Alice lines merge into one
     # blockquote whose time range spans the whole run (0.00 → 5.00).
-    assert to_markdown(MD_LINES) == (
+    assert to_markdown_blocks(MD_LINES) == (
         "## Alice\n\n"
         "> [00:00:00.000\u201300:00:05.000] Hello \\*there\\*. Still here.\n"
         "\n"
@@ -171,7 +174,7 @@ def test_markdown_headings_and_merged_blockquote() -> None:
 
 
 def test_markdown_without_timestamps_drops_time_range() -> None:
-    assert to_markdown(MD_LINES, timestamps=False) == (
+    assert to_markdown_blocks(MD_LINES, timestamps=False) == (
         "## Alice\n\n"
         "> Hello \\*there\\*. Still here.\n"
         "\n"
@@ -181,7 +184,7 @@ def test_markdown_without_timestamps_drops_time_range() -> None:
 
 
 def test_markdown_empty_is_empty_string() -> None:
-    assert to_markdown([]) == ""
+    assert to_markdown_blocks([]) == ""
 
 
 def test_markdown_speaker_return_starts_new_paragraph() -> None:
@@ -190,7 +193,7 @@ def test_markdown_speaker_return_starts_new_paragraph() -> None:
         TranscriptLine(start_seconds=1.0, end_seconds=2.0, speaker="B", text="two"),
         TranscriptLine(start_seconds=2.0, end_seconds=3.0, speaker="A", text="three"),
     ]
-    assert to_markdown(lines, timestamps=False) == (
+    assert to_markdown_blocks(lines, timestamps=False) == (
         "## A\n\n> one\n\n## B\n\n> two\n\n## A\n\n> three\n"
     )
 
@@ -198,7 +201,7 @@ def test_markdown_speaker_return_starts_new_paragraph() -> None:
 def test_markdown_quotes_every_physical_line() -> None:
     # Embedded newlines in a segment stay as separate blockquote lines.
     lines = [TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="one\ntwo")]
-    assert to_markdown(lines, timestamps=False) == "## A\n\n> one\n> two\n"
+    assert to_markdown_blocks(lines, timestamps=False) == "## A\n\n> one\n> two\n"
 
 
 def test_markdown_escapes_markdown_and_html_control_chars() -> None:
@@ -212,7 +215,7 @@ def test_markdown_escapes_markdown_and_html_control_chars() -> None:
             text="see `code`, _em_, [link](x) and <script>&",
         )
     ]
-    assert to_markdown(lines, timestamps=False) == (
+    assert to_markdown_blocks(lines, timestamps=False) == (
         "## A &lt;b&gt;\n\n"
         "> see \\`code\\`, \\_em\\_, \\[link\\](x) and &lt;script&gt;&amp;\n"
     )
@@ -232,7 +235,7 @@ def test_markdown_defuses_line_leading_block_markers() -> None:
             ),
         )
     ]
-    assert to_markdown(lines, timestamps=False) == (
+    assert to_markdown_blocks(lines, timestamps=False) == (
         "## A\n\n"
         "> \\# not a heading\n"
         "> \\- not a bullet\n"
@@ -249,7 +252,7 @@ def test_markdown_timestamp_prefix_keeps_first_line_defused() -> None:
     lines = [
         TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="# hi"),
     ]
-    assert to_markdown(lines) == (
+    assert to_markdown_blocks(lines) == (
         "## A\n\n> [00:00:00.000\u201300:00:01.000] \\# hi\n"
     )
 
@@ -261,7 +264,7 @@ def test_markdown_defuses_setext_equals_underline() -> None:
     lines = [
         TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="Foo\n==="),
     ]
-    assert to_markdown(lines, timestamps=False) == "## A\n\n> Foo\n> \\===\n"
+    assert to_markdown_blocks(lines, timestamps=False) == "## A\n\n> Foo\n> \\===\n"
 
 
 def test_markdown_normalizes_bare_carriage_return_breakout() -> None:
@@ -271,7 +274,7 @@ def test_markdown_normalizes_bare_carriage_return_breakout() -> None:
     lines = [
         TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="foo\r# Owned"),
     ]
-    assert to_markdown(lines, timestamps=False) == "## A\n\n> foo\n> \\# Owned\n"
+    assert to_markdown_blocks(lines, timestamps=False) == "## A\n\n> foo\n> \\# Owned\n"
 
 
 def test_markdown_crlf_collapses_to_one_line_break() -> None:
@@ -279,7 +282,7 @@ def test_markdown_crlf_collapses_to_one_line_break() -> None:
     lines = [
         TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="foo\r\nbar"),
     ]
-    assert to_markdown(lines, timestamps=False) == "## A\n\n> foo\n> bar\n"
+    assert to_markdown_blocks(lines, timestamps=False) == "## A\n\n> foo\n> bar\n"
 
 
 def test_markdown_escapes_tilde_fence_and_table_pipe() -> None:
@@ -293,7 +296,7 @@ def test_markdown_escapes_tilde_fence_and_table_pipe() -> None:
             text="~~~\nh1 | h2\n--- | ---",
         )
     ]
-    assert to_markdown(lines, timestamps=False) == (
+    assert to_markdown_blocks(lines, timestamps=False) == (
         "## A\n\n> \\~\\~\\~\n> h1 \\| h2\n> \\--- \\| ---\n"
     )
 
@@ -307,7 +310,7 @@ def test_markdown_defuses_tab_indented_block_leader() -> None:
             start_seconds=0.0, end_seconds=1.0, speaker="A", text="\t# Owned\nFoo\n\t==="
         ),
     ]
-    assert to_markdown(lines, timestamps=False) == (
+    assert to_markdown_blocks(lines, timestamps=False) == (
         "## A\n\n> \\# Owned\n> Foo\n> \\===\n"
     )
 
@@ -319,7 +322,7 @@ def test_markdown_strips_leading_indent_no_code_block() -> None:
     lines = [
         TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="    *soft*"),
     ]
-    assert to_markdown(lines, timestamps=False) == "## A\n\n> \\*soft\\*\n"
+    assert to_markdown_blocks(lines, timestamps=False) == "## A\n\n> \\*soft\\*\n"
 
 
 def test_markdown_strips_trailing_hard_break() -> None:
@@ -328,7 +331,7 @@ def test_markdown_strips_trailing_hard_break() -> None:
     lines = [
         TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="one  \ntwo"),
     ]
-    assert to_markdown(lines, timestamps=False) == "## A\n\n> one\n> two\n"
+    assert to_markdown_blocks(lines, timestamps=False) == "## A\n\n> one\n> two\n"
 
 
 def test_markdown_folds_unicode_line_separators() -> None:
@@ -340,7 +343,7 @@ def test_markdown_folds_unicode_line_separators() -> None:
             start_seconds=0.0, end_seconds=1.0, speaker="A\u2029B", text="foo\u2028# x"
         ),
     ]
-    assert to_markdown(lines, timestamps=False) == "## A B\n\n> foo\n> \\# x\n"
+    assert to_markdown_blocks(lines, timestamps=False) == "## A B\n\n> foo\n> \\# x\n"
 
 
 def test_markdown_folds_speaker_newline_into_one_heading() -> None:
@@ -354,7 +357,7 @@ def test_markdown_folds_speaker_newline_into_one_heading() -> None:
             text="hi",
         )
     ]
-    assert to_markdown(lines, timestamps=False) == "## Alice ## forged\n\n> hi\n"
+    assert to_markdown_blocks(lines, timestamps=False) == "## Alice ## forged\n\n> hi\n"
 
 
 def test_paragraphize_merges_adjacent_same_speaker() -> None:
@@ -398,7 +401,7 @@ def test_dispatcher_matches_direct_formatters(fmt: TranscriptFormat) -> None:
         TranscriptFormat.SRT: to_srt,
         TranscriptFormat.VTT: to_vtt,
         TranscriptFormat.JSON: to_json,
-        TranscriptFormat.MARKDOWN: to_markdown,
+        TranscriptFormat.MARKDOWN: to_markdown_blocks,
     }[fmt]
     assert render_transcript(LINES, fmt) == direct(LINES)
 
@@ -411,7 +414,7 @@ def test_dispatcher_timestamps_flag_affects_only_txt_and_markdown() -> None:
     )
     assert render_transcript(
         LINES, TranscriptFormat.MARKDOWN, timestamps=False
-    ) == to_markdown(LINES, timestamps=False)
+    ) == to_markdown_blocks(LINES, timestamps=False)
     for fmt, direct in (
         (TranscriptFormat.SRT, to_srt),
         (TranscriptFormat.VTT, to_vtt),
@@ -437,7 +440,7 @@ _CLIP = [
 
 
 def test_pull_quote_body_is_to_markdown_by_construction() -> None:
-    # The load-bearing invariant: the quote body is byte-identical to to_markdown of
+    # The load-bearing invariant: the quote body is byte-identical to to_markdown_blocks of
     # the same clipped lines, so a pull-quote and a file export can never drift.
     quote = annotation_pull_quote(
         _CLIP,
@@ -447,7 +450,7 @@ def test_pull_quote_body_is_to_markdown_by_construction() -> None:
         timing_precision="word",
     )
     # The reading copy (timestamps in the citation, not the body) is the invariant.
-    assert quote.startswith(to_markdown(_CLIP, timestamps=False))
+    assert quote.startswith(to_markdown_blocks(_CLIP, timestamps=False))
     assert quote.startswith("## Alice\n\n> world\n")
 
 
@@ -542,3 +545,52 @@ def test_annotation_media_types_is_md_only() -> None:
     assert set(ANNOTATION_MEDIA_TYPES) == {"md"}
     assert ANNOTATION_MEDIA_TYPES["md"].startswith("text/markdown")
     assert ANNOTATION_BULK_SEPARATOR == "\n---\n\n"
+
+
+@pytest.mark.parametrize("seconds,expected", [(-1, "[00:00:00]"), (59.999, "[00:00:59]"),
+                                            (3600, "[01:00:00]"), (360000, "[100:00:00]")])
+def test_format_clock(seconds: float, expected: str) -> None:
+    assert format_clock(seconds) == expected
+
+
+def test_turn_markdown_goldens() -> None:
+    paragraphs = [
+        ReadingParagraph("Alex", False, 12, (ReadingRun(None, "Hello."),)),
+        ReadingParagraph("Sam", False, 15, (
+            ReadingRun(None, "Hi."), ReadingRun(60, "Still here."),
+        )),
+        ReadingParagraph("Sam", True, 100, (ReadingRun(None, "Continuing."),)),
+    ]
+    assert to_markdown_turns(paragraphs) == (
+        "[00:00:12] **Alex:** Hello.\n\n"
+        "[00:00:15] **Sam:** Hi. [00:01:00] Still here.\n\n"
+        "[00:01:40] Continuing.\n"
+    )
+    assert to_markdown_turns(paragraphs, timestamps=False) == (
+        "**Alex:** Hello.\n\n**Sam:** Hi. Still here.\n\nContinuing.\n"
+    )
+    assert to_markdown_turns([], "Title | 2 Oct 2026") == "# Title \\| 2 Oct 2026\n"
+    assert to_markdown_turns([]) == ""
+
+
+def test_turn_markdown_hostile_and_multiline() -> None:
+    paragraphs = [
+        ReadingParagraph("Alex*_[]|<>&\n# forged", False, 0, (
+            ReadingRun(None, " *_[]|<>&\r\n\t# forged\u2028\n final "),
+        )),
+        ReadingParagraph("Alex", True, 1, (ReadingRun(None, "# forged"),)),
+        ReadingParagraph("Alex", True, 2, (ReadingRun(None, "1. forged"),)),
+    ]
+    assert to_markdown_turns(paragraphs, timestamps=False) == (
+        "**Alex\\*\\_\\[\\]\\|&lt;&gt;&amp; # forged:** "
+        "\\*\\_\\[\\]\\|&lt;&gt;&amp; # forged final\n\n"
+        "\\# forged\n\n1\\. forged\n"
+    )
+    assert to_markdown_turns([], "Title\r\n# forged") == "# Title # forged\n"
+
+
+def test_turn_markdown_header_with_paragraph() -> None:
+    paragraph = ReadingParagraph("Jo", False, 0, (ReadingRun(None, "Hello"),))
+    assert to_markdown_turns([paragraph], "Title | date") == (
+        "# Title \\| date\n\n[00:00:00] **Jo:** Hello\n"
+    )
