@@ -458,12 +458,13 @@ Refinements made while implementing, all inside the rules above:
   placeholder, because no rename history is stored; closing it needs a
   persisted flag, out of proportion for this slice. The no-op check reads the
   label state before the owner lock, so a roster rename racing the command
-  can change which speaker owns the requested name (single operator). The
-  machine branch of the count skips a run whose label has any ledger history,
-  a revoke included, so it can undercount after a revoke.
+  can change which speaker owns the requested name (single operator). Speakers
+  auto-enrolled before the evidence table existed have no `created` row and
+  take the safe branch, a new enrollment, never a wrong rename.
 - **Other recordings.** The count reports recordings where the speaker, or
-  a merged alias of it, is the current attribution of some label; superseded
-  rulings and ungrounded machine assignments do not count.
+  a merged alias of it, is the current attribution of some label: superseded
+  rulings and ungrounded machine assignments do not count, and a grounded
+  machine assignment counts again once the ruling over it is revoked.
 - **Undo wording.** The console offers undo only right after its own
   action, so the command says a later ruling supersedes the assignment and
   the rename stays, rather than promising an undo.
