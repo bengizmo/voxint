@@ -6,6 +6,7 @@ import {
   type AnnotationShape,
   type AnnotationTagShape,
 } from "../lib/annotations";
+import { createVoiceSamplePlayer, type VoiceSamplePlayer } from "../lib/voice-sample";
 import { ApiError, apiFetch } from "../lib/api-client";
 import {
   type SegmentPatchResult,
@@ -123,6 +124,7 @@ export function MediaEditor({
   const [editText, setEditText] = useState("");
   // The current line got new text while the edit box held an unsaved edit.
   const [editOvertaken, setEditOvertaken] = useState(false);
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
   const { busy, busyRef, setBusy } = useBusyGuard();
   const [reviewToken, setReviewToken] = useState<string | null>(
     initialReviewToken,
@@ -329,6 +331,49 @@ export function MediaEditor({
   }, [hasUnsavedEdit]);
 
   const playerRef = useRef<TranscriptPlayerHandle>(null);
+  // A roster speaker's voice from another recording (issue #714). The sample
+  // has its own audio element, so playback is made exclusive by hand: a sample
+  // pauses the main player, and the main player starting stops the sample. It
+  // lives for the editor's life, so closing the menu leaves a clip playing.
+  const samplerRef = useRef<VoiceSamplePlayer | null>(null);
+  const availabilityRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    samplerRef.current = createVoiceSamplePlayer(() =>
+      playerRef.current?.pausePlayback(),
+    );
+    return () => {
+      samplerRef.current?.dispose();
+      availabilityRef.current?.abort();
+      availabilityRef.current = null;
+    };
+  }, []);
+  const onMainPlay = useCallback(() => samplerRef.current?.stop(), []);
+  // Hearing is read-only: it never moves the cursor or touches the edit box,
+  // so an unsaved edit is safe (issue #732). A failure is reported in the
+  // editor, not the menu, which may have closed by the time it is known.
+  const hearOtherRecording = useCallback(
+    async (speakerId: string) => {
+      const name =
+        speakers.find((speaker) => speaker.id === speakerId)?.displayName ??
+        "this speaker";
+      setVoiceNotice(null);
+      const outcome = await samplerRef.current?.play(
+        `/media/${mediaId}/editor/voice-sample/${speakerId}`,
+      );
+      if (outcome === "none") {
+        setVoiceNotice(
+          `No confirmed line of ${name} from another recording is available.`,
+        );
+      } else if (outcome === "gone") {
+        setVoiceNotice(
+          `The recordings with ${name}'s confirmed lines can't be played anymore.`,
+        );
+      } else if (outcome === "failed") {
+        setVoiceNotice(`Couldn't play ${name}'s voice. Try again.`);
+      }
+    },
+    [mediaId, speakers],
+  );
   const editRef = useRef<HTMLTextAreaElement>(null);
   const annotationRootRef = useRef<HTMLDivElement>(null);
   const reloadAnnotationsRef = useRef<(() => Promise<void>) | null>(null);
@@ -375,6 +420,31 @@ export function MediaEditor({
     segmentIndex: number;
     anchorRect: DOMRect;
   } | null>(null);
+  // Who has a voice sample in another recording (issue #714). Asked on the
+  // first menu open and kept for the editor's life: eligibility depends only
+  // on other recordings, so nothing done here can change it.
+  const [sampleSpeakerIds, setSampleSpeakerIds] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!popoverTarget || sampleSpeakerIds !== null || availabilityRef.current) return;
+    const controller = new AbortController();
+    availabilityRef.current = controller;
+    void (async () => {
+      try {
+        const response = await apiFetch(`/media/${mediaId}/editor/voice-samples`, {
+          headers: { accept: "application/json" },
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const body = (await response.json()) as { speakerIds?: unknown };
+        if (controller.signal.aborted || !Array.isArray(body.speakerIds)) return;
+        setSampleSpeakerIds(body.speakerIds as string[]);
+      } catch {
+        // A later menu open may retry; hearing never blocks editing.
+      } finally {
+        if (availabilityRef.current === controller) availabilityRef.current = null;
+      }
+    })();
+  }, [popoverTarget, sampleSpeakerIds, mediaId]);
   const popoverOpenRef = useRef(false);
   useEffect(() => {
     popoverOpenRef.current = popoverTarget != null;
@@ -513,6 +583,18 @@ export function MediaEditor({
     () => comparisons.map((comparison) => comparison.speaker),
     [comparisons],
   );
+  // Everyone with a sample elsewhere, minus those the in-recording list above
+  // already offers. The line's own speaker stays, so a doubtful match can be
+  // checked. With seek disabled that list is not shown, so nobody is dropped.
+  const otherRecordingSpeakers = useMemo(() => {
+    const available = new Set(sampleSpeakerIds);
+    const offered = new Set(
+      capability.seekEnabled ? comparableSpeakers.map((speaker) => speaker.id) : [],
+    );
+    return speakers
+      .filter((speaker) => available.has(speaker.id) && !offered.has(speaker.id))
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+  }, [sampleSpeakerIds, speakers, comparableSpeakers, capability.seekEnabled]);
   const hearSpeaker = useCallback(
     (speakerId: string) => {
       const found = comparisons.find((comparison) => comparison.speaker.id === speakerId);
@@ -646,6 +728,7 @@ export function MediaEditor({
     setEditOvertaken(false);
     setConfirmDiscard(false);
     setAssignStatus(null);
+    setVoiceNotice(null);
     setMergeSuggestion(null);
     setProvOpen(false);
   }, [current?.segmentId, current?.text]);
@@ -1773,6 +1856,11 @@ export function MediaEditor({
                     action to discard the edit and continue.
                   </p>
                 )}
+                {voiceNotice && (
+                  <p role="status" className="text-sm">
+                    {voiceNotice}
+                  </p>
+                )}
                 {editOvertaken && (
                   <p role="status" className="text-sm">
                     This line changed while you were editing. Your edit is
@@ -1793,8 +1881,15 @@ export function MediaEditor({
                 </p>
               </div>
             )}
+            {/* The same notice when the panel above is not rendered. */}
+            {!(writable && current && current.segmentId !== null) && voiceNotice && (
+              <p role="status" className="text-sm">
+                {voiceNotice}
+              </p>
+            )}
             <TranscriptPlayer
               ref={playerRef}
+              onMainPlay={onMainPlay}
               runId={runId}
               mediaUrl={mediaUrl}
               segments={segments}
@@ -1846,6 +1941,8 @@ export function MediaEditor({
                 onRename={handlePopoverRename}
                 onClose={closePopover}
                 onHearVoice={capability.seekEnabled ? hearPopoverVoice : undefined}
+                otherRecordingSpeakers={otherRecordingSpeakers}
+                onHearOtherRecording={hearOtherRecording}
                 comparableSpeakers={comparableSpeakers}
                 onHearSpeaker={capability.seekEnabled ? hearSpeaker : undefined}
                 disabled={busy || !writable}

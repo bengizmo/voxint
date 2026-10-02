@@ -6,6 +6,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Compare with a voice from another recording** (#714). The speaker menu
+  could only play people who already have a line in the recording you are
+  reviewing. It now has a second list, "Compare with a voice from another
+  recording", for people on your speaker list who do not. Clicking a name
+  plays a clip of up to ten seconds from a line you assigned to that person
+  yourself in another recording, trimmed to audio where only that voice is
+  speaking. Lines Voxint matched on its own are never used, and neither are
+  recordings in the trash. The clip pauses the main player, does not move
+  your place or touch an unsaved edit, and the editor says why when a clip
+  cannot be played. Two read-only routes serve it:
+  `GET /media/{id}/editor/voice-samples` and
+  `GET /media/{id}/editor/voice-sample/{speaker_id}`.
+
 ### Fixed
 - **Editor requests are no longer cacheable** (#714). The media editor page
   was sent with `Cache-Control: no-store`, but the requests under it were

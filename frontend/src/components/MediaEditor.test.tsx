@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MediaEditor, type MediaEditorProps } from "./MediaEditor";
-import { ApiError, apiFetch } from "../lib/api-client";
+import { ApiError } from "../lib/api-client";
 import type { WriteGuard } from "../lib/editor-mutations";
 import type { LabelsResult } from "./SpeakerRail";
 import type {
@@ -11,9 +11,13 @@ import type {
   TranscriptPlayerProps,
 } from "./TranscriptPlayer";
 
+const availability = vi.hoisted(() => vi.fn());
+// Keep existing write assertions independent of the new read-only availability call.
+const apiFetch = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api-client", async (original) => ({
   ...await original<typeof import("../lib/api-client")>(),
-  apiFetch: vi.fn(),
+  apiFetch: (url: string, init?: RequestInit) => url.endsWith("/voice-samples")
+    ? availability(url, init) : apiFetch(url, init),
 }));
 // Tests reach the annotation panel's jump through `annotations`.
 const annotations = vi.hoisted(() => ({
@@ -40,6 +44,9 @@ vi.mock("./SpeakerRail", () => ({
 vi.mock("./OutlinePanel", () => ({ OutlinePanel: () => null }));
 vi.mock("./KeymapHelp", () => ({ KeymapHelp: () => null }));
 const player = vi.hoisted(() => ({
+  pausePlayback: vi.fn(),
+  onMainPlay: undefined as (() => void) | undefined,
+  cursorIndex: undefined as number | undefined,
   previewSegment: vi.fn(),
   playSegment: vi.fn(),
   focusCursorRow: vi.fn(() => null),
@@ -53,9 +60,12 @@ vi.mock("./TranscriptPlayer", async () => {
     TranscriptPlayer: (
       props: TranscriptPlayerProps & { ref?: React.Ref<TranscriptPlayerHandle> },
     ) => {
+      player.onMainPlay = props.onMainPlay;
+      player.cursorIndex = props.cursorIndex;
       player.highlightLabels = props.highlightLabels ?? null;
       player.onSegmentSelect = props.onSegmentSelect;
       useImperativeHandle(props.ref, () => ({
+        pausePlayback: player.pausePlayback,
         playSegment: player.playSegment,
         previewSegment: player.previewSegment,
         focusCursorRow: player.focusCursorRow,
@@ -116,6 +126,7 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   vi.stubGlobal("CSS", { escape: (s: string) => s.replaceAll(":", "\\:") });
   vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+  availability.mockReset().mockResolvedValue({ json: async () => ({ speakerIds: [] }) });
   // clearAllMocks keeps queued Once implementations; reset so none can leak.
   vi.mocked(apiFetch).mockReset();
   vi.mocked(apiFetch).mockResolvedValue({
@@ -364,7 +375,7 @@ function openComparison(lines: Segment[], labelStates: ReturnType<typeof labelSt
 }
 
 function compareNames(): string[] {
-  return screen.queryAllByRole("button", { name: /^Hear (?!this voice)/ })
+  return screen.queryAllByRole("button", { name: /^Hear (?!this voice)(?!.* from another recording$)/ })
     .map((button) => button.getAttribute("aria-label") ?? "");
 }
 
@@ -974,4 +985,191 @@ it("does not advance from a line the operator moved to during a verify", async (
 
   expect(editBox().value).toBe("Text 0");
   expect(screen.getByText(/segment at 2\.00s/)).toBeTruthy();
+});
+
+function renderSamples(seekEnabled = true, lines = segments, labelStates = defaultLabelStates) {
+  return render(<MediaEditor
+    mediaId="media" runId="run" mediaUrl="/audio" segments={lines}
+    capability={{ seekEnabled, reasons: [], mediaDuration: 60 }}
+    lowConfidenceThreshold={0.5} reviewToken="claim"
+    initialProgress={{ verified: 0, total: lines.length }}
+    speakers={[{ id: "cass", displayName: "Cass" }, { id: "bob", displayName: "Bob" }, { id: "alice", displayName: "Alice" }]}
+    labelStates={labelStates}
+  />);
+}
+function offerSamples() {
+  availability.mockResolvedValue({ json: async () => ({ speakerIds: ["cass", "alice", "bob"] }) });
+}
+async function openSamples(index = 0, name = "Alice") {
+  fireEvent.click(screen.getByRole("button", { name: `Speaker ${index}: ${name}` }));
+  const summary = await screen.findByText("Compare with a voice from another recording");
+  const details = summary.closest("details")!;
+  if (!details.open) {
+    await act(async () => {
+      details.open = true;
+      fireEvent(details, new Event("toggle"));
+    });
+  }
+}
+function sampleAudio() {
+  const audio = document.createElement("audio");
+  audio.play = vi.fn().mockResolvedValue(undefined);
+  audio.pause = vi.fn();
+  vi.stubGlobal("Audio", class { constructor() { return audio; } });
+  const revoke = vi.fn();
+  vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:sample"), revokeObjectURL: revoke });
+  const fetch = vi.fn().mockImplementation(async () => new Response("wav"));
+  vi.stubGlobal("fetch", fetch);
+  return { audio, fetch, revoke };
+}
+it("fetches availability only on first open across closing, reopening and different lines", async () => {
+  offerSamples();
+  renderSamples();
+  expect(availability).not.toHaveBeenCalled();
+  await openSamples();
+  expect(availability).toHaveBeenCalledWith("/media/media/editor/voice-samples", {
+    headers: { accept: "application/json" }, cache: "no-store", signal: expect.any(AbortSignal),
+  });
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  await openSamples();
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  await openSamples(1);
+  expect(availability).toHaveBeenCalledOnce();
+});
+it.each([true, false])("filters and sorts other-recording speakers with seekEnabled=%s while keeping the current speaker", async (seek) => {
+  offerSamples();
+  const lines = [segments[0], { ...segments[1], speaker: "Bob", label: "VOICE/B" }];
+  const states = [...defaultLabelStates, { ...defaultLabelStates[0], label: "VOICE/B", speakerId: "bob", speakerName: "Bob" }];
+  renderSamples(seek, lines, states);
+  await openSamples();
+  expect(screen.getAllByRole("button", { name: /from another recording$/ }).map((button) => button.textContent))
+    .toEqual(seek ? ["▸ Alice", "▸ Cass"] : ["▸ Alice", "▸ Bob", "▸ Cass"]);
+});
+it("sample playback pauses the main player and main play stops the sample without changing a dirty edit", async () => {
+  offerSamples();
+  const { audio, fetch } = sampleAudio();
+  renderSamples();
+  fireEvent.change(editBox(), { target: { value: "My unsaved correction" } });
+  const cursor = player.cursorIndex;
+  await openSamples(1);
+  fireEvent.click(screen.getByRole("button", { name: "Hear Alice from another recording" }));
+  await waitFor(() => expect(audio.play).toHaveBeenCalledOnce());
+  expect(fetch).toHaveBeenCalledWith("/media/media/editor/voice-sample/alice", expect.objectContaining({ cache: "no-store" }));
+  expect(player.pausePlayback).toHaveBeenCalledOnce();
+  expect(player.cursorIndex).toBe(cursor);
+  expect(editBox().value).toBe("My unsaved correction");
+  expect(screen.queryByText(UNSAVED_WARNING)).toBeNull();
+  expect(apiFetch).not.toHaveBeenCalled();
+  act(() => { player.onMainPlay?.(); });
+  expect(audio.pause).toHaveBeenCalledOnce();
+});
+it.each([
+  [404, "no_voice_sample", "No confirmed line of Alice from another recording is available."],
+  [410, "voice_sample_gone", "The recordings with Alice's confirmed lines can't be played anymore."],
+  [404, "not found", "Couldn't play Alice's voice. Try again."],
+  [500, "error", "Couldn't play Alice's voice. Try again."],
+  [200, "play rejection", "Couldn't play Alice's voice. Try again."],
+])("shows a visible voice notice for %s %s", async (status, detail, notice) => {
+  offerSamples();
+  const { audio, fetch } = sampleAudio();
+  fetch.mockResolvedValue(new Response(JSON.stringify({ detail }), { status }));
+  if (status === 200) vi.mocked(audio.play).mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
+  renderSamples();
+  await openSamples();
+  fireEvent.click(screen.getByRole("button", { name: "Hear Alice from another recording" }));
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  const message = await screen.findByText(notice);
+  expect(message.getAttribute("role")).toBe("status");
+  expect(message.className).toBe("text-sm");
+  expect(message.closest(".me-segment-actions")).not.toBeNull();
+  expect(screen.getAllByText(notice)).toHaveLength(1);
+  act(() => { player.onSegmentSelect?.(1); });
+  expect(screen.queryByText(notice)).toBeNull();
+});
+it("unmount revokes the sample URL and aborts a pending sample fetch", async () => {
+  offerSamples();
+  const { audio, fetch, revoke } = sampleAudio();
+  const { unmount } = renderSamples();
+  await openSamples();
+  const button = screen.getByRole("button", { name: "Hear Alice from another recording" });
+  fireEvent.click(button);
+  await waitFor(() => expect(audio.play).toHaveBeenCalledOnce());
+  let resolve!: (value: Response) => void;
+  fetch.mockImplementation(() => new Promise<Response>((done) => { resolve = done; }));
+  fireEvent.click(button);
+  const signal = fetch.mock.calls[1][1].signal as AbortSignal;
+  unmount();
+  expect(signal.aborted).toBe(true);
+  expect(revoke).toHaveBeenCalledWith("blob:sample");
+  expect(audio.hasAttribute("src")).toBe(false);
+  await act(async () => { resolve(new Response("late")); });
+  expect(audio.play).toHaveBeenCalledOnce();
+});
+it("keeps one availability request in flight and aborts it on unmount", async () => {
+  let resolve!: (value: Response) => void;
+  availability.mockImplementation(() => new Promise<Response>((done) => { resolve = done; }));
+  const { unmount } = renderSamples();
+  fireEvent.click(screen.getByRole("button", { name: "Speaker 0: Alice" }));
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  fireEvent.click(screen.getByRole("button", { name: "Speaker 1: Alice" }));
+  expect(availability).toHaveBeenCalledOnce();
+  const signal = availability.mock.calls[0][1].signal as AbortSignal;
+  unmount();
+  expect(signal.aborted).toBe(true);
+  await act(async () => { resolve(new Response(JSON.stringify({ speakerIds: ["alice"] }))); });
+});
+it("retries failed availability on a later popover open", async () => {
+  availability.mockRejectedValueOnce(new Error("offline"));
+  renderSamples();
+  fireEvent.click(screen.getByRole("button", { name: "Speaker 0: Alice" }));
+  await act(async () => {});
+  expect(screen.queryByText("Compare with a voice from another recording")).toBeNull();
+  offerSamples();
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  await openSamples();
+  expect(availability).toHaveBeenCalledTimes(2);
+});
+it("keeps the voice notice when an unsaved edit is overtaken and clears it for a new sample", async () => {
+  offerSamples();
+  const { fetch } = sampleAudio();
+  fetch.mockResolvedValueOnce(new Response('{"detail":"no_voice_sample"}', { status: 404 }));
+  renderSamples();
+  fireEvent.change(editBox(), { target: { value: "My correction" } });
+  await openSamples();
+  const button = screen.getByRole("button", { name: "Hear Alice from another recording" });
+  fireEvent.click(button);
+  const notice = "No confirmed line of Alice from another recording is available.";
+  await screen.findByText(notice);
+  adopt({ segments: serverEdited });
+  expect(screen.getByText(notice)).toBeTruthy();
+  expect(screen.getByText(/This line changed while you were editing/)).toBeTruthy();
+  expect(editBox().value).toBe("My correction");
+  await act(async () => { fireEvent.click(button); });
+  expect(screen.queryByText(notice)).toBeNull();
+});
+it("shows exactly one voice notice above the player when the sticky actions disappear", async () => {
+  offerSamples();
+  const { fetch } = sampleAudio();
+  renderSamples();
+  await openSamples();
+  fetch.mockResolvedValueOnce(new Response("", { status: 410 }));
+  fireEvent.click(screen.getByRole("button", { name: "Hear Alice from another recording" }));
+  const notice = "The recordings with Alice's confirmed lines can't be played anymore.";
+  await screen.findByText(notice);
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  await loseClaimOn({ key: "v" }, document.body);
+  const message = screen.getByText(notice);
+  expect(screen.getAllByText(notice)).toHaveLength(1);
+  expect(message.closest(".me-segment-actions")).toBeNull();
+  expect(message.nextElementSibling?.textContent).toContain("Speaker 0: Alice");
+});
+it("closing the popover leaves the playing sample alone", async () => {
+  offerSamples();
+  const { audio } = sampleAudio();
+  renderSamples();
+  await openSamples();
+  fireEvent.click(screen.getByRole("button", { name: "Hear Alice from another recording" }));
+  await waitFor(() => expect(audio.play).toHaveBeenCalledOnce());
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  expect(audio.pause).not.toHaveBeenCalled();
 });

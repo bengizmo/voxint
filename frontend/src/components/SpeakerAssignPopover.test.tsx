@@ -291,3 +291,43 @@ describe("SpeakerAssignPopover", () => {
     outside.remove();
   });
 });
+
+const otherSpeakers = [{ id: "dana", displayName: "Dana" }];
+it("renders other-recording comparisons only with both props", () => {
+  const { props, rerender } = setup({ otherRecordingSpeakers: otherSpeakers });
+  expect(screen.queryByText("Compare with a voice from another recording")).toBeNull();
+  rerender(<SpeakerAssignPopover {...props} otherRecordingSpeakers={[]} onHearOtherRecording={vi.fn()} />);
+  expect(screen.queryByText("Compare with a voice from another recording")).toBeNull();
+});
+it("labels other-recording buttons and previews without closing the popover", () => {
+  const hear = vi.fn();
+  const { props } = setup({ otherRecordingSpeakers: otherSpeakers, onHearOtherRecording: hear });
+  const button = screen.getByRole("button", { name: "Hear Dana from another recording" });
+  expect(button.textContent).toBe("▸ Dana");
+  expect(screen.getByRole("list", { name: "Compare with a voice from another recording" })).toBeTruthy();
+  fireEvent.click(button);
+  expect(hear).toHaveBeenCalledWith("dana");
+  expect(props.onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole("dialog")).toBeTruthy();
+});
+it("derives the other-recording default for late lists and preserves the operator toggle", async () => {
+  const { props, rerender } = setup({ onHearOtherRecording: vi.fn() });
+  rerender(<SpeakerAssignPopover {...props} otherRecordingSpeakers={otherSpeakers} />);
+  const details = screen.getByText("Compare with a voice from another recording").closest("details")!;
+  expect(details.open).toBe(true);
+  // Flush the programmatic open toggle; it must not count as operator intent.
+  await act(async () => { fireEvent(details, new Event("toggle")); });
+  rerender(<SpeakerAssignPopover {...props} otherRecordingSpeakers={otherSpeakers} comparableSpeakers={otherSpeakers} onHearSpeaker={vi.fn()} />);
+  expect(details.open).toBe(false);
+  await act(async () => {
+    details.open = true;
+    fireEvent(details, new Event("toggle"));
+  });
+  rerender(<SpeakerAssignPopover {...props} otherRecordingSpeakers={otherSpeakers} comparableSpeakers={otherSpeakers} onHearSpeaker={vi.fn()} disabled />);
+  expect(details.open).toBe(true);
+  expect((screen.getByRole("button", { name: "Hear Dana from another recording" }) as HTMLButtonElement).disabled).toBe(true);
+});
+it("starts other-recording comparisons collapsed alongside in-recording comparisons", () => {
+  setup({ otherRecordingSpeakers: otherSpeakers, onHearOtherRecording: vi.fn(), comparableSpeakers: otherSpeakers, onHearSpeaker: vi.fn() });
+  expect(screen.getByText("Compare with a voice from another recording").closest("details")!.open).toBe(false);
+});

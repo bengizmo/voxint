@@ -22,6 +22,11 @@ export interface SpeakerAssignPopoverProps {
   // before choosing. Omitted when playback cannot seek.
   comparableSpeakers?: readonly Speaker[];
   onHearSpeaker?: (speakerId: string) => void;
+  // Roster voices with a confirmed line in ANOTHER recording (issue #714),
+  // already narrowed and sorted by the editor. Each button plays a short clip
+  // of that line; it does not need this recording's playback to seek.
+  otherRecordingSpeakers?: readonly Speaker[];
+  onHearOtherRecording?: (speakerId: string) => void;
   disabled?: boolean;
 }
 
@@ -63,6 +68,7 @@ const styles = `
 .sp-rename-buttons { display: flex; justify-content: flex-end; gap: .25rem; }
 .sp-compare { margin: .25rem 0 0; padding: 0 .5rem; }
 .sp-compare p { margin: 0 0 .25rem; color: var(--ink-2, inherit); }
+.sp-compare-other summary { margin: 0 0 .25rem; cursor: pointer; color: var(--ink-2, inherit); }
 .sp-compare ul { display: flex; flex-wrap: wrap; gap: .25rem; margin: 0; padding: 0; list-style: none; }
 .sp-compare button {
   border: 1px solid var(--line); border-radius: var(--r-sm, 4px);
@@ -88,6 +94,8 @@ export function SpeakerAssignPopover({
   onHearVoice,
   comparableSpeakers = [],
   onHearSpeaker,
+  otherRecordingSpeakers = [],
+  onHearOtherRecording,
   disabled = false,
 }: SpeakerAssignPopoverProps) {
   const uid = useId();
@@ -101,6 +109,12 @@ export function SpeakerAssignPopover({
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(currentSpeaker);
   const [creating, setCreating] = useState(false);
+  // The other-recordings group starts expanded when it is the only comparison
+  // on offer, collapsed under the in-recording list otherwise. null = the
+  // operator has not toggled it, so the default still applies (the list can
+  // arrive after the menu opened).
+  const [otherOpen, setOtherOpen] = useState<boolean | null>(null);
+  const defaultOtherOpen = !(onHearSpeaker && comparableSpeakers.length > 0);
   const busy = disabled || creating;
   const mountedRef = useRef(false);
 
@@ -275,6 +289,34 @@ export function SpeakerAssignPopover({
               ))}
             </ul>
           </div>
+        )}
+        {onHearOtherRecording && otherRecordingSpeakers.length > 0 && (
+          <details
+            className="sp-compare sp-compare-other"
+            open={otherOpen ?? defaultOtherOpen}
+            onToggle={(event) => {
+              // Prop-driven open changes also emit toggle; only remember a
+              // departure from the rendered state (the operator's choice).
+              const open = event.currentTarget.open;
+              if (open !== (otherOpen ?? defaultOtherOpen)) setOtherOpen(open);
+            }}
+          >
+            <summary id={`${uid}-compare-other`}>Compare with a voice from another recording</summary>
+            <ul role="list" aria-labelledby={`${uid}-compare-other`}>
+              {otherRecordingSpeakers.map((speaker) => (
+                <li key={speaker.id}>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    aria-label={`Hear ${speaker.displayName} from another recording`}
+                    onClick={() => onHearOtherRecording(speaker.id)}
+                  >
+                    ▸ {speaker.displayName}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
         {currentSpeakerId !== null &&
           (renaming ? (
