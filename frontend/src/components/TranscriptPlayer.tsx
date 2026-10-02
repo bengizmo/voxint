@@ -177,7 +177,10 @@ export interface TranscriptPlayerProps {
   // edit cursor to the line the operator clicked — a correction then lands on the
   // segment being played, never the one under a stale cursor. Absent on the
   // read-only transcript page, which stays byte-identical (play only).
-  onSegmentSelect?: (index: number) => void;
+  // Returning false means the cursor stayed (an unsaved edit, issue #732): the
+  // line still plays, but a region click neither scrolls the list to it nor
+  // follows its playback, so the strip stays under the pointer for a repeat.
+  onSegmentSelect?: (index: number) => boolean | void;
   onSpeakerClick?: (segmentIndex: number, anchorRect: DOMRect) => void;
   popoverSegmentIndex?: number | null;
   highlightLabels?: ReadonlySet<string>;
@@ -774,9 +777,15 @@ export const TranscriptPlayer = forwardRef<
   const onRegionActivate = (index: number) => {
     const seg = segments[index];
     if (!seg) return;
-    onSegmentSelect?.(index);
-    ensureRendered(index);
-    setPendingScrollTarget(index);
+    if (onSegmentSelect?.(index) === false) {
+      // The cursor stayed: play it as a preview does, without following. The
+      // line already playing changes nothing to follow, and an unspent flag
+      // would skip a later follow.
+      if (index !== activeIndex) suppressFollowOnceRef.current = true;
+    } else {
+      ensureRendered(index);
+      setPendingScrollTarget(index);
+    }
     play(seg);
   };
   const onRateChange = (next: number) => {

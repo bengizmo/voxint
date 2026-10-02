@@ -7,6 +7,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **Moving to another line warns before dropping an unsaved edit** (#732).
+  Clicking another line or the waveform, a navigation key, or a jump from
+  the outline, a note or the speaker panel used to reset the edit box
+  without a word. Now the first move shows the same warning as verify and
+  split, and repeating it discards the edit. A click or jump still plays
+  the line it points at, and a waveform click no longer scrolls the
+  transcript away from the strip when the editor stays put. Assigning a
+  speaker to another line from its popover keeps you on the line you are
+  editing.
+- **A lost claim no longer hides your unsaved edit** (#734). The message
+  told you to copy the edit "from the box below", but the edit box is
+  hidden without a claim. The message now shows the unsaved text in a
+  read-only box you can copy from, keeps the editor on that line, and
+  re-claiming puts the text back in the edit box.
 - **A speaker merge that went stale no longer locks the editor** (#728).
   If a label changed between previewing a merge in the speaker panel and
   confirming it, the editor used to drop to read-only and say your claim

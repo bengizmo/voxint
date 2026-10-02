@@ -112,37 +112,53 @@ export function useSegmentPatch(
 export interface WalkCursorState {
   cursor: number;
   setCursor: (i: number) => void;
-  goTo: (i: number) => void;
-  jumpNext: () => void;
+  goTo: (i: number) => boolean;
+  select: (i: number) => boolean;
+  jumpNext: () => boolean;
   remaining: number;
 }
 
+// `canLeave` is asked before the cursor leaves its line; returning false keeps
+// it there (the editor warns about an unsaved edit first, issue #732). goTo,
+// select and jumpNext report whether the cursor went. setCursor is unguarded,
+// for moves that already confirmed.
 export function useWalkCursor(
   segments: Segment[],
   initialSegments: Segment[],
   play: (index: number) => void,
+  canLeave: () => boolean = () => true,
 ): WalkCursorState {
   const [cursor, setCursor] = useState<number>(() =>
     Math.max(nextTarget(initialSegments, 0), 0),
   );
 
-  const goTo = useCallback(
-    (index: number) => {
-      if (index < 0) return;
+  const select = useCallback(
+    (index: number): boolean => {
+      if (index < 0) return false;
+      if (index !== cursor && !canLeave()) return false;
       setCursor(index);
-      play(index);
+      return true;
     },
-    [play],
+    [cursor, canLeave],
   );
 
-  const jumpNext = useCallback(() => {
+  const goTo = useCallback(
+    (index: number): boolean => {
+      if (!select(index)) return false;
+      play(index);
+      return true;
+    },
+    [select, play],
+  );
+
+  const jumpNext = useCallback((): boolean => {
     const next = nextTarget(segments, cursor + 1);
-    if (next >= 0) goTo(next);
+    return next >= 0 && goTo(next);
   }, [segments, cursor, goTo]);
 
   const remaining = segments.filter(isTarget).length;
 
-  return { cursor, setCursor, goTo, jumpNext, remaining };
+  return { cursor, setCursor, goTo, select, jumpNext, remaining };
 }
 
 export interface WriteGuard {
