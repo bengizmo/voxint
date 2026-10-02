@@ -94,6 +94,7 @@ from voxint.adjudication.transcript import (
     parse_transcript_text,
 )
 from voxint.adjudication.undo import (
+    UndoArchivedSpeakerError,
     UndoDriftError,
     UndoError,
     UndoExpiredError,
@@ -224,6 +225,9 @@ _CLAIM_CONFLICT_HEADERS = {"X-Voxint-Conflict": "claim"}
 # conflict, and a duplicate tag name apart from a lost claim. The taxonomy lives in
 # docs/annotations.md ("API surface and error taxonomy").
 _ANNOTATION_STALE_HEADERS = {"X-Voxint-Conflict": "stale"}
+# A segment undo refused because the speaker it would restore is archived. Unlike
+# drift, restoring that speaker lets the same undo succeed (issue #726).
+_UNDO_ARCHIVED_SPEAKER_HEADERS = {"X-Voxint-Conflict": "archived-speaker"}
 _ANNOTATION_IDEMPOTENCY_HEADERS = {"X-Voxint-Conflict": "idempotency"}
 _ANNOTATION_TAG_CONFLICT_HEADERS = {"X-Voxint-Conflict": "duplicate-tag"}
 
@@ -2636,6 +2640,10 @@ def undo_relabel(
             grace_seconds=settings.UNDO_GRACE_SECONDS,
             user_id=identity.user_id,
         )
+    except UndoArchivedSpeakerError as exc:
+        raise HTTPException(
+            status_code=409, detail=str(exc), headers=_UNDO_ARCHIVED_SPEAKER_HEADERS
+        ) from exc
     except (UndoDriftError, UndoExpiredError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ConflictingReplayError as exc:

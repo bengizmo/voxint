@@ -46,6 +46,11 @@ class UndoDriftError(UndoError):
     """A label was re-ruled after the action."""
 
 
+class UndoArchivedSpeakerError(UndoDriftError):
+    """The undo would restore a speaker archived since. Restoring that speaker
+    makes the undo possible again within the grace window."""
+
+
 class UndoExpiredError(UndoError):
     """The undo grace window has passed."""
 
@@ -381,10 +386,14 @@ def undo_segment_decision(
         # speaker a superseded ruling named). Check the canonical identity but
         # write the historical id, which the replay comparison above expects.
         restored = session.get(Speaker, canonicalize(restore_speaker, merge_map(session)))
-        if restored is None or not is_active(restored):
-            raise UndoDriftError(
-                "the speaker this segment had before is archived; restore them"
-                " from the speaker list, then undo again"
+        if restored is None:
+            raise UndoDriftError("the speaker this segment had before no longer exists")
+        if not is_active(restored):
+            # Name the canonical identity: a merged speaker cannot be restored,
+            # but the one it was merged into can, and that makes the undo work.
+            raise UndoArchivedSpeakerError(
+                f"{restored.display_name} is archived. Restore them on the Speakers"
+                " page, then undo again."
             )
     segment = session.get(TranscriptSegment, original.transcript_segment_id)
     if segment is None:
