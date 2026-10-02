@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, apiFetch } from "../lib/api-client";
+import type { WriteGuard } from "../lib/editor-mutations";
 import type { MergeSuggestion } from "../lib/merge-candidates";
 import { makeNonce } from "../lib/nonce";
 import type { LabelsResult } from "./SpeakerRail";
@@ -21,6 +22,7 @@ interface MergeSuggestionToastProps {
   onMerged: (data: LabelsResult) => void;
   onDismiss: () => void;
   stacked?: boolean;
+  writeGuard?: WriteGuard;
 }
 
 const AUTO_DISMISS_MS = 15_000;
@@ -33,10 +35,12 @@ export function MergeSuggestionToast({
   onMerged,
   onDismiss,
   stacked = false,
+  writeGuard,
 }: MergeSuggestionToastProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const busyRef = useRef(false);
+  const localBusyRef = useRef(false);
+  const busyRef = writeGuard?.busyRef ?? localBusyRef;
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const onDismissRef = useRef(onDismiss);
@@ -51,8 +55,11 @@ export function MergeSuggestionToast({
 
   const doMerge = useCallback(async () => {
     if (busyRef.current) return;
+    // The guard covers the preview too: the merge sends the preview's expected
+    // rulings, so no other write may change them in between.
     busyRef.current = true;
     setBusy(true);
+    writeGuard?.setBusy(true);
     setError(null);
     if (timerRef.current) clearTimeout(timerRef.current);
     try {
@@ -100,8 +107,9 @@ export function MergeSuggestionToast({
     } finally {
       busyRef.current = false;
       setBusy(false);
+      writeGuard?.setBusy(false);
     }
-  }, [suggestion, reviewToken, runId, onMerged, onClaimLost, onDismiss]);
+  }, [suggestion, reviewToken, runId, onMerged, onClaimLost, onDismiss, busyRef, writeGuard]);
 
   const candidateNames = suggestion.candidateLabels.join(", ");
 
@@ -134,7 +142,7 @@ export function MergeSuggestionToast({
         <button
           type="button"
           onClick={() => void doMerge()}
-          disabled={busy}
+          disabled={busy || (writeGuard?.busy ?? false)}
           style={{
             background: "none",
             border: "none",

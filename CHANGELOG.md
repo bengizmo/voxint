@@ -7,6 +7,19 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **An unsaved edit survives a speaker change elsewhere** (#726). If the
+  line you were editing got new text from a speaker-panel change, an undo
+  or a reload of the recording's state, the edit box used to reset to that
+  text and drop your typing without a warning. Your edit is now kept, with
+  a note that the line changed; saving it replaces the new text, and
+  verifying still warns before discarding it. After a save, the box shows
+  the text that was saved.
+- **Speaker-panel changes no longer race edits in the transcript** (#726).
+  Rulings, new speakers and merges from the speaker panel, and the merge
+  suggestion after an assignment, used to run alongside a save, verify or
+  undo in the transcript, so a slower reply could put back older speakers
+  or lines. They now wait their turn: while one change is saving, the other
+  controls are disabled until it finishes.
 - **Reloading the media editor no longer loses your claim** (#722). With one
   operator, refreshing the editor page (or following a tutorial step) used to
   release the editing claim while the new page carried on with it, so the next

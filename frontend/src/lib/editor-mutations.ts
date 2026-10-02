@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { type RefObject, useCallback, useRef, useState } from "react";
 
 import { ApiError, apiFetch } from "./api-client";
 import type { Segment } from "../components/TranscriptPlayer";
@@ -150,13 +150,15 @@ export function useWalkCursor(
   return { cursor, setCursor, goTo, jumpNext, remaining };
 }
 
+export interface WriteGuard {
+  busy: boolean;
+  busyRef: RefObject<boolean>;
+  setBusy: (busy: boolean) => void;
+}
+
 // Synchronous re-entry guard: state flips a render too late to stop a second
 // key that fires before React re-renders, so two writes could overlap.
-export function useBusyGuard(): {
-  busy: boolean;
-  busyRef: React.RefObject<boolean>;
-  setBusy: (b: boolean) => void;
-} {
+export function useBusyGuard(): WriteGuard {
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   return { busy, busyRef, setBusy };

@@ -121,6 +121,8 @@ export function MediaEditor({
   const [segments, setSegments] = useState<Segment[]>(initialSegments);
   const [progress, setProgress] = useState(initialProgress);
   const [editText, setEditText] = useState("");
+  // The current line got new text while the edit box held an unsaved edit.
+  const [editOvertaken, setEditOvertaken] = useState(false);
   const { busy, busyRef, setBusy } = useBusyGuard();
   const [reviewToken, setReviewToken] = useState<string | null>(
     initialReviewToken,
@@ -416,7 +418,7 @@ export function MediaEditor({
     }
   }, [popoverTarget]);
 
-  const undoWriteGuard = useMemo(
+  const writeGuard = useMemo(
     () => ({ busy, busyRef, setBusy }),
     [busy, busyRef, setBusy],
   );
@@ -486,10 +488,17 @@ export function MediaEditor({
   );
   const applyResult = useSegmentPatch(segments, setSegments, setProgress);
 
-  // Counts whole-run adoptions, so a refetch can tell that a newer result (for
-  // example a speaker-rail ruling, which has its own write guard) landed while
-  // it was in flight.
+  // Counts whole-run adoptions, so a refetch can tell that a newer result landed
+  // while it was in flight. Every writer now shares the editor's write guard,
+  // which the refetch runs under, so this is a backstop (issue #726).
   const labelsAdoptedRef = useRef(0);
+  // The label states the next adoption diffs against. Updated on adoption, not
+  // only on render, so two results adopted before a re-render still compare
+  // each against the one before it (issue #726).
+  const labelStatesRef = useRef(labelStates);
+  useEffect(() => {
+    labelStatesRef.current = labelStates;
+  }, [labelStates]);
 
   // `keepUndo` leaves the undo toast up: a refetch after a refused undo must
   // not clear the toast that explains the refusal.
@@ -499,7 +508,7 @@ export function MediaEditor({
       setMergeSuggestion(null);
       const changedLabels = new Set<string>();
       for (const newLs of result.labels) {
-        const oldLs = labelStates.find((ls) => ls.label === newLs.label);
+        const oldLs = labelStatesRef.current.find((ls) => ls.label === newLs.label);
         if (!oldLs || oldLs.speakerId !== newLs.speakerId || oldLs.resolution !== newLs.resolution) {
           changedLabels.add(newLs.label);
         }
@@ -508,6 +517,7 @@ export function MediaEditor({
 
       setSegments(result.segments);
       setProgress(result.progress);
+      labelStatesRef.current = result.labels;
       setLabelStates(result.labels);
       if (!keepUndo) setUndoInfo(result.undo ?? null);
       if (result.speakers) {
@@ -527,7 +537,7 @@ export function MediaEditor({
       }
       void reloadAnnotationsRef.current?.();
     },
-    [setSegments, setProgress, labelStates],
+    [setSegments, setProgress],
   );
 
   // After a refused undo (issue #718) the scope was re-ruled elsewhere, so this
@@ -567,8 +577,31 @@ export function MediaEditor({
   const rawLabel = current?.label?.trim() ?? "";
   const showRawLabel = rawLabel !== "" && rawLabel !== speakerDisplayName;
 
+  // What the edit box last loaded, so a change to the current line's text
+  // (a whole-run result adopted from the rail, an undo or a refetch) can tell
+  // an unsaved edit from an untouched box (issue #726).
+  const loadedRef = useRef<{ segmentId: string | null; text: string }>({
+    segmentId: null,
+    text: "",
+  });
   useEffect(() => {
-    setEditText(current?.text ?? "");
+    const segmentId = current?.segmentId ?? null;
+    const text = current?.text ?? "";
+    const loaded = loadedRef.current;
+    loadedRef.current = { segmentId, text };
+    const edit = editTextRef.current;
+    const sameLine = segmentId !== null && segmentId === loaded.segmentId;
+    // saveEdit records the saved text first, so the box's own save lands here
+    // as no change and never reads as an edit overtaken by new text.
+    const ownSave = sameLine && text === loaded.text;
+    if (sameLine && !ownSave && edit !== loaded.text && edit !== text) {
+      // Same line, new text, unsaved edit: keep the edit. Verify still warns
+      // before discarding it, and saving replaces the new text with it.
+      setEditOvertaken(true);
+      return;
+    }
+    if (!ownSave) setEditText(text);
+    setEditOvertaken(false);
     setConfirmDiscard(false);
     setAssignStatus(null);
     setMergeSuggestion(null);
@@ -653,11 +686,24 @@ export function MediaEditor({
     setError(null);
     try {
       const index = cursor;
+      const segmentId = current.segmentId;
+      const submitted = editText;
       const result = await postJson(
-        `/review/${runId}/segments/${current.segmentId}/text`,
-        { text: editText },
+        `/review/${runId}/segments/${segmentId}/text`,
+        { text: submitted },
       );
       if (!result) return;
+      // Navigation stays live during a save, so touch the box only if it still
+      // shows this line. Show what was saved unless the operator typed on: the
+      // server can return other text than was typed (an empty box reverts to
+      // the pipeline text).
+      if (currentRef.current?.segmentId === segmentId) {
+        loadedRef.current = { segmentId, text: result.text };
+        if (editTextRef.current === submitted) setEditText(result.text);
+        // A save that leaves the line's text as it was never reruns the sync
+        // effect, so clear the overtaken note here.
+        setEditOvertaken(false);
+      }
       applyResult(index, result, { supersedeProvenance: true });
       setConfirmDiscard(false);
       void reloadAnnotationsRef.current?.();
@@ -1664,6 +1710,12 @@ export function MediaEditor({
                     action to discard the edit and continue.
                   </p>
                 )}
+                {editOvertaken && (
+                  <p role="status" className="text-sm">
+                    This line changed while you were editing. Your edit is
+                    kept; saving it replaces the new text.
+                  </p>
+                )}
                 {error && (
                   <p role="alert" className="text-sm">
                     {error}
@@ -1750,6 +1802,7 @@ export function MediaEditor({
             onAssignment={handleRailAssignment}
             onHearVoice={capability.seekEnabled ? hearVoice : undefined}
             hearableLabels={hearableLabels}
+            writeGuard={writeGuard}
           />
         </div>
 
@@ -1797,7 +1850,7 @@ export function MediaEditor({
           }}
           onDismiss={() => setUndoInfo(null)}
           onConflict={refetchAfterUndoConflict}
-          writeGuard={undoWriteGuard}
+          writeGuard={writeGuard}
         />
       )}
       {mergeSuggestion && reviewToken && (
@@ -1810,6 +1863,7 @@ export function MediaEditor({
           onMerged={handleMergeSuggestionMerged}
           onDismiss={dismissMergeSuggestion}
           stacked={!!undoInfo}
+          writeGuard={writeGuard}
         />
       )}
     </>

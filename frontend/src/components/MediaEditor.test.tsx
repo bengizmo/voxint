@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MediaEditor, type MediaEditorProps } from "./MediaEditor";
 import { ApiError, apiFetch } from "../lib/api-client";
+import type { WriteGuard } from "../lib/editor-mutations";
 import type { LabelsResult } from "./SpeakerRail";
 import type {
   Segment,
@@ -19,23 +20,29 @@ vi.mock("./AnnotationLayer", () => ({
 }));
 // The rail renders nothing; tests reach its onLabelsChanged through `rail`.
 const rail = vi.hoisted(() => ({
+  writeGuard: undefined as WriteGuard | undefined,
   onLabelsChanged: null as ((result: LabelsResult) => void) | null,
 }));
 vi.mock("./SpeakerRail", () => ({
-  SpeakerRail: (props: { onLabelsChanged: (result: LabelsResult) => void }) => {
+  SpeakerRail: (props: { writeGuard?: WriteGuard; onLabelsChanged: (result: LabelsResult) => void }) => {
     rail.onLabelsChanged = props.onLabelsChanged;
+    rail.writeGuard = props.writeGuard;
     return null;
   },
 }));
 vi.mock("./OutlinePanel", () => ({ OutlinePanel: () => null }));
 vi.mock("./KeymapHelp", () => ({ KeymapHelp: () => null }));
-const player = vi.hoisted(() => ({ previewSegment: vi.fn() }));
+const player = vi.hoisted(() => ({
+  previewSegment: vi.fn(),
+  highlightLabels: null as ReadonlySet<string> | null,
+}));
 vi.mock("./TranscriptPlayer", async () => {
   const { useImperativeHandle } = await import("react");
   return {
     TranscriptPlayer: (
       props: TranscriptPlayerProps & { ref?: React.Ref<TranscriptPlayerHandle> },
     ) => {
+      player.highlightLabels = props.highlightLabels ?? null;
       useImperativeHandle(props.ref, () => ({
         playSegment: () => {},
         previewSegment: player.previewSegment,
@@ -202,6 +209,41 @@ it("refetches the run after a refused undo and keeps the toast", async () => {
   expect(screen.getByText("Too late to undo. This was changed again since.")).toBeTruthy();
 });
 
+it("shares the editor guard with the rail through an undo conflict refetch", async () => {
+  await relabelThenRefusedUndo();
+  const busyRef = rail.writeGuard?.busyRef;
+  expect(busyRef?.current).toBe(false);
+  let respond!: (value: Response) => void;
+  vi.mocked(apiFetch).mockReturnValueOnce(new Promise<Response>((resolve) => { respond = resolve; }));
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(3));
+  expect(vi.mocked(apiFetch).mock.calls[2][0]).toBe("/review/run/labels");
+  expect(rail.writeGuard?.busyRef).toBe(busyRef);
+  expect(busyRef?.current).toBe(true);
+  expect(rail.writeGuard?.busy).toBe(true);
+  expect(screen.getByRole("button", { name: "Verify & next v" })).toHaveProperty("disabled", true);
+  await act(async () => respond({
+    json: async () => ({ segments, labels: defaultLabelStates, progress: { verified: 0, total: 2 } }),
+  } as Response));
+  expect(busyRef?.current).toBe(false);
+  expect(rail.writeGuard?.busy).toBe(false);
+  expect(screen.getByRole("button", { name: "Verify & next v" })).toHaveProperty("disabled", false);
+});
+
+it("drops editor writes while a rail write holds the shared guard", () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  const guard = rail.writeGuard;
+  expect(guard).toBeDefined();
+  guard!.busyRef.current = true;
+
+  for (const key of ["v", "1"]) fireEvent.keyDown(document.body, { key });
+  fireEvent.click(screen.getByRole("button", { name: "Verify & next v" }));
+
+  expect(apiFetch).not.toHaveBeenCalled();
+  guard!.busyRef.current = false;
+});
+
 it("drops a refetch that a newer rail ruling overtook", async () => {
   await relabelThenRefusedUndo();
   let respond: (value: Response) => void = () => {};
@@ -213,7 +255,8 @@ it("drops a refetch that a newer rail ruling overtook", async () => {
 
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(3));
-  // A rail ruling (own write guard) lands while the GET is in flight.
+  // Inject an adoption directly to exercise the #725 counter drop; the real
+  // rail now shares the editor guard and cannot write while this GET is in flight.
   const ruled = segments.map((seg, index) =>
     index === 1 ? { ...seg, speaker: "Dana" } : seg);
   act(() => {
@@ -536,4 +579,167 @@ it("explains copying the previous speaker at the first segment", () => {
   fireEvent.keyDown(document.body, { key: "=" });
   expect(screen.getByText("No previous segment to copy from.")).toBeTruthy();
   expect(apiFetch).not.toHaveBeenCalled();
+});
+
+function adopt(result: Partial<LabelsResult>) {
+  act(() => {
+    rail.onLabelsChanged?.({
+      segments, progress: { verified: 0, total: 2 }, labels: defaultLabelStates, ...result,
+    });
+  });
+}
+
+function editBox(): HTMLTextAreaElement {
+  return screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Corrected transcript text for this segment",
+  });
+}
+
+const serverEdited = segments.map((seg, index) =>
+  index === 0 ? { ...seg, text: "Text 0 from elsewhere" } : seg);
+
+it("keeps an unsaved edit when an adopted result changes the line's text", () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  expect(editBox().value).toBe("Text 0");
+  fireEvent.change(editBox(), { target: { value: "My correction" } });
+
+  adopt({ segments: serverEdited });
+
+  expect(editBox().value).toBe("My correction");
+  const notice = screen.getByText(
+    "This line changed while you were editing. Your edit is kept; saving it replaces the new text.",
+  );
+  // Shown on screen, not only to screen readers.
+  expect(notice.closest(".visually-hidden")).toBeNull();
+});
+
+it("loads the new text into an untouched edit box", () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+
+  adopt({ segments: serverEdited });
+
+  expect(editBox().value).toBe("Text 0 from elsewhere");
+  expect(screen.queryByText(/This line changed while you were editing/)).toBeNull();
+});
+
+it.each([
+  ["the typed text", "Saved wording", "Saved wording"],
+  // An empty box reverts the line to its pipeline text.
+  ["other text than was typed", "", "Pipeline wording"],
+])("treats a save that returns %s as clean", async (_name, typed, saved) => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  fireEvent.change(editBox(), { target: { value: typed } });
+  vi.mocked(apiFetch).mockResolvedValueOnce({
+    json: async () => ({
+      verified: false, corrected: typed !== "", text: saved,
+      progress: { verified: 0, total: 2 },
+    }),
+  } as unknown as Response);
+
+  fireEvent.keyDown(editBox(), { key: "Enter", ctrlKey: true });
+
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
+  expect(String(vi.mocked(apiFetch).mock.calls[0][0])).toBe("/review/run/segments/seg-0/text");
+  await waitFor(() => expect(editBox().value).toBe(saved));
+  expect(screen.queryByText(/This line changed while you were editing/)).toBeNull();
+});
+
+it("highlights only the labels each adopted result changed", () => {
+  const twoLabels = [
+    { ...defaultLabelStates[0], label: "VOICE/A" },
+    { ...defaultLabelStates[0], label: "VOICE/B" },
+  ];
+  setup({ labelStates: twoLabels });
+  const toBob = (ls: (typeof twoLabels)[number]) =>
+    ({ ...ls, speakerId: "bob", speakerName: "Bob" });
+
+  // Two results adopted before a re-render: the second moved only VOICE/B.
+  act(() => {
+    rail.onLabelsChanged?.({
+      segments, progress: { verified: 0, total: 2 },
+      labels: [toBob(twoLabels[0]), twoLabels[1]],
+    });
+    rail.onLabelsChanged?.({
+      segments, progress: { verified: 0, total: 2 },
+      labels: [toBob(twoLabels[0]), toBob(twoLabels[1])],
+    });
+  });
+
+  expect([...(player.highlightLabels ?? [])]).toEqual(["VOICE/B"]);
+});
+
+function deferredSave(): (text: string) => Promise<void> {
+  let respond: (value: Response) => void = () => {};
+  vi.mocked(apiFetch).mockReturnValueOnce(new Promise<Response>((r) => { respond = r; }));
+  return async (text: string) => {
+    await act(async () => {
+      respond({
+        json: async () => ({
+          verified: false, corrected: true, text, progress: { verified: 0, total: 2 },
+        }),
+      } as unknown as Response);
+    });
+  };
+}
+
+it("does not write a late save reply into another line's edit box", async () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  fireEvent.change(editBox(), { target: { value: "Line 0 fixed" } });
+  const finish = deferredSave();
+  fireEvent.keyDown(editBox(), { key: "Enter", ctrlKey: true });
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
+
+  // Skip to line 1 (navigation stays live) and start a draft there before
+  // the save replies.
+  fireEvent.keyDown(document.body, { key: "n" });
+  await waitFor(() => expect(editBox().value).toBe("Text 1"));
+  fireEvent.change(editBox(), { target: { value: "Line 1 draft" } });
+
+  await finish("Line 0 fixed");
+
+  expect(editBox().value).toBe("Line 1 draft");
+  expect(screen.queryByText(/This line changed while you were editing/)).toBeNull();
+
+  // The late reply left line 1's baseline alone, so new text for line 1 still
+  // reads as overtaking the draft rather than replacing it.
+  adopt({ segments: segments.map((seg, index) =>
+    index === 1 ? { ...seg, text: "Text 1 from elsewhere" } : seg) });
+  expect(editBox().value).toBe("Line 1 draft");
+  expect(screen.getByText(/This line changed while you were editing/)).toBeTruthy();
+});
+
+it("keeps typing done while a save was pending, without the overtaken notice", async () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  fireEvent.change(editBox(), { target: { value: "First" } });
+  const finish = deferredSave();
+  fireEvent.keyDown(editBox(), { key: "Enter", ctrlKey: true });
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
+  fireEvent.change(editBox(), { target: { value: "First, then more" } });
+
+  await finish("First");
+
+  expect(editBox().value).toBe("First, then more");
+  expect(screen.queryByText(/This line changed while you were editing/)).toBeNull();
+});
+
+it("clears the overtaken notice when the kept edit is saved as the line's text", async () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  fireEvent.change(editBox(), { target: { value: "My correction" } });
+  adopt({ segments: serverEdited });
+  expect(screen.getByText(/This line changed while you were editing/)).toBeTruthy();
+
+  // Settle on the new text and save it: the line's text does not change.
+  fireEvent.change(editBox(), { target: { value: "Text 0 from elsewhere" } });
+  const finish = deferredSave();
+  fireEvent.keyDown(editBox(), { key: "Enter", ctrlKey: true });
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
+  await finish("Text 0 from elsewhere");
+
+  expect(screen.queryByText(/This line changed while you were editing/)).toBeNull();
 });

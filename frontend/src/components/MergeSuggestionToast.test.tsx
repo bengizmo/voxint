@@ -66,6 +66,40 @@ function setup(
 }
 
 describe("MergeSuggestionToast", () => {
+  it("no-ops while the shared ref is held", () => {
+    const writeGuard = { busy: false, busyRef: { current: true }, setBusy: vi.fn() };
+    setup({ writeGuard });
+    fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(writeGuard.busyRef.current).toBe(true);
+    expect(writeGuard.setBusy).not.toHaveBeenCalled();
+  });
+
+  it("holds the shared guard until the merge response is adopted", async () => {
+    const writeGuard = { busy: false, busyRef: { current: false }, setBusy: vi.fn() };
+    const data: LabelsResult = { labels: [], segments: [], progress: { verified: 0, total: 0 } };
+    let respond!: (response: Response) => void;
+    vi.mocked(apiFetch)
+      .mockResolvedValueOnce(jsonResponse(preview))
+      .mockReturnValueOnce(new Promise<Response>((resolve) => { respond = resolve; }));
+    const { props } = setup({ writeGuard });
+    fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+    expect(writeGuard.busyRef.current).toBe(true);
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2));
+    expect(writeGuard.busyRef.current).toBe(true);
+    expect(writeGuard.setBusy).toHaveBeenCalledExactlyOnceWith(true);
+    expect(props.onMerged).not.toHaveBeenCalled();
+    await act(async () => respond(jsonResponse(data)));
+    expect(props.onMerged).toHaveBeenCalledExactlyOnceWith(data);
+    expect(writeGuard.busyRef.current).toBe(false);
+    expect(writeGuard.setBusy).toHaveBeenLastCalledWith(false);
+  });
+
+  it("disables merge while the editor is busy", () => {
+    setup({ writeGuard: { busy: true, busyRef: { current: true }, setBusy: vi.fn() } });
+    expect(screen.getByRole("button", { name: "Merge" })).toHaveProperty("disabled", true);
+  });
+
   it("renders candidate label names and the target speaker name", () => {
     setup({
       suggestion: {
