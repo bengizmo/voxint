@@ -555,21 +555,25 @@ def test_reconcile_passes_with_zero_annotations_expected(
         assert reconcile_run(session, run_id, expect) == []
 
 
+# Throwaway login for the in-process test app below; not a credential.
+_VOICE_CREDS = ("reviewer", "s3cret")
+
+
 @pytest.fixture()
 def voice_client(session_factory: sessionmaker[Session], tmp_path: Path) -> TestClient:
     seed_onboarded(session_factory)
     client = TestClient(
         create_app(
             settings=Settings(
-                voxint_user="reviewer",
-                voxint_password="s3cret",
+                voxint_user=_VOICE_CREDS[0],
+                voxint_password=_VOICE_CREDS[1],
                 media_root=tmp_path,
                 csrf_secret="e2e-voices-test-key",
             ),
             session_factory=session_factory,
         )
     )
-    client.auth = ("reviewer", "s3cret")
+    client.auth = _VOICE_CREDS
     return client
 
 

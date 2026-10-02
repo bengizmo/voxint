@@ -33,7 +33,7 @@ beforeEach(() => {
     createObjectURL: createUrl,
     revokeObjectURL: revokeUrl,
   });
-  fetchMock.mockImplementation(async () => new Response(new Blob(["wav"])));
+  fetchMock.mockImplementation(async () => new Response("wav"));
 });
 afterEach(() => {
   vi.resetAllMocks();
