@@ -48,7 +48,9 @@ export function createVoiceSamplePlayer(
   return {
     async play(url) {
       if (disposed) return "superseded";
-      request?.abort();
+      // The newest click wins outright: silence the previous sample now, so
+      // it cannot keep playing while this one loads or fails.
+      stop();
       const controller = new AbortController();
       request = controller;
       // Re-checked after every await: an answer that arrives late must not

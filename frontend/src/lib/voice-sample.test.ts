@@ -84,7 +84,8 @@ it("reuses one audio element and revokes URLs on replacement and dispose", async
   sampler.dispose();
   expect(revokeUrl).toHaveBeenLastCalledWith("blob:second");
   expect(audio.hasAttribute("src")).toBe(false);
-  expect(pause).toHaveBeenCalledOnce();
+  // Once when the second request silenced the first, once on dispose.
+  expect(pause).toHaveBeenCalledTimes(2);
 });
 it.each([
   [404, JSON.stringify({ detail: "no_voice_sample" }), "none"],
@@ -126,6 +127,18 @@ it.each(["stop", "dispose"] as const)(
     expect(play).not.toHaveBeenCalled();
   },
 );
+it("a newer request silences the playing sample even when it then fails", async () => {
+  const sampler = createVoiceSamplePlayer(vi.fn());
+  expect(await sampler.play("/first")).toBe("playing");
+  expect(pause).not.toHaveBeenCalled();
+  const pending = deferred<Response>();
+  fetchMock.mockReturnValueOnce(pending.promise);
+  const second = sampler.play("/second");
+  expect(pause).toHaveBeenCalledOnce();
+  pending.resolve(new Response("", { status: 410 }));
+  expect(await second).toBe("gone");
+  expect(play).toHaveBeenCalledOnce();
+});
 it("stop pauses a playing sample", async () => {
   const sampler = createVoiceSamplePlayer(vi.fn());
   await sampler.play("/sample");

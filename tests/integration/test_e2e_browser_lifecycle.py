@@ -683,10 +683,36 @@ def test_reclaim_source_reports_other_newly_reclaimed_runs(
         other = seed_voice_source(session, tmp_path, speakers)
         session.commit()
         assert reclaim_source_run(session, tmp_path, source) == [
-            f"unexpectedly reclaimed preprocessed audio of run {other}"
+            f"unexpectedly reclaimed audio of run {other}"
         ]
         # Already stamped artifacts are not collateral changes on a later call.
         assert reclaim_source_run(session, tmp_path, source) == []
+
+
+def test_reclaim_source_reports_a_clip_reclaimed_from_another_run(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory() as session:
+        current, _ = seed_browser_run(session, tmp_path, fixture="voices")
+        source = session.query(PipelineRun).filter(PipelineRun.id != current).one().id
+        # An aged extracted clip on the run the lane has open: the sweep takes
+        # clips too, by their own age.
+        clip_rel = f"artifacts/{current}/clips/aged.wav"
+        (tmp_path / clip_rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / clip_rel).write_bytes(_silent_wav_bytes(1.0))
+        clip = AudioArtifact(
+            pipeline_run_id=current,
+            kind=ArtifactKind.AUDIO_CLIP.value,
+            path=clip_rel,
+            idempotency_key="aged-clip",
+        )
+        session.add(clip)
+        session.flush()
+        clip.created_at = datetime.now(UTC) - timedelta(days=30)
+        session.commit()
+        assert reclaim_source_run(session, tmp_path, source) == [
+            f"unexpectedly reclaimed audio of run {current}"
+        ]
 
 
 def test_reclaim_source_reports_unaged_target(

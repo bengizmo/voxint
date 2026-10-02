@@ -1184,8 +1184,9 @@ def reclaim_source_run(session: Session, media_root: Path, run_id: uuid.UUID) ->
     named run must end up stamped, and no other run may be stamped by this call
     (the recording the browser has open must stay playable).
     """
+    # Every kind: the sweep also reclaims extracted clips, and one taken from
+    # another run is just as much collateral as its normalized audio.
     artifacts = select(AudioArtifact.id, AudioArtifact.pipeline_run_id).where(
-        AudioArtifact.kind == ArtifactKind.PREPROCESSED_AUDIO.value,
         AudioArtifact.reclaimed_at.is_not(None),
     )
     target = session.scalar(
@@ -1209,7 +1210,7 @@ def reclaim_source_run(session: Session, media_root: Path, run_id: uuid.UUID) ->
         problems.append(f"normalized audio of run {run_id} was not reclaimed")
     for artifact_id, other_run_id in session.execute(artifacts):
         if artifact_id not in before and other_run_id != run_id:
-            problems.append(f"unexpectedly reclaimed preprocessed audio of run {other_run_id}")
+            problems.append(f"unexpectedly reclaimed audio of run {other_run_id}")
     return problems
 
 
