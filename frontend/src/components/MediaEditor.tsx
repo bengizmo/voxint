@@ -297,6 +297,37 @@ export function MediaEditor({
   editTextRef.current = editText;
   const confirmDiscardRef = useRef(confirmDiscard);
   confirmDiscardRef.current = confirmDiscard;
+  const claimLostRef = useRef(claimLost);
+  claimLostRef.current = claimLost;
+  const currentRef = useRef<Segment | null>(null);
+  // The text of a save still in flight, so moving on while it saves is not
+  // leaving an unsaved edit behind.
+  const pendingSaveRef = useRef<{ segmentId: string; text: string } | null>(null);
+
+  // The box holds text the operator has not saved and is not saving.
+  const hasUnsavedEdit = useCallback((): boolean => {
+    const cur = currentRef.current;
+    if (!cur) return false;
+    const edit = editTextRef.current;
+    if (edit === (cur.text ?? "")) return false;
+    const pending = pendingSaveRef.current;
+    return !(pending?.segmentId === cur.segmentId && pending.text === edit);
+  }, []);
+
+  // Asked before the cursor leaves its line (issue #732). An unsaved edit gets
+  // the same warn-then-continue as verify and split: the first move warns and a
+  // repeated one discards. With the claim lost the edit cannot be saved and the
+  // warning's panel is hidden, so the cursor stays put until a re-claim.
+  const canLeave = useCallback((): boolean => {
+    if (!hasUnsavedEdit()) return true;
+    if (claimLostRef.current) return false;
+    if (!confirmDiscardRef.current) {
+      setConfirmDiscard(true);
+      return false;
+    }
+    confirmDiscardRef.current = false;
+    return true;
+  }, [hasUnsavedEdit]);
 
   const playerRef = useRef<TranscriptPlayerHandle>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -369,10 +400,11 @@ export function MediaEditor({
     popoverResolution?.speakerId != null &&
     popoverSegment?.speaker === popoverResolution.speakerName;
 
-  const { cursor, setCursor, goTo, jumpNext, remaining } = useWalkCursor(
+  const { cursor, setCursor, goTo, select, jumpNext, remaining } = useWalkCursor(
     segments,
     initialSegments,
     play,
+    canLeave,
   );
   useEffect(() => {
     if (pendingOpenRef.current) {
@@ -398,6 +430,16 @@ export function MediaEditor({
     }
   }, [cursor, pendingPopoverIndex, handleSpeakerClick]);
 
+  // A jump to a place in the recording (outline, annotation, the rail's hear
+  // voice) plays it even when the cursor has to stay with an unsaved edit, as a
+  // transcript click does; only the move waits.
+  const jumpTo = useCallback(
+    (index: number) => {
+      if (!goTo(index) && index >= 0) play(index);
+    },
+    [goTo, play],
+  );
+
   const hearableLabels = useMemo(
     () =>
       new Set(
@@ -408,9 +450,9 @@ export function MediaEditor({
   const hearVoice = useCallback(
     (label: string) => {
       const index = segments.findIndex((segment) => segment.label === label);
-      if (index >= 0) goTo(index);
+      if (index >= 0) jumpTo(index);
     },
-    [segments, goTo],
+    [segments, jumpTo],
   );
   const hearPopoverVoice = useCallback(() => {
     if (popoverTarget) {
@@ -570,6 +612,7 @@ export function MediaEditor({
 
   const current =
     cursor >= 0 && cursor < segments.length ? segments[cursor] : null;
+  currentRef.current = current;
   const focusParentId = current?.sourceSegmentId ?? null;
   const isSplitParent = siblingCount(segments, focusParentId) > 1;
   const speakerDisplayName =
@@ -654,11 +697,10 @@ export function MediaEditor({
       const patched = applyResult(index, result);
       setConfirmDiscard(false);
       if (walkMode) {
+        // Typing during the verify leaves an edit the confirm never covered,
+        // so the advance warns instead of dropping it.
         const next = nextTarget(patched, index + 1);
-        if (next >= 0) {
-          keyboardNavRef.current = true;
-          goTo(next);
-        }
+        if (next >= 0 && goTo(next)) keyboardNavRef.current = true;
       }
     } finally {
       busyRef.current = false;
@@ -688,6 +730,7 @@ export function MediaEditor({
       const index = cursor;
       const segmentId = current.segmentId;
       const submitted = editText;
+      pendingSaveRef.current = { segmentId, text: submitted };
       const result = await postJson(
         `/review/${runId}/segments/${segmentId}/text`,
         { text: submitted },
@@ -703,19 +746,17 @@ export function MediaEditor({
         // A save that leaves the line's text as it was never reruns the sync
         // effect, so clear the overtaken note here.
         setEditOvertaken(false);
+        setConfirmDiscard(false);
+        editRef.current?.blur();
       }
       applyResult(index, result, { supersedeProvenance: true });
-      setConfirmDiscard(false);
       void reloadAnnotationsRef.current?.();
-      editRef.current?.blur();
     } finally {
+      pendingSaveRef.current = null;
       busyRef.current = false;
       setBusy(false);
     }
   }, [current, cursor, postJson, runId, editText, applyResult, segments, busyRef, setBusy]);
-
-  const currentRef = useRef(current);
-  currentRef.current = current;
 
   const splitAt = useCallback(
     async (sourceSegmentId: string, wordIndex: number) => {
@@ -845,7 +886,8 @@ export function MediaEditor({
     if (!popoverTarget || !popoverSegment || !writable || busyRef.current) return;
     closePopover();
     if (scope === "segment") {
-      setCursor(popoverTarget.segmentIndex);
+      // The relabel names its segment, so an unsaved edit can stay on its line.
+      if (!hasUnsavedEdit()) setCursor(popoverTarget.segmentIndex);
       const isChild = popoverSegment.wordStart != null && popoverSegment.wordEnd != null;
       if (isChild) {
         await reassignChild(popoverSegment, speakerId);
@@ -875,7 +917,7 @@ export function MediaEditor({
       busyRef.current = false;
       setBusy(false);
     }
-  }, [popoverTarget, popoverSegment, writable, busyRef, closePopover, setCursor, reassignSegment, reassignChild, setBusy, postForm, runId, onLabelsChanged, speakers, popoverResolution]);
+  }, [popoverTarget, popoverSegment, writable, busyRef, closePopover, hasUnsavedEdit, setCursor, reassignSegment, reassignChild, setBusy, postForm, runId, onLabelsChanged, speakers, popoverResolution]);
 
   const handleRailAssignment = useCallback(
     (label: string, speakerId: string, freshLabels: LabelStateShape[]) => {
@@ -901,14 +943,14 @@ export function MediaEditor({
       setError("Reset is only supported for just this segment. Choose that scope to reset.");
       return;
     }
-    setCursor(popoverTarget.segmentIndex);
+    if (!hasUnsavedEdit()) setCursor(popoverTarget.segmentIndex);
     const isChild = popoverSegment.wordStart != null && popoverSegment.wordEnd != null;
     if (isChild) {
       await reassignChild(popoverSegment, null);
     } else {
       await reassignSegment(null, popoverSegment);
     }
-  }, [popoverTarget, popoverSegment, writable, busyRef, closePopover, setCursor, reassignSegment, reassignChild]);
+  }, [popoverTarget, popoverSegment, writable, busyRef, closePopover, hasUnsavedEdit, setCursor, reassignSegment, reassignChild]);
 
   const handlePopoverCreate = useCallback(async (name: string): Promise<boolean> => {
     if (!popoverSegment?.label || !writable || busyRef.current) return false;
@@ -1137,7 +1179,7 @@ export function MediaEditor({
     limits: annotationLimits,
     tagCsrf,
     clipCsrf,
-    onJump: goTo,
+    onJump: jumpTo,
     onClaimLost: onAnnotationClaimLost,
   });
   useEffect(() => {
@@ -1167,8 +1209,9 @@ export function MediaEditor({
           break;
         case REVIEW_KEY.skip:
           event.preventDefault();
-          keyboardNavRef.current = true;
-          jumpNext();
+          // Arm the focus only for a move that went; jumpNext can land on
+          // the current line, which never runs the focus effect to disarm it.
+          if (jumpNext()) keyboardNavRef.current = true;
           setTimeout(() => { keyboardNavRef.current = false; }, 0);
           break;
         case REVIEW_KEY.replay:
@@ -1182,19 +1225,13 @@ export function MediaEditor({
         case REVIEW_KEY.next: {
           event.preventDefault();
           const next = Math.min(cursor + 1, segments.length - 1);
-          if (next !== cursor) {
-            keyboardNavRef.current = true;
-            goTo(next);
-          }
+          if (next !== cursor && goTo(next)) keyboardNavRef.current = true;
           break;
         }
         case REVIEW_KEY.previous: {
           event.preventDefault();
           const prev = Math.max(cursor - 1, 0);
-          if (prev !== cursor) {
-            keyboardNavRef.current = true;
-            goTo(prev);
-          }
+          if (prev !== cursor && goTo(prev)) keyboardNavRef.current = true;
           break;
         }
         case REVIEW_KEY.speaker:
@@ -1315,6 +1352,9 @@ export function MediaEditor({
   }, []);
 
   const done = progress.total > 0 && remaining === 0;
+  // Shown with the lost-claim notice, since the edit box needs the claim.
+  const lostClaimEdit =
+    claimLost && current !== null && editText !== (current.text ?? "");
 
   return (
     <>
@@ -1323,19 +1363,39 @@ export function MediaEditor({
         className={writable && walkMode ? "walk-active" : undefined}
       >
         {claimLost && (
-          <p role="alert" className="notice text-sm">
-            Your claim expired or was taken over. Everything you already saved is
-            safe. Copy any unsaved edit from the box below, then{" "}
-            <button
-              type="button"
-              onClick={() => void claimForEditing()}
-              disabled={claiming}
-              className="underline"
-            >
-              {claiming ? "Re-claiming…" : "re-claim to continue editing"}
-            </button>
-            .
-          </p>
+          <div role="alert" className="notice text-sm">
+            <p>
+              Your claim expired or was taken over. Everything you already saved
+              is safe.{" "}
+              {lostClaimEdit
+                ? "Your unsaved edit is below, and the editor stays on its line until you re-claim. Copy it, or "
+                : ""}
+              <button
+                type="button"
+                onClick={() => void claimForEditing()}
+                disabled={claiming}
+                className="underline"
+              >
+                {claiming
+                  ? "Re-claiming…"
+                  : lostClaimEdit
+                    ? "re-claim to keep editing it"
+                    : "Re-claim to continue editing"}
+              </button>
+              .
+            </p>
+            {lostClaimEdit && (
+              // Read-only, not disabled, so the text can still be selected
+              // and copied (issue #734).
+              <textarea
+                readOnly
+                value={editText}
+                rows={2}
+                className="w-full text-sm"
+                aria-label="Your unsaved edit"
+              />
+            )}
+          </div>
         )}
         {!reviewToken && !claimLost && claimCsrf && (
           <div className="notice text-sm">
@@ -1502,8 +1562,7 @@ export function MediaEditor({
                   (segment) => segment.label != null && needsYouLabels.has(segment.label),
                 );
                 if (index < 0) return;
-                goTo(index);
-                setPendingPopoverIndex(index);
+                if (goTo(index)) setPendingPopoverIndex(index);
               }}
               style={{
                 padding: 0,
@@ -1732,7 +1791,7 @@ export function MediaEditor({
               segments={segments}
               capability={capability}
               lowConfidenceThreshold={lowConfidenceThreshold}
-              onSegmentSelect={writable ? setCursor : undefined}
+              onSegmentSelect={writable ? select : undefined}
               onSpeakerClick={writable ? handleSpeakerClick : undefined}
               popoverSegmentIndex={popoverTarget?.segmentIndex ?? null}
               labelResolutions={labelResolutions}
@@ -1806,7 +1865,7 @@ export function MediaEditor({
           outline={outline}
           segments={segments}
           capability={capability}
-          onJump={goTo}
+          onJump={jumpTo}
           assetControls={
             assetControls
               ? {

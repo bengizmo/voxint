@@ -15,8 +15,15 @@ vi.mock("../lib/api-client", async (original) => ({
   ...await original<typeof import("../lib/api-client")>(),
   apiFetch: vi.fn(),
 }));
+// Tests reach the annotation panel's jump through `annotations`.
+const annotations = vi.hoisted(() => ({
+  onJump: null as ((line: number) => boolean | void) | null,
+}));
 vi.mock("./AnnotationLayer", () => ({
-  useAnnotations: () => ({ reload: vi.fn(), toolbar: null, panel: null }),
+  useAnnotations: (options: { onJump: (line: number) => boolean | void }) => {
+    annotations.onJump = options.onJump;
+    return { reload: vi.fn(), toolbar: null, panel: null };
+  },
 }));
 // The rail renders nothing; tests reach its onLabelsChanged through `rail`.
 const rail = vi.hoisted(() => ({
@@ -34,7 +41,10 @@ vi.mock("./OutlinePanel", () => ({ OutlinePanel: () => null }));
 vi.mock("./KeymapHelp", () => ({ KeymapHelp: () => null }));
 const player = vi.hoisted(() => ({
   previewSegment: vi.fn(),
+  playSegment: vi.fn(),
   highlightLabels: null as ReadonlySet<string> | null,
+  // A transcript line or waveform-region click selects through this.
+  onSegmentSelect: undefined as ((index: number) => boolean | void) | undefined,
 }));
 vi.mock("./TranscriptPlayer", async () => {
   const { useImperativeHandle } = await import("react");
@@ -43,8 +53,9 @@ vi.mock("./TranscriptPlayer", async () => {
       props: TranscriptPlayerProps & { ref?: React.Ref<TranscriptPlayerHandle> },
     ) => {
       player.highlightLabels = props.highlightLabels ?? null;
+      player.onSegmentSelect = props.onSegmentSelect;
       useImperativeHandle(props.ref, () => ({
-        playSegment: () => {},
+        playSegment: player.playSegment,
         previewSegment: player.previewSegment,
         focusCursorRow: () => null,
       }));
@@ -763,4 +774,138 @@ it.each([
     expect(screen.queryByText(/Your claim expired or was taken over/)).toBeNull();
     expect(editBox().value).toBe("My correction");
   }
+});
+
+function startEdit(overrides: Partial<MediaEditorProps> = {}) {
+  setup(overrides);
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  fireEvent.change(editBox(), { target: { value: "My correction" } });
+}
+
+// Each way the operator moves the cursor to line 1. Returns what the move
+// reported, where it reports anything.
+function moveCalled(name: string): () => boolean | void {
+  const moves: Record<string, () => boolean | void> = {
+    "a transcript line or waveform-region click": () => player.onSegmentSelect?.(1),
+    "the skip key": () => { fireEvent.keyDown(document.body, { key: "n" }); },
+    "the next-line key": () => { fireEvent.keyDown(document.body, { key: "j" }); },
+    "an annotation jump": () => annotations.onJump?.(1),
+  };
+  return () => {
+    let went: boolean | void = undefined;
+    act(() => { went = moves[name](); });
+    return went;
+  };
+}
+
+const UNSAVED_WARNING = /You have an unsaved edit/;
+
+// A transcript click is played by the player itself; an annotation jump asks
+// the editor to play the line even when the cursor stays. Key moves wait whole.
+it.each([
+  ["a transcript line or waveform-region click", false],
+  ["the skip key", false],
+  ["the next-line key", false],
+  ["an annotation jump", true],
+])("warns before %s drops an unsaved edit, then discards it on a repeat (#732)", async (name, plays) => {
+  const move = moveCalled(name);
+  startEdit();
+
+  expect(move()).not.toBe(true);
+  expect(editBox().value).toBe("My correction");
+  expect(screen.getByText(UNSAVED_WARNING)).toBeTruthy();
+  expect(player.playSegment.mock.calls).toEqual(plays ? [[1]] : []);
+
+  expect(move()).not.toBe(false);
+  await waitFor(() => expect(editBox().value).toBe("Text 1"));
+  expect(screen.queryByText(UNSAVED_WARNING)).toBeNull();
+});
+
+it("moves at once when the edit box holds no unsaved edit", () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+
+  expect(moveCalled("a transcript line or waveform-region click")()).toBe(true);
+
+  expect(editBox().value).toBe("Text 1");
+  expect(screen.queryByText(UNSAVED_WARNING)).toBeNull();
+});
+
+it("does not advance past an edit typed while a verify was pending", async () => {
+  setup();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  let respond: (value: Response) => void = () => {};
+  vi.mocked(apiFetch).mockReturnValueOnce(new Promise<Response>((r) => { respond = r; }));
+  fireEvent.keyDown(document.body, { key: "v" });
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
+  fireEvent.change(editBox(), { target: { value: "Typed during verify" } });
+
+  await act(async () => {
+    respond({
+      json: async () => ({
+        verified: true, corrected: false, text: "Text 0", progress: { verified: 1, total: 2 },
+      }),
+    } as unknown as Response);
+  });
+
+  expect(editBox().value).toBe("Typed during verify");
+  expect(screen.getByText(UNSAVED_WARNING)).toBeTruthy();
+  expect(screen.getByText(/segment at 0\.00s/)).toBeTruthy();
+});
+
+it("relabels another line from its popover without leaving an unsaved edit", async () => {
+  setup();
+  fireEvent.change(editBox(), { target: { value: "My correction" } });
+  fireEvent.click(screen.getByRole("radio", { name: "Just this segment" }));
+  fireEvent.click(screen.getByRole("option", { name: "Bob" }));
+
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledOnce());
+  expect(vi.mocked(apiFetch).mock.calls[0][0]).toBe("/review/run/segments/seg-1/relabel");
+  expect(editBox().value).toBe("My correction");
+  expect(screen.getByText(/segment at 0\.00s/)).toBeTruthy();
+});
+
+async function loseClaimOn(key: { key: string; ctrlKey?: boolean }, target: Element) {
+  vi.mocked(apiFetch).mockRejectedValueOnce(new ApiError(409, "Claim taken.", "claim"));
+  fireEvent.keyDown(target, key);
+  await screen.findByText(/Your claim expired or was taken over/);
+}
+
+it("shows an unsaved edit while the claim is lost and restores it on re-claim (#734)", async () => {
+  startEdit({ claimCsrf: "claim-csrf" });
+  await loseClaimOn({ key: "Enter", ctrlKey: true }, editBox());
+
+  expect(screen.queryByRole("textbox", {
+    name: "Corrected transcript text for this segment",
+  })).toBeNull();
+  const kept = screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Your unsaved edit" });
+  expect(kept.value).toBe("My correction");
+  expect(kept.readOnly).toBe(true);
+  expect(screen.getByText(/Your unsaved edit is below/)).toBeTruthy();
+
+  // Nothing can save the edit until a re-claim, so the cursor stays on its
+  // line even when the jump is repeated; the jump still plays its line.
+  moveCalled("an annotation jump")();
+  moveCalled("an annotation jump")();
+  expect(kept.value).toBe("My correction");
+  expect(player.playSegment.mock.calls).toEqual([[1], [1]]);
+
+  vi.mocked(apiFetch).mockResolvedValueOnce({
+    json: async () => ({ token: "fresh-token", tagCsrf: "tag", clipCsrf: "clip" }),
+  } as unknown as Response);
+  fireEvent.click(screen.getByRole("button", { name: "re-claim to keep editing it" }));
+
+  await waitFor(() => expect(editBox().value).toBe("My correction"));
+  expect(screen.queryByRole("textbox", { name: "Your unsaved edit" })).toBeNull();
+  expect(screen.getByText(/segment at 0\.00s/)).toBeTruthy();
+});
+
+it("offers a plain re-claim when the claim is lost with no unsaved edit (#734)", async () => {
+  setup({ claimCsrf: "claim-csrf" });
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  await loseClaimOn({ key: "v" }, document.body);
+
+  expect(screen.getByRole("button", { name: "Re-claim to continue editing" })).toBeTruthy();
+  expect(screen.queryByRole("textbox", { name: "Your unsaved edit" })).toBeNull();
+  expect(screen.queryByText(/Your unsaved edit is below/)).toBeNull();
 });
