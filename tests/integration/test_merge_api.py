@@ -225,6 +225,8 @@ def test_merge_rejects_stale_preview_with_409(
     fields["nonce"] = uuid.uuid4().hex
     stale = client.post(f"/review/{run_id}/merge", data=fields, headers=HX)
     assert stale.status_code == 409
+    # Drift is not a lost claim: unmarked, so the rail keeps the claim (#728).
+    assert "x-voxint-conflict" not in stale.headers
     with session_factory() as session:
         # The stale merge wrote nothing; S1 is still the exclude it drifted to.
         rows = session.execute(
@@ -612,3 +614,64 @@ def test_merge_validation_and_auth(
         data={"token": token, "labels": ["S0", "S1"], "target": str(known_id)},
         headers=HX,
     ).status_code == 409
+
+
+_ANY_ID = "00000000-0000-0000-0000-000000000001"
+
+# Every claim-gated write on the review router, with just enough form data to
+# pass validation and reach the claim check (issue #728).
+_CLAIM_GATED_WRITES: list[tuple[str, dict[str, object]]] = [
+    ("labels/S0/decision", {"nonce": uuid.uuid4().hex, "action": "exclude"}),
+    ("labels/S0/enroll", {"nonce": uuid.uuid4().hex, "display_name": "New Voice"}),
+    ("merge/preview", {"labels": ["S0", "S1"], "target": "new", "new_name": "New Voice"}),
+    ("merge", {"nonce": uuid.uuid4().hex, "labels": ["S0", "S1"], "expected": "{}"}),
+    (f"segments/{_ANY_ID}/verify", {}),
+    (f"segments/{_ANY_ID}/text", {"text": "edited"}),
+    ("enrich/names", {}),
+    (f"candidates/{_ANY_ID}/decision", {"nonce": uuid.uuid4().hex, "verdict": "accept"}),
+]
+
+
+@pytest.mark.parametrize(
+    ("path", "data"), _CLAIM_GATED_WRITES, ids=[p for p, _ in _CLAIM_GATED_WRITES]
+)
+def test_claim_gated_writes_mark_a_lost_claim(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    media_root: Path,
+    path: str,
+    data: dict[str, object],
+) -> None:
+    """A stale claim token gets a 409 marked ``X-Voxint-Conflict: claim``, so
+    the console can tell a lost claim from the other 409s these routes raise."""
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    stale = claim_token(client, run_id)
+    assert claim_token(client, run_id) != stale  # the re-claim rotated the token
+    resp = client.post(f"/review/{run_id}/{path}", data={"token": stale, **data}, headers=HX)
+    assert resp.status_code == 409, resp.text
+    assert resp.headers.get("X-Voxint-Conflict") == "claim"
+
+
+def test_decision_conflicting_replay_409_is_not_a_claim_loss(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """The label decision route's other 409, a nonce reused for a different
+    ruling, stays unmarked: the claim is still good (issue #728)."""
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    token = claim_token(client, run_id)
+    nonce = uuid.uuid4().hex
+    first = client.post(
+        f"/review/{run_id}/labels/S0/decision",
+        data={"token": token, "nonce": nonce, "action": "exclude"},
+        headers=HX,
+    )
+    assert first.status_code == 200, first.text
+    replay = client.post(
+        f"/review/{run_id}/labels/S0/decision",
+        data={"token": token, "nonce": nonce, "action": "unknown"},
+        headers=HX,
+    )
+    assert replay.status_code == 409, replay.text
+    assert "x-voxint-conflict" not in replay.headers

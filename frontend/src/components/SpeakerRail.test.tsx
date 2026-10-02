@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { apiFetch } from "../lib/api-client";
+import { ApiError, apiFetch } from "../lib/api-client";
 import { SpeakerRail, type LabelsResult } from "./SpeakerRail";
 
 vi.mock("../lib/api-client", async (original) => ({
@@ -149,4 +149,57 @@ it("disables ruling and merge controls while the editor is busy", async () => {
     expect(screen.getByRole("button", { name: "SPEAKER_00: choose who this is" })).toHaveProperty("disabled", true);
     expect(screen.getByRole("button", { name: "Confirm merge" })).toHaveProperty("disabled", true);
   });
+});
+
+it.each(["decide", "enroll"])("%s shows an unmarked 409 and keeps the claim", async (action) => {
+  vi.mocked(apiFetch).mockRejectedValueOnce(
+    new ApiError(409, "That nonce was used for another ruling."),
+  );
+  const { props } = setup();
+  if (action === "decide") fireEvent.click(screen.getAllByRole("button", { name: "Can't tell" })[0]);
+  else createSpeaker();
+  expect(await screen.findByText("That nonce was used for another ruling.")).toBeTruthy();
+  expect(props.onClaimLost).not.toHaveBeenCalled();
+});
+
+it.each(["decide", "enroll"])("%s treats a marked 409 as a lost claim", async (action) => {
+  vi.mocked(apiFetch).mockRejectedValueOnce(new ApiError(409, "Claim taken.", "claim"));
+  const { props } = setup();
+  if (action === "decide") fireEvent.click(screen.getAllByRole("button", { name: "Can't tell" })[0]);
+  else createSpeaker();
+  await waitFor(() => expect(props.onClaimLost).toHaveBeenCalledOnce());
+});
+
+it("keeps the claim and clears the preview when the merge drifted (unmarked 409)", async () => {
+  const { props } = setup();
+  const confirm = await previewMerge();
+  vi.mocked(apiFetch).mockRejectedValueOnce(
+    new ApiError(409, "label 'SPEAKER_01' changed since you previewed"),
+  );
+  fireEvent.click(confirm);
+  expect(
+    await screen.findByText("These labels changed since the preview. Preview again before merging."),
+  ).toBeTruthy();
+  expect(props.onClaimLost).not.toHaveBeenCalled();
+  expect(props.onLabelsChanged).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "Confirm merge" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Preview merge…" })).toBeTruthy();
+});
+
+it.each(["preview", "merge"])("treats a marked 409 on %s as a lost claim", async (stage) => {
+  const { props } = setup();
+  if (stage === "merge") {
+    const confirm = await previewMerge();
+    vi.mocked(apiFetch).mockRejectedValueOnce(new ApiError(409, "Claim taken.", "claim"));
+    fireEvent.click(confirm);
+  } else {
+    fireEvent.click(screen.getByText("Same speaker across labels?"));
+    fireEvent.click(screen.getByRole("checkbox", { name: /SPEAKER_00/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /SPEAKER_01/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Merge target speaker" }));
+    fireEvent.click(screen.getByRole("option", { name: "Alice" }));
+    vi.mocked(apiFetch).mockRejectedValueOnce(new ApiError(409, "Claim taken.", "claim"));
+    fireEvent.click(screen.getByRole("button", { name: "Preview merge…" }));
+  }
+  await waitFor(() => expect(props.onClaimLost).toHaveBeenCalledOnce());
 });

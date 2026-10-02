@@ -356,7 +356,7 @@ function MergePanel({
       const data = (await res.json()) as MergePreview;
       setPreview(data);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
+      if (err instanceof ApiError && err.conflictKind === "claim") {
         onClaimLost();
       } else {
         setError(err instanceof ApiError ? err.detail : "Preview failed.");
@@ -395,8 +395,13 @@ function MergePanel({
       setNewName("");
       onMerge(data);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
+      if (err instanceof ApiError && err.conflictKind === "claim") {
         onClaimLost();
+      } else if (err instanceof ApiError && err.status === 409) {
+        // A ruling changed one of these labels after the preview. The claim is
+        // fine; the operator previews again to see the current impact (#728).
+        setPreview(null);
+        setError("These labels changed since the preview. Preview again before merging.");
       } else {
         setError(err instanceof ApiError ? err.detail : "Merge failed.");
       }
@@ -595,7 +600,7 @@ export function SpeakerRail({
           onAssignment?.(label, speakerId, data.labels);
         }
       } catch (err) {
-        if (err instanceof ApiError && err.status === 409) {
+        if (err instanceof ApiError && err.conflictKind === "claim") {
           onClaimLost();
         } else {
           setError(err instanceof ApiError ? err.detail : "Decision failed.");
@@ -637,7 +642,7 @@ export function SpeakerRail({
         adoptResult(data);
         return true;
       } catch (err) {
-        if (err instanceof ApiError && err.status === 409) {
+        if (err instanceof ApiError && err.conflictKind === "claim") {
           onClaimLost();
         } else {
           setError(err instanceof ApiError ? err.detail : "Enrollment failed.");

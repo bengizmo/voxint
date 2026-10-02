@@ -691,8 +691,11 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
 - **Reviewer slot**: claim columns on `pipeline_runs`, guarded by the same CAS
   `revision` as pipeline transitions. The claim token is an opaque per-claim
   secret required on every mutation; a re-claim rotates it, so a stale tab
-  gets 409 instead of acting on a slot someone else holds. Claims expire on a
-  TTL, so an abandoned tab never dams the queue.
+  gets 409 instead of acting on a slot someone else holds. That 409 is always
+  marked `X-Voxint-Conflict: claim`, because several routes raise other 409s
+  too (a merge whose preview drifted, a reused nonce, a segment-state
+  conflict); the console treats only the marked one as a lost claim. Claims
+  expire on a TTL, so an abandoned tab never dams the queue.
 - **Decisions** POST through the existing idempotent ledger append. Each
   rendered form carries a fresh server-issued nonce as the idempotency key:
   htmx retries are harmless replays, new submissions are new (superseding)

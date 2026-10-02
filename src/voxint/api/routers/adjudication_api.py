@@ -220,6 +220,14 @@ router = APIRouter(dependencies=[Depends(require_onboarded)])
 # the claim. The value is opaque; only presence + "claim" matters to the client.
 _CLAIM_CONFLICT_HEADERS = {"X-Voxint-Conflict": "claim"}
 
+
+def _claim_conflict(exc: ClaimMismatchError) -> HTTPException:
+    """The 409 for a lost claim, always marked: a route that can also raise a
+    plain 409 (a merge whose preview drifted, a conflicting replay) must never
+    be read as a claim loss, and vice versa (issue #728)."""
+    return HTTPException(status_code=409, detail=str(exc), headers=_CLAIM_CONFLICT_HEADERS)
+
+
 # Annotation-layer 409 markers (issue #86), mirroring _CLAIM_CONFLICT_HEADERS so
 # the console can tell a stale-quote/anchor conflict, a replayed-nonce idempotency
 # conflict, and a duplicate tag name apart from a lost claim. The taxonomy lives in
@@ -498,7 +506,7 @@ def enrich_names(
     try:
         run = verify_claim(session, run_id, token)
     except ClaimMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _claim_conflict(exc) from exc
     try:
         run_offline_name_producer(session, run_id=run_id, settings=settings)
     except NameProducerError as exc:
@@ -524,7 +532,7 @@ def decide_name_candidate(
     try:
         run = verify_claim(session, run_id, token)
     except ClaimMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _claim_conflict(exc) from exc
     try:
         decision = ProfileDecision(verdict)
     except ValueError as exc:
@@ -574,7 +582,7 @@ def decide(
     try:
         run = verify_claim(session, run_id, token, for_update=True)
     except ClaimMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _claim_conflict(exc) from exc
     try:
         decision = Decision(action)
     except ValueError as exc:
@@ -688,7 +696,7 @@ def merge_preview(
     try:
         verify_claim(session, run_id, token)
     except ClaimMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _claim_conflict(exc) from exc
     target_speaker: Speaker | None = None
     display_name: str | None = None
     if target == "new":
@@ -753,7 +761,7 @@ def merge_apply(
     try:
         run = verify_claim(session, run_id, token, for_update=True)
     except ClaimMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _claim_conflict(exc) from exc
     # An untouched text field posts "" not None; the confirm form omits the
     # unused target entirely, but normalise defensively so the XOR check sees
     # a clean None rather than an empty string.
@@ -985,7 +993,7 @@ def verify_segment(
     try:
         verify_claim(session, run_id, token, for_update=True)
     except ClaimMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _claim_conflict(exc) from exc
     segment = session.get(TranscriptSegment, segment_id)
     if segment is None or segment.pipeline_run_id != run_id:
         raise HTTPException(status_code=404, detail="no such segment in this run")
@@ -1010,7 +1018,7 @@ def correct_segment(
     try:
         verify_claim(session, run_id, token, for_update=True)
     except ClaimMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _claim_conflict(exc) from exc
     segment = session.get(TranscriptSegment, segment_id)
     if segment is None or segment.pipeline_run_id != run_id:
         raise HTTPException(status_code=404, detail="no such segment in this run")
@@ -1161,7 +1169,7 @@ def enroll(
     try:
         run = verify_claim(session, run_id, token, for_update=True)
     except ClaimMismatchError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _claim_conflict(exc) from exc
     settings: Settings = request.app.state.settings
     # Only a fresh enrollment announces, never a replay of one.
     is_replay = decision_exists(session, nonce)
