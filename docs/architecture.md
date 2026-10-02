@@ -845,9 +845,10 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   unhandled 500. `Referrer-Policy: no-referrer` on every response (the review
   token rides in the URL, so no navigation or subresource may leak it in a
   `Referer`); `Cache-Control: no-store` on every token-sensitive response
-  (`/review/*` and `/media/{uuid}/editor*`, where claim tokens ride in the URL
-  or response body; the path classifier is `_is_token_sensitive_path` in
-  `app.py`); `X-Content-Type-Options:
+  (`/review/*`, and `/media/{uuid}/editor` with everything under
+  `/media/{uuid}/editor/`, where claim tokens ride in the URL or response
+  body, error responses included; the path classifier is
+  `_is_token_sensitive_path` in `app.py`); `X-Content-Type-Options:
   nosniff` on every response (#103), so the browser honours the declared
   `Content-Type` instead of sniffing operator-controlled transcript exports or
   first-party assets into HTML. `X-Frame-Options` and a content-security policy

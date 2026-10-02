@@ -7,6 +7,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **Editor requests are no longer cacheable** (#714). The media editor page
+  was sent with `Cache-Control: no-store`, but the requests under it were
+  not: claiming, refreshing and releasing a claim, and their error replies.
+  The claim reply carries the claim token, so a browser or proxy could keep
+  a copy of it. Every response under `/media/{id}/editor/` is now
+  `no-store`, matching the review pages.
 - **Moving to another line warns before dropping an unsaved edit** (#732).
   Clicking another line or the waveform, a navigation key, or a jump from
   the outline, a note or the speaker panel used to reset the edit box

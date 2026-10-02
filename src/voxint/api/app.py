@@ -216,11 +216,12 @@ class _SecurityHeadersMiddleware:
       leak the token in the ``Referer`` header, the one exploitable disclosure
       vector under this threat model. ``no-referrer`` suppresses ``Referer`` on
       every navigation and subresource fetch.
-    * ``Cache-Control: no-store`` on every ``/review`` response — the review pages
-      embed the token (hidden form fields, island props) and the claim/mutation
-      redirects carry it in ``Location``; stamping it centrally guarantees no
-      token-bearing review response is ever written to a browser/proxy cache, and
-      cannot be missed when a new ``/review`` route is added.
+    * ``Cache-Control: no-store`` on every ``/review`` and ``/media/{id}/editor``
+      response, descendants included (``_is_token_sensitive_path``) — these pages
+      embed the token (hidden form fields, island props), the claim/mutation
+      redirects carry it in ``Location`` and the editor claim returns it in JSON;
+      stamping it centrally guarantees no token-bearing response is ever written
+      to a browser/proxy cache, and cannot be missed when a new route is added.
 
     This is a *mitigation*, not token removal: the token still appears in browser
     history, address-bar screenshots, and server access logs. That residual is
@@ -250,10 +251,11 @@ class _SecurityHeadersMiddleware:
         await self._app(scope, receive, send_with_headers)
 
 
-_MEDIA_DETAIL_RE = re.compile(
-    r"^/media/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/editor(?:\?|$)",
-    re.IGNORECASE,
-)
+# Any single segment before ``/editor``, not just the hyphenated UUID spelling: the
+# editor routes parse ``media_id`` as ``uuid.UUID``, which also accepts compact and
+# braced forms. Over-matching only adds no-store to a 404/422, the safe direction.
+# ASGI paths never carry the query string; the ``\?`` branch is only defensive.
+_MEDIA_DETAIL_RE = re.compile(r"^/media/[^/]+/editor(?:/|\?|$)")
 
 
 def _is_token_sensitive_path(path: str) -> bool:
@@ -263,10 +265,12 @@ def _is_token_sensitive_path(path: str) -> bool:
     never written to a browser or proxy cache. Currently two families:
 
     * ``/review`` and all descendants (the legacy review flow).
-    * ``/media/{uuid}`` and descendants (the editor detail page, #156).
+    * ``/media/{uuid}/editor`` and all descendants (the editor page, #156, and
+      its ``/editor/...`` subroutes such as the claim POST, whose JSON body
+      carries the claim token).
 
-    Library-level ``/media`` routes (listing, upload, assign, rerun, archive) are
-    excluded -- they never carry tokens and should remain cacheable by the browser.
+    Library-level ``/media`` routes (listing, upload, assign, rerun, archive) and
+    the bare ``/media/{uuid}`` audio route are excluded -- they never carry tokens.
     """
     if path.startswith("/review"):
         return True

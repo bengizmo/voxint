@@ -37,6 +37,16 @@ def _request(path: str) -> Request:
         "/media/00000000-0000-0000-0000-000000000001/editor",
         "/media/00000000-0000-0000-0000-000000000001/editor?run=x",
         "/media/AABBCCDD-1122-3344-5566-778899AABBCC/editor",
+        "/media/00000000-0000-0000-0000-000000000001/editor/",
+        "/media/00000000-0000-0000-0000-000000000001/editor/claim",
+        "/media/00000000-0000-0000-0000-000000000001/editor/refresh",
+        "/media/00000000-0000-0000-0000-000000000001/editor/release",
+        "/media/00000000-0000-0000-0000-000000000001/editor/a/b",
+        # uuid.UUID path params also accept compact and braced spellings (#714 review).
+        "/media/00000000000000000000000000000001/editor/claim",
+        "/media/{00000000-0000-0000-0000-000000000001}/editor/claim",
+        "/media/urn:uuid:00000000-0000-0000-0000-000000000001/editor/claim",
+        "/media/not-a-uuid/editor",
     ],
 )
 def test_token_sensitive_paths_match(path: str) -> None:
@@ -60,7 +70,9 @@ def test_token_sensitive_paths_match(path: str) -> None:
         "/runs/abc123",
         "/settings",
         "/",
-        "/media/not-a-uuid/editor",
+        "/media/00000000-0000-0000-0000-000000000001/editorial",
+        "/media/00000000-0000-0000-0000-000000000001/editor-claim",
+        "/media/00000000-0000-0000-0000-000000000001/x/editor/claim",
     ],
 )
 def test_non_token_paths_do_not_match(path: str) -> None:
@@ -93,6 +105,14 @@ async def test_error_handler_adds_no_store_on_review_path() -> None:
 async def test_error_handler_adds_no_store_on_media_editor_path() -> None:
     response = await _security_headers_on_error(
         _request("/media/00000000-0000-0000-0000-000000000001/editor"), RuntimeError("boom")
+    )
+    assert response.headers["cache-control"] == "no-store"
+
+
+async def test_error_handler_adds_no_store_on_media_editor_subroute() -> None:
+    response = await _security_headers_on_error(
+        _request("/media/00000000-0000-0000-0000-000000000001/editor/claim"),
+        RuntimeError("boom"),
     )
     assert response.headers["cache-control"] == "no-store"
 
