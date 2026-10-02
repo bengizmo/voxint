@@ -356,6 +356,30 @@ describe("UndoToast", () => {
     });
   });
 
+  it("keeps an undo failure on screen past the deadline", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.mocked(apiFetch).mockRejectedValueOnce(new ApiError(409, "drift"));
+    const { props } = setup({
+      undo: {
+        kind: "decide",
+        decisionId: "dec-1",
+        expiresAt: new Date(Date.now() + 30_000).toISOString(),
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByRole("status").textContent).toContain("Too late to undo.");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(props.onDismiss).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toContain("Too late to undo.");
+  });
+
   it("dismisses itself when the window closes", () => {
     vi.useFakeTimers();
     const { props } = setup({

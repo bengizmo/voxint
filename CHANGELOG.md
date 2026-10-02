@@ -19,7 +19,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   refused because the change was made again elsewhere (another tab, or
   another operator), the editor now reloads the recording's speakers and
   lines from the server, so it shows what is actually saved. It used to keep
-  showing the old state until your next change or a page reload.
+  showing the old state until your next change or a page reload. A message
+  saying an undo failed now stays until you close it, instead of vanishing
+  when the undo window runs out.
 
 ## [0.50.0] - 2026-10-01
 
