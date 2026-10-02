@@ -526,6 +526,12 @@
     ]
   ],
   [
+    "/review/{run_id}/labels",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/review/{run_id}/labels/{label}/decision",
     [
       "POST"

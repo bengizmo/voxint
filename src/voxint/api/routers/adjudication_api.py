@@ -2646,6 +2646,21 @@ def undo_relabel(
     return _labels_response(request, session, run)
 
 
+@router.get("/review/{run_id}/labels")
+def run_labels(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+) -> Response:
+    """The whole-run state every undo returns (labels, segments, progress,
+    speakers), read without a claim. The editor refetches it after an undo is
+    refused with a 409, so it shows what the server now holds (issue #718)."""
+    return _labels_response(
+        request, session, _run_or_404(session, run_id), include_speakers=True
+    )
+
+
 # --- Legacy review page redirects (issue #158) ---
 #
 # The review queue, workbench, and transcript pages are retired. Bookmarks

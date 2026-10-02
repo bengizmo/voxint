@@ -702,6 +702,14 @@
     true
   ],
   [
+    "/review/{run_id}/labels",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/review/{run_id}/labels/{label}/decision",
     [
       "POST"

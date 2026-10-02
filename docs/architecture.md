@@ -730,7 +730,11 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   `undo_segment_decision` appends a compensating row in the exact scope that
   re-asserts the previous newest row there (the earlier `assign`'s speaker, or
   `inherit` when there was none), because a REVOKE stays label-shaped and the
-  segment resolvers reduce newest-wins without consulting voids.
+  segment resolvers reduce newest-wins without consulting voids. When any undo
+  is refused with a non-claim 409, the editor refetches
+  `GET /review/{run_id}/labels` (the shape every undo returns, read without a
+  claim) while it still holds its write guard, and adopts it without clearing
+  the toast that explains the refusal (issue #718).
   **Every label-scope query filters `transcript_segment_id IS NULL`** so a
   segment override never leaks into label resolution: `effective_decisions`
   (the source `label_states` reads), the `_label_unresolved` /

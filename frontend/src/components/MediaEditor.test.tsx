@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MediaEditor, type MediaEditorProps } from "./MediaEditor";
-import { apiFetch } from "../lib/api-client";
+import { ApiError, apiFetch } from "../lib/api-client";
+import type { LabelsResult } from "./SpeakerRail";
 import type {
   Segment,
   TranscriptPlayerHandle,
@@ -16,7 +17,16 @@ vi.mock("../lib/api-client", async (original) => ({
 vi.mock("./AnnotationLayer", () => ({
   useAnnotations: () => ({ reload: vi.fn(), toolbar: null, panel: null }),
 }));
-vi.mock("./SpeakerRail", () => ({ SpeakerRail: () => null }));
+// The rail renders nothing; tests reach its onLabelsChanged through `rail`.
+const rail = vi.hoisted(() => ({
+  onLabelsChanged: null as ((result: LabelsResult) => void) | null,
+}));
+vi.mock("./SpeakerRail", () => ({
+  SpeakerRail: (props: { onLabelsChanged: (result: LabelsResult) => void }) => {
+    rail.onLabelsChanged = props.onLabelsChanged;
+    return null;
+  },
+}));
 vi.mock("./OutlinePanel", () => ({ OutlinePanel: () => null }));
 vi.mock("./KeymapHelp", () => ({ KeymapHelp: () => null }));
 const player = vi.hoisted(() => ({ previewSegment: vi.fn() }));
@@ -147,6 +157,125 @@ it("offers undo for a segment relabel and adopts the undo result", async () => {
   expect(screen.queryByText("Segment speaker changed.")).toBeNull();
   // The live region no longer claims the undone assignment.
   expect(screen.queryByText("Assigned to Bob.")).toBeNull();
+});
+
+async function relabelThenRefusedUndo() {
+  const expiresAt = new Date(Date.now() + 300_000).toISOString();
+  const relabeled = segments.map((seg, index) =>
+    index === 1 ? { ...seg, speaker: "Bob" } : seg);
+  vi.mocked(apiFetch)
+    .mockResolvedValueOnce({
+      json: async () => ({
+        segments: relabeled,
+        progress: { verified: 0, total: 2 },
+        undo: { kind: "relabel", decisionId: "dec-9", expiresAt },
+      }),
+    } as unknown as Response)
+    .mockRejectedValueOnce(new ApiError(409, "changed again"));
+  setup({ claimCsrf: "claim-csrf" });
+  fireEvent.click(screen.getByRole("radio", { name: "Just this segment" }));
+  fireEvent.click(screen.getByRole("option", { name: "Bob" }));
+  await screen.findByText("Segment speaker changed.");
+}
+
+it("refetches the run after a refused undo and keeps the toast", async () => {
+  await relabelThenRefusedUndo();
+  // Another tab moved line 1 on to Carol after the relabel.
+  const serverTruth = segments.map((seg, index) =>
+    index === 1 ? { ...seg, speaker: "Carol" } : seg);
+  vi.mocked(apiFetch).mockResolvedValueOnce({
+    json: async () => ({
+      segments: serverTruth,
+      progress: { verified: 1, total: 2 },
+      labels: defaultLabelStates,
+      speakers: [{ id: "alice", displayName: "Alice" }, { id: "carol", displayName: "Carol" }],
+    }),
+  } as unknown as Response);
+
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+  await screen.findByRole("button", { name: "Speaker 1: Carol" });
+  expect(screen.queryByText("Assigned to Bob.")).toBeNull();
+  expect(vi.mocked(apiFetch).mock.calls[1][0]).toBe("/review/run/undo/relabel");
+  expect(vi.mocked(apiFetch).mock.calls[2][0]).toBe("/review/run/labels");
+  expect(vi.mocked(apiFetch).mock.calls[2][1]?.method).toBeUndefined();
+  expect(screen.getByText("Too late to undo. This was changed again since.")).toBeTruthy();
+});
+
+it("drops a refetch that a newer rail ruling overtook", async () => {
+  await relabelThenRefusedUndo();
+  let respond: (value: Response) => void = () => {};
+  vi.mocked(apiFetch).mockReturnValueOnce(
+    new Promise<Response>((r) => {
+      respond = r;
+    }),
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(3));
+  // A rail ruling (own write guard) lands while the GET is in flight.
+  const ruled = segments.map((seg, index) =>
+    index === 1 ? { ...seg, speaker: "Dana" } : seg);
+  act(() => {
+    rail.onLabelsChanged?.({
+      segments: ruled, progress: { verified: 0, total: 2 }, labels: defaultLabelStates,
+    });
+  });
+  await screen.findByRole("button", { name: "Speaker 1: Dana" });
+  // The GET was read before that ruling committed.
+  const stale = segments.map((seg, index) =>
+    index === 1 ? { ...seg, speaker: "Carol" } : seg);
+  await act(async () => {
+    respond({
+      json: async () => ({
+        segments: stale, progress: { verified: 0, total: 2 }, labels: defaultLabelStates,
+      }),
+    } as unknown as Response);
+  });
+
+  expect(screen.getByRole("button", { name: "Speaker 1: Dana" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Speaker 1: Carol" })).toBeNull();
+});
+
+it("gives up on a refetch that hangs, releasing the editor", async () => {
+  await relabelThenRefusedUndo();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  let signal: AbortSignal | undefined;
+  vi.mocked(apiFetch).mockImplementationOnce((_url, init) => {
+    signal = init?.signal ?? undefined;
+    return new Promise<Response>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    });
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(9_999);
+  });
+  expect(signal?.aborted).toBe(false);
+  expect(screen.getByRole("button", { name: "Verify & next v" })).toHaveProperty("disabled", true);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
+  });
+  vi.useRealTimers();
+
+  expect(signal?.aborted).toBe(true);
+  expect(warn).toHaveBeenCalledOnce();
+  expect(screen.getByRole("button", { name: "Verify & next v" })).toHaveProperty("disabled", false);
+});
+
+it("keeps the stale view and the toast when the refetch fails", async () => {
+  await relabelThenRefusedUndo();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.mocked(apiFetch).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+  await waitFor(() => expect(warn).toHaveBeenCalledOnce());
+  expect(vi.mocked(apiFetch).mock.calls[2][0]).toBe("/review/run/labels");
+  expect(screen.getByRole("button", { name: "Speaker 1: Bob" })).toBeTruthy();
+  expect(screen.getByText("Too late to undo. This was changed again since.")).toBeTruthy();
 });
 
 function line(index: number, label: string, speaker: string, seconds = 1, extra = {}) {

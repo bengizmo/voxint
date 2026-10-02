@@ -21,11 +21,19 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   on your speaker list. Lines assigned to a speaker that was later merged
   into this one now count as uses too, so that speaker is kept. Undoing a
   line change that would bring back a speaker who has since been archived
-  now refuses and asks you to restore that speaker first.
+  now refuses with "Too late to undo" instead of reassigning the line to
+  that archived speaker.
 - **Restarting a run counts only line speaker changes still in effect**
   (#718). A line that was changed and then undone used to count as two
   rulings, and the restart asked you to confirm voiding them. It now counts
   none, and a run with no other rulings restarts without that prompt.
+- **The editor catches up after "Too late to undo"** (#718). When an undo is
+  refused because the change was made again elsewhere (another tab, or
+  another operator), the editor now reloads the recording's speakers and
+  lines from the server, so it shows what is actually saved. It used to keep
+  showing the old state until your next change or a page reload. A message
+  saying an undo failed now stays until you close it, instead of vanishing
+  when the undo window runs out.
 
 ## [0.50.0] - 2026-10-01
 

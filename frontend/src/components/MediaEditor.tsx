@@ -47,6 +47,9 @@ import {
   type TranscriptPlayerHandle,
 } from "./TranscriptPlayer";
 
+// How long the refetch after a refused undo may hold the editor write guard.
+const UNDO_REFETCH_TIMEOUT_MS = 10_000;
+
 // The whole-run reconcile a segment relabel returns; a fresh ruling carries
 // its undo (issue #573).
 type RelabelResult = Pick<LabelsResult, "segments" | "progress" | "undo">;
@@ -483,8 +486,16 @@ export function MediaEditor({
   );
   const applyResult = useSegmentPatch(segments, setSegments, setProgress);
 
+  // Counts whole-run adoptions, so a refetch can tell that a newer result (for
+  // example a speaker-rail ruling, which has its own write guard) landed while
+  // it was in flight.
+  const labelsAdoptedRef = useRef(0);
+
+  // `keepUndo` leaves the undo toast up: a refetch after a refused undo must
+  // not clear the toast that explains the refusal.
   const onLabelsChanged = useCallback(
-    (result: LabelsResult) => {
+    (result: LabelsResult, { keepUndo = false }: { keepUndo?: boolean } = {}) => {
+      labelsAdoptedRef.current += 1;
       setMergeSuggestion(null);
       const changedLabels = new Set<string>();
       for (const newLs of result.labels) {
@@ -498,7 +509,7 @@ export function MediaEditor({
       setSegments(result.segments);
       setProgress(result.progress);
       setLabelStates(result.labels);
-      setUndoInfo(result.undo ?? null);
+      if (!keepUndo) setUndoInfo(result.undo ?? null);
       if (result.speakers) {
         setSpeakers((prev) => {
           const incoming = result.speakers!;
@@ -518,6 +529,34 @@ export function MediaEditor({
     },
     [setSegments, setProgress, labelStates],
   );
+
+  // After a refused undo (issue #718) the scope was re-ruled elsewhere, so this
+  // editor is stale. Adopt the whole run from the server. The undo toast holds
+  // the editor write guard until this settles, so the request is time-boxed. On
+  // failure the editor stays as it was until the next write or reload; the
+  // toast already says the undo did not apply. Never rejects.
+  const refetchAfterUndoConflict = useCallback(async () => {
+    const adoptedBefore = labelsAdoptedRef.current;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UNDO_REFETCH_TIMEOUT_MS);
+    try {
+      const res = await apiFetch(`/review/${runId}/labels`, {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const result = (await res.json()) as LabelsResult;
+      // A newer result is already on screen; this snapshot may predate it.
+      if (labelsAdoptedRef.current !== adoptedBefore) return;
+      // The refused action's "Assigned to …" announcement no longer holds.
+      setAssignStatus(null);
+      onLabelsChanged(result, { keepUndo: true });
+    } catch (err) {
+      console.warn("Could not refresh the editor after a refused undo", err);
+    } finally {
+      clearTimeout(timer);
+    }
+  }, [runId, onLabelsChanged]);
 
   const current =
     cursor >= 0 && cursor < segments.length ? segments[cursor] : null;
@@ -1757,6 +1796,7 @@ export function MediaEditor({
             onLabelsChanged(data);
           }}
           onDismiss={() => setUndoInfo(null)}
+          onConflict={refetchAfterUndoConflict}
           writeGuard={undoWriteGuard}
         />
       )}
