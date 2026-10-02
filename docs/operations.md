@@ -930,6 +930,12 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   | DIARIZE_EMBED | no (segments survive) | no | yes (labels shift) |
   | ENHANCE_MATCH / FINALIZE | no | no | no |
 
+  The segment-scope column counts only overrides still in effect: a segment
+  or word range whose newest ruling is an `assign`. A line whose speaker
+  change was undone, or that was reset to follow its label, blocks nothing.
+  The restart still voids those older rows before it deletes the segments,
+  so the ledger keeps them as history.
+
   ENHANCE_MATCH and FINALIZE restarts are safe for all runs, including those
   with adjudication decisions. This is the common case ("I updated the roster,
   re-match").

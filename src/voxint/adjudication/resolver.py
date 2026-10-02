@@ -581,6 +581,34 @@ def word_range_states(
     return _active_overrides(session, newest)
 
 
+def newest_in_scope(ruling: type[AdjudicationDecision]) -> ColumnElement[bool]:
+    """SQL mirror of the newest-wins reduction in :func:`segment_states` and
+    :func:`word_range_states`: true when no later row shares ``ruling``'s exact
+    scope (run, segment, word range), ordered ``created_at`` then ``id``.
+
+    ``ruling`` is an alias of :class:`AdjudicationDecision` from the enclosing
+    query. Like those resolvers it does not consult voids, so callers that must
+    skip voided rows filter the candidate separately. A newest row is not always
+    rendered: a word range that no longer matches a current split child stays
+    newest and would apply again if that boundary returned.
+    """
+    newer = aliased(AdjudicationDecision)
+    return ~(
+        select(1)
+        .where(
+            newer.pipeline_run_id == ruling.pipeline_run_id,
+            newer.transcript_segment_id == ruling.transcript_segment_id,
+            newer.start_word_index.is_not_distinct_from(ruling.start_word_index),
+            newer.end_word_index.is_not_distinct_from(ruling.end_word_index),
+            or_(
+                newer.created_at > ruling.created_at,
+                and_(newer.created_at == ruling.created_at, newer.id > ruling.id),
+            ),
+        )
+        .exists()
+    )
+
+
 def _active_overrides(
     session: Session, newest: dict[_K, AdjudicationDecision]
 ) -> dict[_K, SegmentOverride]:
