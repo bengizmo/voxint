@@ -121,9 +121,19 @@ def _archive_if_orphaned(
     return True
 
 
-def segment_undo_key(decision_id: uuid.UUID) -> str:
-    """The idempotency key of the undo of segment ruling ``decision_id``."""
+def undo_key(decision_id: uuid.UUID) -> str:
+    """The idempotency key of the undo of ruling ``decision_id``."""
     return f"{UNDO_KEY_PREFIX}{decision_id}"
+
+
+def _check_label_undo_key(idempotency_key: str, decision_id: uuid.UUID) -> None:
+    """A label-scope undo may use any key outside the undo namespace, but one
+    inside it must name this ruling. Otherwise a REVOKE could take a segment
+    ruling's undo key, and that ruling could never be undone (#726)."""
+    if idempotency_key.startswith(UNDO_KEY_PREFIX) and idempotency_key != undo_key(
+        decision_id
+    ):
+        raise ConflictingReplayError(idempotency_key)
 
 
 def _append_revoke(
@@ -159,6 +169,7 @@ def undo_enrollment(
     original = session.get(AdjudicationDecision, decision_id)
     if original is None:
         raise UndoError(f"no adjudication decision {decision_id}")
+    _check_label_undo_key(idempotency_key, decision_id)
     if (
         original.pipeline_run_id != run_id
         or original.transcript_segment_id is not None
@@ -232,6 +243,7 @@ def undo_decision(
     original = session.get(AdjudicationDecision, decision_id)
     if original is None:
         raise UndoError(f"no adjudication decision {decision_id}")
+    _check_label_undo_key(idempotency_key, decision_id)
     if (
         original.pipeline_run_id != run_id
         or original.transcript_segment_id is not None
@@ -345,11 +357,11 @@ def undo_segment_decision(
     to the ruling it undoes, so the key is that link: a ruling is undone at most
     once, and only undo writes may store a key in that namespace (#726).
     """
-    if idempotency_key != segment_undo_key(decision_id):
-        raise ConflictingReplayError(idempotency_key)
     original = session.get(AdjudicationDecision, decision_id)
     if original is None:
         raise UndoError(f"no adjudication decision {decision_id}")
+    if idempotency_key != undo_key(decision_id):
+        raise ConflictingReplayError(idempotency_key)
     if original.pipeline_run_id != run_id:
         raise UndoError("only a segment-scope ruling from this run can be undone")
     if original.detached_at is not None:

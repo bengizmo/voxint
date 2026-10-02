@@ -30,9 +30,9 @@ from voxint.adjudication.undo import (
     UndoDriftError,
     UndoError,
     UndoExpiredError,
-    segment_undo_key,
     undo_decision,
     undo_enrollment,
+    undo_key,
     undo_segment_decision,
 )
 from voxint.api.app import create_app
@@ -152,7 +152,7 @@ def _undo(
         run_id=seeded.run_id,
         decision_id=decision_id,
         operator="ben",
-        idempotency_key=key or segment_undo_key(decision_id),
+        idempotency_key=key or undo_key(decision_id),
         grace_seconds=grace_seconds,
     )
     session.commit()
@@ -398,7 +398,7 @@ def test_undo_refuses_a_key_already_used_elsewhere(
         _undo(session, seeded, first.id)
 
         with pytest.raises(ConflictingReplayError):
-            _undo(session, seeded, second.id, key=segment_undo_key(first.id))
+            _undo(session, seeded, second.id, key=undo_key(first.id))
         session.rollback()
         with pytest.raises(ConflictingReplayError):
             _undo(session, seeded, second.id, key=second.idempotency_key)
@@ -414,7 +414,7 @@ def test_undo_refuses_a_key_reused_for_another_ruling_in_the_same_scope(
         second = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
 
         with pytest.raises(ConflictingReplayError):
-            _undo(session, seeded, second.id, key=segment_undo_key(first.id))
+            _undo(session, seeded, second.id, key=undo_key(first.id))
         session.rollback()
         assert _segment_speaker(session, seeded) == seeded.bob
 
@@ -434,7 +434,7 @@ def test_an_undo_key_reused_for_an_older_ruling_is_refused(
         undone_w = _undo(session, seeded, w.id)
 
         with pytest.raises(ConflictingReplayError):
-            _undo(session, seeded, y.id, key=segment_undo_key(w.id))
+            _undo(session, seeded, y.id, key=undo_key(w.id))
         session.rollback()
         # Y's own key is no replay either: Y is not the newest ruling.
         with pytest.raises(UndoDriftError):
@@ -463,21 +463,20 @@ def test_only_undo_writes_may_use_the_undo_key_namespace(
                 seeded,
                 Decision.ASSIGN,
                 speaker_id=seeded.bob,
-                key=segment_undo_key(z.id),
+                key=undo_key(z.id),
             )
         session.rollback()
 
         result = _undo(session, seeded, z.id)
         assert result["is_replay"] is False
-        assert _compensation(session, result).idempotency_key == segment_undo_key(z.id)
+        assert _compensation(session, result).idempotency_key == undo_key(z.id)
 
 
-def test_a_label_revoke_under_a_segment_undo_key_is_not_read_as_that_undo(
+def test_a_label_undo_cannot_take_a_segment_rulings_undo_key(
     session_factory: sessionmaker[Session],
 ) -> None:
-    # Label-scope undos also write under the undo prefix with a client nonce, so
-    # one can occupy a segment ruling's undo key. The replay checks still reject
-    # it: a label REVOKE is not in the segment's scope.
+    # A label-scope REVOKE stored under a segment ruling's undo key would make
+    # that ruling's undo a permanent 409, so label undos refuse it (#726).
     seeded = _seed(session_factory)
     with session_factory() as session:
         label_rule = record_decision(
@@ -490,21 +489,48 @@ def test_a_label_revoke_under_a_segment_undo_key_is_not_read_as_that_undo(
             speaker_id=seeded.bob,
         )
         session.commit()
+        _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
         ruling = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
-        undo_decision(
+
+        with pytest.raises(ConflictingReplayError):
+            undo_decision(
+                session,
+                run_id=seeded.run_id,
+                decision_id=label_rule.id,
+                operator="ben",
+                idempotency_key=undo_key(ruling.id),
+                grace_seconds=_GRACE,
+            )
+        session.rollback()
+
+        assert _undo(session, seeded, ruling.id)["is_replay"] is False
+        assert _segment_speaker(session, seeded) == seeded.bob
+
+
+def test_a_row_under_the_undo_key_that_is_not_this_undo_is_refused(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # The replay checks stay as a backstop for a row no current writer can put
+    # there (one written before the namespace was reserved): it must be this
+    # ruling's compensation, not just any row under the key.
+    seeded = _seed(session_factory)
+    with session_factory() as session:
+        _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
+        ruling = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
+        record_decision(
             session,
-            run_id=seeded.run_id,
-            decision_id=label_rule.id,
+            pipeline_run_id=seeded.run_id,
+            diarization_label="S0",
+            decision=Decision.INHERIT,
             operator="ben",
-            idempotency_key=segment_undo_key(ruling.id),
-            grace_seconds=_GRACE,
+            idempotency_key=undo_key(ruling.id),
+            transcript_segment_id=seeded.segment_id,
+            is_undo=True,
         )
         session.commit()
 
         with pytest.raises(ConflictingReplayError):
             _undo(session, seeded, ruling.id)
-        session.rollback()
-        assert _segment_speaker(session, seeded) == seeded.alice
 
 
 def test_undoing_an_undo_redoes_the_ruling(

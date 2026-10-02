@@ -734,9 +734,10 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   compensating row records no link to the ruling it undoes, so its idempotency
   key carries that link: a segment undo must use `undo:<decision id>`, and
   `record_decision` refuses a non-undo write under the `undo:` prefix (issue
-  #726). A row under that key is then either that ruling's undo or another
-  undo's row, which the replay checks reject (a label-scope REVOKE is outside
-  the segment's scope). Rows written before this change are not re-checked: a
+  #726). Label-scope undos may use a key in that namespace only for their own
+  ruling, and merge-undo keys carry a child suffix, so a row under
+  `undo:<decision id>` is that ruling's undo; the replay checks stay as a
+  backstop. Rows written before this change are not re-checked: a
   hand-crafted request could have stored a plain ruling under such a key,
   which the review console never does. When any undo
   is refused with a non-claim 409, the editor refetches

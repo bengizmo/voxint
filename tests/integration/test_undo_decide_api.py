@@ -329,3 +329,80 @@ def test_undo_of_an_unknown_decision_is_a_400(
     resp = _undo(client, run_id, token, str(uuid.uuid4()), csrf=_csrf())
 
     assert resp.status_code == 400  # type: ignore[attr-defined]
+
+
+def _ledger_rows(session_factory: sessionmaker[Session], run_id: uuid.UUID) -> int:
+    with session_factory() as session:
+        return session.execute(
+            select(func.count())
+            .select_from(AdjudicationDecision)
+            .where(AdjudicationDecision.pipeline_run_id == run_id)
+        ).scalar_one()
+
+
+def test_a_decision_cannot_take_a_key_in_the_undo_namespace(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # #726: keys starting "undo:" are reserved for undo writes.
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    token = claim_token(client, run_id)
+    before = _ledger_rows(session_factory, run_id)
+
+    resp = client.post(
+        f"/review/{run_id}/labels/S1/decision",
+        data={"token": token, "nonce": f"undo:{uuid.uuid4()}", "action": "exclude"},
+    )
+
+    assert resp.status_code == 409
+    assert _ledger_rows(session_factory, run_id) == before
+
+
+def test_an_enrollment_cannot_take_a_key_in_the_undo_namespace(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    token = claim_token(client, run_id)
+    before = _ledger_rows(session_factory, run_id)
+
+    resp = client.post(
+        f"/review/{run_id}/labels/S1/enroll",
+        data={"token": token, "nonce": f"undo:{uuid.uuid4()}", "display_name": "Norma Newvoice"},
+    )
+
+    assert resp.status_code == 409
+    assert _ledger_rows(session_factory, run_id) == before
+    with session_factory() as session:
+        assert (
+            session.execute(
+                select(Speaker).where(Speaker.display_name == "Norma Newvoice")
+            ).scalar_one_or_none()
+            is None
+        )
+
+
+def test_a_label_undo_cannot_take_another_rulings_undo_key(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # A REVOKE under another ruling's undo key would make that ruling's own undo
+    # a permanent 409 (#726).
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    token = claim_token(client, run_id)
+    undo = _decide(client, run_id, token, "S1", "exclude")["undo"]
+    assert isinstance(undo, dict)
+    csrf = mint_csrf_token(_CSRF_KEY, CSRF_CLAIM)
+
+    refused = _undo(
+        client, run_id, token, undo["decisionId"], csrf=csrf, nonce=f"undo:{uuid.uuid4()}"
+    )
+    assert refused.status_code == 409  # type: ignore[attr-defined]
+
+    undone = _undo(client, run_id, token, undo["decisionId"], csrf=csrf)
+    assert undone.status_code == 200  # type: ignore[attr-defined]
+    # A key outside the namespace stays allowed for label undos.
+    other = _decide(client, run_id, token, "S0", "exclude")["undo"]
+    assert isinstance(other, dict)
+    plain = _undo(client, run_id, token, other["decisionId"], csrf=csrf, nonce=uuid.uuid4().hex)
+    assert plain.status_code == 200  # type: ignore[attr-defined]
