@@ -15,6 +15,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   (`REVIEW_CLAIM_TTL_SECONDS`). With several operators (`VOXINT_MULTI_USER`),
   closing the editor still releases the claim right away so someone else can
   pick it up, and a reload in that mode can still lose it.
+- **Undoing an enrollment now archives the new speaker when nothing else
+  uses it** (#718). If you had also assigned that speaker to a single line
+  and then undid or replaced that line's change, the speaker used to stay
+  on your speaker list. Lines assigned to a speaker that was later merged
+  into this one now count as uses too, so that speaker is kept. Undoing a
+  line change that would bring back a speaker who has since been archived
+  now refuses with "Too late to undo" instead of reassigning the line to
+  that archived speaker.
+- **Restarting a run counts only line speaker changes still in effect**
+  (#718). A line that was changed and then undone used to count as two
+  rulings, and the restart asked you to confirm voiding them. It now counts
+  none, and a run with no other rulings restarts without that prompt.
 - **The editor catches up after "Too late to undo"** (#718). When an undo is
   refused because the change was made again elsewhere (another tab, or
   another operator), the editor now reloads the recording's speakers and
