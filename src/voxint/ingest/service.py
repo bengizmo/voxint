@@ -1070,8 +1070,11 @@ def restart_impact(
 
     Voided decisions (those with a matching REVOKE) and REVOKE rows
     themselves are excluded from counts so runs whose decisions have
-    already been revoked report accurate active-decision counts.
+    already been revoked report accurate active-decision counts. The
+    segment-scope count is of effective overrides: scopes whose newest row
+    is an ASSIGN.
     """
+    from voxint.adjudication.resolver import newest_in_scope
     from voxint.db.models import (
         AdjudicationDecision,
         Decision,
@@ -1126,6 +1129,11 @@ def restart_impact(
             derived_embeddings=0,
         )
 
+    # Effective overrides only (issue #718): scopes whose newest row is an
+    # ASSIGN, as segment_states reduces them. An assign then its undo leaves none.
+    # A word range that no longer matches a current split child still counts,
+    # as it would apply again if that boundary returned. The
+    # superseded rows are still voided before the segments are deleted.
     segment_scope = (
         session.scalar(
             select(func.count())
@@ -1133,7 +1141,11 @@ def restart_impact(
             .where(
                 AdjudicationDecision.pipeline_run_id == run_id,
                 AdjudicationDecision.transcript_segment_id.is_not(None),
+                AdjudicationDecision.decision == Decision.ASSIGN.value,
+                AdjudicationDecision.speaker_id.is_not(None),
                 AdjudicationDecision.id.not_in(revoked_ids),
+                AdjudicationDecision.detached_at.is_(None),
+                newest_in_scope(AdjudicationDecision),
             )
         )
         or 0

@@ -16,11 +16,11 @@ an INHERIT. Newest-wins then yields the pre-ruling state.
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from voxint.adjudication.ledger import ConflictingReplayError, record_decision
-from voxint.adjudication.resolver import effective_decisions
+from voxint.adjudication.resolver import effective_decisions, newest_in_scope
 from voxint.adjudication.splits import child_ranges
 from voxint.db.models import (
     AdjudicationDecision,
@@ -29,7 +29,13 @@ from voxint.db.models import (
     SpeakerEmbedding,
     TranscriptSegment,
 )
-from voxint.speakers.roster import archive_speaker
+from voxint.speakers.roster import (
+    alias_ids,
+    archive_speaker,
+    canonicalize,
+    is_active,
+    merge_map,
+)
 
 
 class UndoError(Exception):
@@ -56,14 +62,25 @@ def _revoke_for(
 
 
 def _has_live_decisions(session: Session, speaker_id: uuid.UUID) -> bool:
-    """Whether any label- or segment-scope speaker ruling remains active."""
+    """Whether any label- or segment-scope speaker ruling remains active.
+
+    Rulings stored against a merged tombstone count for the identity it
+    merged into. A label-scope ruling stays live until it is voided, because
+    revoking a newer label ruling brings the older one back. A segment-scope
+    ruling counts only while it is the newest in its exact scope (issue #718):
+    a later ruling or an undo's compensating row supersedes it, and an undo
+    that would re-assert it refuses an archived speaker (see
+    :func:`undo_segment_decision`).
+    """
     ruling = aliased(AdjudicationDecision)
     revoke = aliased(AdjudicationDecision)
     count = session.execute(
         select(func.count())
         .select_from(ruling)
         .where(
-            ruling.speaker_id == speaker_id,
+            ruling.speaker_id.in_(alias_ids(session, speaker_id)),
+            ruling.detached_at.is_(None),
+            or_(ruling.transcript_segment_id.is_(None), newest_in_scope(ruling)),
             ~select(revoke.id)
             .where(
                 revoke.decision == Decision.REVOKE.value,
@@ -358,6 +375,17 @@ def undo_segment_decision(
 
     if position != 0:
         raise UndoDriftError("this segment's speaker was changed again after this ruling")
+    if restore_speaker is not None:
+        # The relabel route only assigns active roster identities; an undo must
+        # not re-assert one archived since (an enrollment undo can archive the
+        # speaker a superseded ruling named). Check the canonical identity but
+        # write the historical id, which the replay comparison above expects.
+        restored = session.get(Speaker, canonicalize(restore_speaker, merge_map(session)))
+        if restored is None or not is_active(restored):
+            raise UndoDriftError(
+                "the speaker this segment had before is archived; restore them"
+                " from the speaker list, then undo again"
+            )
     segment = session.get(TranscriptSegment, original.transcript_segment_id)
     if segment is None:
         # Unreachable while the FK's ON DELETE SET NULL detaches rulings (0066);

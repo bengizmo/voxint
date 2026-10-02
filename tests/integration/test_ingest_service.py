@@ -1407,6 +1407,126 @@ def test_restart_blocked_by_word_range_ruling(
         assert exc_info.value.impact.requires_void
 
 
+def _segment_ruling(
+    session: Session,
+    run_id: uuid.UUID,
+    segment_id: uuid.UUID,
+    decision: str,
+    speaker_id: uuid.UUID | None = None,
+    word_range: tuple[int, int] | None = None,
+) -> uuid.UUID:
+    """Record one segment-scope ruling in its own transaction.
+
+    created_at is the transaction start, so one commit per ruling keeps the
+    newest-wins order deterministic. The row is inserted directly because these
+    segments carry no word timings for the ledger's word-range validation.
+    """
+    from voxint.db.models import AdjudicationDecision
+
+    row = AdjudicationDecision(
+        pipeline_run_id=run_id,
+        diarization_label="S0",
+        decision=decision,
+        operator="reviewer",
+        idempotency_key=uuid.uuid4().hex,
+        speaker_id=speaker_id,
+        transcript_segment_id=segment_id,
+        start_word_index=word_range[0] if word_range else None,
+        end_word_index=word_range[1] if word_range else None,
+    )
+    session.add(row)
+    session.commit()
+    return row.id
+
+
+def test_restart_impact_ignores_an_undone_segment_ruling(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Assign then undo leaves no override in effect, so nothing gates the
+    restart; the two rows are still voided and detached so the segments go."""
+    from voxint.adjudication.undo import undo_segment_decision
+    from voxint.db.models import AdjudicationDecision, Decision, Speaker
+    from voxint.ingest import restart_impact
+
+    with session_factory() as session:
+        run_id, seg_ids = _completed_run_with_segments(session, "incoming/restart-undone.wav")
+        speaker = Speaker(display_name="test-spk")
+        session.add(speaker)
+        session.commit()
+        assigned = _segment_ruling(session, run_id, seg_ids[0], "assign", speaker.id)
+        undo_segment_decision(
+            session,
+            run_id=run_id,
+            decision_id=assigned,
+            operator="reviewer",
+            idempotency_key=uuid.uuid4().hex,
+            grace_seconds=300,
+        )
+        session.commit()
+
+    with session_factory() as session:
+        impact = restart_impact(session, run_id)
+        assert impact.segment_scope_decisions == 0
+        assert not impact.requires_void
+
+        result = restart_run(session, run_id)
+        session.commit()
+        assert result.status is RunStatus.QUEUED
+
+    with session_factory() as session:
+        rulings = session.execute(
+            select(AdjudicationDecision).where(
+                AdjudicationDecision.pipeline_run_id == run_id,
+                AdjudicationDecision.decision != Decision.REVOKE.value,
+            )
+        ).scalars().all()
+        assert len(rulings) == 2
+        assert all(r.transcript_segment_id is None for r in rulings)
+        assert all(r.detached_at is not None for r in rulings)
+        revoked = set(
+            session.execute(
+                select(AdjudicationDecision.voids_decision_id).where(
+                    AdjudicationDecision.pipeline_run_id == run_id,
+                    AdjudicationDecision.decision == Decision.REVOKE.value,
+                )
+            ).scalars()
+        )
+        assert revoked == {r.id for r in rulings}
+
+
+def test_restart_impact_counts_one_override_per_scope(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Only the newest row per exact scope counts, and only when it assigns."""
+    from voxint.db.models import Speaker
+    from voxint.ingest import RunRestartVoidRequiredError
+
+    with session_factory() as session:
+        run_id, seg_ids = _completed_run_with_segments(
+            session, "incoming/restart-per-scope.wav", segment_count=3
+        )
+        alice = Speaker(display_name="test-alice")
+        bob = Speaker(display_name="test-bob")
+        session.add_all([alice, bob])
+        session.commit()
+        # Segment 0: re-ruled to another speaker, one override in effect.
+        _segment_ruling(session, run_id, seg_ids[0], "assign", alice.id)
+        _segment_ruling(session, run_id, seg_ids[0], "assign", bob.id)
+        # A word range of segment 0 is its own scope.
+        _segment_ruling(session, run_id, seg_ids[0], "assign", alice.id, (0, 1))
+        # Segment 1: reset after an assign, nothing in effect.
+        _segment_ruling(session, run_id, seg_ids[1], "assign", alice.id)
+        _segment_ruling(session, run_id, seg_ids[1], "inherit")
+        # Segment 2: reset, then assigned again.
+        _segment_ruling(session, run_id, seg_ids[2], "inherit")
+        _segment_ruling(session, run_id, seg_ids[2], "assign", bob.id)
+
+    with session_factory() as session:
+        with pytest.raises(RunRestartVoidRequiredError) as exc_info:
+            restart_run(session, run_id)
+        assert exc_info.value.impact.segment_scope_decisions == 3
+
+
 def test_restart_blocked_by_enrichment_evidence(
     session_factory: sessionmaker[Session],
 ) -> None:
