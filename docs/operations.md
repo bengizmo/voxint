@@ -1778,8 +1778,9 @@ With a voice and a name it runs one transaction and reports each effect:
 - The name belongs to an active speaker on the roster: the label is assigned to
   that speaker. Naming a voice with the name it already has changes nothing.
 - The voice is a placeholder, a `Voice N` speaker that Voxint created
-  automatically and nobody has renamed: the speaker is renamed and the label
-  gets a human assignment. The output says how many other recordings carry
+  automatically (not one it merely matched) and nobody has renamed: the
+  speaker is renamed and the label gets a human assignment, whichever way
+  the label reached that speaker. The output says how many other recordings carry
   that speaker, because the rename applies there too.
 - Otherwise a new speaker is enrolled from the voice's audio, as the console's
   enroll action does. A voice with no usable audio cannot be enrolled.
@@ -1789,8 +1790,8 @@ review claim on the run, you included (a command-line claim would log the
 console tab out of its review); the voice is unknown or ambiguous; the name
 belongs to a merged or archived speaker. The command never claims the run.
 
-Undo in the console reverts an assignment. A rename stays, as it does when
-you rename on the roster page.
+A later ruling in the console supersedes the assignment. A rename stays, as
+it does when you rename on the roster page.
 
 ## Deduplicating the speaker roster
 

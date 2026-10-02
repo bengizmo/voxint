@@ -18,7 +18,7 @@ import re
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import or_, select
+from sqlalchemy import String, and_, cast, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from voxint.activity import record_speaker_identified
@@ -27,11 +27,19 @@ from voxint.adjudication.ledger import record_decision
 from voxint.adjudication.resolver import LabelState, label_states, newest_in_scope
 from voxint.adjudication.slots import ClaimUnavailableError, require_unclaimed
 from voxint.adjudication.transcript import label_display_name
-from voxint.db.models import AdjudicationDecision, Decision, PipelineRun, Speaker, SpeakerAssignment
+from voxint.db.models import (
+    AdjudicationDecision,
+    AutoEnrollEvidence,
+    Decision,
+    PipelineRun,
+    Speaker,
+    SpeakerAssignment,
+)
 from voxint.speakers.auto_enroll import NAME_PREFIX
 from voxint.speakers.matching import MatchingGates
 from voxint.speakers.roster import (
     RosterError,
+    alias_ids,
     describe_name_owner,
     is_active,
     normalize_display_name,
@@ -90,20 +98,92 @@ def _resolve(states: list[LabelState], voice: str) -> LabelState:
 
 
 def _other_runs(session: Session, run_id: uuid.UUID, speaker_id: uuid.UUID) -> int:
+    """Approximate rename impact in two queries, including canonical aliases.
+
+    Count current label rulings, latest segment/range rulings and unopposed
+    grounded machine assignments. This is not a transcript projection: it does
+    not check surviving split geometry or whether overrides cover all text.
+    Machine fallback conservatively requires no label ledger history at all.
+    """
+    ids = alias_ids(session, speaker_id)
     ruling = aliased(AdjudicationDecision)
+    newer = aliased(AdjudicationDecision)
     revoke = aliased(AdjudicationDecision)
+    newer_revoke = aliased(AdjudicationDecision)
+    newer_label = (
+        select(newer.id)
+        .where(
+            newer.pipeline_run_id == ruling.pipeline_run_id,
+            newer.diarization_label == ruling.diarization_label,
+            newer.transcript_segment_id.is_(None),
+            newer.detached_at.is_(None),
+            newer.decision != Decision.REVOKE.value,
+            ~select(newer_revoke.id).where(newer_revoke.voids_decision_id == newer.id).exists(),
+            or_(
+                newer.created_at > ruling.created_at,
+                and_(newer.created_at == ruling.created_at, newer.id > ruling.id),
+            ),
+        )
+        .exists()
+    )
     live = select(ruling.pipeline_run_id).where(
-        ruling.speaker_id == speaker_id,
+        ruling.speaker_id.in_(ids),
         ruling.pipeline_run_id != run_id,
         ruling.detached_at.is_(None),
-        or_(ruling.transcript_segment_id.is_(None), newest_in_scope(ruling)),
+        ruling.decision.in_((Decision.ASSIGN.value, Decision.AUTO_ENROLL.value)),
+        or_(
+            and_(ruling.transcript_segment_id.is_(None), ~newer_label),
+            and_(ruling.transcript_segment_id.is_not(None), newest_in_scope(ruling)),
+        ),
         ~select(revoke.id).where(revoke.voids_decision_id == ruling.id).exists(),
     )
     machine = select(SpeakerAssignment.pipeline_run_id).where(
-        SpeakerAssignment.speaker_id == speaker_id,
+        SpeakerAssignment.speaker_id.in_(ids),
         SpeakerAssignment.pipeline_run_id != run_id,
+        SpeakerAssignment.grounded.is_(True),
+        SpeakerAssignment.method == "cosine",
+        ~select(AdjudicationDecision.id)
+        .where(
+            AdjudicationDecision.pipeline_run_id == SpeakerAssignment.pipeline_run_id,
+            AdjudicationDecision.diarization_label == SpeakerAssignment.diarization_label,
+            AdjudicationDecision.transcript_segment_id.is_(None),
+        )
+        .exists(),
     )
     return len(session.scalars(live.union(machine)).all())
+
+
+def _auto_created(session: Session, speaker_id: uuid.UUID) -> bool:
+    """Creation provenance belongs to the identity, not its current label."""
+    return bool(
+        session.scalar(
+            select(
+                select(AdjudicationDecision.id)
+                .join(
+                    AutoEnrollEvidence,
+                    and_(
+                        AutoEnrollEvidence.pipeline_run_id == AdjudicationDecision.pipeline_run_id,
+                        AutoEnrollEvidence.diarization_label
+                        == AdjudicationDecision.diarization_label,
+                        AutoEnrollEvidence.decision == "created",
+                    ),
+                )
+                .where(
+                    AdjudicationDecision.speaker_id == speaker_id,
+                    AdjudicationDecision.decision == Decision.AUTO_ENROLL.value,
+                    AdjudicationDecision.operator == "system:auto_enroll",
+                    AdjudicationDecision.idempotency_key
+                    == (
+                        "auto_enroll:"
+                        + cast(AdjudicationDecision.pipeline_run_id, String)
+                        + ":"
+                        + AdjudicationDecision.diarization_label
+                    ),
+                )
+                .exists()
+            )
+        )
+    )
 
 
 def name_voice(
@@ -152,12 +232,13 @@ def name_voice(
                 .execution_options(populate_existing=True)
             )
             placeholder = (
-                state.effective_decision is not None
-                and state.effective_decision.decision == Decision.AUTO_ENROLL.value
-                and speaker is not None
+                speaker is not None
                 and re.fullmatch(re.escape(NAME_PREFIX) + r"[0-9]+", speaker.display_name)
+                and _auto_created(session, speaker.id)
             )
             if placeholder and speaker is not None:
+                if not is_active(speaker):
+                    raise NamingError(describe_name_owner(speaker))
                 old_name = speaker.display_name
                 count = _other_runs(session, run_id, speaker.id)
                 speaker = rename_speaker(session, speaker.id, name)
@@ -194,7 +275,7 @@ def name_voice(
             )
             decision_id = row.id
         effects.append(f'assigned {state.label} -> "{name}"')
-        if activity_enabled and speaker.id != state.speaker_id:
+        if activity_enabled:
             record_speaker_identified(
                 session,
                 run_id=run_id,

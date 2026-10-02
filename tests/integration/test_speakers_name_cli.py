@@ -15,7 +15,16 @@ from voxint.adjudication.slots import claim_run
 from voxint.adjudication.transcript import attributed_transcript
 from voxint.adjudication.undo import undo_decision
 from voxint.cli import main
-from voxint.db.models import AdjudicationDecision, Decision, PipelineRun, Speaker
+from voxint.db.models import (
+    ActivityEvent,
+    AdjudicationDecision,
+    AutoEnrollEvidence,
+    Decision,
+    PipelineRun,
+    Speaker,
+    SpeakerAssignment,
+    SpeakerEmbedding,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -49,6 +58,7 @@ def rule(
     speaker: Speaker,
     decision: Decision = Decision.ASSIGN,
     label: str = "SPEAKER_00",
+    evidence: str = "created",
 ) -> None:
     record_decision(
         session,
@@ -57,8 +67,22 @@ def rule(
         speaker_id=speaker.id,
         decision=decision,
         operator="system:auto_enroll" if decision == Decision.AUTO_ENROLL else "seed",
-        idempotency_key=str(uuid.uuid4()),
+        idempotency_key=(
+            f"auto_enroll:{run}:{label}" if decision == Decision.AUTO_ENROLL else str(uuid.uuid4())
+        ),
     )
+
+    if decision == Decision.AUTO_ENROLL:
+        session.add(
+            AutoEnrollEvidence(
+                pipeline_run_id=run,
+                diarization_label=label,
+                decision=evidence,
+                reason="synthetic",
+                top_speaker_id=speaker.id if evidence == "linked" else None,
+                similarity=0.99 if evidence == "linked" else None,
+            )
+        )
 
 
 def invoke(run: uuid.UUID, voice: str = "SPEAKER_00", name: str = "Sam") -> int:
@@ -164,7 +188,7 @@ def test_placeholder_detection(
         rule(s, run, speaker, decision)
         other = make_completed_run(s)
         add_turn(s, other, 0, "SPEAKER_00")
-        rule(s, other, speaker, Decision.AUTO_ENROLL)
+        rule(s, other, speaker, Decision.AUTO_ENROLL, evidence="linked")
         s.commit()
     assert invoke(run) == 0
     out = capsys.readouterr().out
@@ -349,7 +373,8 @@ def test_other_recording_count(
 
 @pytest.mark.parametrize("name", ["", "   ", "S" * 121])
 def test_invalid_name(
-    session_factory: sessionmaker[Session], name: str,
+    session_factory: sessionmaker[Session],
+    name: str,
 ) -> None:
     with session_factory() as s:
         run = _seed_completed_run(s)
@@ -362,7 +387,8 @@ def test_invalid_name(
 
 
 def test_reserved_operator(
-    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("VOXINT_USER", "system:auto_enroll")
     with session_factory() as s:
@@ -396,3 +422,132 @@ def test_unclaimed_holds_run_lock(session_factory: sessionmaker[Session]) -> Non
         assert snapshot(s) == before
         row = s.get(PipelineRun, run)
         assert row is not None and row.review_claim_token is None
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_identity_creation_provenance(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    linked: bool,
+) -> None:
+    monkeypatch.setenv("CONSOLE_ACTIVITY_ENABLED", "true")
+    with session_factory() as s:
+        origin = make_completed_run(s)
+        run = make_completed_run(s)
+        add_turn(s, run, 0, "SPEAKER_00")
+        speaker = Speaker(display_name="Voice 7" if linked else "Voice 3")
+        s.add(speaker)
+        s.flush()
+        old_id = speaker.id
+        if linked:
+            rule(s, run, speaker, Decision.AUTO_ENROLL, evidence="linked")
+        else:
+            rule(s, origin, speaker, Decision.AUTO_ENROLL)
+            s.add(
+                SpeakerAssignment(
+                    pipeline_run_id=run,
+                    diarization_label="SPEAKER_00",
+                    speaker_id=old_id,
+                    method="cosine",
+                    grounded=True,
+                )
+            )
+        s.commit()
+        if not linked:
+            assert label_states(s, run)[0].effective_decision is None
+            assert label_states(s, run)[0].speaker_id == old_id
+    assert invoke(run) == 0
+    out = capsys.readouterr().out
+    assert "a later ruling in the console supersedes this assignment; the rename stays" in out
+    with session_factory() as s:
+        rows, speakers = snapshot(s)
+        assert len(rows) == 2 and len(speakers) == (2 if linked else 1)
+        old = s.get(Speaker, old_id)
+        assert old is not None and old.display_name == ("Voice 7" if linked else "Sam")
+        current = label_states(s, run)[0]
+        assert current.speaker_name == "Sam"
+        assert (current.speaker_id == old_id) == (not linked)
+        assert current.effective_decision is not None
+        assert current.effective_decision.decision == "assign"
+        events = list(s.scalars(select(ActivityEvent)))
+        assert len(events) == 1 and events[0].title == "Sam"
+        assert events[0].occurrence_key == f"decision:{current.effective_decision.id}:identified"
+
+
+@pytest.mark.parametrize("mode", ["superseded", "ungrounded", "alias", "opposed"])
+def test_current_impact_count(session_factory: sessionmaker[Session], mode: str) -> None:
+    from voxint.adjudication.naming import _other_runs
+
+    with session_factory() as s:
+        run, other = make_completed_run(s), make_completed_run(s)
+        speaker, bob = Speaker(display_name="Voice 3"), Speaker(display_name="Bob")
+        s.add_all([speaker, bob])
+        s.flush()
+        if mode == "alias":
+            alias = Speaker(
+                display_name="Alex", merged_into_id=speaker.id, merged_at=datetime.now(UTC)
+            )
+            s.add(alias)
+            s.flush()
+            rule(s, other, alias)
+        elif mode == "superseded":
+            rule(s, other, speaker)
+            s.commit()
+            rule(s, other, bob)
+        else:
+            s.add(
+                SpeakerAssignment(
+                    pipeline_run_id=other,
+                    diarization_label="SPEAKER_00",
+                    speaker_id=speaker.id,
+                    method="cosine",
+                    grounded=mode != "ungrounded",
+                )
+            )
+            if mode == "opposed":
+                rule(s, other, bob)
+        s.commit()
+        before = snapshot(s)
+        assert _other_runs(s, run, speaker.id) == int(mode == "alias")
+        assert snapshot(s) == before
+
+
+def test_own_current_name_noop(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as s:
+        run = _seed_completed_run(s)
+        speaker = Speaker(display_name="Voice 3")
+        s.add(speaker)
+        s.flush()
+        rule(s, run, speaker, Decision.AUTO_ENROLL)
+        s.commit()
+        before = snapshot(s)
+    assert invoke(run, voice="Voice 3", name="Voice 3") == 0
+    with session_factory() as s:
+        assert snapshot(s) == before
+        assert list(s.scalars(select(ActivityEvent))) == []
+
+
+def test_enroll_rollback(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CONSOLE_ACTIVITY_ENABLED", "true")
+    with session_factory() as s:
+        run = make_completed_run(s)
+        add_turn(s, run, 0, "SPEAKER_00")
+        s.commit()
+        before = snapshot(s)
+
+    def fail(session: Session, **kwargs: object) -> None:
+        assert session.scalar(select(Speaker.display_name)) == "Sam"
+        assert session.scalar(select(SpeakerEmbedding.id)) is not None
+        assert session.scalar(select(AdjudicationDecision.id)) is not None
+        raise RuntimeError("synthetic failure after enrollment")
+
+    monkeypatch.setattr("voxint.adjudication.naming.record_speaker_identified", fail)
+    assert invoke(run) == 1
+    with session_factory() as s:
+        assert snapshot(s) == before
+        assert list(s.scalars(select(SpeakerEmbedding))) == []
+        assert list(s.scalars(select(ActivityEvent))) == []

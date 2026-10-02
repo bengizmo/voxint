@@ -442,3 +442,20 @@ Refinements made while implementing, all inside the rules above:
   on `.txt` answers 422. No writes, so no reconcile; teardown left the tree
   clean.
 - The header carries the title only. The date arrives with slice 5.
+
+### Slice 3 implementation notes (2026-10-02)
+
+- **Placeholder provenance.** "Created by an `AUTO_ENROLL` ledger decision"
+  is read as created, not linked: auto-enrollment also writes `AUTO_ENROLL`
+  rulings when it links an existing speaker, so the test is the speaker's
+  own provenance (an `auto_enroll_evidence` row with decision `created` for
+  the run and label whose `AUTO_ENROLL` ruling names the speaker) plus a
+  name that still matches `Voice N`, whichever way the current label reached
+  that speaker (a grounded cosine match included). Found by the review panel
+  (3 of 3).
+- **Other recordings.** The count reports recordings where the speaker, or
+  a merged alias of it, is the current attribution of some label; superseded
+  rulings and ungrounded machine assignments do not count.
+- **Undo wording.** The console offers undo only right after its own
+  action, so the command says a later ruling supersedes the assignment and
+  the rename stays, rather than promising an undo.

@@ -1528,8 +1528,10 @@ def _speakers_name(args: argparse.Namespace) -> int:
                     operator=settings.voxint_user, gates=gates_from_settings(settings),
                     activity_enabled=settings.console_activity_enabled,
                 )
-                lines = [*result.effects,
-                         "undo in the console reverts the assignment; a rename stays"]
+                lines = [
+                    *result.effects,
+                    "a later ruling in the console supersedes this assignment; the rename stays",
+                ]
         for line in lines:
             print(line.replace("\u2014", ";"))
         return 0
