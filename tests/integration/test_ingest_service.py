@@ -1459,7 +1459,7 @@ def test_restart_impact_ignores_an_undone_segment_ruling(
             run_id=run_id,
             decision_id=assigned,
             operator="reviewer",
-            idempotency_key=uuid.uuid4().hex,
+            idempotency_key=f"undo:{assigned}",
             grace_seconds=300,
         )
         session.commit()

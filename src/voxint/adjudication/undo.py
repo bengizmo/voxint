@@ -19,7 +19,11 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, aliased
 
-from voxint.adjudication.ledger import ConflictingReplayError, record_decision
+from voxint.adjudication.ledger import (
+    UNDO_KEY_PREFIX,
+    ConflictingReplayError,
+    record_decision,
+)
 from voxint.adjudication.resolver import effective_decisions, newest_in_scope
 from voxint.adjudication.splits import child_ranges
 from voxint.db.models import (
@@ -117,6 +121,21 @@ def _archive_if_orphaned(
     return True
 
 
+def undo_key(decision_id: uuid.UUID) -> str:
+    """The idempotency key of the undo of ruling ``decision_id``."""
+    return f"{UNDO_KEY_PREFIX}{decision_id}"
+
+
+def _check_label_undo_key(idempotency_key: str, decision_id: uuid.UUID) -> None:
+    """A label-scope undo may use any key outside the undo namespace, but one
+    inside it must name this ruling. Otherwise a REVOKE could take a segment
+    ruling's undo key, and that ruling could never be undone (#726)."""
+    if idempotency_key.startswith(UNDO_KEY_PREFIX) and idempotency_key != undo_key(
+        decision_id
+    ):
+        raise ConflictingReplayError(idempotency_key)
+
+
 def _append_revoke(
     session: Session,
     *,
@@ -134,6 +153,7 @@ def _append_revoke(
         idempotency_key=idempotency_key,
         voids_decision_id=original.id,
         user_id=user_id,
+        is_undo=True,
     )
 
 
@@ -149,6 +169,7 @@ def undo_enrollment(
     original = session.get(AdjudicationDecision, decision_id)
     if original is None:
         raise UndoError(f"no adjudication decision {decision_id}")
+    _check_label_undo_key(idempotency_key, decision_id)
     if (
         original.pipeline_run_id != run_id
         or original.transcript_segment_id is not None
@@ -222,6 +243,7 @@ def undo_decision(
     original = session.get(AdjudicationDecision, decision_id)
     if original is None:
         raise UndoError(f"no adjudication decision {decision_id}")
+    _check_label_undo_key(idempotency_key, decision_id)
     if (
         original.pipeline_run_id != run_id
         or original.transcript_segment_id is not None
@@ -330,10 +352,16 @@ def undo_segment_decision(
     docstring). Replaying the same ``idempotency_key`` returns the compensating
     row it already wrote, even after the grace window, so a retried request
     whose first attempt committed reports success.
+
+    The key must be ``undo:<decision_id>``. The compensating row records no link
+    to the ruling it undoes, so the key is that link: a ruling is undone at most
+    once, and only undo writes may store a key in that namespace (#726).
     """
     original = session.get(AdjudicationDecision, decision_id)
     if original is None:
         raise UndoError(f"no adjudication decision {decision_id}")
+    if idempotency_key != undo_key(decision_id):
+        raise ConflictingReplayError(idempotency_key)
     if original.pipeline_run_id != run_id:
         raise UndoError("only a segment-scope ruling from this run can be undone")
     if original.detached_at is not None:
@@ -419,6 +447,7 @@ def undo_segment_decision(
         start_word_index=original.start_word_index,
         end_word_index=original.end_word_index,
         user_id=user_id,
+        is_undo=True,
     )
     session.flush()
     return {

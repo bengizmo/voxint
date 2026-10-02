@@ -30,7 +30,9 @@ from voxint.adjudication.undo import (
     UndoDriftError,
     UndoError,
     UndoExpiredError,
+    undo_decision,
     undo_enrollment,
+    undo_key,
     undo_segment_decision,
 )
 from voxint.api.app import create_app
@@ -142,7 +144,7 @@ def _undo(
     session: Session,
     seeded: _Seeded,
     decision_id: uuid.UUID,
-    key: str = "undo-segment",
+    key: str | None = None,
     grace_seconds: float = _GRACE,
 ) -> dict[str, object]:
     result = undo_segment_decision(
@@ -150,7 +152,7 @@ def _undo(
         run_id=seeded.run_id,
         decision_id=decision_id,
         operator="ben",
-        idempotency_key=key,
+        idempotency_key=key or undo_key(decision_id),
         grace_seconds=grace_seconds,
     )
     session.commit()
@@ -368,9 +370,9 @@ def test_undo_replays_its_key_even_after_the_window(
     seeded = _seed(session_factory)
     with session_factory() as session:
         original = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
-        first = _undo(session, seeded, original.id, key="undo-once")
+        first = _undo(session, seeded, original.id)
 
-        replay = _undo(session, seeded, original.id, key="undo-once", grace_seconds=0)
+        replay = _undo(session, seeded, original.id, grace_seconds=0)
 
         assert replay["is_replay"] is True
         assert replay["compensating_decision_id"] == first["compensating_decision_id"]
@@ -393,10 +395,10 @@ def test_undo_refuses_a_key_already_used_elsewhere(
         second = _rule(
             session, seeded, Decision.ASSIGN, speaker_id=seeded.alice, word_range=(2, 4)
         )
-        _undo(session, seeded, first.id, key="shared-key")
+        _undo(session, seeded, first.id)
 
         with pytest.raises(ConflictingReplayError):
-            _undo(session, seeded, second.id, key="shared-key")
+            _undo(session, seeded, second.id, key=undo_key(first.id))
         session.rollback()
         with pytest.raises(ConflictingReplayError):
             _undo(session, seeded, second.id, key=second.idempotency_key)
@@ -408,13 +410,147 @@ def test_undo_refuses_a_key_reused_for_another_ruling_in_the_same_scope(
     seeded = _seed(session_factory)
     with session_factory() as session:
         first = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
-        _undo(session, seeded, first.id, key="same-scope-key")
+        _undo(session, seeded, first.id)
         second = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
 
         with pytest.raises(ConflictingReplayError):
-            _undo(session, seeded, second.id, key="same-scope-key")
+            _undo(session, seeded, second.id, key=undo_key(first.id))
         session.rollback()
         assert _segment_speaker(session, seeded) == seeded.bob
+
+
+def test_an_undo_key_reused_for_an_older_ruling_is_refused(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # #726 item 4: X(Alice) -> Y(Bob) -> Z(Alice) -> W(Bob). Undoing W writes
+    # Alice, which is also what undoing Y would restore, so before the key was
+    # bound to the ruling, W's key passed as Y's replay and reported "Y undone".
+    seeded = _seed(session_factory)
+    with session_factory() as session:
+        _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
+        y = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
+        _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
+        w = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
+        undone_w = _undo(session, seeded, w.id)
+
+        with pytest.raises(ConflictingReplayError):
+            _undo(session, seeded, y.id, key=undo_key(w.id))
+        session.rollback()
+        # Y's own key is no replay either: Y is not the newest ruling.
+        with pytest.raises(UndoDriftError):
+            _undo(session, seeded, y.id)
+        session.rollback()
+
+        replay = _undo(session, seeded, w.id)
+        assert replay["is_replay"] is True
+        assert replay["compensating_decision_id"] == undone_w["compensating_decision_id"]
+        assert _segment_speaker(session, seeded) == seeded.alice
+
+
+def test_only_undo_writes_may_use_the_undo_key_namespace(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # A plain ruling stored under ``undo:<Z>`` would otherwise pass the replay
+    # check as Z's undo: it is newer than Z and can name Z's earlier speaker.
+    seeded = _seed(session_factory)
+    with session_factory() as session:
+        _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
+        z = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
+
+        with pytest.raises(ConflictingReplayError):
+            _rule(
+                session,
+                seeded,
+                Decision.ASSIGN,
+                speaker_id=seeded.bob,
+                key=undo_key(z.id),
+            )
+        session.rollback()
+
+        result = _undo(session, seeded, z.id)
+        assert result["is_replay"] is False
+        assert _compensation(session, result).idempotency_key == undo_key(z.id)
+
+
+def test_a_label_undo_cannot_take_a_segment_rulings_undo_key(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # A label-scope REVOKE stored under a segment ruling's undo key would make
+    # that ruling's undo a permanent 409, so label undos refuse it (#726).
+    seeded = _seed(session_factory)
+    with session_factory() as session:
+        label_rule = record_decision(
+            session,
+            pipeline_run_id=seeded.run_id,
+            diarization_label="S0",
+            decision=Decision.ASSIGN,
+            operator="ben",
+            idempotency_key=uuid.uuid4().hex,
+            speaker_id=seeded.bob,
+        )
+        session.commit()
+        _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
+        ruling = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
+
+        with pytest.raises(ConflictingReplayError):
+            undo_decision(
+                session,
+                run_id=seeded.run_id,
+                decision_id=label_rule.id,
+                operator="ben",
+                idempotency_key=undo_key(ruling.id),
+                grace_seconds=_GRACE,
+            )
+        session.rollback()
+
+        assert _undo(session, seeded, ruling.id)["is_replay"] is False
+        assert _segment_speaker(session, seeded) == seeded.bob
+
+
+def test_a_row_under_the_undo_key_that_is_not_this_undo_is_refused(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # The replay checks stay as a backstop for a row no current writer can put
+    # there (one written before the namespace was reserved): it must be this
+    # ruling's compensation, not just any row under the key.
+    seeded = _seed(session_factory)
+    with session_factory() as session:
+        _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
+        ruling = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
+        record_decision(
+            session,
+            pipeline_run_id=seeded.run_id,
+            diarization_label="S0",
+            decision=Decision.INHERIT,
+            operator="ben",
+            idempotency_key=undo_key(ruling.id),
+            transcript_segment_id=seeded.segment_id,
+            is_undo=True,
+        )
+        session.commit()
+
+        with pytest.raises(ConflictingReplayError):
+            _undo(session, seeded, ruling.id)
+
+
+def test_undoing_an_undo_redoes_the_ruling(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # The compensating row is a ruling of its own with its own key, so the
+    # derived key never blocks undo, redo, undo.
+    seeded = _seed(session_factory)
+    with session_factory() as session:
+        _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
+        later = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
+        undone = _undo(session, seeded, later.id)
+        compensation = _compensation(session, undone)
+
+        redone = _undo(session, seeded, compensation.id)
+        assert _segment_speaker(session, seeded) == seeded.bob
+        undone_again = _undo(session, seeded, _compensation(session, redone).id)
+
+        assert undone_again["is_replay"] is False
+        assert _segment_speaker(session, seeded) == seeded.alice
 
 
 def test_a_replay_after_a_later_ruling_reports_the_undo_it_already_did(
@@ -425,10 +561,10 @@ def test_a_replay_after_a_later_ruling_reports_the_undo_it_already_did(
     seeded = _seed(session_factory)
     with session_factory() as session:
         original = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.alice)
-        first = _undo(session, seeded, original.id, key="retried")
+        first = _undo(session, seeded, original.id)
         _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
 
-        replay = _undo(session, seeded, original.id, key="retried")
+        replay = _undo(session, seeded, original.id)
 
         assert replay["is_replay"] is True
         assert replay["compensating_decision_id"] == first["compensating_decision_id"]
@@ -788,8 +924,13 @@ def _post_undo(
     decision_id: str,
     *,
     csrf: str | None = "valid",
+    nonce: str | None = None,
 ) -> object:
-    data = {"token": token, "decision_id": decision_id, "nonce": f"undo:{decision_id}"}
+    data = {
+        "token": token,
+        "decision_id": decision_id,
+        "nonce": nonce or f"undo:{decision_id}",
+    }
     if csrf is not None:
         data["csrf_token"] = (
             mint_csrf_token(_CSRF_KEY, CSRF_CLAIM) if csrf == "valid" else csrf
@@ -1021,3 +1162,48 @@ def test_run_labels_returns_server_truth_without_a_claim(
 
 def test_run_labels_is_a_404_for_an_unknown_run(client: TestClient) -> None:
     assert client.get(f"/review/{uuid.uuid4()}/labels").status_code == 404
+
+
+def test_undo_with_a_key_for_another_ruling_is_a_409(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    seeded = _seed(session_factory)
+    token = _claim(client, seeded.run_id)
+    first = _relabel(client, seeded, token, seeded.alice)["undo"]
+    second = _relabel(client, seeded, token, seeded.bob)["undo"]
+    assert isinstance(first, dict) and isinstance(second, dict)
+
+    resp = _post_undo(
+        client, seeded, token, second["decisionId"], nonce=f"undo:{first['decisionId']}"
+    )
+
+    assert resp.status_code == 409  # type: ignore[attr-defined]
+    assert "x-voxint-conflict" not in resp.headers  # type: ignore[attr-defined]
+    with session_factory() as session:
+        assert _segment_speaker(session, seeded) == seeded.bob
+        assert _compensations(session, seeded) == 0
+
+
+def test_a_relabel_cannot_take_a_key_in_the_undo_namespace(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    seeded = _seed(session_factory)
+    token = _claim(client, seeded.run_id)
+    first = _relabel(client, seeded, token, seeded.alice)["undo"]
+    assert isinstance(first, dict)
+
+    resp = client.post(
+        f"/review/{seeded.run_id}/segments/{seeded.segment_id}/relabel",
+        data={
+            "token": token,
+            "nonce": f"undo:{first['decisionId']}",
+            "action": "assign",
+            "speaker_id": str(seeded.bob),
+        },
+        headers={"Accept": "application/json"},
+    )
+
+    assert resp.status_code == 409
+    with session_factory() as session:
+        assert _segment_speaker(session, seeded) == seeded.alice
+        assert _compensations(session, seeded) == 0
