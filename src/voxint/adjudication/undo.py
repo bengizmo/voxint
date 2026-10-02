@@ -46,6 +46,11 @@ class UndoDriftError(UndoError):
     """A label was re-ruled after the action."""
 
 
+class UndoArchivedSpeakerError(UndoDriftError):
+    """The undo would restore a speaker archived since. Restoring that speaker
+    makes the undo possible again within the grace window."""
+
+
 class UndoExpiredError(UndoError):
     """The undo grace window has passed."""
 
@@ -382,7 +387,7 @@ def undo_segment_decision(
         # write the historical id, which the replay comparison above expects.
         restored = session.get(Speaker, canonicalize(restore_speaker, merge_map(session)))
         if restored is None or not is_active(restored):
-            raise UndoDriftError(
+            raise UndoArchivedSpeakerError(
                 "the speaker this segment had before is archived; restore them"
                 " from the speaker list, then undo again"
             )

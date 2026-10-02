@@ -26,6 +26,7 @@ from voxint.adjudication.resolver import (
     word_range_states,
 )
 from voxint.adjudication.undo import (
+    UndoArchivedSpeakerError,
     UndoDriftError,
     UndoError,
     UndoExpiredError,
@@ -47,7 +48,7 @@ from voxint.db.models import (
     SpeakerEmbedding,
     TranscriptSegment,
 )
-from voxint.speakers.roster import archive_speaker
+from voxint.speakers.roster import archive_speaker, restore_speaker
 
 CREDS = ("reviewer", "s3cret")
 _CSRF_KEY = "segment-undo-test-csrf-key"
@@ -595,7 +596,7 @@ def test_undo_refuses_to_restore_an_archived_speaker(
         later = _rule(session, seeded, Decision.ASSIGN, speaker_id=seeded.bob)
         assert _undo_enrollment(session, seeded, enrolled) is True
 
-        with pytest.raises(UndoDriftError, match="archived"):
+        with pytest.raises(UndoArchivedSpeakerError, match="archived"):
             _undo(session, seeded, later.id)
         session.rollback()
         assert _segment_speaker(session, seeded) == seeded.bob
@@ -635,7 +636,7 @@ def test_undo_refuses_a_merged_speaker_whose_target_is_archived(
         archive_speaker(session, target.id)
         session.commit()
 
-        with pytest.raises(UndoDriftError, match="archived"):
+        with pytest.raises(UndoArchivedSpeakerError, match="archived"):
             _undo(session, seeded, later.id)
 
 
@@ -869,7 +870,7 @@ def test_undo_after_another_change_is_an_unmarked_409(
     assert "x-voxint-conflict" not in resp.headers  # type: ignore[attr-defined]
 
 
-def test_undo_that_would_restore_an_archived_speaker_is_an_unmarked_409(
+def test_undo_that_would_restore_an_archived_speaker_is_a_marked_409(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
     seeded = _seed(session_factory)
@@ -885,7 +886,21 @@ def test_undo_that_would_restore_an_archived_speaker_is_an_unmarked_409(
 
     assert resp.status_code == 409  # type: ignore[attr-defined]
     assert "archived" in resp.json()["detail"]  # type: ignore[attr-defined]
-    assert "x-voxint-conflict" not in resp.headers  # type: ignore[attr-defined]
+    assert (
+        resp.headers["x-voxint-conflict"] == "archived-speaker"  # type: ignore[attr-defined]
+    )
+
+    # Restoring the speaker makes the same undo succeed (the toast keeps its
+    # Undo button for this case).
+    with session_factory() as session:
+        restore_speaker(session, seeded.alice)
+        session.commit()
+
+    retried = _post_undo(client, seeded, token, undo["decisionId"])
+
+    assert retried.status_code == 200  # type: ignore[attr-defined]
+    with session_factory() as session:
+        assert _segment_speaker(session, seeded) == seeded.alice
 
 
 def test_undo_past_the_window_is_a_409(
