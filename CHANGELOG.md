@@ -81,6 +81,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   saying an undo failed now stays until you close it, instead of vanishing
   when the undo window runs out.
 
+### Changed
+- **The review console is typechecked with TypeScript 6** (#655, second
+  slice). The frontend toolchain moves to typescript 6.0.3 and
+  typescript-eslint 8.71.0. TypeScript 7 has to wait: its npm package ships
+  no compiler API, and typescript-eslint, which the lint step needs, does not
+  support it yet. Only typechecking and linting change: the built console is
+  byte-identical to a build with TypeScript 5.9.
+
 ## [0.50.0] - 2026-10-01
 
 ### Added
