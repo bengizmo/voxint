@@ -72,19 +72,27 @@ export function UndoToast({
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Auto-dismiss at the deadline, but not once the toast shows why an undo
-  // failed: that stays until the operator closes it (issue #718).
+  // failed: that stays until the operator closes it (issue #718). A retryable
+  // failure still watches the deadline, and past it says the window closed and
+  // drops the Undo button rather than offer an undo that can only fail.
   useEffect(() => {
-    if (error !== null) return;
+    if (error !== null && !retryable) return;
+    const expire = retryable
+      ? () => {
+          setError("Undo window expired.");
+          setRetryable(false);
+        }
+      : onDismiss;
     const ms = new Date(undo.expiresAt).getTime() - Date.now();
     if (ms <= 0) {
-      onDismiss();
+      expire();
       return;
     }
-    timerRef.current = setTimeout(onDismiss, ms);
+    timerRef.current = setTimeout(expire, ms);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [undo.expiresAt, onDismiss, error]);
+  }, [undo.expiresAt, onDismiss, error, retryable]);
 
   const doUndo = useCallback(async () => {
     if (busyRef.current || !claimCsrf) return;
@@ -113,9 +121,9 @@ export function UndoToast({
         onClaimLost();
         onDismiss();
       } else if (err instanceof ApiError && err.conflictKind === "archived-speaker") {
-        setError(
-          "Can't undo: the earlier speaker is archived. Restore them on the Speakers page, then undo again.",
-        );
+        // The server names the speaker to restore, which for a merged speaker
+        // is the one it was merged into.
+        setError(`Can't undo: ${err.detail}`);
         setRetryable(true);
         await onConflict?.();
       } else if (err instanceof ApiError && err.status === 409) {

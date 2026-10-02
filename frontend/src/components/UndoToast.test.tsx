@@ -254,7 +254,11 @@ describe("UndoToast", () => {
     };
     vi.mocked(apiFetch)
       .mockRejectedValueOnce(
-        new ApiError(409, "the speaker ... is archived", "archived-speaker"),
+        new ApiError(
+          409,
+          "Dana is archived. Restore them on the Speakers page, then undo again.",
+          "archived-speaker",
+        ),
       )
       .mockResolvedValueOnce(jsonResponse(labels));
     const onConflict = vi.fn(() => Promise.resolve());
@@ -264,7 +268,7 @@ describe("UndoToast", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("status").textContent).toContain(
-        "Can't undo: the earlier speaker is archived. Restore them on the Speakers page, then undo again.",
+        "Can't undo: Dana is archived. Restore them on the Speakers page, then undo again.",
       );
     });
     expect(screen.getByRole("status").textContent).not.toContain("Too late");
@@ -301,6 +305,36 @@ describe("UndoToast", () => {
       expect(screen.getByRole("status").textContent).toContain("Too late to undo.");
     });
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+
+  it("drops the retry once the window closes after an archived-speaker refusal", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.mocked(apiFetch).mockRejectedValueOnce(
+      new ApiError(409, "Dana is archived.", "archived-speaker"),
+    );
+    const { props } = setup({
+      undo: {
+        kind: "relabel",
+        decisionId: "dec-9",
+        expiresAt: new Date(Date.now() + 30_000).toISOString(),
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByRole("status").textContent).toContain("Dana is archived.");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeTruthy();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(screen.getByRole("status").textContent).toContain("Undo window expired.");
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+    expect(props.onDismiss).not.toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledOnce();
   });
 
   it("refetches through onConflict on a drift 409, still holding the write guard", async () => {
