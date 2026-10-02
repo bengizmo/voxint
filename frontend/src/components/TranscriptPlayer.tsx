@@ -164,6 +164,10 @@ export interface SplitFocus {
 }
 
 export interface TranscriptPlayerProps {
+  // Fired when the shared media element starts playing, by any path (transport,
+  // a line, a preview). The editor uses it to stop a voice sample playing on
+  // its own element (issue #714). Absent on the read-only page: no listener.
+  onMainPlay?: () => void;
   runId: string;
   mediaUrl: string;
   segments: Segment[];
@@ -253,6 +257,9 @@ export interface TranscriptPlayerProps {
 // wrappers attach the ref unconditionally; a transcript with no outline simply
 // never invokes it.
 export interface TranscriptPlayerHandle {
+  // Pause the media element and drop any turn guard (issue #714): a voice
+  // sample on another element is about to play.
+  pausePlayback: () => void;
   playSegment: (index: number) => void;
   previewSegment: (index: number) => void;
   focusCursorRow: () => HTMLElement | null;
@@ -532,10 +539,17 @@ export const TranscriptPlayer = forwardRef<
     onTextSelect,
     translation,
     jumpToSeconds,
+    onMainPlay,
   },
   ref,
 ) {
   const audioRef = useRef<HTMLAudioElement>(null);
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !onMainPlay) return;
+    audio.addEventListener("play", onMainPlay);
+    return () => audio.removeEventListener("play", onMainPlay);
+  }, [onMainPlay]);
   const listRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState<number>(-1);
   const suppressFollowOnceRef = useRef(false);
@@ -803,6 +817,10 @@ export const TranscriptPlayer = forwardRef<
   useImperativeHandle(
     ref,
     () => ({
+      pausePlayback: () => {
+        cancelActiveTurn();
+        audioRef.current?.pause();
+      },
       playSegment: (index: number) => {
         const seg = segments[index];
         if (!seg) return;

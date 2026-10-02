@@ -1,6 +1,6 @@
 # Plan: compare voices from other recordings (#714)
 
-Status: in-progress
+Status: done
 
 ## Goal
 
@@ -315,3 +315,56 @@ z-ai/glm-5.3 and moonshotai/kimi-k3, 3 of 3 voices.
 | Cut mid-utterance at the cap | glm | **Partly accepted.** A whole span is used when it is 10 s or shorter; longer spans are cut at 10 s from onset (accepted trade-off). |
 | Implementation finding (2026-10-02): `overlap` is a whole-turn flag | Claude, verified in `postprocess.py` | **Clean spans revised** to (same-label turns) minus (other-label turns); see step 3. |
 | Maintainer decisions (2026-10-02) | Ben | 10 s cap (was 8 s), 2 s floor (was 1 s, which also removes the sub-floor fallback), and the group starts expanded when the in-recording list is empty. |
+
+## Completion notes
+
+Closed 2026-10-02. All four slices are implemented: slice 1 in PR #738, slice 2
+in PR #740, and slices 3 and 4 together on `feat/714-voice-sample-ui`.
+
+**Verified**
+- Requirements 1 and 2 (the clip and the availability list): every scenario has
+  a test in `tests/integration/test_voice_sample_api.py` or
+  `tests/unit/test_voice_sample.py`.
+- Requirement 3 (the menu), per scenario:
+  - Preview, and main player takes over: `MediaEditor.test.tsx` ("sample
+    playback pauses the main player and main play stops the sample without
+    changing a dirty edit") and the browser lane.
+  - Group starts expanded when it is the only comparison:
+    `SpeakerAssignPopover.test.tsx` (default, late list, collapsed beside the
+    in-recording list) and the browser lane on both kinds of line.
+  - Current speaker can be checked: `MediaEditor.test.tsx` ("filters and sorts
+    other-recording speakers ... while keeping the current speaker") and the
+    browser lane (Blair on Blair's own line).
+  - Gone media: `MediaEditor.test.tsx` notice cases and the browser lane after
+    a real reclaim.
+- Local gates on the landing diff: ruff and mypy clean; pytest 7520 passed, 170
+  skipped (opt-in and platform-only lanes); vitest 375 passed; eslint and
+  typecheck clean.
+- Browser lane on maintainer hardware with the new `voices` fixture. The clip
+  played as real audio, 440 Hz for Dana and 880 Hz for Blair. The reconcile of
+  both runs was identical before and after, and the only POSTs were the
+  editor's claim and refresh.
+- Review: High, 3 of 3 voices (codex, deepseek-v4-pro, moonshotai/kimi-k3), plus
+  a 3 of 3 delta re-review of the fixes.
+
+**Spec files touched:** none (no living spec declared).
+
+**Drift from the plan, kept**
+- The error `detail` is a plain string, so the client branches on the status
+  and on `detail === "no_voice_sample"`, not on `detail.code` as the UI section
+  says. A 404 with any other detail gets the generic "Couldn't play" notice.
+- A newer sample request silences the sample that is playing, and the main
+  player starting also drops a request still in flight (review finding: the old
+  clip kept playing under the new speaker's failure notice).
+- The availability fetch is retried on a later menu open if it failed. A
+  success is still kept for the editor's life.
+- The voice notice clears when the cursor moves to another line or a new sample
+  is requested.
+- Slices 3 and 4 landed in one PR: the lane evidence for slice 3 needs the
+  slice 4 fixture.
+- The 410 lane step runs the product's reclaim sweep through a new
+  `reclaim-source` subcommand (file unlinked and row stamped), which is the
+  real transition the plan's "stamp through the tool" stood for.
+
+**Follow-ups:** none from this plan. #739 (API key creation reply lacks
+`no-store`) was filed during slice 1 and is tracked separately.

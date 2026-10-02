@@ -198,6 +198,20 @@ Neither button moves your place in the transcript or closes the menu, and each
 plays one line and then stops. Both appear only when audio playback is
 available.
 
+Someone you know from an earlier recording may have no line here yet. Open
+**Compare with a voice from another recording** in the same menu and click
+their name. Voxint plays a short clip, ten seconds at most, of a line you
+assigned to that person yourself in another recording. A name appears there
+only when such a line exists, so people Voxint matched on its own are not
+listed, and neither are people whose only lines are in recordings you moved to
+the trash. The list opens by itself when it is the only comparison on offer.
+
+The clip pauses the recording you are reviewing, and pressing play on the
+recording stops the clip. Your place in the transcript and any text you are
+editing stay as they are. If the clip cannot be played, a short message under
+the edit box says why, for example because the other recording's audio was
+removed to free up space.
+
 ### Undo a ruling
 
 After assigning a speaker, excluding a voice, or ruling "can't tell," an **undo

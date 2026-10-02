@@ -23,6 +23,7 @@ Subcommands (run under ``uv`` — this imports ``voxint``):
     uv run python tools/e2e_browser_lifecycle.py serve --database-url <dsn>  # backgrounded
     uv run python tools/e2e_browser_lifecycle.py reconcile --database-url <dsn> \
         --run-id <uuid> --expect-file <expectation.json>
+    uv run python tools/e2e_browser_lifecycle.py reclaim-source --database-url <dsn> --run-id <uuid>
     uv run python tools/e2e_browser_lifecycle.py teardown [--drop-db --database-url <dsn>]
 
 The database URL must name a DISPOSABLE database (its ``public`` schema is
@@ -37,23 +38,27 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import os
 import re
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import time
 import uuid
 import wave
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.adjudication.ledger import record_decision
@@ -80,6 +85,7 @@ from voxint.db.models import (
 )
 from voxint.domain_packs.corrections import parse_corrections
 from voxint.domain_packs.corrector import CORRECTOR_VERSION, apply_corrections
+from voxint.media.reclaim import reclaim_expired_intermediates, run_intermediate_reclaimed_at
 from voxint.speakers.matching import (
     DECISION_ACCEPTED,
     DECISION_INELIGIBLE,
@@ -218,10 +224,24 @@ _RAIL_SEGMENTS: tuple[tuple[str, str, float | None], ...] = (
     ("S5", "We can close the remaining action item.", 0.9),
 )
 
-FIXTURE_CHOICES = ("review", "editor", "benchmark", "rail")
+# Voices fixture (issue #714): the review run plus a second recording, B, that
+# the lane never opens. In B the operator "confirmed" Dana on S0 and Blair on
+# S1, each over a 5 s tone of its own pitch, so the lane can tell from the
+# clip's audio whose voice the speaker menu played. In the review run itself
+# S1 is confirmed as Blair and S0 is left unresolved: a menu opened on an S0
+# line offers Blair in the in-recording compare list (so only Dana is listed
+# under "another recording"), and one opened on an S1 line has no in-recording
+# list (so the other-recordings group starts expanded, with Blair kept in it).
+VOICE_DANA_NAME = "Dana Roster"
+VOICE_BLAIR_NAME = "Blair Roster"
+VOICE_DANA_HZ = 440.0
+VOICE_BLAIR_HZ = 880.0
+
+FIXTURE_CHOICES = ("review", "editor", "benchmark", "rail", "voices")
 
 _FIXTURE_SEGMENTS: dict[str, tuple[tuple[str, str, float | None], ...]] = {
     "review": _SEED_SEGMENTS,
+    "voices": _SEED_SEGMENTS,
     "editor": _EDITOR_SEGMENTS,
     "rail": _RAIL_SEGMENTS,
 }
@@ -371,6 +391,85 @@ def _silent_wav_bytes(seconds: float) -> bytes:
         w.setframerate(16000)
         w.writeframes((4096).to_bytes(2, "little", signed=True) * frames)
     return buf.getvalue()
+
+
+def _tone_wav_bytes(spans: Sequence[tuple[float, float]]) -> bytes:
+    """Deterministic 16 kHz mono PCM, with one sine tone per (seconds, Hz) span."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        for seconds, hz in spans:
+            wav.writeframes(
+                b"".join(
+                    struct.pack("<h", round(8000 * math.sin(2 * math.pi * hz * i / 16000)))
+                    for i in range(int(seconds * 16000))
+                )
+            )
+    return buf.getvalue()
+
+
+def seed_voice_source(
+    session: Session, media_root: Path, speakers: dict[str, uuid.UUID]
+) -> uuid.UUID:
+    """Seed the aged, human-confirmed source recording; caller owns the commit.
+
+    Aged 30 days so ``reclaim-source`` can run the product's own sweep with a
+    one-day cutoff and take this recording's audio without touching the run the
+    lane has open.
+    """
+    media = MediaItem(source_path=f"e2e/{uuid.uuid4().hex}.wav", duration_seconds=10.0)
+    session.add(media)
+    session.flush()
+    media.created_at = datetime.now(UTC) - timedelta(days=30)
+    run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
+    session.add(run)
+    session.flush()
+    run.updated_at = media.created_at
+    audio_rel = f"artifacts/{run.id}/normalized.wav"
+    payload = _tone_wav_bytes(((5.0, VOICE_DANA_HZ), (5.0, VOICE_BLAIR_HZ)))
+    for rel in (media.source_path, audio_rel):
+        path = media_root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    session.add(
+        AudioArtifact(
+            pipeline_run_id=run.id, kind=ArtifactKind.PREPROCESSED_AUDIO.value, path=audio_rel
+        )
+    )
+    for index, name in enumerate((VOICE_DANA_NAME, VOICE_BLAIR_NAME)):
+        label = f"S{index}"
+        session.add(
+            TranscriptSegment(
+                pipeline_run_id=run.id,
+                segment_index=index,
+                start_seconds=index * 5.0,
+                end_seconds=(index + 1) * 5.0,
+                raw_text=f"Confirmed voice of {name}.",
+                diarization_label=label,
+            )
+        )
+        session.add(
+            DiarizationTurn(
+                pipeline_run_id=run.id,
+                turn_index=index,
+                start_seconds=index * 5.0,
+                end_seconds=(index + 1) * 5.0,
+                label=label,
+                skip_reason="e2e seed: embedding lane not exercised",
+            )
+        )
+        record_decision(
+            session,
+            pipeline_run_id=run.id,
+            diarization_label=label,
+            decision=Decision.ASSIGN,
+            operator="e2e-seed",
+            idempotency_key=f"e2e-voices:{run.id}:{label}",
+            speaker_id=speakers[name],
+        )
+    return run.id
 
 
 def _seed_rail_evidence(
@@ -557,8 +656,10 @@ def seed_browser_run(
 
     Returns ``(run_id, media_id)``. ``fixture`` selects the segment set:
     ``"review"`` (5 segments, backward compat), ``"editor"`` (30 segments,
-    4 speakers, split-eligible text), ``"benchmark"`` (2000 segments), or
-    ``"rail"`` (12 segments covering every speaker-rail state).
+    4 speakers, split-eligible text), ``"benchmark"`` (2000 segments),
+    ``"rail"`` (12 segments covering every speaker-rail state), or
+    ``"voices"`` (the review run plus a second, aged recording that is the
+    source of cross-recording voice samples, issue #714).
     """
     if fixture not in FIXTURE_CHOICES:
         raise ValueError(f"unknown fixture {fixture!r}; must be one of {FIXTURE_CHOICES}")
@@ -616,6 +717,23 @@ def seed_browser_run(
         speaker_rows.extend(extra_speakers)
         speakers = {speaker.display_name: speaker.id for speaker in speaker_rows}
         _seed_rail_evidence(session, run.id, speakers)
+
+    if fixture == "voices":
+        dana = Speaker(display_name=VOICE_DANA_NAME)
+        session.add(dana)
+        session.flush()
+        speaker_rows.append(dana)
+        speakers = {speaker.display_name: speaker.id for speaker in speaker_rows}
+        record_decision(
+            session,
+            pipeline_run_id=run.id,
+            diarization_label="S1",
+            decision=Decision.ASSIGN,
+            operator="e2e-seed",
+            idempotency_key=f"e2e-voices:{run.id}:S1",
+            speaker_id=speakers[VOICE_BLAIR_NAME],
+        )
+        seed_voice_source(session, media_root, speakers)
 
     wav_bytes = _silent_wav_bytes(duration)
     # The original upload, where the Media library looks for it. Without it the
@@ -714,7 +832,7 @@ def _reset_schema_and_migrate(url: str) -> None:
         # Belt-and-suspenders over the URL guard: assert the database we actually
         # connected to is disposable BEFORE dropping its schema, so no query-param
         # or driver-kwarg override can land the DROP on the live DB (codex+kimi).
-        live = conn.execute(text("SELECT current_database()")).scalar_one()
+        live: str = conn.execute(text("SELECT current_database()")).scalar_one()
         assert_disposable_db(f"postgresql:///{live}")
         conn.execute(text("DROP SCHEMA public CASCADE"))
         conn.execute(text("CREATE SCHEMA public"))
@@ -742,6 +860,11 @@ def cmd_seed(args: argparse.Namespace) -> None:
         complete_onboarding(session, llm_enabled_default=False)
         session.commit()
         run_id, media_id = seed_browser_run(session, media_root, fixture=fixture)
+        source_run_id = (
+            session.scalars(select(PipelineRun.id).where(PipelineRun.id != run_id)).one()
+            if fixture == "voices"
+            else None
+        )
     engine.dispose()
     seg_count = (
         len(_benchmark_segments())
@@ -751,6 +874,8 @@ def cmd_seed(args: argparse.Namespace) -> None:
     print(f"ok: seeded COMPLETED {fixture} run with {seg_count} segments")
     print(f"RUN_ID={run_id}")
     print(f"MEDIA_ID={media_id}")
+    if source_run_id is not None:
+        print(f"VOICE_SOURCE_RUN_ID={source_run_id}")
     print("SEED PASS")
 
 
@@ -1050,6 +1175,63 @@ def cmd_reconcile(args: argparse.Namespace) -> None:
     print("RECONCILE PASS")
 
 
+def reclaim_source_run(session: Session, media_root: Path, run_id: uuid.UUID) -> list[str]:
+    """Reclaim the voice source's audio with the product sweep; return problems.
+
+    The lane's "audio gone" (410) path must go through the real reclaim, which
+    unlinks the file AND stamps the artifact row. Deleting the file by hand
+    would exercise the unservable-file path instead. Fail closed both ways: the
+    named run must end up stamped, and no other run may be stamped by this call
+    (the recording the browser has open must stay playable).
+    """
+    # Every kind: the sweep also reclaims extracted clips, and one taken from
+    # another run is just as much collateral as its normalized audio.
+    artifacts = select(AudioArtifact.id, AudioArtifact.pipeline_run_id).where(
+        AudioArtifact.reclaimed_at.is_not(None),
+    )
+    target = session.scalar(
+        select(AudioArtifact.id).where(
+            AudioArtifact.pipeline_run_id == run_id,
+            AudioArtifact.kind == ArtifactKind.PREPROCESSED_AUDIO.value,
+        )
+    )
+    if target is None:
+        return [f"no preprocessed audio found for run {run_id}"]
+    before = {artifact_id for artifact_id, _ in session.execute(artifacts)}
+    reclaim_expired_intermediates(
+        session,
+        media_root=media_root,
+        cutoff=datetime.now(UTC) - timedelta(days=1),
+        batch_limit=100,
+        tutorial_run_id=None,
+    )
+    problems = []
+    if run_intermediate_reclaimed_at(session, run_id) is None:
+        problems.append(f"normalized audio of run {run_id} was not reclaimed")
+    for artifact_id, other_run_id in session.execute(artifacts):
+        if artifact_id not in before and other_run_id != run_id:
+            problems.append(f"unexpectedly reclaimed audio of run {other_run_id}")
+    return problems
+
+
+def cmd_reclaim_source(args: argparse.Namespace) -> None:
+    url = _guarded(args.database_url)
+    try:
+        run_id = uuid.UUID(args.run_id)
+    except ValueError:
+        fail(f"--run-id is not a valid UUID: {args.run_id!r}")
+    engine = create_engine(url)
+    try:
+        with Session(engine) as session:
+            problems = reclaim_source_run(session, Path(args.media_root), run_id)
+    finally:
+        engine.dispose()
+    if problems:
+        fail("; ".join(problems))
+    print(f"ok: reclaimed normalized audio of run {run_id}")
+    print("RECLAIM PASS")
+
+
 # --------------------------------------------------------------------------- #
 # teardown — kill by port, unstage artifacts, optionally drop the DB
 # --------------------------------------------------------------------------- #
@@ -1186,7 +1368,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="review",
         help=(
             "segment fixture: review (5 segs), editor (30 segs), "
-            "benchmark (2000 segs), rail (12 segs)"
+            "benchmark (2000 segs), rail (12 segs), voices (5 segs plus voice source)"
         ),
     )
     p_seed.set_defaults(func=cmd_seed)
@@ -1205,6 +1387,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_rec.add_argument("--expect-file", help="JSON file with the expected durable outcome")
     p_rec.add_argument("--expect", help="inline JSON with the expected durable outcome")
     p_rec.set_defaults(func=cmd_reconcile)
+
+    p_reclaim = sub.add_parser("reclaim-source", help="reclaim the aged voice source audio")
+    p_reclaim.add_argument("--database-url", required=True)
+    p_reclaim.add_argument("--run-id", required=True)
+    p_reclaim.add_argument("--media-root", default=str(DEFAULT_MEDIA_DIR))
+    p_reclaim.set_defaults(func=cmd_reclaim_source)
 
     p_td = sub.add_parser("teardown", help="kill by port, unstage artifacts, optional DB drop")
     p_td.add_argument("--port", type=int, default=DEFAULT_PORT)
