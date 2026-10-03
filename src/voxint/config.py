@@ -7,6 +7,7 @@ hardcoded elsewhere. Values come from the environment (or an ``.env`` file in de
 import os
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -279,6 +280,16 @@ class Settings(BaseSettings):
     # vLLM): a thinking model otherwise emits long traces that waste tokens and
     # can blow llm_timeout_seconds on the heavy entity_mentions/research jobs.
     llm_disable_thinking: bool = False
+
+    # Shared-GPU phase gates. Opt-in; the phase orchestrator ships separately.
+    gpu_phase_enabled: bool = False
+    gpu_lease_acquire_url: str = ""
+    gpu_lease_release_url: str = ""
+    gpu_lease_status_url: str = ""
+    gpu_lease_token: str = Field(default="", repr=False)
+    gpu_phase_tick_seconds: int = Field(default=30, ge=5)
+    gpu_phase_min_dwell_seconds: int = Field(default=600, ge=0)
+    gpu_phase_max_audio_seconds: int = Field(default=7200, ge=0)
 
     # Optional bundled local LLM (issue #67, SCOPED). When enabled AND a bundled
     # base URL is compose-injected, transcript enhancement + run-asset
@@ -845,6 +856,25 @@ class Settings(BaseSettings):
             raise ValueError(
                 "csrf_secret must be empty (auto per-process) or at least 16 characters"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_gpu_phase(self) -> "Settings":
+        if self.gpu_phase_enabled:
+            if self.gpu_phase_max_audio_seconds < self.gpu_phase_min_dwell_seconds:
+                raise ValueError(
+                    "gpu_phase_max_audio_seconds must be >= gpu_phase_min_dwell_seconds"
+                )
+            for name in ("gpu_lease_acquire_url", "gpu_lease_release_url", "gpu_lease_status_url"):
+                try:
+                    url = urlsplit(getattr(self, name))
+                    valid = url.scheme in {"http", "https"} and bool(url.hostname)
+                except ValueError:
+                    valid = False
+                if not valid:
+                    raise ValueError(
+                        f"{name} must be a non-empty http(s) URL when GPU phases are enabled"
+                    )
         return self
 
     @model_validator(mode="after")

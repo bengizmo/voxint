@@ -49,8 +49,15 @@ from voxint.db.models import (
 from voxint.db.session import build_engine, build_session_factory
 from voxint.domain_packs.registry import domain_pack_from_snapshot
 from voxint.embeddings.onnx_embedder import minilm_artifacts_available
-from voxint.enrichment import asset_jobs, embedding_jobs, translation_jobs
+from voxint.enrichment import asset_jobs, embedding_jobs, research_jobs, translation_jobs
 from voxint.enrichment.research_jobs import execute_job
+from voxint.gpu_phase.dispatch import lane_filters, open_lanes
+from voxint.gpu_phase.state import (
+    admit_lane,
+    gates_enabled,
+    lane_open_for_segment,
+    read_phase_if_enabled,
+)
 from voxint.ingest.watch import sweep_watch_folders
 from voxint.media.reclaim import (
     ReclaimSummary,
@@ -220,6 +227,10 @@ def _drive_segment(
         if not skip_queue_pause and row is not None and row.queue_paused:
             logger.info("queue paused; run %s deferred (stays QUEUED)", run_id)
             return "queue-paused"
+        snapshot = read_phase_if_enabled(session, settings)
+        if not lane_open_for_segment(snapshot, settings, segment):
+            logger.info("GPU phase closed; run %s deferred (stays QUEUED)", run_id)
+            return "gpu-phase-wait"
         prefs = resolve_run_preferences(row, settings)
         # Resolve the effective key (a UI-stored row value wins over env) inside the
         # session, so it reaches the per-run HttpLLMClient the same no-restart way as
@@ -272,8 +283,23 @@ def _drive_segment(
             diarization_num_speakers=num_speakers_hint,
         )
     stage_fns = build_stage_fns(ctx)
+    # The early gate above is advisory; this admission re-checks the phase inside
+    # the entry CAS transaction (see voxint.gpu_phase.state.admit_lane).
+    phase_refused = False
+
+    def admit(session: Session) -> bool:
+        nonlocal phase_refused
+        phase_refused = not admit_lane(session, settings, segment)
+        return not phase_refused
+
     try:
-        final = execute_run(factory, run_id, stage_fns, settings=settings, stages=segment)
+        # Feature off: the call is unchanged (no admit keyword at all).
+        if gates_enabled(settings):
+            final = execute_run(
+                factory, run_id, stage_fns, settings=settings, stages=segment, admit=admit
+            )
+        else:
+            final = execute_run(factory, run_id, stage_fns, settings=settings, stages=segment)
     except StageFailedError as exc:
         if not retryable_cause(exc) or exc.failed_snapshot is None:
             raise  # deterministic — the failure lane owns it now
@@ -300,6 +326,9 @@ def _drive_segment(
             exc=exc, countdown=delay + random.uniform(0, delay * 0.1)
         )
     else:
+        if phase_refused:
+            logger.info("GPU phase closed at admission; run %s deferred (stays QUEUED)", run_id)
+            return "gpu-phase-wait"
         if final.status is RunStatus.COMPLETED and segment == POST_SEGMENT:
             # Only the owning post lane performs completion side effects. A
             # late/redelivered GPU task may observe an already-COMPLETED row;
@@ -399,6 +428,8 @@ def recovery_sweep() -> dict[str, int]:
     cutoff = datetime.now(tz=UTC) - timedelta(seconds=settings.queued_run_stale_seconds)
     with factory() as session:
         queue_paused = app_settings.is_queue_paused(session)
+        phase_lanes = open_lanes(session, settings)
+        post_open = phase_lanes is None or phase_lanes >= POST_SEGMENT
     if queue_paused:
         logger.info("queue paused; skipping pipeline re-dispatch")
         stale_queued: Sequence[uuid.UUID] = []
@@ -410,6 +441,7 @@ def recovery_sweep() -> dict[str, int]:
                     .where(
                         PipelineRun.status == RunStatus.QUEUED.value,
                         PipelineRun.updated_at < cutoff,
+                        *lane_filters(phase_lanes),
                     )
                     .order_by(PipelineRun.updated_at, PipelineRun.id)
                     .limit(settings.recovery_publish_batch_size)
@@ -428,6 +460,7 @@ def recovery_sweep() -> dict[str, int]:
                 select(PipelineRun.id, PipelineRun.current_stage)
                 .where(
                     PipelineRun.id.in_(publish_ids),
+                    *lane_filters(phase_lanes),
                     PipelineRun.status == RunStatus.QUEUED.value,
                 )
                 .order_by(PipelineRun.updated_at, PipelineRun.id)
@@ -481,8 +514,12 @@ def recovery_sweep() -> dict[str, int]:
                     exc_info=True,
                 )
     with factory() as session:
-        stale_asset_jobs = asset_jobs.stale_queued_job_ids(
-            session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
+        stale_asset_jobs = (
+            asset_jobs.stale_queued_job_ids(
+                session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
+            )
+            if post_open
+            else []
         )
     for job_id in stale_asset_jobs:
         try:
@@ -495,8 +532,12 @@ def recovery_sweep() -> dict[str, int]:
                 exc_info=True,
             )
     with factory() as session:
-        stale_translation_jobs = translation_jobs.stale_queued_job_ids(
-            session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
+        stale_translation_jobs = (
+            translation_jobs.stale_queued_job_ids(
+                session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
+            )
+            if post_open
+            else []
         )
     for job_id in stale_translation_jobs:
         try:
@@ -504,6 +545,24 @@ def recovery_sweep() -> dict[str, int]:
         except OperationalError:
             logger.warning(
                 "translation recovery enqueue deferred (broker unavailable); "
+                "job %s stays QUEUED for a later sweep",
+                job_id,
+                exc_info=True,
+            )
+    with factory() as session:
+        stale_research_jobs = (
+            research_jobs.stale_queued_job_ids(
+                session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
+            )
+            if post_open
+            else []
+        )
+    for job_id in stale_research_jobs:
+        try:
+            research_speaker.apply_async((str(job_id),), ignore_result=True)
+        except OperationalError:
+            logger.warning(
+                "research recovery enqueue deferred (broker unavailable); "
                 "job %s stays QUEUED for a later sweep",
                 job_id,
                 exc_info=True,
@@ -521,6 +580,7 @@ def recovery_sweep() -> dict[str, int]:
         "stale_embedding_jobs": len(stale_embedding_jobs),
         "stale_asset_jobs": len(stale_asset_jobs),
         "stale_translation_jobs": len(stale_translation_jobs),
+        "stale_research_jobs": len(stale_research_jobs),
     }
     # Surface the plugin-lane count only when a plugin actually declares a lane;
     # built-in lane counts above are always present.
