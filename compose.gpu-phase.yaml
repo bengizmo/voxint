@@ -1,0 +1,66 @@
+# Opt-in overlay: lets Voxint share one GPU with another service (#748).
+#
+# Adds a dedicated `gpu-phase` Celery worker that runs the GPU phase
+# orchestrator. It asks a host broker for the GPU, then starts and stops the
+# model services (whisper, pyannote, titanet) through the Docker Engine API.
+# To do that it mounts the Docker socket, which grants this one process
+# host-equivalent control over all containers. That is acceptable for a
+# single-operator deployment, but it is a real privilege escalation. No other
+# service gains the socket from this overlay.
+#
+# Only gpu-phase consumes the `gpu_phase` queue. The app does not declare that
+# queue, so a worker started without -Q (the regular worker, including the
+# command the installer writes into compose.hardware.yaml) never runs an
+# orchestrator tick, and this overlay leaves the regular worker alone.
+#
+# Usage:
+#   docker compose -f compose.yaml -f compose.gpu.yaml \
+#     -f compose.gpu-phase.yaml up -d
+#
+# Tiers: gpu and rocm (swap compose.gpu.yaml for compose.rocm.yaml). Not for
+# the cpu tier: there is no GPU to share, and gpu-phase does not inherit the
+# tier overlay's COMPUTE_TIER, so it would run with GPU-tier Celery timing
+# beside a cpu-tier worker. Not for the metal tier: its model services run
+# natively under launchd, not as containers this process can start or stop.
+#
+# Turn the feature on in .env: GPU_PHASE_ENABLED=true plus the broker URLs
+# GPU_LEASE_ACQUIRE_URL, GPU_LEASE_RELEASE_URL and GPU_LEASE_STATUS_URL.
+# Without them the gpu-phase worker sits idle and the stack behaves as usual.
+#
+# DOCKER_GID must match the docker group on the host. Find it with:
+#   getent group docker | cut -d: -f3
+# Default 999 works on most Linux installs. Set it in .env if yours differs.
+#
+# gpu-phase copies the image, .env, settings, media volume and depends_on
+# of the `worker` service in compose.yaml (`extends`), not what other overlays
+# add to `worker`. With compose.build.yaml, give gpu-phase
+# `image: voxint-app:dev` and `pull_policy: never` in your own override.
+services:
+  gpu-phase:
+    extends:
+      file: compose.yaml
+      service: worker
+    # One tick at a time, on its own queue, so a tick never waits behind a
+    # long transcription. The node name keeps it distinct in Celery inspect.
+    command: >-
+      celery -A voxint.worker.app worker --loglevel=INFO
+      -Q gpu_phase --concurrency=1 -n gpu-phase@%h
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:-999}"
+    # Lets the lease URLs reach a broker on the host as
+    # http://host.docker.internal:<port>, on Linux as well as Docker Desktop.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      VOXINT_SERVICE_CONTROL: docker
+      # The project this container runs in, which is where the model
+      # containers live, whatever name or -p the operator used.
+      VOXINT_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-voxint}
+      # The readiness probe reaches the model services by service DNS name,
+      # the same URLs the gpu and rocm tier overlays give the worker.
+      ASR_URL: http://whisper:8022
+      DIARIZER_URL: http://pyannote:8024
+      EMBEDDER_URL: http://titanet:8021
