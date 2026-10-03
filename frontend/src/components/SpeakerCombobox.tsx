@@ -63,6 +63,7 @@ export function SpeakerCombobox({
   const listRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef(false);
+  const refocusInputRef = useRef(false);
 
   useEffect(() => {
     if (autoFocus) inputRef.current?.focus();
@@ -109,6 +110,21 @@ export function SpeakerCombobox({
     }
   }, [open]);
 
+  // [#772] The input is disabled while a create is in flight, so the browser
+  // drops focus to <body>. After a failed create, hand focus back once the
+  // input is enabled again (the host may still hold `disabled`), so Escape
+  // closes the list and a retry needs no extra click.
+  useEffect(() => {
+    if (!open) {
+      refocusInputRef.current = false;
+      return;
+    }
+    if (refocusInputRef.current && !creating && !disabled) {
+      refocusInputRef.current = false;
+      inputRef.current?.focus();
+    }
+  }, [open, creating, disabled]);
+
   // [M1] Map speaker id -> unfiltered roster index for stable digit prefixes.
   const speakerRosterIndex = useMemo(() => {
     const m = new Map<string, number>();
@@ -132,10 +148,12 @@ export function SpeakerCombobox({
       }
       if (row === "create" && onCreate) {
         setCreating(true);
+        let ok = false;
         try {
-          const ok = await onCreate(trimmed);
+          ok = await onCreate(trimmed);
           if (ok) close(true);
         } finally {
+          if (!ok) refocusInputRef.current = true;
           setCreating(false);
         }
       }

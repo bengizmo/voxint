@@ -13,6 +13,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   "Upload timed out". An upload is now cancelled only when no bytes have moved
   for 2 minutes, or when the server has not answered 10 minutes after the last
   byte. A cancelled file keeps its Retry button.
+- **The speaker picker keeps focus after a failed Create** (#772). When
+  creating a new person from the speaker rail failed, focus fell to the page,
+  so Escape could not close the picker and its open list covered the card's
+  other buttons. Focus now returns to the picker's text box, where Escape
+  closes it and a retry needs no extra click.
 
 ## [0.51.0] - 2026-10-03
 
