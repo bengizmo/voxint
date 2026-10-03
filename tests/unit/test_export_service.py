@@ -12,6 +12,7 @@ from voxint.export.service import (
     ExportOptionError,
     MarkdownStyle,
     parse_fillers,
+    parse_repeats,
     parse_style,
     render_run_transcript,
 )
@@ -89,5 +90,68 @@ def test_renderer_rejects_translation_before_loading() -> None:
             text=TranscriptText.RAW,
             translated_texts=[],
             drop_fillers=True,
+        )
+    assert not session.mock_calls
+
+
+@pytest.mark.parametrize(
+    "raw, expected", [(None, False), ("", False), ("keep", False), ("drop", True)]
+)
+def test_repeats_values(raw: str | None, expected: bool) -> None:
+    assert parse_repeats(raw, TranscriptFormat.MARKDOWN, MarkdownStyle.TURNS) is expected
+    assert not parse_repeats(None, TranscriptFormat.TXT, None)
+
+
+@pytest.mark.parametrize("raw", ["keep", "drop"])
+@pytest.mark.parametrize(
+    "fmt, style",
+    [
+        (None, None),
+        (TranscriptFormat.TXT, None),
+        (TranscriptFormat.JSON, None),
+        (TranscriptFormat.MARKDOWN, MarkdownStyle.BLOCKS),
+    ],
+)
+def test_repeats_wrong_layout(
+    raw: str, fmt: TranscriptFormat | None, style: MarkdownStyle | None
+) -> None:
+    with pytest.raises(ExportOptionError, match="repeats applies to the md turns style only"):
+        parse_repeats(raw, fmt, style)
+
+
+def test_repeats_unknown() -> None:
+    with pytest.raises(ExportOptionError, match="unknown repeats value 'bogus'; valid: keep, drop"):
+        parse_repeats("bogus", TranscriptFormat.MARKDOWN, MarkdownStyle.TURNS)
+
+
+@pytest.mark.parametrize(
+    "fillers, detail",
+    [
+        (False, "repeats cannot be combined with a translation"),
+        (True, "fillers cannot be combined with a translation"),
+    ],
+)
+def test_renderer_rejects_repeats_with_translation_before_loading(
+    fillers: bool, detail: str
+) -> None:
+    session = Mock()
+    with pytest.raises(ExportOptionError, match=detail):
+        render_run_transcript(
+            session,
+            uuid.uuid4(),
+            TranscriptFormat.MARKDOWN,
+            text=TranscriptText.RAW,
+            translated_texts=[],
+            drop_fillers=fillers,
+            drop_repeats=True,
+        )
+    assert not session.mock_calls
+
+
+def test_renderer_rejects_repeats_outside_md_turns_before_loading() -> None:
+    session = Mock()
+    with pytest.raises(ExportOptionError, match="repeats applies to the md turns style only"):
+        render_run_transcript(
+            session, uuid.uuid4(), TranscriptFormat.TXT, text=TranscriptText.RAW, drop_repeats=True
         )
     assert not session.mock_calls

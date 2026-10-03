@@ -2243,6 +2243,7 @@ def _export(args: argparse.Namespace) -> int:
     from voxint.export import TranscriptFormat
     from voxint.export.service import (
         parse_fillers,
+        parse_repeats,
         parse_style,
         render_run_rttm,
         render_run_transcript,
@@ -2253,6 +2254,7 @@ def _export(args: argparse.Namespace) -> int:
         fmt = None if args.format == "rttm" else TranscriptFormat(args.format)
         style = parse_style(args.style, fmt)
         drop_fillers = parse_fillers("drop" if args.drop_fillers else None, fmt, style)
+        drop_repeats = parse_repeats("drop" if args.drop_repeats else None, fmt, style)
     except ValueError as exc:
         print(f"error: {exc}")
         return 2
@@ -2284,6 +2286,7 @@ def _export(args: argparse.Namespace) -> int:
                     timestamps=args.timestamps,
                     style=style,
                     drop_fillers=drop_fillers,
+                    drop_repeats=drop_repeats,
                 )
     finally:
         engine.dispose()
@@ -3234,6 +3237,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--drop-fillers",
         action="store_true",
         help="remove standalone um/uh and friends from the Markdown turns export (md turns only)",
+    )
+    export_p.add_argument(
+        "--drop-repeats",
+        action="store_true",
+        help=(
+            "remove an immediately repeated word or word pair such as 'the the' from the"
+            " Markdown turns export (md turns only)"
+        ),
     )
     export_p.add_argument(
         "--text",

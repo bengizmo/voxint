@@ -332,3 +332,147 @@ def test_fillers_refusal_matrix(
         )
         assert missing_public.status_code == 422
         assert missing_public.json()["error"]["message"] == detail
+
+
+_REPEAT_WORDS = [
+    ("Go", 0.0), (" to", 0.1), (" the", 0.2), (" the", 0.3), (" store.", 0.4),
+    (" We", 0.5), (" um", 0.6), (" we", 0.7), (" left.", 0.8), (" There.", 1.0),
+]
+
+
+@pytest.mark.parametrize("timestamps", [True, False])
+def test_repeats_three_surface_golden_and_default(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    timestamps: bool,
+) -> None:
+    with session_factory() as session:
+        run_id = seed_words(session)
+        segment = session.scalars(
+            select(TranscriptSegment).where(TranscriptSegment.pipeline_run_id == run_id)
+        ).one()
+        segment.raw_text = "".join(word for word, _ in _REPEAT_WORDS)
+        segment.words = [
+            {"word": word, "start": start, "end": start + 0.1} for word, start in _REPEAT_WORDS
+        ]
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        run.sidecar = {"title": "Synthetic repeats example"}
+        session.commit()
+    client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
+    monkeypatch.setattr(
+        "voxint.cli._engine_or_report",
+        lambda: (create_engine(session_factory.kw["bind"].url), 0),
+    )
+    alex = {
+        (None, None): "Go to the the store. We um we left.",
+        (None, "keep"): "Go to the the store. We um we left.",
+        ("drop", None): "Go to the the store. We we left.",
+        (None, "drop"): "Go to the store. We um we left.",
+        # Filler removal first turns "We um we" into a sentence-start repeat.
+        ("drop", "drop"): "Go to the store. We left.",
+    }
+    a, b = ("[00:00:00] ", "[00:00:01] ") if timestamps else ("", "")
+    for (fillers, repeats), text in alex.items():
+        path = tmp_path / f"{fillers}-{repeats}.md"
+        args = ["export", str(run_id), "--format", "md", "-o", str(path)]
+        params = {"timestamps": str(timestamps).lower()}
+        if fillers:
+            params["fillers"] = fillers
+            args.append("--drop-fillers")
+        if repeats:
+            params["repeats"] = repeats
+            if repeats == "drop":
+                args.append("--drop-repeats")
+        if not timestamps:
+            args.append("--no-timestamps")
+        assert main(args) == 0
+        console = client.get(f"/review/{run_id}/export.md", params=params)
+        public = client.get(
+            f"/api/v1/runs/{run_id}/transcript",
+            params={"format": "md", **params},
+            auth=None,
+            headers={"Authorization": "Bearer synthetic-api-key"},
+        )
+        assert console.status_code == public.status_code == 200
+        golden = f"# Synthetic repeats example\n\n{a}**Alex:** {text}\n\n{b}**Sam:** There.\n"
+        assert path.read_bytes() == console.content == public.content == golden.encode()
+    with session_factory() as session:
+        segment = session.scalars(
+            select(TranscriptSegment).where(TranscriptSegment.pipeline_run_id == run_id)
+        ).one()
+        assert segment.raw_text == "Go to the the store. We um we left. There."
+        assert segment.words is not None
+        assert [w["word"] for w in segment.words] == [word for word, _ in _REPEAT_WORDS]
+
+
+def test_repeats_refusal_matrix(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def no_db() -> None:
+        pytest.fail("invalid CLI repeats options must not touch the database")
+
+    monkeypatch.setattr("voxint.cli._engine_or_report", no_db)
+    for args in (
+        ["--format", "txt"],
+        ["--format", "rttm"],
+        ["--format", "md", "--style", "blocks"],
+    ):
+        assert main(["export", str(uuid.uuid4()), "--drop-repeats", *args]) == 2
+        assert capsys.readouterr().out == "error: repeats applies to the md turns style only\n"
+    with session_factory() as session:
+        run_id = seed_words(session)
+        record_spanish(session, run_id)
+        session.commit()
+    client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
+    only = "repeats applies to the md turns style only"
+    cases = [(fmt, {"repeats": value}, only) for fmt in ("txt", "rttm", "srt", "vtt", "json")
+             for value in ("drop", "keep")] + [
+        ("md", {"repeats": "drop", "style": "blocks"}, only),
+        ("md", {"repeats": "bogus"}, "unknown repeats value 'bogus'; valid: keep, drop"),
+        # Fillers are validated first when both options are wrong.
+        (
+            "txt",
+            {"fillers": "drop", "repeats": "drop"},
+            "fillers applies to the md turns style only",
+        ),
+    ]
+    for lang_params, detail in (
+        ({"repeats": "drop", "lang": "es"}, "repeats cannot be combined with a translation"),
+        (
+            {"fillers": "drop", "repeats": "drop", "lang": "es"},
+            "fillers cannot be combined with a translation",
+        ),
+    ):
+        conflict = client.get(f"/review/{run_id}/export.md", params=lang_params)
+        assert conflict.status_code == 422
+        assert conflict.json()["detail"] == detail
+    # keep never conflicts with a translation.
+    assert client.get(
+        f"/review/{run_id}/export.md", params={"repeats": "keep", "lang": "es"}
+    ).status_code == 200
+    for fmt, params, detail in cases:
+        console = client.get(f"/review/{run_id}/export.{fmt}", params=params)
+        assert console.status_code == 422
+        assert console.json()["detail"] == detail
+        public = client.get(
+            f"/api/v1/runs/{run_id}/transcript",
+            params={"format": fmt, **params},
+            auth=None,
+            headers={"Authorization": "Bearer synthetic-api-key"},
+        )
+        assert public.status_code == 422
+        assert public.json()["error"]["message"] == detail
+        missing_console = client.get(f"/review/{uuid.uuid4()}/export.{fmt}", params=params)
+        assert missing_console.status_code == 404
+        missing_public = client.get(
+            f"/api/v1/runs/{uuid.uuid4()}/transcript",
+            params={"format": fmt, **params},
+            auth=None,
+            headers={"Authorization": "Bearer synthetic-api-key"},
+        )
+        assert missing_public.status_code == 422
+        assert missing_public.json()["error"]["message"] == detail

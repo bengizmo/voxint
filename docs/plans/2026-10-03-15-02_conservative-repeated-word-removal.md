@@ -421,8 +421,8 @@ review state when exporting with `repeats=drop`.
 
 **Decisions (maintainer, 2026-10-03, recorded on #755)**
 1. **A repeat across a filler-only interruption** (A `the` / B `um` /
-   A `the cat`): both copies stay. The original speaker turn is the unit; the
-   fillers clean and merge steps are split so repeats run between them.
+   A `the cat`): both copies stay. The original speaker turn is the unit;
+   filler removal reports its merge seams and repeats never match across one.
 2. **Language:** apply regardless of the run's language, documented as built
    on English word lists, matching fillers. #756 owns language-aware lists.
 3. **`no no` and `so so`:** excluded from one-word removal.
@@ -441,7 +441,7 @@ qwen/qwen3.8-max-prime. 3 of 3 answered.
 | Exclusion set misses `her her`, `was was`, `did did`; `can` and `will` have content readings | glm, codex; 2 (glm on `her`/`was`/`did`, codex on `her`/`can`/`will`) | Accepted: all added to the exclusions; `can`/`will` dropped from the list entirely |
 | Partial contraction paradigm creates "why this one but not that" | glm; 1 | Accepted: complete generated paradigm |
 | Interrogatives `what who how where why` absent | glm; 1 | Partly: `what`, `who` (pronouns) added; `how where why` (adverbs) listed as deliberately absent |
-| Fillers merge (F5) lets repeats cross an original interruption | codex (high), qwen (asked for a decision), glm (wants it caught); split | Maintainer: do not cross (decision 1). Fillers split into clean and merge steps |
+| Fillers merge (F5) lets repeats cross an original interruption | codex (high), qwen (asked for a decision), glm (wants it caught); split | Maintainer: do not cross (decision 1). Fillers report merge seams (`drop_fillers_with_seams`) |
 | Removing a piece changes paragraphing, timestamps and minute markers; layout must be asserted on rendered output | codex (reproduced), qwen; 2 | Accepted: R6 within-segment plus 3 s pause guard; rendered-output goldens. Codex's temporal-continuity cross-segment option rejected as Alternative 5 |
 | The "identity fast path like fillers" claim is wrong (`drop_fillers` rebuilds turns) | codex, qwen; 2 | Accepted: R9 now states byte identity, plus reuse of unchanged turns and pieces |
 | Refusal matrix overstated equivalence; console 404-first versus API 422-first; precedence with both options and translation; `keep` validated | codex, qwen; 2 | Accepted: requirement rewritten to keep each surface's contract; precedence defined |

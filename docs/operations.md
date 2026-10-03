@@ -839,17 +839,21 @@ docker compose exec -T api voxint export <run-id> --format md --style blocks > b
   timestamps flag. Passing `--style` with any other format is an error.
 - `--drop-fillers`: remove standalone English fillers from the Markdown turns
   export (`--format md` only). See "Fillers" below.
+- `--drop-repeats`: remove an immediately repeated English function word or word
+  pair, such as `the the`, from the Markdown turns export (`--format md` only).
+  See "Repeats" below.
 - `-o PATH`: write to a file instead of stdout (refuses to overwrite an
   existing file unless `--force`).
 
 The same exports are available over HTTP at
 `GET /review/{run_id}/export.{txt,md,srt,vtt,json,rttm}` (add `?text=raw` for the
 raw variant, `?timestamps=false` on `txt`/`md` for the reading copy, or
-`?style=blocks` on `md` for the older layout, or `?fillers=drop` to remove
-fillers from the Markdown turns export). The `/api/v1/runs/{run_id}/transcript`
-route takes the same `style` and `fillers` parameters with `format=md`.
-`fillers=keep` is the default. On either route, `style` with any other format,
-or a non-empty `fillers` value outside the Markdown turns style, returns 422.
+`?style=blocks` on `md` for the older layout, or `?fillers=drop` and
+`?repeats=drop` to remove fillers and repeated words from the Markdown turns
+export). The `/api/v1/runs/{run_id}/transcript` route takes the same `style`,
+`fillers` and `repeats` parameters with `format=md`. `keep` is the default for
+both filters. On either route, `style` with any other format, or a non-empty
+`fillers` or `repeats` value outside the Markdown turns style, returns 422.
 RTTM uses the run's UUID as the file id and the raw diarization labels
 (`SPEAKER_00` …), so it round-trips against diarization scoring tools, and it
 deliberately does **not** substitute adjudicated speaker names.
@@ -919,6 +923,34 @@ How it is built:
   know` stay.
   Nothing stored changes. Filler removal is not available with a translation
   or the `blocks` style.
+- **Repeats.** `--drop-repeats` or `?repeats=drop` removes the second copy of a
+  word or word pair said twice in a row: `go to the the store` becomes `go to
+  the store`, and `we were we were going` becomes `we were going`. It is a
+  separate option from fillers. With both, fillers go first, so `the um the`
+  becomes `the`. The rules are narrow on purpose:
+  - Both copies must be English function words: pronouns, auxiliaries,
+    determiners, prepositions and conjunctions, plus `what`, `who` and their
+    contractions (`I'm`, `don't`). Content words stay, so `going going` and
+    `we went we went` are kept.
+  - Only whitespace may separate the copies, and no punctuation may touch
+    either copy. `No, no`, `We were, we were going` and `the the.` stay.
+  - Exactly two copies. `I I I` and `we were we were we were` stay.
+  - A word repeated alone is never removed when the double can be grammatical
+    or meaningful: `that that`, `had had`, `is is`, `was was`, `do do`,
+    `did did`, `her her`, `no no` and `so so` stay. `can` and `will` are not
+    on the list at all.
+  - The copies must be in the same turn and the same transcript segment, and
+    not split by a turn that filler removal dropped. A repeat inside quotation
+    marks stays. A repeat whose removal would leave a pause of 3 seconds or
+    more between the surviving words stays, so paragraphs do not move.
+  - A capitalised first copy matches a lowercase second copy only at the start
+    of a sentence (`The the cat` becomes `The cat`).
+
+  Whisper often puts a comma between the copies of a restart, and those stay.
+  On the maintainer's English test recordings this left about half of the
+  doubled function words in place. The word lists are English, so repeats in
+  other languages are not removed. Nothing stored changes. Repeat removal is
+  not available with a translation or the `blocks` style.
 - **Translations.** With `?lang=`, each translated line stays whole under its
   line's speaker. Translated text has no word timings.
 
@@ -939,8 +971,8 @@ The transcript view route serves the same turns as an on-screen **read mode**:
 paragraph per speaker turn with the name in bold, server-side with no
 JavaScript, gated by `&timestamps=false` for a view without clocks or minute
 markers. Read mode and the default `turns` Markdown export use the same `layout_turns`
-paragraphs. Opt-in filler removal applies only to the export; read mode keeps
-the fillers.
+paragraphs. Opt-in filler and repeat removal apply only to the export; read
+mode keeps the fillers and repeats.
 
 ### The browser console
 
