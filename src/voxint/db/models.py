@@ -61,6 +61,35 @@ class Base(DeclarativeBase):
     type_annotation_map: ClassVar = {dict[str, Any]: JSON().with_variant(JSONB(), "postgresql")}
 
 
+class GpuPhaseState(Base):
+    """Persistent singleton for the opt-in shared-GPU phase gate."""
+
+    __tablename__ = "gpu_phase"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="gpu_phase_singleton_check"),
+        CheckConstraint(
+            "phase IN ('llm', 'draining_post', 'acquiring', 'starting_services', "
+            "'audio', 'draining', 'stopping_services', 'releasing', 'error')",
+            name="gpu_phase_phase_check",
+        ),
+        CheckConstraint("failures >= 0", name="gpu_phase_failures_check"),
+        CheckConstraint("operator_request IN ('audio', 'release')", name="gpu_phase_request_check"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    phase: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'llm'"))
+    phase_since: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    lease_id: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    failures: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    operator_request: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class RunStatus(enum.StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
