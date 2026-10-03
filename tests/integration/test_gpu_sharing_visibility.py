@@ -7,6 +7,7 @@ they are down, as they are while GPU sharing has them stopped.
 
 import re
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -32,7 +33,8 @@ CLOSED = "http://127.0.0.1:9"  # discard port: connection refused
 
 def _set(session_factory: sessionmaker[Session], phase: GpuPhase, **fields: object) -> None:
     with session_factory() as session:
-        set_phase(session, phase, now=NOW, **fields)  # type: ignore[arg-type]
+        # A fresh write, as the phase task makes each tick (doctor flags a stale row).
+        set_phase(session, phase, now=datetime.now(UTC), **fields)  # type: ignore[arg-type]
         session.commit()
 
 
@@ -257,6 +259,18 @@ def test_doctor_audio_phase_llm_endpoint_down_is_expected(
     endpoint = next(r for r in results if r.name == "llm endpoint")
     assert endpoint.expected_stop and not endpoint.hard
     assert "expected while Voxint holds the GPU" in endpoint.detail
+
+
+def test_doctor_flags_a_phase_task_that_stopped_writing(
+    engine: Engine, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        set_phase(session, GpuPhase.LLM, now=datetime.now(UTC) - timedelta(minutes=10))
+        session.commit()
+    sharing = next(r for r in _diagnose(engine, _settings()) if r.name == GPU_SHARING_CHECK)
+    assert not sharing.ok and not sharing.hard
+    assert sharing.detail.startswith("the GPU sharing task has not run since ")
+    assert "gpu-phase service from compose.gpu-phase.yaml" in sharing.detail
 
 
 def test_doctor_error_phase_reports_last_error(

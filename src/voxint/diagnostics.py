@@ -205,14 +205,27 @@ def _utc(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
+def gpu_phase_stale_after_seconds(tick_seconds: int) -> int:
+    """The phase task writes the row every tick; this long without a write means
+    it is not running."""
+    return max(3 * tick_seconds, 120)
+
+
 def check_gpu_phase(
-    *, enabled: bool, snapshot: GpuPhaseSnapshot | None, read_error: str | None = None
+    *,
+    enabled: bool,
+    snapshot: GpuPhaseSnapshot | None,
+    now: datetime,
+    tick_seconds: int,
+    read_error: str | None = None,
 ) -> CheckResult | None:
     """Advisory: which phase GPU sharing is in, in plain words. None when off.
 
     ``error`` (the GPU could not be handed back, so language-model work is
     paused) is the one not-ok phase; a failed attempt that is backing off is
-    reported in the detail but stays ok, since the next tick retries it.
+    reported in the detail but stays ok, since the next tick retries it. A row
+    the phase task has not written for ``max(3 * tick, 120)`` seconds means the
+    task is not running, which is reported first: nothing else can change then.
     ``last_error`` is the orchestrator's bounded message and is shown as is.
     """
     if not enabled:
@@ -229,6 +242,14 @@ def check_gpu_phase(
             False,
             False,
             f"{NO_ROW_SUMMARY}; check that the gpu-phase worker is running",
+        )
+    if (now - snapshot.updated_at).total_seconds() > gpu_phase_stale_after_seconds(tick_seconds):
+        return CheckResult(
+            GPU_SHARING_CHECK,
+            False,
+            False,
+            f"the GPU sharing task has not run since {_utc(snapshot.updated_at)}; check "
+            "that the gpu-phase service from compose.gpu-phase.yaml is running",
         )
     phase = snapshot.phase
     if phase == GpuPhase.ERROR:
@@ -513,7 +534,11 @@ def run_diagnostics(
         results.append(js_rt)
     snapshot, phase_error = _read_gpu_phase(settings, engine)
     gpu_check = check_gpu_phase(
-        enabled=settings.gpu_phase_enabled, snapshot=snapshot, read_error=phase_error
+        enabled=settings.gpu_phase_enabled,
+        snapshot=snapshot,
+        now=datetime.now(UTC),
+        tick_seconds=settings.gpu_phase_tick_seconds,
+        read_error=phase_error,
     )
     if gpu_check is not None:
         if phase_error is None:

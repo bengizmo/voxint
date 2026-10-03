@@ -539,7 +539,9 @@ When the GPU cannot hold the model services and a local LLM server at the same
 time, GPU sharing lets them take turns: Voxint borrows the GPU for
 transcription and diarization, then hands it back for LLM work. It needs a
 small broker on the host that stops and starts the other service, the
-`compose.gpu-phase.yaml` overlay, and `GPU_PHASE_ENABLED=true`. While it is on,
+`compose.gpu-phase.yaml` overlay, and `GPU_PHASE_ENABLED=true`. The overlay's
+`gpu-phase` service runs the phase task; without it the phase never changes and
+recordings stay queued. While it is on,
 model services stopped for the language model's turn are reported as off, not
 as failures, and `voxint gpu-phase status|audio-now|release` shows and steers
 the current phase. Setup, the broker HTTP contract, settings and failure

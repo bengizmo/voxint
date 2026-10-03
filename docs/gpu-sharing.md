@@ -167,18 +167,18 @@ still holds from before the restart.
    docker compose exec api voxint doctor
    ```
 
-The overlay does two things:
+The overlay adds one service, a `gpu-phase` worker. It is the only consumer
+of the `gpu_phase` queue, and it starts and stops the whisper, pyannote and
+titanet containers. For that it mounts the Docker socket, which gives that
+container control over every container on the host. The same trade-off as the
+[service controls overlay](service-controls.md#security) applies: accept it
+only on a host where you trust everyone who can reach the stack.
 
-- It adds a `gpu-phase` worker that consumes only the `gpu_phase` queue and
-  starts and stops the whisper, pyannote and titanet containers. For that it
-  mounts the Docker socket, which gives that container control over every
-  container on the host. The same trade-off as the
-  [service controls overlay](service-controls.md#security) applies: accept it
-  only on a host where you trust everyone who can reach the stack.
-- It pins the regular worker to `-Q celery,post`, so it never runs a phase
-  tick. If you override the worker command (for example to set
-  `--concurrency`), keep `-Q celery,post` on that command line, or the regular
-  worker also consumes the `gpu_phase` queue.
+The overlay leaves the regular worker's command alone, so a `--concurrency`
+setting or other worker overrides keep working. The regular worker never runs
+phase ticks. Without the overlay nothing consumes the ticks, so the phase never
+changes: with `GPU_PHASE_ENABLED=true` and no `gpu-phase` service, recordings
+wait in the queue indefinitely.
 
 With the feature on, the phase starts in `llm` and the model services stay
 stopped until there is audio work.
@@ -221,12 +221,31 @@ voxint gpu-phase release     # hand the GPU back now, or retry after an error
 next few ticks. With GPU sharing off, they exit with an error and change
 nothing; `status` says GPU sharing is off.
 
+How a request plays out depends on the phase:
+
+- `release` during `audio` starts the normal hand-back: no new GPU work starts,
+  and runs in progress finish first.
+- `release` during the hand-back (`draining`) stops the model services at once,
+  even while audio runs are still in progress. Those runs fail their current
+  stage and retry it in the next audio window.
+- `release` while already in `llm` holds off the next switch to audio for
+  `GPU_PHASE_MIN_DWELL_SECONDS`.
+- `release` in `error` retries the hand-back now instead of waiting for the
+  backoff.
+- `audio-now` made while the GPU is being handed back, or while Voxint recovers
+  from an error, is kept and acted on at the next tick in `llm`.
+
+A failed or timed-out acquire also goes through `releasing` before `llm`, so the
+broker is told to release any lease it may have granted before language-model
+work resumes.
+
 | Problem | What you see | What to do |
 |---|---|---|
 | Recordings stay queued | Banner "Waiting for the GPU", phase `llm` | Expected until min dwell passes. Run `voxint gpu-phase audio-now` to start now. If `status` shows failures and a retry time, check the last error and the broker. |
 | The broker refuses or is down | Phase back in `llm` with a last error and a retry time | Fix the broker. Voxint retries on its own with backoff, or run `audio-now` to retry at once. |
 | A model service does not come up | Phase goes back through `stopping_services` and `releasing` to `llm`, with a last error | Check the service's logs (`docker compose logs whisper`). |
 | No phase recorded | `voxint gpu-phase status` shows phase `none`; doctor warns "no phase recorded yet". Both lanes wait. | The phase task writes the row on its next run. If it stays this way, check that the `gpu-phase` worker is running (`docker compose ps gpu-phase`). |
+| The phase task is not running | Doctor and the Status page warn "the GPU sharing task has not run since ...". Phases do not change. | Check that the `gpu-phase` service from `compose.gpu-phase.yaml` is running (`docker compose ps gpu-phase`, `docker compose logs gpu-phase`). |
 | The GPU could not be handed back | Phase `error`, alert on the Runs page, `gpu sharing` warning in doctor and on the Status page. LLM work is paused. | Fix the cause in the last error (often the broker), then run `voxint gpu-phase release` to retry. Voxint also retries on its own with backoff. |
 
 ## Turn it off safely

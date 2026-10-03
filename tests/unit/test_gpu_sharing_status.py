@@ -25,6 +25,7 @@ from voxint.diagnostics import (
     check_gpu_phase,
     check_state,
     exit_code,
+    gpu_phase_stale_after_seconds,
     run_diagnostics,
 )
 from voxint.gpu_phase.state import GpuPhase, GpuPhaseSnapshot, OperatorRequest
@@ -59,6 +60,13 @@ def snap(phase: GpuPhase, **fields: Any) -> GpuPhaseSnapshot:
     }
     values.update(fields)
     return GpuPhaseSnapshot(**values)
+
+
+def gpu_check(**kwargs: Any) -> CheckResult | None:
+    """check_gpu_phase at NOW with the default 30 s tick; the row is fresh."""
+    kwargs.setdefault("now", NOW)
+    kwargs.setdefault("tick_seconds", 30)
+    return check_gpu_phase(**kwargs)
 
 
 def down_models() -> list[CheckResult]:
@@ -161,11 +169,11 @@ def test_error_copy() -> None:
 
 
 def test_check_gpu_phase_off_is_absent() -> None:
-    assert check_gpu_phase(enabled=False, snapshot=snap(GpuPhase.ERROR)) is None
+    assert gpu_check(enabled=False, snapshot=snap(GpuPhase.ERROR)) is None
 
 
 def test_check_gpu_phase_llm_is_ok_advisory() -> None:
-    result = check_gpu_phase(enabled=True, snapshot=snap(GpuPhase.LLM))
+    result = gpu_check(enabled=True, snapshot=snap(GpuPhase.LLM))
     assert result == CheckResult(
         GPU_SHARING_CHECK,
         True,
@@ -175,7 +183,7 @@ def test_check_gpu_phase_llm_is_ok_advisory() -> None:
 
 
 def test_check_gpu_phase_missing_row_needs_attention() -> None:
-    result = check_gpu_phase(enabled=True, snapshot=None)
+    result = gpu_check(enabled=True, snapshot=None)
     assert result == CheckResult(
         GPU_SHARING_CHECK,
         False,
@@ -193,7 +201,7 @@ def test_apply_gpu_phase_missing_row() -> None:
 
 
 def test_check_gpu_phase_reports_request_and_backoff() -> None:
-    result = check_gpu_phase(
+    result = gpu_check(
         enabled=True,
         snapshot=snap(
             GpuPhase.LLM,
@@ -212,7 +220,7 @@ def test_check_gpu_phase_reports_request_and_backoff() -> None:
 
 
 def test_check_gpu_phase_error_is_an_advisory_failure_with_last_error() -> None:
-    result = check_gpu_phase(
+    result = gpu_check(
         enabled=True,
         snapshot=snap(GpuPhase.ERROR, last_error="could not return the GPU: release timed out"),
     )
@@ -224,8 +232,37 @@ def test_check_gpu_phase_error_is_an_advisory_failure_with_last_error() -> None:
     assert exit_code([result]) == 0
 
 
+def test_stale_after_is_three_ticks_with_a_two_minute_floor() -> None:
+    assert gpu_phase_stale_after_seconds(5) == 120
+    assert gpu_phase_stale_after_seconds(30) == 120
+    assert gpu_phase_stale_after_seconds(60) == 180
+
+
+@pytest.mark.parametrize("phase", [GpuPhase.LLM, GpuPhase.AUDIO, GpuPhase.ERROR])
+def test_check_gpu_phase_reports_a_task_that_stopped_writing(phase: GpuPhase) -> None:
+    written = NOW - timedelta(seconds=121)
+    result = gpu_check(snapshot=snap(phase, updated_at=written), enabled=True)
+    assert result == CheckResult(
+        GPU_SHARING_CHECK,
+        False,
+        False,
+        "the GPU sharing task has not run since 2026-10-02 17:57 UTC; check that the "
+        "gpu-phase service from compose.gpu-phase.yaml is running",
+    )
+    assert exit_code([result]) == 0
+
+
+def test_check_gpu_phase_at_the_stale_boundary_is_still_fresh() -> None:
+    at_limit = snap(GpuPhase.LLM, updated_at=NOW - timedelta(seconds=120))
+    result = gpu_check(snapshot=at_limit, enabled=True)
+    assert result is not None and result.ok
+    slow_tick = snap(GpuPhase.LLM, updated_at=NOW - timedelta(seconds=150))
+    result = gpu_check(snapshot=slow_tick, enabled=True, tick_seconds=60)
+    assert result is not None and result.ok
+
+
 def test_check_gpu_phase_read_error() -> None:
-    result = check_gpu_phase(enabled=True, snapshot=None, read_error="ProgrammingError")
+    result = gpu_check(enabled=True, snapshot=None, read_error="ProgrammingError")
     assert result == CheckResult(
         GPU_SHARING_CHECK, False, False, "could not read the phase (ProgrammingError)"
     )
@@ -377,7 +414,7 @@ def test_status_rows_expected_stop_is_off_without_controls() -> None:
 
 
 def test_status_rows_gpu_sharing_error_warns() -> None:
-    result = check_gpu_phase(enabled=True, snapshot=snap(GpuPhase.ERROR, last_error="boom"))
+    result = gpu_check(enabled=True, snapshot=snap(GpuPhase.ERROR, last_error="boom"))
     assert result is not None
     rows = _build_components([_check(result)], NoopController("test"))
     sharing = _row(rows, "GPU sharing")
