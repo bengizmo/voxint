@@ -533,6 +533,18 @@ docker compose -f compose.yaml -f compose.gpu.yaml -f compose.override.yaml up -
 
 and requeue the failed run.
 
+### Sharing the GPU with a local LLM (issue #748; off by default)
+
+When the GPU cannot hold the model services and a local LLM server at the same
+time, GPU sharing lets them take turns: Voxint borrows the GPU for
+transcription and diarization, then hands it back for LLM work. It needs a
+small broker on the host that stops and starts the other service, the
+`compose.gpu-phase.yaml` overlay, and `GPU_PHASE_ENABLED=true`. While it is on,
+model services stopped for the language model's turn are reported as off, not
+as failures, and `voxint gpu-phase status|audio-now|release` shows and steers
+the current phase. Setup, the broker HTTP contract, settings and failure
+recovery: [gpu-sharing.md](gpu-sharing.md).
+
 ### Schema migrations
 
 A one-shot `migrate` service runs `alembic upgrade head` after Postgres is
@@ -565,6 +577,7 @@ docker compose exec api voxint restart <run-id> [--from-stage STAGE] [--yes] [--
 docker compose exec api voxint list                      # recent runs, newest first (--status, --limit, --json)
 docker compose exec api voxint export <run-id> --format srt   # export a transcript (see below)
 docker compose exec api voxint doctor                    # read-only preflight for every dependency
+docker compose exec api voxint gpu-phase status          # GPU sharing phase and waiting work (docs/gpu-sharing.md)
 docker compose exec api voxint stats                     # aggregate health/throughput (--since, --json)
 docker compose exec api voxint watch <run-id>            # follow a run until it stops (--interval, --timeout)
 docker compose exec api voxint speakers auto-enroll-backfill --dry-run  # preview auto-enrollment on existing runs

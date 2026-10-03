@@ -927,6 +927,96 @@ def _queue_resume(args: argparse.Namespace) -> int:
     return 0
 
 
+_GPU_SHARING_OFF = "GPU sharing is off (GPU_PHASE_ENABLED is not set)"
+
+
+def _gpu_phase_status(args: argparse.Namespace) -> int:
+    """Print the shared-GPU phase and lane counts. Read-only."""
+    del args
+    from datetime import UTC, datetime
+
+    from voxint.config import get_settings
+    from voxint.db.session import build_engine, build_session_factory
+    from voxint.gpu_phase.state import (
+        gpu_lane_demand,
+        gpu_lane_in_flight,
+        post_lane_in_flight,
+        read_phase,
+    )
+    from voxint.gpu_phase.visibility import phase_summary, snapshot_phase
+
+    settings = get_settings()
+    if not settings.gpu_phase_enabled:
+        print(_GPU_SHARING_OFF)
+        return 0
+
+    def when(value: datetime | None) -> str:
+        return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC") if value else "-"
+
+    factory = build_session_factory(build_engine())
+    with factory() as session:
+        snapshot = read_phase(session)
+        demand = gpu_lane_demand(session)
+        gpu_running = gpu_lane_in_flight(session)
+        post_running = post_lane_in_flight(session)
+    phase = snapshot_phase(snapshot)
+    print(f"phase:            {phase.value if phase else 'none'} ({phase_summary(phase)})")
+    if snapshot is not None:
+        print(f"since:            {when(snapshot.phase_since)}")
+        print(f"lease expires:    {when(snapshot.lease_expires_at)}")
+        print(f"last error:       {snapshot.last_error or '-'}")
+        print(f"failures:         {snapshot.failures}")
+        print(f"retry after:      {when(snapshot.retry_after)}")
+        request = snapshot.operator_request.value if snapshot.operator_request else "-"
+        print(f"pending request:  {request}")
+    print(f"waiting for GPU:  {demand} queued runs")
+    print(f"in flight:        {gpu_running} on the GPU, {post_running} after it")
+    return 0
+
+
+def _gpu_phase_request(request_value: str) -> int:
+    from voxint.config import get_settings
+    from voxint.db.session import build_engine, build_session_factory, session_scope
+    from voxint.gpu_phase.state import GpuPhase, OperatorRequest, read_phase, set_request
+    from voxint.gpu_phase.visibility import snapshot_phase
+
+    settings = get_settings()
+    if not settings.gpu_phase_enabled:
+        print(f"error: {_GPU_SHARING_OFF}; there is no phase to change")
+        return 2
+    request = OperatorRequest(request_value)
+    factory = build_session_factory(build_engine())
+    with session_scope(factory) as session:
+        set_request(session, request)
+        phase = snapshot_phase(read_phase(session))
+    watch = "watch with 'voxint gpu-phase status'"
+    if request == OperatorRequest.AUDIO:
+        if phase == GpuPhase.AUDIO:
+            print(f"audio work requested; the GPU is already doing audio work ({watch})")
+        else:
+            print(f"audio work requested; the GPU switches over the next few ticks ({watch})")
+    elif phase == GpuPhase.ERROR:
+        print(f"release requested; the next tick retries handing the GPU back ({watch})")
+    elif phase == GpuPhase.LLM:
+        print(f"release requested; the GPU already serves the language model ({watch})")
+    else:
+        print(
+            "release requested; the GPU goes back to the language model once audio "
+            f"work in progress finishes ({watch})"
+        )
+    return 0
+
+
+def _gpu_phase_audio_now(args: argparse.Namespace) -> int:
+    del args
+    return _gpu_phase_request("audio")
+
+
+def _gpu_phase_release(args: argparse.Namespace) -> int:
+    del args
+    return _gpu_phase_request("release")
+
+
 def _fetch(args: argparse.Namespace) -> int:
     """Register a URL for acquisition and enqueue its run (mirrors ``_submit``).
 
@@ -2180,7 +2270,10 @@ def _doctor(args: argparse.Namespace) -> int:
         engine.dispose()
 
     for result in results:
-        tag = "ok  " if result.ok else ("FAIL" if result.hard else "warn")
+        if result.expected_stop:
+            tag = "off "
+        else:
+            tag = "ok  " if result.ok else ("FAIL" if result.hard else "warn")
         print(f"[{tag}] {result.name}: {result.detail}")
 
     # Advisory hardware telemetry from the services' /healthz. Never gates the
@@ -2952,6 +3045,23 @@ def build_parser() -> argparse.ArgumentParser:
     qpause_p.set_defaults(fn=_queue_pause)
     qresume_p = queue_sub.add_parser("resume", help="resume the global processing queue")
     qresume_p.set_defaults(fn=_queue_resume)
+
+    gpu_phase_p = sub.add_parser(
+        "gpu-phase", help="shared-GPU controls (GPU_PHASE_ENABLED; see docs/gpu-sharing.md)"
+    )
+    gpu_phase_sub = gpu_phase_p.add_subparsers(dest="gpu_phase_command", required=True)
+    gstatus_p = gpu_phase_sub.add_parser(
+        "status", help="show the GPU phase, lease, last error and waiting work"
+    )
+    gstatus_p.set_defaults(fn=_gpu_phase_status)
+    gaudio_p = gpu_phase_sub.add_parser(
+        "audio-now", help="switch the GPU to audio work on the next tick"
+    )
+    gaudio_p.set_defaults(fn=_gpu_phase_audio_now)
+    grelease_p = gpu_phase_sub.add_parser(
+        "release", help="hand the GPU back to the other service, or retry after an error"
+    )
+    grelease_p.set_defaults(fn=_gpu_phase_release)
 
     fetch_p = sub.add_parser("fetch", help="submit a URL for yt-dlp acquisition + transcription")
     fetch_p.add_argument(

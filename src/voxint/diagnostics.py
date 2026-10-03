@@ -13,6 +13,11 @@ Two deliberate rules:
   vendored) and enhancement is best-effort, so their state is reported but never
   changes the exit code. An enabled-but-unconfigured BYO endpoint reports an
   ok-state "not configured" without being probed at all.
+* **Expected stops.** With GPU sharing on (``GPU_PHASE_ENABLED``), the model
+  services are stopped on purpose while the GPU serves the language model, and
+  the language model is stopped on purpose while Voxint holds the GPU. Such a
+  result is advisory with ``expected_stop=True``: shown as off, never a failure,
+  never a nonzero exit.
 * **No secrets in output.** ``database_url``/``redis_url``/``llm_api_key`` are
   credentials. A detail string therefore never echoes a URL, a token, or a raw
   exception (a DSN can ride inside ``str(exc)``) — only the exception *type* and
@@ -24,6 +29,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 
 import httpx
@@ -42,6 +48,15 @@ from voxint.app_settings import (
     resolve_effective_ytdlp_enabled,
 )
 from voxint.config import Settings
+from voxint.gpu_phase.state import GpuPhase, GpuPhaseSnapshot, OperatorRequest, read_phase
+from voxint.gpu_phase.visibility import (
+    LLM_EXPECTED_DOWN_DETAIL,
+    NO_ROW_SUMMARY,
+    PHASE_SUMMARY,
+    llm_expected_down,
+    model_service_stop_detail,
+    snapshot_phase,
+)
 
 HF_WHOAMI_URL = "https://huggingface.co/api/whoami-v2"
 
@@ -59,6 +74,9 @@ class CheckResult:
     ok: bool
     hard: bool
     detail: str  # plain-language; never a credential, URL, or raw exception text
+    # Down on purpose (GPU sharing stopped it). Always paired with ok=False and
+    # hard=False, so the exit code ignores it; displays render it as "off".
+    expected_stop: bool = False
 
 
 def _safe(exc: Exception) -> str:
@@ -168,6 +186,102 @@ def check_voice_embedding_spaces(
     return CheckResult(
         "voice embedding spaces", True, False, f"consistent ({spaces[0]})"
     )
+
+
+GPU_SHARING_CHECK = "gpu sharing"
+_MODEL_SERVICE_CHECKS = frozenset({"transcription", "diarization", "speaker embedding"})
+# Only the operator's own endpoint: the other service on a shared GPU is a
+# host LLM server reached through LLM_BASE_URL. The bundled model is a Voxint
+# container that GPU sharing never stops, so it keeps its honest state.
+_SHARED_LLM_CHECK = "llm endpoint"
+
+_REQUEST_TEXT = {
+    OperatorRequest.AUDIO: "operator asked for audio work now",
+    OperatorRequest.RELEASE: "operator asked to release the GPU",
+}
+
+
+def _utc(value: datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def check_gpu_phase(
+    *, enabled: bool, snapshot: GpuPhaseSnapshot | None, read_error: str | None = None
+) -> CheckResult | None:
+    """Advisory: which phase GPU sharing is in, in plain words. None when off.
+
+    ``error`` (the GPU could not be handed back, so language-model work is
+    paused) is the one not-ok phase; a failed attempt that is backing off is
+    reported in the detail but stays ok, since the next tick retries it.
+    ``last_error`` is the orchestrator's bounded message and is shown as is.
+    """
+    if not enabled:
+        return None
+    if read_error is not None:
+        return CheckResult(
+            GPU_SHARING_CHECK, False, False, f"could not read the phase ({read_error})"
+        )
+    if snapshot is None:
+        # Both lanes stay closed until the GPU sharing task writes the row; if it
+        # never does, its worker is not running.
+        return CheckResult(
+            GPU_SHARING_CHECK,
+            False,
+            False,
+            f"{NO_ROW_SUMMARY}; check that the gpu-phase worker is running",
+        )
+    phase = snapshot.phase
+    if phase == GpuPhase.ERROR:
+        reason = snapshot.last_error
+        detail = PHASE_SUMMARY[phase] + (f" ({reason})" if reason else "")
+        return CheckResult(
+            GPU_SHARING_CHECK,
+            False,
+            False,
+            f"{detail}; language-model work is paused; run voxint gpu-phase release",
+        )
+    parts = [f"{PHASE_SUMMARY[phase]} since {_utc(snapshot.phase_since)}"]
+    if snapshot.operator_request is not None:
+        parts.append(_REQUEST_TEXT[snapshot.operator_request])
+    if snapshot.failures and snapshot.retry_after is not None:
+        failed = f"last attempt failed, next try after {_utc(snapshot.retry_after)}"
+        if snapshot.last_error:
+            failed += f" ({snapshot.last_error})"
+        parts.append(failed)
+    return CheckResult(GPU_SHARING_CHECK, True, False, "; ".join(parts))
+
+
+def apply_gpu_phase(results: list[CheckResult], phase: GpuPhase | None) -> list[CheckResult]:
+    """Re-mark the dependencies GPU sharing stopped on purpose as expected stops.
+
+    Only a result that is down changes: a service that answers is reported as it
+    is, whatever the phase.
+    """
+    service_detail = model_service_stop_detail(phase)
+    llm_down = llm_expected_down(phase)
+    adjusted: list[CheckResult] = []
+    for result in results:
+        if not result.ok and result.name in _MODEL_SERVICE_CHECKS and service_detail:
+            result = CheckResult(result.name, False, False, service_detail, expected_stop=True)
+        elif not result.ok and result.name == _SHARED_LLM_CHECK and llm_down:
+            result = CheckResult(
+                result.name, False, False, LLM_EXPECTED_DOWN_DETAIL, expected_stop=True
+            )
+        adjusted.append(result)
+    return adjusted
+
+
+def _read_gpu_phase(
+    settings: Settings, engine: Engine
+) -> tuple[GpuPhaseSnapshot | None, str | None]:
+    """(snapshot, None), or (None, exception type) when the row cannot be read."""
+    if not settings.gpu_phase_enabled:
+        return None, None
+    try:
+        with Session(engine) as session:
+            return read_phase(session), None
+    except SQLAlchemyError as exc:
+        return None, _safe(exc)
 
 
 def check_hf_token(token: str | None, *, client: httpx.Client) -> CheckResult:
@@ -397,6 +511,14 @@ def run_diagnostics(
     js_rt = check_ytdlp_js_runtime(ytdlp_enabled=ytdlp_enabled)
     if js_rt is not None:
         results.append(js_rt)
+    snapshot, phase_error = _read_gpu_phase(settings, engine)
+    gpu_check = check_gpu_phase(
+        enabled=settings.gpu_phase_enabled, snapshot=snapshot, read_error=phase_error
+    )
+    if gpu_check is not None:
+        if phase_error is None:
+            results = apply_gpu_phase(results, snapshot_phase(snapshot))
+        results.append(gpu_check)
     return results
 
 
@@ -412,6 +534,8 @@ def check_state(result: CheckResult) -> Literal["ready", "failed", "unverified"]
     setup wizard (issue #61): ``ready`` (passed), ``failed`` (a hard dependency is
     down — the pipeline cannot run), or ``unverified`` (an advisory check that did not
     pass — reported honestly rather than as healthy, never a false all-good).
+    An expected stop (GPU sharing) is advisory, so it reads ``unverified`` with
+    its own detail; the Status page and doctor show it as off.
     """
     if result.ok:
         return "ready"

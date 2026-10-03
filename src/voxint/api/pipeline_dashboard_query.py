@@ -120,6 +120,9 @@ class PipelineDashboardState:
     workload: WorkloadSummary
     generated_at: datetime
     is_idle: bool
+    # Short GPU-sharing note for the footer (#748); None when sharing is off or
+    # there is nothing to say (audio phase, or nothing waiting).
+    gpu_sharing_note: str | None = None
 
 
 def _successful_avg_durations(
@@ -243,7 +246,10 @@ def estimate_run_stage_progress(
 
 
 def degraded_stages(
-    services: Iterable[tuple[str, bool]], *, llm_enabled: bool | None
+    services: Iterable[tuple[str, bool]],
+    *,
+    llm_enabled: bool | None,
+    expected_stop_reason: str | None = None,
 ) -> dict[str, str]:
     """Map cached service reachability to ``{stage: reason}`` for the strip.
 
@@ -251,12 +257,20 @@ def degraded_stages(
     caller feeds it the cached resource snapshot (never a fresh probe); an empty
     snapshot marks nothing degraded, so missing telemetry never claims a paused
     stage. Two services pausing the same stage join their reasons with "and".
+
+    ``expected_stop_reason`` is set while GPU sharing has stopped the model
+    services on purpose (#748): a down service's stage then shows that reason
+    once, instead of claiming the service is down.
     """
     reasons: dict[str, list[str]] = {}
     down_services = {name for name, up in services if not up}
     for name, (stage, reason) in _SERVICE_STAGE.items():
         if name in down_services:
-            reasons.setdefault(stage.value, []).append(reason)
+            stage_reasons = reasons.setdefault(stage.value, [])
+            if expected_stop_reason is None:
+                stage_reasons.append(reason)
+            elif expected_stop_reason not in stage_reasons:
+                stage_reasons.append(expected_stop_reason)
     if llm_enabled is False:
         reasons.setdefault(Stage.ENHANCE_MATCH.value, []).append("local AI model is off")
     return {stage: " and ".join(stage_reasons) for stage, stage_reasons in reasons.items()}
@@ -268,6 +282,7 @@ def pipeline_dashboard_state(
     compute_tier: str,
     queue_paused: bool,
     degraded: Mapping[str, str] | None = None,
+    gpu_sharing_note: str | None = None,
 ) -> PipelineDashboardState:
     """Composite read model for the progress strip."""
     degraded = degraded or {}
@@ -345,6 +360,7 @@ def pipeline_dashboard_state(
         ),
         generated_at=now,
         is_idle=is_idle,
+        gpu_sharing_note=gpu_sharing_note,
     )
 
 

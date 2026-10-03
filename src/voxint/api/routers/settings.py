@@ -124,7 +124,12 @@ from voxint.app_settings import (
 )
 from voxint.config import Settings, llm_budget_fits_stage_lease, llm_endpoint_explicitly_set
 from voxint.db.models import AppSettings
-from voxint.diagnostics import LLM_NOT_CONFIGURED_DETAIL, check_state, run_diagnostics
+from voxint.diagnostics import (
+    GPU_SHARING_CHECK,
+    LLM_NOT_CONFIGURED_DETAIL,
+    check_state,
+    run_diagnostics,
+)
 from voxint.domain_packs.base import DomainPackError
 from voxint.domain_packs.corrections import (
     MAX_MATCH_CHARS,
@@ -825,6 +830,15 @@ _DOCTOR_REMEDIATION: dict[str, str] = {
         " turn the bundled model off in Settings. Transcription and diarization"
         " still run; enhancement is simply skipped until it's reachable."
     ),
+    # GPU sharing (#748): the model services and the language model take turns
+    # on one GPU, so one of them being stopped is the normal state.
+    "gpu sharing": (
+        "GPU sharing is on: the model services run only while the GPU does audio"
+        " work, and the language model is stopped during that time. A stopped"
+        " service here is expected. If GPU sharing reports it could not return"
+        " the GPU, run voxint gpu-phase release on the server, or see"
+        " docs/gpu-sharing.md."
+    ),
     # Fallback for any diagnostics check not explicitly categorized below — a neutral
     # "look at this dependency" rather than wrongly steering the operator at the model
     # services. No current check lands here (see _doctor_category), but a future one
@@ -841,6 +855,8 @@ def _doctor_category(name: str) -> str:
     ``_DOCTOR_REMEDIATION`` category. Total by construction — an unrecognized name (a
     future check) falls through to the neutral ``other`` copy, never a KeyError and
     never the wrong (model-services) remediation."""
+    if name == GPU_SHARING_CHECK:
+        return "gpu sharing"
     if name == "postgres":
         return "database"
     if name == "redis":
@@ -867,7 +883,10 @@ def _doctor_checks(request: Request, session: Session) -> list[dict[str, Any]]:
             "name": r.name,
             "state": check_state(r),
             "detail": r.detail,
-            "remediation": _DOCTOR_REMEDIATION[_doctor_category(r.name)],
+            "remediation": _DOCTOR_REMEDIATION[
+                "gpu sharing" if r.expected_stop else _doctor_category(r.name)
+            ],
+            "expected_stop": r.expected_stop,
         }
         for r in results
     ]
@@ -886,6 +905,7 @@ _COMPONENT_LABELS: dict[str, str] = {
     # independent capabilities with independent health, so they get one row each.
     "llm bundled": "Bundled AI model",
     "llm endpoint": "Your own AI endpoint",
+    GPU_SHARING_CHECK: "GPU sharing",
 }
 
 _COMPONENT_ORDER = (
@@ -897,6 +917,7 @@ _COMPONENT_ORDER = (
     "redis",
     "llm bundled",
     "llm endpoint",
+    GPU_SHARING_CHECK,
 )
 
 
@@ -956,7 +977,15 @@ def _build_components(
                 action_label = "Turn on"
                 action_style = "primary"
             else:
+                # Includes "gpu sharing": absent when the feature is off.
                 continue
+        elif check.get("expected_stop"):
+            # GPU sharing stopped this on purpose (#748): off, not a warning.
+            dot = "off"
+            state_text = check["detail"]
+        elif key == GPU_SHARING_CHECK:
+            dot = "ok" if check["state"] == "ready" else "warn"
+            state_text = check["detail"]
         else:
             state = check["state"]
             if (
@@ -983,9 +1012,13 @@ def _build_components(
             "diarization": "diarization",
             "speaker embedding": "speaker_embedding",
         }.get(key)
+        # A service GPU sharing stopped gets no start/stop controls or hint:
+        # starting it by hand would load models onto a GPU the language model
+        # holds. The GPU sharing orchestrator starts it for the next audio window.
+        sharing_owned = bool(check and check.get("expected_stop"))
         container_state = (
             controller.inspect(service_key)
-            if (controller.controllable and service_key)
+            if (controller.controllable and service_key and not sharing_owned)
             else None
         )
         if container_state == ServiceState.STOPPED:
@@ -995,9 +1028,15 @@ def _build_components(
             {
                 "label": label,
                 "key": service_key,
-                "controllable": controller.controllable if service_key else False,
+                "controllable": (
+                    controller.controllable if service_key and not sharing_owned else False
+                ),
                 "state": container_state,
-                "terminal_hint": controller.terminal_hint(service_key) if service_key else None,
+                "terminal_hint": (
+                    controller.terminal_hint(service_key)
+                    if service_key and not sharing_owned
+                    else None
+                ),
                 "is_model_service": service_key is not None,
                 "dot": dot,
                 "state_text": state_text,

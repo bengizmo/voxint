@@ -156,6 +156,8 @@ from voxint.enrichment.translations import (
 )
 from voxint.export import MEDIA_TYPES, format_clock, transcript_payload
 from voxint.export.reading import layout_turns
+from voxint.gpu_phase.visibility import GpuSharingView, stage_pause_reason
+from voxint.gpu_phase.visibility import read_view as read_gpu_sharing_view
 from voxint.ingest import (
     MissingStageError,
     RestartPrerequisiteError,
@@ -648,6 +650,15 @@ def _stage_progress_for(
     return stage_progress
 
 
+def _gpu_sharing(
+    session: Session, settings: Settings
+) -> tuple[GpuSharingView | None, str | None]:
+    """The GPU-sharing view (None when off) and the strip's stage reason while
+    GPU sharing keeps the model services stopped (#748)."""
+    view = read_gpu_sharing_view(session, settings)
+    return view, stage_pause_reason(view.phase) if view is not None else None
+
+
 @core_router.get("/runs")
 def runs(
     request: Request,
@@ -720,16 +731,24 @@ def runs(
     grouped_items = group_failed_runs(page.items) if active_view is LifecycleView.FAILED else None
     _queue_paused = is_queue_paused(session)
     _now = datetime.now(UTC)
+    gpu_sharing, stop_reason = _gpu_sharing(session, settings)
+    gpu_note = gpu_sharing.note if gpu_sharing is not None else None
     # Degraded stage cells read the cached resource snapshot (short-TTL,
     # single-flight); never a fresh probe on the page or the strip poll.
     snapshot = collect_resource_status_or_empty(settings)
     degraded = degraded_stages(
         ((service.name, service.up) for service in snapshot.services),
         llm_enabled=settings.llm_enabled,
+        expected_stop_reason=stop_reason,
     )
     dashboard = (
         pipeline_dashboard_state(
-            session, _now, settings.compute_tier, _queue_paused, degraded=degraded
+            session,
+            _now,
+            settings.compute_tier,
+            _queue_paused,
+            degraded=degraded,
+            gpu_sharing_note=gpu_note,
         )
         if not show_archived
         else None
@@ -797,11 +816,14 @@ def runs(
             "pipeline_summary": _pipeline_summary(
                 run_status_counts(session),
                 queue_paused=_queue_paused,
+                gpu_sharing_note=gpu_note,
             ),
             "degraded": _detect_degraded(
                 ((service.name, service.up) for service in snapshot.services),
                 llm_enabled=settings.llm_enabled,
+                model_services_expected_down=stop_reason is not None,
             ),
+            "gpu_sharing": gpu_sharing,
             "aux_jobs": recent_aux_jobs(session),
             "settings_status_url": str(request.url_for("settings_status")),
             "next_url": next_url,
@@ -847,13 +869,20 @@ def runs_progress_strip(
     settings: Settings = request.app.state.settings
     now = datetime.now(UTC)
     _queue_paused = is_queue_paused(session)
+    gpu_sharing, stop_reason = _gpu_sharing(session, settings)
     snapshot = collect_resource_status_or_empty(settings)
     degraded = degraded_stages(
         ((service.name, service.up) for service in snapshot.services),
         llm_enabled=settings.llm_enabled,
+        expected_stop_reason=stop_reason,
     )
     dashboard = pipeline_dashboard_state(
-        session, now, settings.compute_tier, _queue_paused, degraded=degraded
+        session,
+        now,
+        settings.compute_tier,
+        _queue_paused,
+        degraded=degraded,
+        gpu_sharing_note=gpu_sharing.note if gpu_sharing is not None else None,
     )
     response = templates.TemplateResponse(
         request,
@@ -912,10 +941,12 @@ def runs_live_rows(
     # The dashboard read model only feeds the stage chip, so a queued-only or
     # all-terminal tick skips it (the strip polls it on its own schedule).
     if any(item.status == RunStatus.RUNNING.value for item in items):
+        _, stop_reason = _gpu_sharing(session, settings)
         snapshot = collect_resource_status_or_empty(settings)
         degraded = degraded_stages(
             ((service.name, service.up) for service in snapshot.services),
             llm_enabled=settings.llm_enabled,
+            expected_stop_reason=stop_reason,
         )
         dashboard = pipeline_dashboard_state(
             session, now, settings.compute_tier, is_queue_paused(session), degraded=degraded

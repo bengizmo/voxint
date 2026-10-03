@@ -14,6 +14,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   research wait until it is LLM. The orchestrator that moves between phases
   is not in this change, so enabling the setting on its own leaves audio
   work queued. Settings are documented in `.env.example`.
+- **GPU sharing status and controls** (#748). `voxint gpu-phase status`
+  prints the phase, lease, last error and waiting work; `voxint gpu-phase
+  audio-now` and `voxint gpu-phase release` ask for the next switch. With
+  GPU sharing on, `voxint doctor` and Settings > Status gain a GPU sharing
+  row, and a model service stopped for the language model's turn (or the
+  language model stopped for Voxint's) reads as off with the reason instead
+  of a failure, so doctor's exit code is unchanged. The Runs page, its
+  progress strip and summary say when recordings are waiting for the GPU,
+  when the GPU is switching, and when it could not be handed back. New
+  `docs/gpu-sharing.md` covers setup, the broker HTTP contract, settings and
+  recovery.
 - **A Markdown export laid out as speaker turns** (#741). The Markdown
   export and the on-screen reading view now show `[HH:MM:SS] **Name:** text`
   paragraphs, and the Markdown file opens with the recording's title. Speakers are assigned word by word
