@@ -158,6 +158,7 @@ Say your recording is `interview.wav`. Create a plain-text file named
 
 ```yaml
 title: Interview with Jane Doe
+recorded: 2026-10-02
 speakers:
   - Jane Doe
   - John Smith
@@ -172,6 +173,7 @@ Every line is optional. Here is what each one does:
 | Key | What it does |
 |---|---|
 | `title` | Becomes the recording's display name in the queue and on the run page. |
+| `recorded` | The day the recording was made, written as YYYY-MM-DD. It appears after the title at the top of the Markdown transcript. Without it, Voxint uses the creation date stored in the file by Apple devices, when there is one. |
 | `speakers` | Names of people likely in the recording. Voxint treats them as trusted name hints when it suggests speaker names during review, so these names surface sooner and more confidently. |
 | `domain_pack` | Picks the [domain pack](../domain-packs.md) for this one recording. It wins over the folder's pack setting. |
 | `notes` | Free text, saved as the run's operator notes. |

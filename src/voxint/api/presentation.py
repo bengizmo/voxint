@@ -25,7 +25,7 @@ Two rules the callers rely on:
 import math
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from urllib.parse import unquote
 
 # Collapses any run of whitespace or non-printing character a display string can
@@ -56,6 +56,30 @@ def _clean_basename(source_path: str) -> str:
     decoded = unquote(segment) if segment else source_path
     cleaned = _CONTROL_RUN.sub(" ", decoded).strip()
     return cleaned or source_path.strip() or source_path
+
+
+_ENGLISH_MONTHS = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+
+
+def recorded_from_snapshot(snapshot: object) -> date | None:
+    """Read a strict ISO date from a possibly tampered stored snapshot."""
+    if not isinstance(snapshot, dict):
+        return None
+    value = snapshot.get("recorded")
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def format_recorded_date(d: date) -> str:
+    """Format a recording day with fixed English month names."""
+    return f"{d.day} {_ENGLISH_MONTHS[d.month - 1]} {d.year:04d}"
 
 
 def title_from_snapshot(snapshot: object) -> str | None:

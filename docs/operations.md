@@ -839,16 +839,28 @@ RTTM uses the run's UUID as the file id and the raw diarization labels
 (`SPEAKER_00` …), so it round-trips against diarization scoring tools, and it
 deliberately does **not** substitute adjudicated speaker names.
 
+#### Media metadata backfills
+
+`voxint media backfill-hashes` fills missing content hashes from source files.
+`voxint media backfill-recorded-dates [--dry-run]` fills missing recording dates
+from each source file's Apple creation date tag. It checks only rows with no
+recording date and skips purged media. Missing files are listed, and files with
+no usable tag stay empty. Each date is committed separately, so an interrupted
+sweep keeps its progress. Use `--dry-run` to list the media IDs and dates that
+would be set without writing anything. Existing dates are kept.
+
 #### The `turns` Markdown style
 
 The `blocks` style gives each transcript segment one speaker. A segment is 25 to
 50 seconds of audio, so when two people trade short remarks inside one segment,
 both end up under one name. The `turns` style, the default since 0.51, assigns
 speakers word by word and lays the transcript out as a conversation under a
-title heading (the recording's title from its sidecar, else its file name):
+title heading (the recording's title from its sidecar, else its file name).
+When a recording date is known, it follows the title after a pipe, which the
+export escapes as `\|` like any other Markdown character:
 
 ```markdown
-# Planning call
+# Planning call \| 2 Oct 2026
 
 [00:00:12] **Alex:** Thanks for making time today.
 
@@ -859,6 +871,12 @@ title heading (the recording's title from its sidecar, else its file name):
 
 How it is built:
 
+- **Recording date.** Taken from the sidecar `recorded:` key when present,
+  else the source file's creation date tag written by Apple devices
+  (`com.apple.quicktime.creationdate`, the date as written at the device's own
+  UTC offset). Files with only a UTC `creation_time` get no date because it can
+  be a day off. The first value found is kept. The date is only used in the
+  Markdown turns heading.
 - **Speakers per word.** Each word takes the speaker of the diarization turn it
   overlaps most. This is computed when you export. Nothing stored changes, and
   the other formats are unaffected.
