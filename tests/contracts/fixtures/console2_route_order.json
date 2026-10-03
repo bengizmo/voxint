@@ -54,6 +54,12 @@
     ]
   ],
   [
+    "/setup/pending",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/login",
     [
       "GET"

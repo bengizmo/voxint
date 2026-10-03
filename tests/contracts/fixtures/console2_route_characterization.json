@@ -1356,6 +1356,14 @@
     true
   ],
   [
+    "/setup/pending",
+    [
+      "GET"
+    ],
+    "exempt",
+    true
+  ],
+  [
     "/setup/scan",
     [
       "POST"

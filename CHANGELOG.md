@@ -84,6 +84,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `GET /media/{id}/editor/voice-sample/{speaker_id}`.
 
 ### Fixed
+- **Clear setup status for non-admins** (#764). Reviewers and viewers now see
+  a "Setup in progress" page with reload and sign-out controls until an
+  administrator finishes setup, instead of an access-denied error.
 - Celery beat now reads `.env` in the Compose stack, as the worker does. Before,
   beat never saw opt-in settings, so `GPU_PHASE_ENABLED`, media retention,
   notifications and the activity prune were never scheduled under Compose (#748).
