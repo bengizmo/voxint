@@ -40,6 +40,11 @@ _Char = tuple[str, int]
 
 
 def _clean_pieces(pieces: tuple[TurnPiece, ...]) -> tuple[TurnPiece, ...]:
+    return tuple(piece for _, piece in _clean_indexed(pieces))
+
+
+def _clean_indexed(pieces: tuple[TurnPiece, ...]) -> tuple[tuple[int, TurnPiece], ...]:
+    """Clean F1-F4 and pair each surviving piece with its input index."""
     chars: list[_Char] = []
     for index, piece in enumerate(pieces):
         if not piece.text:
@@ -54,7 +59,7 @@ def _clean_pieces(pieces: tuple[TurnPiece, ...]) -> tuple[TurnPiece, ...]:
         chars.extend((char, index) for char in piece.text)
     body = "".join(char for char, _ in chars)
     if not _FILLER.search(body):
-        return pieces
+        return tuple(enumerate(pieces))
 
     out: list[_Char] = []
     cursor = 0
@@ -109,8 +114,8 @@ def _clean_pieces(pieces: tuple[TurnPiece, ...]) -> tuple[TurnPiece, ...]:
     for char, owner in out:
         texts[owner].append(char)
     return tuple(
-        replace(piece, text="".join(text))
-        for piece, text in zip(pieces, texts, strict=True)
+        (index, replace(piece, text="".join(text)))
+        for index, (piece, text) in enumerate(zip(pieces, texts, strict=True))
         if "".join(text).strip()
     )
 
@@ -136,11 +141,30 @@ def _join_at_seam(
 
 def drop_fillers(turns: Sequence[SpeakerTurn]) -> list[SpeakerTurn]:
     """Apply F1-F6 without changing attribution, ordering or piece metadata."""
+    return [turn for turn, _ in drop_fillers_with_seams(turns)]
+
+
+def drop_fillers_with_seams(
+    turns: Sequence[SpeakerTurn],
+) -> list[tuple[SpeakerTurn, frozenset[int]]]:
+    """Apply F1-F6 and report, per output turn, the piece indexes where F5 joined
+    in another input turn, so a later filter can refuse to work across them."""
     kept = [turn for turn in turns if any(p.text.strip() for p in _clean_pieces(turn.pieces))]
-    merged: list[SpeakerTurn] = []
+    merged: list[tuple[SpeakerTurn, list[int]]] = []
     for turn in kept:
-        if merged and merged[-1].identity_key == turn.identity_key:
-            merged[-1] = replace(merged[-1], pieces=_join_at_seam(merged[-1].pieces, turn.pieces))
+        if merged and merged[-1][0].identity_key == turn.identity_key:
+            left, sources = merged[-1]
+            sources.extend([sources[-1] + 1 if sources else 0] * len(turn.pieces))
+            merged[-1] = (replace(left, pieces=_join_at_seam(left.pieces, turn.pieces)), sources)
         else:
-            merged.append(turn)
-    return [replace(turn, pieces=_clean_pieces(turn.pieces)) for turn in merged]
+            merged.append((turn, [0] * len(turn.pieces)))
+    out: list[tuple[SpeakerTurn, frozenset[int]]] = []
+    for turn, sources in merged:
+        cleaned = _clean_indexed(turn.pieces)
+        seams = frozenset(
+            position
+            for position in range(1, len(cleaned))
+            if sources[cleaned[position][0]] != sources[cleaned[position - 1][0]]
+        )
+        out.append((replace(turn, pieces=tuple(piece for _, piece in cleaned)), seams))
+    return out
