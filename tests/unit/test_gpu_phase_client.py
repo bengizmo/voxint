@@ -137,8 +137,21 @@ def test_non_success_codes_survive_invalid_bodies(code: int, content: bytes) -> 
         phase_settings(gpu_lease_token="private-token"),
         transport=httpx.MockTransport(lambda request: httpx.Response(code, content=content)),
     )
-    results = [client.acquire(), client.release("lease"), client.status()]
+    release = client.release("lease")
+    results = [client.acquire(), client.status()]
+    if code == 202:
+        # A release 202 means "still restoring the other service"; its body is unused.
+        assert release.kind == "pending"
+        assert "private-token" not in release.reason
+    else:
+        results.append(release)
     for result in results:
         assert result.kind == "failed"
         assert f"HTTP {code}" in result.reason
         assert "private-token" not in result.reason
+
+
+def test_release_pending_while_the_other_service_restarts() -> None:
+    settings = phase_settings()
+    transport = httpx.MockTransport(lambda request: httpx.Response(202, json={"state": "pending"}))
+    assert LeaseClient(settings, transport=transport).release("lease").kind == "pending"

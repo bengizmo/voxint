@@ -279,3 +279,37 @@ def test_error_lease_loss_keeps_the_original_reason() -> None:
     assert result.fields["last_error"] == (
         "could not return the GPU: could not stop audio services; GPU lease lost"
     )
+
+
+@pytest.mark.parametrize("delay", [None, -1, 100, 900])
+def test_release_ack_preserves_longer_backoff(delay: int | None) -> None:
+    result = decide(
+        snapshot(
+            P.LLM,
+            operator_request=OperatorRequest.RELEASE,
+            retry_after=NOW + timedelta(seconds=delay) if delay is not None else None,
+        ),
+        Counts(1),
+        Observed(),
+        NOW,
+        phase_settings(),
+    )
+    assert result.phase == P.LLM
+    assert result.fields["operator_request"] is None
+    assert result.fields["retry_after"] == NOW + timedelta(seconds=max(delay or 0, 600))
+
+
+@pytest.mark.parametrize(
+    ("age", "expected"), [(0, P.RELEASING), (899, P.RELEASING), (900, P.ERROR)]
+)
+def test_release_pending_waits_for_the_other_service(age: int, expected: P) -> None:
+    result = decide(
+        snapshot(P.RELEASING, age=age, lease_id="lease"),
+        Counts(),
+        Observed(services=(), release=ReleaseResult("pending")),
+        NOW,
+        phase_settings(),
+    )
+    assert result.phase == expected
+    if expected == P.ERROR:
+        assert "did not come back" in str(result.fields["last_error"])

@@ -29,6 +29,8 @@ class FakeGpuBroker:
         self.lease_id: str | None = None
         self.expiry: datetime | None = None
         self.explicit_release = False
+        # Number of release calls answered 202 before the release completes.
+        self.release_pending = 0
         self.calls: list[httpx.Request] = []
         self.transport = httpx.MockTransport(self)
 
@@ -55,6 +57,9 @@ class FakeGpuBroker:
             )
         body = json.loads(request.content)
         if request.url.path == "/release":
+            if self.release_pending > 0 and self.lease_id == body["lease_id"]:
+                self.release_pending -= 1
+                return httpx.Response(202, json={"state": "pending"})
             code = 200 if self.lease_id == body["lease_id"] else 404
             if code == 200:
                 self.lease_id = None

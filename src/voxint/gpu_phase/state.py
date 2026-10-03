@@ -189,6 +189,17 @@ def gpu_lane_demand(session: Session) -> int:
     ).scalar_one()
 
 
+def post_lane_queued(session: Session) -> int:
+    return session.execute(
+        select(func.count())
+        .select_from(PipelineRun)
+        .where(
+            PipelineRun.status == RunStatus.QUEUED.value,
+            PipelineRun.current_stage.in_(POST_SEGMENT),
+        )
+    ).scalar_one()
+
+
 def _in_flight(session: Session, segment: frozenset[Stage]) -> int:
     stage_filter: ColumnElement[bool] = PipelineRun.current_stage.in_(segment)
     if segment == GPU_SEGMENT:
@@ -204,34 +215,41 @@ def _in_flight(session: Session, segment: frozenset[Stage]) -> int:
 
 
 def gpu_lane_in_flight(session: Session) -> int:
+    """Count RUNNING NULL current_stage only on the GPU side because the engine sets
+    it on entry CAS and never clears it mid-pipeline (completed runs have NULL
+    with status COMPLETED).
+    """
     return _in_flight(session, GPU_SEGMENT)
 
 
 def post_lane_in_flight(session: Session) -> int:
-    """RUNNING pipeline runs in the post lane. LLM jobs are not counted here."""
+    """Exclude RUNNING NULL current_stage (GPU only) because the engine sets it on
+    entry CAS and never clears it mid-pipeline (completed runs are NULL with status COMPLETED).
+    """
     return _in_flight(session, POST_SEGMENT)
 
 
 def running_llm_jobs(session: Session) -> int:
     """Only active LLM work blocks borrowing; queued work stays behind the gate."""
+    return _llm_jobs(session, "running")
+
+
+def queued_llm_jobs(session: Session) -> int:
+    return _llm_jobs(session, "queued")
+
+
+def _llm_jobs(session: Session, status: str) -> int:
     from voxint.db.models import (
         ResearchJob,
-        ResearchJobStatus,
         RunAssetJob,
-        RunAssetJobStatus,
         TranslationJob,
-        TranslationJobStatus,
     )
 
     return sum(
         session.execute(
             select(func.count()).select_from(model).where(model.status == status)
         ).scalar_one()
-        for model, status in (
-            (ResearchJob, ResearchJobStatus.RUNNING.value),
-            (RunAssetJob, RunAssetJobStatus.RUNNING.value),
-            (TranslationJob, TranslationJobStatus.RUNNING.value),
-        )
+        for model in (ResearchJob, RunAssetJob, TranslationJob)
     )
 
 

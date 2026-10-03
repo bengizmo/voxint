@@ -5,7 +5,8 @@ lease_id (null for acquisition, current ID for renew-on-acquire). 200 returns
 lease_id and optional ISO8601 expires_at; null/absent expiry means explicit
 release only. 202 state=pending requests another tick; 409 holder plus optional
 retry_after_seconds means busy. Renewal 404/409 means lost.
-POST release sends lease_id; 200 and 404 both succeed. GET status returns
+POST release sends lease_id; 200 and 404 both succeed. 202 state=pending means the
+broker is still restoring the other service: ask again next tick. GET status returns
 state=free|held, holder, lease_id and optional expires_at.
 Optional bearer authorization is never copied into diagnostics. Bodies and
 exception messages are deliberately excluded from failure reasons.
@@ -33,7 +34,7 @@ class AcquireResult:
 
 @dataclass(frozen=True)
 class ReleaseResult:
-    kind: Literal["released", "failed"]
+    kind: Literal["released", "pending", "failed"]
     reason: str = ""
 
 
@@ -167,6 +168,9 @@ class LeaseClient:
             )
             if code in (200, 404):
                 return ReleaseResult("released")
+            if code == 202:
+                # The broker is still bringing the other service back up.
+                return ReleaseResult("pending")
             return ReleaseResult("failed", f"broker refused release (HTTP {code})")
         except Exception:
             return ReleaseResult("failed", "broker unavailable or invalid response")

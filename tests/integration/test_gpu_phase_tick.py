@@ -19,6 +19,7 @@ from tests.unit.test_gpu_phase import phase_settings
 from voxint.api.service_control import SERVICE_KEYS, ControlOutcome, ControlResult, ServiceState
 from voxint.config import Settings
 from voxint.db.models import GpuPhaseState, Stage
+from voxint.gpu_phase import orchestrator
 from voxint.gpu_phase.client import LeaseClient, StatusResult
 from voxint.gpu_phase.orchestrator import TickResult, tick
 from voxint.gpu_phase.state import (
@@ -70,6 +71,7 @@ class Rig:
 
 @pytest.fixture
 def rig(session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch) -> Rig:
+    monkeypatch.setattr(orchestrator, "_last_lane_publish", {})
     clock = FakeClock()
     broker = FakeGpuBroker(clock)
     controller = FakeController()
@@ -632,3 +634,160 @@ def test_publication_stops_entire_batch_on_first_error(
     for name in order[order.index(failed_task) + 1 :]:
         rig.publishers[name].assert_not_called()
     assert caplog.text.count("GPU phase lane publication deferred") == 1
+
+
+@pytest.mark.parametrize(
+    "work,task",
+    [
+        ("audio", "run_pipeline"),
+        ("post", "finish_pipeline"),
+        ("asset", "generate_run_asset"),
+        ("translation", "translate_run"),
+        ("research", "research_speaker"),
+    ],
+)
+def test_idle_lane_republishes_with_monotonic_throttle(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, work: str, task: str
+) -> None:
+    phase = P.AUDIO if work == "audio" else P.LLM
+    if phase == P.AUDIO:
+        prepare_audio(rig)
+    else:
+        rig.seed(phase)
+    with rig.session_factory.begin() as session:
+        if work in ("audio", "post"):
+            seed_run(session, None if work == "audio" else Stage.ENHANCE_MATCH)
+        else:
+            jobs = seed_jobs(session)
+            for kind, job in zip(("asset", "translation", "research"), jobs, strict=True):
+                if kind != work:
+                    job.status = "succeeded"
+    elapsed = 0.0
+    monkeypatch.setattr(orchestrator.time, "monotonic", lambda: elapsed)
+
+    def assert_committed(*args: object, **kwargs: object) -> None:
+        assert rig.read().updated_at == rig.clock()
+
+    rig.publishers[task].side_effect = assert_committed
+    rig.clock.advance(1)
+    assert rig.step().phase == phase
+    assert rig.publishers[task].call_count == 1
+    elapsed = 299.0
+    rig.clock.advance(1)
+    assert rig.step().phase == phase
+    assert rig.publishers[task].call_count == 1
+    elapsed = 300.0
+    assert rig.step().phase == phase
+    assert rig.publishers[task].call_count == 2
+    for name, publisher in rig.publishers.items():
+        if name != task:
+            publisher.assert_not_called()
+
+
+@pytest.mark.parametrize("busy", ["audio", "post", "asset", "translation", "research", "none"])
+def test_busy_or_empty_lane_does_not_republish(rig: Rig, busy: str) -> None:
+    phase = P.AUDIO if busy == "audio" else P.LLM
+    if phase == P.AUDIO:
+        prepare_audio(rig)
+    else:
+        rig.seed(phase)
+    with rig.session_factory.begin() as session:
+        if busy == "audio":
+            seed_run(session, None)
+            seed_run(session, Stage.TRANSCRIBE, status="running")
+        elif busy != "none":
+            seed_run(session, Stage.ENHANCE_MATCH)
+            if busy == "post":
+                seed_run(session, Stage.ENHANCE_MATCH, status="running")
+            else:
+                jobs = seed_jobs(session)
+                jobs[("asset", "translation", "research").index(busy)].status = "running"
+    assert rig.step().phase == phase
+    for publisher in rig.publishers.values():
+        publisher.assert_not_called()
+
+
+def test_transition_publication_failure_recovers_on_idle_tick(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with rig.session_factory.begin() as session:
+        seed_run(session, Stage.ENHANCE_MATCH)
+    elapsed = 0.0
+    monkeypatch.setattr(orchestrator.time, "monotonic", lambda: elapsed)
+    publisher = rig.publishers["finish_pipeline"]
+    publisher.side_effect = OperationalError("offline")
+    rig.seed(P.RELEASING)
+    assert rig.step().phase == P.LLM
+    assert publisher.call_count == 1
+    assert rig.step().phase == P.LLM
+    assert publisher.call_count == 1
+    elapsed = 300.0
+    publisher.side_effect = None
+    assert rig.step().phase == P.LLM
+    assert publisher.call_count == 2
+
+
+@pytest.mark.parametrize("expiry", [None, -1, 60])
+def test_renewal_exception_is_a_failed_acquire(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, expiry: int | None
+) -> None:
+    prepare_audio(rig)
+    rig.settings.gpu_phase_min_dwell_seconds = 600
+    rig.seed(
+        P.AUDIO,
+        lease_expires_at=None if expiry is None else rig.clock() + timedelta(seconds=expiry),
+    )
+    monkeypatch.setattr(rig.client, "acquire", MagicMock(side_effect=RuntimeError("secret")))
+    observed = orchestrator._observe(
+        rig.read(), rig.settings, rig.client, rig.controller, rig.probe
+    )
+    assert observed.acquire is not None
+    assert observed.acquire.kind == "failed"
+    assert observed.acquire.reason == "RuntimeError"
+    assert observed.control_error is None
+    assert rig.step().phase == (P.STOPPING_SERVICES if expiry == -1 else P.AUDIO)
+
+
+def test_acquiring_exception_reconciles_with_backoff(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig.seed(P.ACQUIRING)
+    monkeypatch.setattr(rig.client, "acquire", MagicMock(side_effect=RuntimeError("secret")))
+    assert rig.step().phase == P.RELEASING
+    assert rig.read().last_error == "RuntimeError"
+    assert rig.read().failures == 1
+    assert rig.read().retry_after == rig.clock() + timedelta(seconds=30)
+    assert not rig.controller.calls
+
+
+def test_renewal_exception_allows_teardown(rig: Rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_audio(rig, P.STOPPING_SERVICES)
+    monkeypatch.setattr(rig.client, "acquire", MagicMock(side_effect=RuntimeError("secret")))
+    assert rig.step().phase == P.RELEASING
+    assert all(value == ServiceState.STOPPED for value in rig.controller.states.values())
+
+
+def test_release_pending_keeps_both_lanes_closed_until_the_other_service_is_back(
+    session_factory: sessionmaker[Session], rig: Rig
+) -> None:
+    with session_factory.begin() as session:
+        seed_run(session, None)
+        post = seed_run(session, Stage.ENHANCE_MATCH)
+    while rig.step().phase != P.AUDIO:
+        pass
+    with session_factory.begin() as session:
+        set_request(session, OperatorRequest.RELEASE)
+    rig.broker.release_pending = 2
+    assert [rig.step().phase for _ in range(3)] == [
+        P.DRAINING,
+        P.STOPPING_SERVICES,
+        P.RELEASING,
+    ]
+    # Two ticks answered 202: still releasing, nothing published to the LLM lane.
+    assert [rig.step().phase for _ in range(2)] == [P.RELEASING, P.RELEASING]
+    rig.publishers["finish_pipeline"].assert_not_called()
+    snapshot = rig.read()
+    assert snapshot is not None
+    assert not post_lane_open(snapshot, rig.settings)
+    assert rig.step().phase == P.LLM
+    rig.publishers["finish_pipeline"].assert_called_once_with((str(post.id),), ignore_result=True)

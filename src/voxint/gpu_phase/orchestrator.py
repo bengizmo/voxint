@@ -9,6 +9,7 @@ services so sequential Docker stops have time to finish before broker release.
 """
 
 import logging
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -32,6 +33,10 @@ logger = logging.getLogger(__name__)
 GPU_PHASE_ADVISORY_LOCK_KEY = 0x766F78696E746770
 SERVICE_READY_SECONDS = 600
 ACQUIRE_PENDING_SECONDS = 600
+# Longer than a broker's own restore timeout, so a slow restore is not cut short.
+RELEASE_PENDING_SECONDS = 900
+IDLE_REPUBLISH_SECONDS = 300
+_last_lane_publish: dict[P, float] = {}
 
 
 @dataclass(frozen=True)
@@ -129,7 +134,10 @@ def decide(
                 P.LLM,
                 {
                     "operator_request": None,
-                    "retry_after": now + timedelta(seconds=settings.gpu_phase_min_dwell_seconds),
+                    "retry_after": max(
+                        snapshot.retry_after or now,
+                        now + timedelta(seconds=settings.gpu_phase_min_dwell_seconds),
+                    ),
                 },
             )
         if snapshot.operator_request == OperatorRequest.AUDIO or (
@@ -203,6 +211,15 @@ def decide(
                     "retry_after": snapshot.retry_after if snapshot.last_error else None,
                 },
             )
+        if o.release and o.release.kind == "pending":
+            # The LLM lane opens only once the broker confirms the other service is back.
+            if age >= RELEASE_PENDING_SECONDS:
+                return failure(
+                    P.ERROR,
+                    "could not return the GPU: the other service did not come back within "
+                    f"{RELEASE_PENDING_SECONDS // 60} minutes",
+                )
+            return Transition(P.RELEASING, fields)
         if o.release:
             return failure(P.ERROR, "could not return the GPU: " + o.release.reason)
     elif snapshot.phase == P.ERROR:
@@ -248,6 +265,13 @@ def tick(
         o = _observe(s, settings, client, controller, probe)
         now = clock()
         transition = decide(s, counts, o, now, settings)
+        idle_demand = (
+            s.phase == P.AUDIO and counts.gpu_lane_demand > 0 and counts.gpu_in_flight == 0
+        ) or (
+            s.phase == P.LLM
+            and counts.post_in_flight == counts.running_llm_jobs == 0
+            and (state.post_lane_queued(session) > 0 or state.queued_llm_jobs(session) > 0)
+        )
         state.set_phase(
             session,
             transition.phase,
@@ -255,8 +279,16 @@ def tick(
             expected_request=s.operator_request,
             **transition.fields,
         )
-    if transition.phase != s.phase and transition.phase in (P.AUDIO, P.LLM):
-        _publish_lane(session_factory, settings, transition.phase, now)
+    if transition.phase in (P.AUDIO, P.LLM):
+        monotonic_now = time.monotonic()
+        last_publish = _last_lane_publish.get(transition.phase)
+        if transition.phase != s.phase or (
+            idle_demand
+            and (last_publish is None or monotonic_now - last_publish >= IDLE_REPUBLISH_SECONDS)
+        ):
+            # Throttle attempts, including broker failures, only after the commit.
+            _last_lane_publish[transition.phase] = monotonic_now
+            _publish_lane(session_factory, settings, transition.phase, now)
     return TickResult("advanced" if transition.phase != s.phase else "waiting", transition.phase)
 
 
@@ -268,14 +300,19 @@ def _observe(
     probe: Callable[[Settings], list[ServiceHealth]],
 ) -> Observed:
     renewal = None
-    if s.phase in (P.STARTING_SERVICES, P.AUDIO, P.DRAINING, P.STOPPING_SERVICES, P.ERROR):
-        if s.lease_id:
-            renewal = client.acquire(s.lease_id)
-        elif s.phase in (P.STARTING_SERVICES, P.AUDIO, P.DRAINING):
-            renewal = AcquireResult("lost")
+    try:
+        if s.phase in (P.STARTING_SERVICES, P.AUDIO, P.DRAINING, P.STOPPING_SERVICES, P.ERROR):
+            if s.lease_id:
+                renewal = client.acquire(s.lease_id)
+            elif s.phase in (P.STARTING_SERVICES, P.AUDIO, P.DRAINING):
+                renewal = AcquireResult("lost")
+    except Exception as exc:
+        renewal = AcquireResult("failed", reason=type(exc).__name__[:240])
     try:
         return _observe_services(s, settings, client, controller, probe, renewal)
     except Exception as exc:
+        if s.phase == P.ACQUIRING:
+            return Observed(acquire=AcquireResult("failed", reason=type(exc).__name__[:240]))
         return Observed(acquire=renewal, control_error=type(exc).__name__[:240])
 
 
