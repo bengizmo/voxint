@@ -1012,6 +1012,14 @@ def _fetch(args: argparse.Namespace) -> int:
     return 0
 
 
+# A phase change between the up-front check and the claim leaves the job QUEUED
+# (the claim re-checks under a lock); the worker runs it in the next LLM phase.
+_LLM_PHASE_DEFERRED = (
+    "GPU sharing switched the GPU away from the language model before this job"
+    " started; it stays queued and runs in the next language-model phase"
+)
+
+
 def _llm_phase_blocked(factory: "sessionmaker[Session]", settings: "Settings") -> str | None:
     """Refuse inline LLM work while GPU sharing has the post lane closed (#748).
 
@@ -1086,6 +1094,9 @@ def _research_speaker(args: argparse.Namespace) -> int:
         if finished.error:
             print(f"error: {finished.error}")
             return 1
+        if finished.status == "queued":
+            print(f"deferred: {_LLM_PHASE_DEFERRED}")
+            return 1
         if finished.producer_run_id is not None:
             print(
                 "drafts recorded — review them on the speaker's card in the"
@@ -1141,6 +1152,8 @@ def _enrich_assets(args: argparse.Namespace) -> int:
             print(f"{kind_value}: {finished.status}")
             if finished.error:
                 print(f"error: {finished.error}")
+            if finished.status == "queued":
+                print(f"deferred: {_LLM_PHASE_DEFERRED}")
             if finished.status != "succeeded":
                 failures += 1
     return 1 if failures else 0
