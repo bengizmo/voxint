@@ -1,6 +1,6 @@
 # Plan: transcript exports as speaker turns (#741)
 
-Status: in-progress
+Status: done
 
 Spec deltas: none (this project declares no living spec).
 
@@ -541,3 +541,79 @@ Critical or High findings. Applied: whitespace handling in the snapshot
 reader (3 of 3), offset range checks (codex), a behavioural contract pin in
 place of a source grep (deepseek, kimi), never-written-to-column assertions
 in memory and after flush (kimi, codex), copy fixes (qwen, kimi).
+
+### Slice 6 implementation notes (2026-10-02)
+
+Landed as PR #765 (`5848abfb`, commits `c1ee6935` and `7a3b75de`). Beyond
+section 8, these calls were made:
+
+- **Sidecar bounds.** `vocabulary:` is a list of at most 64 terms (counted
+  before deduplication), 120 characters per term and 2000 characters once
+  rendered with `, ` separators (counted after deduplication). A value outside
+  the bounds is rejected, never truncated. A term must be a single line, tested
+  with `splitlines()` so U+2028 and U+2029 are caught. An invalid value holds
+  the file, where the key used to be ignored. `vocabulary: []` has no effect.
+- **Freeze.** `_resolve_run_config` applies the sidecar terms after the four
+  per-field branches (explicit, project, folder, global). A term already
+  present moves to the tail. The snapshot gains `sidecar_vocabulary` only when
+  it is non-empty, and `config_resolution_version` stays the last key. Both
+  `submit_media_item` and `submit_media_item_if_new` pass the terms, so watch
+  ingest and re-runs share the path.
+- **Worker.** `parse_sidecar_vocabulary` reads the raw snapshot tolerantly (it
+  never raises, and it deduplicates), honours only version-2 snapshots and
+  keeps only terms in the effective vocabulary. `StageContext` gains
+  `sidecar_vocabulary`.
+- **Prompt.** `_initial_prompt(vocabulary, reserved)` gives reserved terms the
+  2000-character budget first and renders them last, because the pinned
+  faster-whisper keeps the last 223 prompt tokens. With no reserved terms the
+  old code path runs unchanged. #743 still tracks the general cap against the
+  engine window.
+- **Absent-key byte identity.** Goldens were captured by running
+  `_resolve_run_config` from `2aeec3f7` against a real Postgres and are pinned
+  in `tests/integration/test_config_resolution_freeze.py` for a missing
+  sidecar, a sidecar with no key and `[]`. The contract test
+  `tests/contracts/test_sidecar_vocabulary_contract.py` pins the ASR request
+  bytes, `MAX_VOCABULARY_CHARS == INITIAL_PROMPT_MAX_CHARS` and the applied
+  key.
+- **Deliberately unchanged.** The re-run preview (`preview_effective_config`)
+  ignores the sidecar, as it already does for the sidecar's pack and speakers.
+
+Review: High panel 3 of 3 (codex, deepseek, qwen). Codex found nothing.
+Applied: U+2028 and U+2029 in the single-line check (qwen), deduplication in
+the worker (deepseek, qwen). Declined: one shared length constant (it would
+pull the database layer into the pure sidecar module; the contract test pins
+the equality instead), a positional dataclass hazard (nothing constructs it
+positionally), a sidecar-aware preview (out of scope, as above). The delta was
+re-reviewed clean by deepseek and qwen.
+
+## Completion notes (2026-10-03)
+
+Verified on `main` at `5848abfb`. All six slices are merged: S1 #745, S2 #746,
+S3 #747, S4 #751, S5 #762, S6 #765.
+
+- **Scenarios.** Each of the 16 acceptance scenarios has a test on `main`:
+  projection in `tests/unit/test_turns.py` (the round-trip invariant runs on
+  every fixture, in memory and on rendered bytes) and
+  `tests/integration/test_attributed_turns.py`; format in
+  `tests/integration/test_turn_exports.py`, `tests/unit/test_export_service.py`,
+  `tests/unit/test_reading_layout.py` and `tests/unit/test_export_formatters.py`
+  (the pre-plan `blocks` goldens are unchanged since the plan's base apart from
+  the rename); naming in `tests/integration/test_speakers_name_cli.py`; the
+  recording date in `tests/unit/test_recorded_date.py` and
+  `tests/integration/test_recorded_date.py`; the absent vocabulary key in
+  `tests/integration/test_config_resolution_freeze.py` and
+  `tests/contracts/test_sidecar_vocabulary_contract.py`. The scoped run (unit,
+  contract and integration, local Postgres 17) passed 578 with none skipped.
+- **Verification section.** The S2 measurements and the browser lane are
+  recorded under "Slice 2 acceptance". The four limits are stated in
+  `docs/operations.md`.
+- **Living spec.** None declared, so no spec file was touched.
+- **Drift.** None unexplained. Behaviour beyond the approach text is recorded
+  in the slice notes above: sidecar `recorded:` and `vocabulary:` became
+  applied keys whose invalid values hold the file, and the P2 threshold moved
+  from 60 to 20 words. The plan's rejected options (positional substitution,
+  `difflib` alignment, smoothing, a fallback footer, a console fillers control)
+  are absent.
+- **Follow-ups.** The MINOR release that ships #741 (the latest tag, v0.50.0,
+  predates every slice). Open issues #742 and #743. Epic #752 (filler tiers) is
+  separate work, and #755 needs a maintainer decision.
