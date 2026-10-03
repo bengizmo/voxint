@@ -7,6 +7,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Leave fillers out of a Markdown export** (#741). Use `--drop-fillers` or
+  `?fillers=drop` with the turns style to remove standalone English "um", "uh",
+  "umm", "uhh", "uhm" and "erm". Sentence starts are re-capitalised and
+  filler-only utterances disappear. Saved text stays unchanged. Translations
+  and the blocks style do not support this option.
 - **A Markdown export laid out as speaker turns** (#741). The Markdown
   export and the on-screen reading view now show `[HH:MM:SS] **Name:** text`
   paragraphs, and the Markdown file opens with the recording's title. Speakers are assigned word by word

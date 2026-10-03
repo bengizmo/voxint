@@ -13,6 +13,7 @@ from voxint.db.models import PipelineRun
 from voxint.export import MEDIA_TYPES, TranscriptFormat
 from voxint.export.service import (
     ExportOptionError,
+    parse_fillers,
     parse_style,
     render_run_rttm,
     render_run_transcript,
@@ -32,6 +33,7 @@ def export_transcript(
     text: str | None = None,
     timestamps: bool = True,
     style: str | None = None,
+    fillers: str | None = None,
 ) -> Response:
     if format not in _VALID_FORMATS:
         raise HTTPException(
@@ -42,6 +44,7 @@ def export_transcript(
     fmt = None if format == "rttm" else TranscriptFormat(format)
     try:
         selected_style = parse_style(style, fmt)
+        drop_fillers = parse_fillers(fillers, fmt, selected_style)
     except ExportOptionError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -58,6 +61,12 @@ def export_transcript(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     content = render_run_transcript(
-        session, run_id, fmt, text=variant, timestamps=timestamps, style=selected_style,
+        session,
+        run_id,
+        fmt,
+        text=variant,
+        timestamps=timestamps,
+        style=selected_style,
+        drop_fillers=drop_fillers,
     )
     return Response(content=content, media_type=MEDIA_TYPES[format])

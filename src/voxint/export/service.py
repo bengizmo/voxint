@@ -13,6 +13,7 @@ from voxint.adjudication.turns import attributed_turns, translated_turns
 from voxint.api.presentation import friendly_media_label, title_from_snapshot
 from voxint.db.models import DiarizationTurn, PipelineRun
 from voxint.export import TranscriptFormat, render_transcript, to_markdown_turns, to_rttm
+from voxint.export.fillers import drop_fillers as remove_fillers
 from voxint.export.reading import layout_turns
 
 
@@ -47,6 +48,21 @@ def parse_style(raw: str | None, fmt: TranscriptFormat | None) -> MarkdownStyle 
         raise ExportOptionError(f"unknown style {raw!r}; valid: turns, blocks") from exc
 
 
+def parse_fillers(
+    raw: str | None,
+    fmt: TranscriptFormat | None,
+    style: MarkdownStyle | None,
+) -> bool:
+    """Validate the opt-in filler filter before loading any transcript data."""
+    if raw in (None, ""):
+        return False
+    if fmt is not TranscriptFormat.MARKDOWN or style is not MarkdownStyle.TURNS:
+        raise ExportOptionError("fillers applies to the md turns style only")
+    if raw not in ("keep", "drop"):
+        raise ExportOptionError(f"unknown fillers value {raw!r}; valid: keep, drop")
+    return raw == "drop"
+
+
 def export_title(session: Session, run_id: uuid.UUID) -> str:
     """Use the frozen title or friendly source basename for the export header."""
     run = session.get(PipelineRun, run_id)
@@ -56,12 +72,22 @@ def export_title(session: Session, run_id: uuid.UUID) -> str:
 
 
 def render_run_transcript(
-    session: Session, run_id: uuid.UUID, fmt: TranscriptFormat, *, text: TranscriptText,
-    timestamps: bool = True, style: MarkdownStyle | None = None,
+    session: Session,
+    run_id: uuid.UUID,
+    fmt: TranscriptFormat,
+    *,
+    text: TranscriptText,
+    timestamps: bool = True,
+    style: MarkdownStyle | None = None,
     translated_texts: Sequence[str] | None = None,
+    drop_fillers: bool = False,
 ) -> str:
     """Load one attributed view and render it without transport-specific behavior."""
     resolved = parse_style(style, fmt)
+    if drop_fillers:
+        if translated_texts is not None:
+            raise ExportOptionError("fillers cannot be combined with a translation")
+        parse_fillers("drop", fmt, resolved)
     if fmt is TranscriptFormat.MARKDOWN and resolved is MarkdownStyle.TURNS:
         if translated_texts is None:
             turns = attributed_turns(session, run_id, text=text)
@@ -70,8 +96,12 @@ def render_run_transcript(
                 turns = translated_turns(session, run_id, translated_texts)
             except ValueError as exc:
                 raise TranslationMismatchError from exc
+        if drop_fillers:
+            turns = remove_fillers(turns)
         return to_markdown_turns(
-            layout_turns(turns), header=export_title(session, run_id), timestamps=timestamps,
+            layout_turns(turns),
+            header=export_title(session, run_id),
+            timestamps=timestamps,
         )
     lines = attributed_transcript(session, run_id, text=text)
     if translated_texts is not None:
