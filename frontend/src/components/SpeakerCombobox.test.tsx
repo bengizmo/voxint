@@ -136,6 +136,26 @@ describe("SpeakerCombobox focus after a failed create", () => {
     expect(document.activeElement).toBe(input);
   });
 
+  it("leaves focus alone when the host toggles disabled with no failed create", () => {
+    const props = {
+      speakers,
+      mode: "command" as const,
+      label: "S2: choose who this is",
+      onSelect: vi.fn(),
+      onCreate: vi.fn(async () => false),
+      autoFocus: true,
+    };
+    const { rerender } = render(<SpeakerCombobox {...props} />);
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+    input.blur();
+
+    rerender(<SpeakerCombobox {...props} disabled />);
+    rerender(<SpeakerCombobox {...props} disabled={false} />);
+
+    expect(props.onCreate).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it("does not refocus the input after a successful create", async () => {
     const onCreate = vi.fn(async () => true);
     render(
