@@ -64,8 +64,11 @@ def _clean_pieces(pieces: tuple[TurnPiece, ...]) -> tuple[TurnPiece, ...]:
         nonlocal capitalise
         for char, owner in chunk:
             if capitalise and not char.isspace() and char not in _OPEN:
-                if char.islower():
-                    char = char.upper()
+                # One owned entry stays one character: a letter whose upper
+                # case expands (ß to SS) is left as it is.
+                upper = char.upper()
+                if char.islower() and len(upper) == 1:
+                    char = upper
                 capitalise = False
             out.append((char, owner))
 
@@ -115,20 +118,20 @@ def _clean_pieces(pieces: tuple[TurnPiece, ...]) -> tuple[TurnPiece, ...]:
 def _join_at_seam(
     left: tuple[TurnPiece, ...], right: tuple[TurnPiece, ...],
 ) -> tuple[TurnPiece, ...]:
-    """Concatenate two turns with exactly one separator at the seam.
+    """Concatenate two turns with exactly one space at the seam, on the right.
 
     The dropped turn between them may have owned the only whitespace, and the
     right-hand piece need not start a segment, so join_pieces would otherwise
     glue the two words together; when both sides carry whitespace the seam
-    would otherwise hold two.
+    would otherwise hold two or more.
     """
-    head = right[0]
-    if left[-1].text[-1].isspace():
-        if head.text[0].isspace():
-            right = (replace(head, text=head.text.lstrip()), *right[1:])
-    elif not head.text[0].isspace():
-        right = (replace(head, text=" " + head.text), *right[1:])
-    return left + right
+    tail, head = left[-1], right[0]
+    return (
+        *left[:-1],
+        replace(tail, text=tail.text.rstrip()),
+        replace(head, text=" " + head.text.lstrip()),
+        *right[1:],
+    )
 
 
 def drop_fillers(turns: Sequence[SpeakerTurn]) -> list[SpeakerTurn]:

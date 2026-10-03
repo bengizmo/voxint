@@ -468,3 +468,43 @@ Refinements made while implementing, all inside the rules above:
 - **Undo wording.** The console offers undo only right after its own
   action, so the command says a later ruling supersedes the assignment and
   the rename stays, rather than promising an undo.
+
+### Slice 4 implementation notes (2026-10-02)
+
+Module `src/voxint/export/fillers.py`, rules F1 to F6 in its docstring.
+Beyond section 6, these calls were made:
+
+- A filler followed by a period, question mark or exclamation mark is also
+  removed. The mark moves onto the preceding text when that text ends in a
+  letter or digit, replaces a trailing comma, semicolon or colon, and is
+  dropped at a turn start or after a sentence that already ended. Quotes
+  and brackets around the preceding text are looked through for both this
+  and the sentence-start test.
+- A filler directly inside closing quotes, with or without a mark, is a
+  quoted word and stays. This avoids an empty quote pair in the output.
+- A turn made only of fillers (nothing with a letter or digit left) is
+  dropped; its same-speaker neighbours merge with exactly one space at the
+  seam and are cleaned as one turn, so a filler at the seam is judged
+  against the text that now precedes it.
+- `fillers=keep` is accepted as the explicit default; any non-empty value
+  outside the Markdown turns style is rejected like `style`. The public
+  `/api/v1` route still takes no `lang`, so the translation conflict exists
+  only on the console routes.
+- Read mode and the export menu do not take the option.
+- The `--style` help text, which still named `blocks` as the default, was
+  corrected in passing.
+
+Measured on the two reference recordings (maintainer hardware, counts only,
+final code): fillers matched 22 and 24 on both the raw and the corrected
+text, the prototype's counts exactly; words 5025 to 5003 and 2384 to 2360;
+no turn dropped; paragraph counts unchanged (184/179 and 86/82); the
+longest paragraph shrank by up to five words.
+
+Review: High panel 3 of 3 (codex, deepseek, kimi). First round: seven
+findings applied (separator ownership around a preserved opening quote,
+terminal mark and sentence start judged through quotes and brackets, closing
+brackets as closers, one separator at a merge seam, punctuation-only
+remainder empties a turn) and two declined (bare quoted fillers kept by the
+quoted-word rule above; a CLI `--lang` conflict that cannot occur because
+the CLI export has no `--lang`). Second round: a Unicode case-expansion
+crash (`ß`) and whitespace runs at the seam, both fixed.

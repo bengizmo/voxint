@@ -106,6 +106,9 @@ def test_f1_not_fillers(text: str) -> None:
         ('"and then," um.', '"and then."'),
         ('"Right?" Um!', '"Right?"'),
         ("um, 3", "3"),
+        ("um, \u00df, um.", "\u00df."),
+        ('um, "\u00df," um.', '"\u00df."'),
+        ("um, \ufb02ow", "\ufb02ow"),
         ("item 1 um.", "item 1."),
         ("value / um.", "value /"),
         ("um, so", "So"),
@@ -190,16 +193,12 @@ def test_f5_merged_turns_keep_a_separator_and_are_cleaned_as_one() -> None:
     )
     assert join_pieces(glued[0].pieces) == "yes right"
     assert glued[0].pieces[1] == replace(piece("right", 2), text=" right")
-    # Both sides carrying whitespace leaves exactly one separator.
-    doubled = drop_fillers(
-        [turn(piece("Hello ")), turn(piece(" um,", 1), name="Sam"), turn(piece(" world", 2))]
-    )
-    assert join_pieces(doubled[0].pieces) == "Hello world"
-    assert doubled[0].pieces == (piece("Hello "), replace(piece(" world", 2), text="world"))
-    single = drop_fillers(
-        [turn(piece("Hello ")), turn(piece(" um,", 1), name="Sam"), turn(piece("world", 2))]
-    )
-    assert single[0].pieces == (piece("Hello "), piece("world", 2))
+    # Whatever whitespace either side carries, the seam holds one space, on the right.
+    for left, right in (("Hello ", " world"), ("Hello ", "world"), ("Hello  ", "\n\nworld")):
+        merged = drop_fillers(
+            [turn(piece(left)), turn(piece(" um,", 1), name="Sam"), turn(piece(right, 2))]
+        )
+        assert merged[0].pieces == (piece("Hello"), replace(piece(right, 2), text=" world"))
     # A filler at the seam is judged against the merged text, not a turn start.
     mid = drop_fillers([
         turn(piece(" yes")), turn(piece(" uh,", 1), name="Sam"),
