@@ -6,6 +6,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **Large browser uploads no longer time out after 5 minutes.** The upload
+  page cancelled any file still uploading after a fixed 5 minutes, so on a
+  slow connection every file above a few hundred megabytes failed with
+  "Upload timed out". An upload is now cancelled only when no bytes have moved
+  for 2 minutes, or when the server has not answered 10 minutes after the last
+  byte. A cancelled file keeps its Retry button.
+
 ## [0.51.0] - 2026-10-03
 
 ### Added

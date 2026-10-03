@@ -447,6 +447,14 @@
     var uploading = false;
     var stopping = false;
     var renderScheduled = false;
+    // Upload deadlines follow progress, not wall-clock time: a long recording on
+    // a slow uplink can take far longer than any fixed bound. Abort only when no
+    // bytes have moved for STALL_TIMEOUT_MS, or when the server has not answered
+    // FINALIZE_TIMEOUT_MS after the last byte (it still copies and hashes the file).
+    var STALL_TIMEOUT_MS = 2 * 60 * 1000;
+    var FINALIZE_TIMEOUT_MS = 10 * 60 * 1000;
+    var STALL_MESSAGE = 'Upload stalled (no progress for ' + STALL_TIMEOUT_MS / 60000 + ' minutes)';
+    var FINALIZE_MESSAGE = 'No response from the server after the upload finished';
 
     function uuidv4() {
       if (window.crypto.randomUUID) return window.crypto.randomUUID();
@@ -604,22 +612,54 @@
         data.append('submission_id', entry.id);
         data.append('csrf_token', csrfToken);
         data.append('media_folder_id', folderId);
+        var watchdog = null;
+        var abortReason = null;
+        var lastLoaded = -1;
+        var finalizeArmed = false;
+        var settled = false;
+        function arm(ms, reason) {
+          window.clearTimeout(watchdog);
+          watchdog = window.setTimeout(function () {
+            if (settled || xhr.readyState === XMLHttpRequest.DONE) return;
+            abortReason = reason;
+            xhr.abort();
+          }, ms);
+        }
+        function armFinalize() {
+          if (finalizeArmed) return;
+          finalizeArmed = true;
+          arm(FINALIZE_TIMEOUT_MS, FINALIZE_MESSAGE);
+        }
+        // Exactly one terminal handler may count the file and advance the batch.
+        function settle() {
+          if (settled) return false;
+          settled = true;
+          window.clearTimeout(watchdog);
+          return true;
+        }
         xhr.open('POST', uploadForm.action);
         xhr.setRequestHeader('Accept', 'application/json');
-        xhr.timeout = 5 * 60 * 1000;
         xhr.upload.onprogress = function (e) {
           if (e.lengthComputable) {
             entry.percent = Math.min(100, Math.floor(e.loaded / e.total * 100));
             if (e.loaded >= e.total) entry.status = 'finalizing';
             scheduleRender();
           }
+          if (entry.status === 'finalizing') {
+            armFinalize();
+          } else if (e.loaded > lastLoaded) {
+            lastLoaded = e.loaded;
+            arm(STALL_TIMEOUT_MS, STALL_MESSAGE);
+          }
         };
         xhr.upload.onload = function () {
           entry.percent = 100;
           entry.status = 'finalizing';
+          armFinalize();
           scheduleRender();
         };
         xhr.onload = function () {
+          if (!settle()) return;
           var ok = false;
           try {
             var body = JSON.parse(xhr.responseText);
@@ -648,20 +688,23 @@
           next();
         };
         xhr.onerror = function () {
+          if (!settle()) return;
           entry.status = 'failed';
           entry.error = 'Upload failed (network error)';
           failed++;
           renderQueue();
           next();
         };
-        xhr.ontimeout = function () {
+        xhr.onabort = function () {
+          if (!settle()) return;
           entry.status = 'failed';
-          entry.error = 'Upload timed out';
+          entry.error = abortReason || 'Upload cancelled';
           failed++;
           renderQueue();
           next();
         };
         xhr.send(data);
+        arm(STALL_TIMEOUT_MS, STALL_MESSAGE);
       }
       next();
     }
