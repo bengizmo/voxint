@@ -677,7 +677,10 @@ class TestAutogenerateHook:
         assert all(kwargs == {"ignore_result": True} for _, kwargs in dispatches)
 
     def test_disabled_or_failing_never_raises(
-        self, session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+        self,
+        session_factory: sessionmaker[Session],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         from voxint.worker import tasks
 
@@ -703,9 +706,11 @@ class TestAutogenerateHook:
             raise RuntimeError("builder exploded")
 
         monkeypatch.setattr(tasks.asset_jobs, "kinds_needing_generation", boom)
-        tasks._autogenerate_run_assets(
-            session_factory, run_id, make_settings(enrichment_run_assets_autogenerate=True)
-        )
+        with caplog.at_level(logging.ERROR, logger=tasks.logger.name):
+            tasks._autogenerate_run_assets(
+                session_factory, run_id, make_settings(enrichment_run_assets_autogenerate=True)
+            )
+        assert f"post-finalize run-asset enqueue failed for run {run_id}" in caplog.messages
         assert dispatches == []
 
     def test_completed_run_without_segments_skips_quietly(
