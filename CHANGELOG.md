@@ -24,9 +24,25 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   (migration `0068`) records whether the GPU is in its audio or LLM phase.
   With `GPU_PHASE_ENABLED=true`, GPU-lane runs wait in the queue until the
   phase is audio, and post-lane runs, run assets, translations and speaker
-  research wait until it is LLM. The orchestrator that moves between phases
-  is not in this change, so enabling the setting on its own leaves audio
-  work queued. Settings are documented in `.env.example`.
+  research wait until it is LLM. A periodic task borrows the GPU through
+  operator-configured HTTP broker hooks, starts and checks audio services,
+  and stops them before returning the lease. The task uses a dedicated
+  `gpu_phase` queue. See `docs/gpu-sharing.md` for the broker contract and
+  recovery behavior. Settings are documented in `.env.example`.
+- **GPU sharing status and controls** (#748). `voxint gpu-phase status`
+  prints the phase, lease, last error and waiting work; `voxint gpu-phase
+  audio-now` and `voxint gpu-phase release` ask for the next switch. With
+  GPU sharing on, `voxint doctor` and Settings > Status gain a GPU sharing
+  row, which also warns when the phase task has stopped running. A model
+  service that GPU sharing stopped for the language model's turn (or the
+  language model stopped for Voxint's) reads as off with the reason instead
+  of a failure, so doctor's exit code is unchanged; a service that answers
+  with an error still fails. Settings > Status offers no start, stop or
+  restart buttons for the model services while GPU sharing manages them. The Runs page, its
+  progress strip and summary say when recordings are waiting for the GPU,
+  when the GPU is switching, and when it could not be handed back. New
+  `docs/gpu-sharing.md` covers setup, the broker HTTP contract, settings and
+  recovery.
 - **A Markdown export laid out as speaker turns** (#741). The Markdown
   export and the on-screen reading view now show `[HH:MM:SS] **Name:** text`
   paragraphs, and the Markdown file opens with the recording's title. Speakers are assigned word by word

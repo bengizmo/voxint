@@ -10,7 +10,7 @@
      hx-trigger="every {{ '60s' if dashboard.is_idle else '15s' }}"
      hx-swap="outerHTML">
   {% if dashboard.is_idle %}
-  <div class="ps-idle">Pipeline idle{% if dashboard.workload.queue_paused %} &middot; <span class="ps-wl-paused">queue paused</span>{% endif %}{% for s in dashboard.stages if s.degraded %} &middot; <span class="ps-degraded">{{ humanize_stage(s.stage) }} paused: {{ s.degraded_reason }}</span>{% endfor %}</div>
+  <div class="ps-idle">Pipeline idle{% if dashboard.workload.queue_paused %} &middot; <span class="ps-wl-paused">queue paused</span>{% endif %}{% if dashboard.gpu_sharing_note %} &middot; <span class="ps-wl-paused" data-gpu-sharing-note>{{ dashboard.gpu_sharing_note }}</span>{% endif %}{% for s in dashboard.stages if s.degraded %} &middot; <span class="ps-degraded">{{ humanize_stage(s.stage) }} paused: {{ s.degraded_reason }}</span>{% endfor %}</div>
   {% else %}
   <div class="ps-stages">
     {% for s in dashboard.stages %}
@@ -51,6 +51,10 @@
     {% if dashboard.workload.queue_paused %}
     <span class="ps-wl-sep">&middot;</span>
     <span class="ps-wl-paused">queue paused</span>
+    {% endif %}
+    {% if dashboard.gpu_sharing_note %}
+    <span class="ps-wl-sep">&middot;</span>
+    <span class="ps-wl-paused" data-gpu-sharing-note>{{ dashboard.gpu_sharing_note }}</span>
     {% endif %}
   </div>
   {% endif %}
