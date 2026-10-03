@@ -124,7 +124,12 @@ from voxint.app_settings import (
 )
 from voxint.config import Settings, llm_budget_fits_stage_lease, llm_endpoint_explicitly_set
 from voxint.db.models import AppSettings
-from voxint.diagnostics import LLM_NOT_CONFIGURED_DETAIL, check_state, run_diagnostics
+from voxint.diagnostics import (
+    GPU_SHARING_CHECK,
+    LLM_NOT_CONFIGURED_DETAIL,
+    check_state,
+    run_diagnostics,
+)
 from voxint.domain_packs.base import DomainPackError
 from voxint.domain_packs.corrections import (
     MAX_MATCH_CHARS,
@@ -137,6 +142,8 @@ from voxint.domain_packs.registry import available_domain_packs, default_domain_
 from voxint.embeddings.onnx_embedder import minilm_artifacts_available
 from voxint.enrichment.translation_jobs import translation_gates_open
 from voxint.enrichment.triage import validate_authority_domains
+from voxint.gpu_phase.visibility import model_service_stop_detail
+from voxint.gpu_phase.visibility import read_state as read_gpu_sharing_state
 from voxint.ingest import submit_media_item_if_new
 from voxint.media.registration import (
     PACK_DEFAULT_SENTINEL,
@@ -825,6 +832,15 @@ _DOCTOR_REMEDIATION: dict[str, str] = {
         " turn the bundled model off in Settings. Transcription and diarization"
         " still run; enhancement is simply skipped until it's reachable."
     ),
+    # GPU sharing (#748): the model services and the language model take turns
+    # on one GPU, so one of them being stopped is the normal state.
+    "gpu sharing": (
+        "GPU sharing is on: the model services run only while the GPU does audio"
+        " work, and the language model is stopped during that time. A stopped"
+        " service here is expected. If GPU sharing reports it could not return"
+        " the GPU, run voxint gpu-phase release on the server, or see"
+        " docs/gpu-sharing.md."
+    ),
     # Fallback for any diagnostics check not explicitly categorized below — a neutral
     # "look at this dependency" rather than wrongly steering the operator at the model
     # services. No current check lands here (see _doctor_category), but a future one
@@ -841,6 +857,8 @@ def _doctor_category(name: str) -> str:
     ``_DOCTOR_REMEDIATION`` category. Total by construction — an unrecognized name (a
     future check) falls through to the neutral ``other`` copy, never a KeyError and
     never the wrong (model-services) remediation."""
+    if name == GPU_SHARING_CHECK:
+        return "gpu sharing"
     if name == "postgres":
         return "database"
     if name == "redis":
@@ -867,7 +885,10 @@ def _doctor_checks(request: Request, session: Session) -> list[dict[str, Any]]:
             "name": r.name,
             "state": check_state(r),
             "detail": r.detail,
-            "remediation": _DOCTOR_REMEDIATION[_doctor_category(r.name)],
+            "remediation": _DOCTOR_REMEDIATION[
+                "gpu sharing" if r.expected_stop else _doctor_category(r.name)
+            ],
+            "expected_stop": r.expected_stop,
         }
         for r in results
     ]
@@ -886,7 +907,17 @@ _COMPONENT_LABELS: dict[str, str] = {
     # independent capabilities with independent health, so they get one row each.
     "llm bundled": "Bundled AI model",
     "llm endpoint": "Your own AI endpoint",
+    GPU_SHARING_CHECK: "GPU sharing",
 }
+
+# Diagnostics check name -> service-control key for the three model services.
+# These, and only these, are owned by GPU sharing when it is on (#748).
+_MODEL_SERVICE_KEYS: dict[str, str] = {
+    "transcription": "transcription",
+    "diarization": "diarization",
+    "speaker embedding": "speaker_embedding",
+}
+_GPU_SHARED_SERVICE_KEYS = frozenset(_MODEL_SERVICE_KEYS.values())
 
 _COMPONENT_ORDER = (
     "__api__",
@@ -897,11 +928,12 @@ _COMPONENT_ORDER = (
     "redis",
     "llm bundled",
     "llm endpoint",
+    GPU_SHARING_CHECK,
 )
 
 
 def _build_components(
-    checks: list[dict[str, Any]], controller: ServiceController
+    checks: list[dict[str, Any]], controller: ServiceController, *, gpu_sharing: bool = False
 ) -> list[dict[str, Any]]:
     """Map doctor checks to the R6 component list with friendly names.
 
@@ -956,7 +988,15 @@ def _build_components(
                 action_label = "Turn on"
                 action_style = "primary"
             else:
+                # Includes "gpu sharing": absent when the feature is off.
                 continue
+        elif check.get("expected_stop"):
+            # GPU sharing stopped this on purpose (#748): off, not a warning.
+            dot = "off"
+            state_text = check["detail"]
+        elif key == GPU_SHARING_CHECK:
+            dot = "ok" if check["state"] == "ready" else "warn"
+            state_text = check["detail"]
         else:
             state = check["state"]
             if (
@@ -978,14 +1018,15 @@ def _build_components(
             else:
                 dot = "warn"
                 state_text = check["detail"] or state
-        service_key = {
-            "transcription": "transcription",
-            "diarization": "diarization",
-            "speaker embedding": "speaker_embedding",
-        }.get(key)
+        service_key = _MODEL_SERVICE_KEYS.get(key)
+        # With GPU sharing on, the orchestrator owns the model services in every
+        # phase, healthy or not: no start/stop/restart controls and no hint.
+        # Starting one by hand could load models onto a GPU the language model
+        # holds; stopping one could break an audio window (#748).
+        sharing_owned = gpu_sharing and service_key is not None
         container_state = (
             controller.inspect(service_key)
-            if (controller.controllable and service_key)
+            if (controller.controllable and service_key and not sharing_owned)
             else None
         )
         if container_state == ServiceState.STOPPED:
@@ -995,9 +1036,15 @@ def _build_components(
             {
                 "label": label,
                 "key": service_key,
-                "controllable": controller.controllable if service_key else False,
+                "controllable": (
+                    controller.controllable if service_key and not sharing_owned else False
+                ),
                 "state": container_state,
-                "terminal_hint": controller.terminal_hint(service_key) if service_key else None,
+                "terminal_hint": (
+                    controller.terminal_hint(service_key)
+                    if service_key and not sharing_owned
+                    else None
+                ),
                 "is_model_service": service_key is not None,
                 "dot": dot,
                 "state_text": state_text,
@@ -2475,7 +2522,9 @@ def settings_status_page(request: Request, operator: OperatorDep, session: Sessi
             },
         )
     checks = _doctor_checks(request, session)
-    components = _build_components(checks, request.app.state.service_controller)
+    components = _build_components(
+        checks, request.app.state.service_controller, gpu_sharing=settings.gpu_phase_enabled
+    )
     csrf_token = mint_csrf_token(request.app.state.csrf_secret, CSRF_SERVICE_CONTROL)
     overall_ok = all(c["dot"] != "warn" for c in components)
     context = _sub_page_context(
@@ -2489,6 +2538,12 @@ def settings_status_page(request: Request, operator: OperatorDep, session: Sessi
         warnings=warnings,
     )
     return templates.TemplateResponse(request, "settings/status.html", context)
+
+
+GPU_SHARING_OWNS_SERVICES = (
+    "GPU sharing manages this service. Use voxint gpu-phase audio-now or"
+    " voxint gpu-phase release to change it."
+)
 
 
 def _service_row_html(
@@ -2519,6 +2574,18 @@ async def _service_control_action(
     if service_key not in SERVICE_KEYS:
         raise HTTPException(status_code=404, detail="Unknown service")
     _require_csrf(request, CSRF_SERVICE_CONTROL, csrf_token)
+    settings: Settings = request.app.state.settings
+    if settings.gpu_phase_enabled and service_key in _GPU_SHARED_SERVICE_KEYS:
+        # A stale form from before GPU sharing was turned on (#748).
+        logger.info(
+            "service_control action=%s actor=%s service_key=%s outcome=refused_gpu_sharing",
+            action,
+            operator,
+            service_key,
+        )
+        return HTMLResponse(
+            _service_row_html(service_key, GPU_SHARING_OWNS_SERVICES, "off"), status_code=409
+        )
     controller: ServiceController = request.app.state.service_controller
     method = {"start": controller.start, "stop": controller.stop, "restart": controller.restart}[
         action
@@ -2595,6 +2662,24 @@ def settings_service_row(service_key: str, request: Request, admin: AdminDep) ->
     # This synchronous route runs in FastAPI's thread pool, including Docker inspection.
     with httpx.Client(timeout=httpx.Timeout(settings.health_probe_timeout_seconds)) as client:
         health = _probe_one(client, service.label, getattr(settings, service.settings_url_attr))
+    if settings.gpu_phase_enabled and service_key in _GPU_SHARED_SERVICE_KEYS:
+        # GPU sharing owns the service (#748): its state only, no controls, no
+        # hint, and no further polling (no action of ours is in progress). A
+        # down service is "off" only when that is expected: the phase is fresh
+        # and keeps services stopped, and nothing answered. Otherwise "warn".
+        # A session only on this path: with sharing off the row needs no database.
+        with request.app.state.session_factory() as session:
+            gpu_state = read_gpu_sharing_state(session, settings)
+        phase = gpu_state.trusted_phase if gpu_state is not None else None
+        expected = (
+            phase is not None
+            and model_service_stop_detail(phase) is not None
+            and health.not_running
+        )
+        dot = "ok" if health.up else "off" if expected else "warn"
+        response = HTMLResponse(_service_row_html(service_key, health.detail, dot))
+        response.headers["Cache-Control"] = "no-store"
+        return response
     state = controller.inspect(service_key) if controller.controllable else ServiceState.UNKNOWN
     dot = "ok" if health.up else "off" if state == ServiceState.STOPPED else "warn"
     action = ""

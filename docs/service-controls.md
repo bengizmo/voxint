@@ -115,6 +115,17 @@ launchctl kickstart -k gui/$(id -u)/com.voxint.metal.whisper
 Substitute the pyannote or titanet label for the other services. If the jobs are
 not loaded, start them with `scripts/metal/voxint-metal.sh up`.
 
+## GPU sharing
+
+With [GPU sharing](gpu-sharing.md) on (`GPU_PHASE_ENABLED=true`), a dedicated
+`gpu-phase` worker starts and stops the three model services as the GPU passes
+between Voxint and another service such as a local LLM. GPU sharing owns the
+services in every phase, so the Status page shows no **Start**, **Stop** or
+**Restart** buttons for them, even when they are running, and refuses a
+control request with HTTP 409. Starting one by hand could load models onto a
+GPU the other service holds, and stopping one could cut an audio window short.
+Use `voxint gpu-phase audio-now` or `voxint gpu-phase release` instead.
+
 ## Limitations
 
 - Controls are per-process on the API instance. Multiple API workers behind a

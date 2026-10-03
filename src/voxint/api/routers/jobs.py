@@ -49,11 +49,16 @@ _SERVICE_CONSEQUENCES: Final[dict[str, tuple[str, str]]] = {
 
 
 def _detect_degraded(
-    services: Iterable[tuple[str, bool]], *, llm_enabled: bool | None
+    services: Iterable[tuple[str, bool]],
+    *,
+    llm_enabled: bool | None,
+    expected_stop_services: frozenset[str] = frozenset(),
 ) -> list[DegradedService]:
+    """``expected_stop_services``: services GPU sharing stopped on purpose
+    (#748); the GPU-sharing banner explains the wait instead."""
     degraded = []
     for name, up in services:
-        if not up and name in _SERVICE_CONSEQUENCES:
+        if not up and name in _SERVICE_CONSEQUENCES and name not in expected_stop_services:
             headline, detail = _SERVICE_CONSEQUENCES[name]
             degraded.append(
                 DegradedService(
@@ -78,12 +83,15 @@ def _pipeline_summary(
     resource_strip: ResourceStripView | None = None,
     *,
     queue_paused: bool = False,
+    gpu_sharing_note: str | None = None,
 ) -> str:
     running = status_counts.get(RunStatus.RUNNING.value, 0)
     queued = status_counts.get(RunStatus.QUEUED.value, 0)
     parts: list[str] = []
     if queue_paused:
         parts.append("queue paused")
+    if gpu_sharing_note:
+        parts.append(gpu_sharing_note)
     if running:
         parts.append(f"{running} running")
     if queued:
