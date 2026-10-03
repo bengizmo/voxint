@@ -37,7 +37,7 @@ task, `voxint.gpu_phase_tick` on the Celery queue `gpu_phase`, runs every
 
 | Phase | Who has the GPU | GPU lane | Post lane | Leaves when |
 |---|---|---|---|---|
-| `llm` | the other service | waits | runs | recordings are waiting and the phase has lasted `GPU_PHASE_MIN_DWELL_SECONDS` (and any backoff has passed), or the operator runs `audio-now` |
+| `llm` | the other service | waits | runs after a recent language-model answer | recordings are waiting and the phase has lasted `GPU_PHASE_MIN_DWELL_SECONDS` (and any backoff has passed), or the operator runs `audio-now` |
 | `draining_post` | the other service | waits | waits | post-lane runs and LLM jobs already in progress finish |
 | `acquiring` | being handed over | waits | waits | the broker grants the lease |
 | `starting_services` | Voxint | waits | waits | whisper, pyannote and titanet all report healthy |
@@ -55,6 +55,19 @@ A failed step (the broker refuses, a service does not come up in time) returns
 to `llm` and backs off before the next try: 30 seconds, doubling each time, up
 to 15 minutes. The phase only lands in `error` when Voxint could not give the
 GPU back, because then neither side can run.
+
+## Waiting for the language model
+
+The post lane also waits for the language model to answer. During the `llm`
+phase, Voxint checks each active language-model endpoint every tick. Work stays
+queued until all configured endpoints answer successfully. Returning the GPU
+starts this wait; it does not immediately start language-model work.
+
+An answer older than `max(3 * GPU_PHASE_TICK_SECONDS, 90)` seconds counts as
+stale and closes the post lane. A stopped gpu-phase worker therefore also
+pauses new language-model work. GPU sharing off keeps the existing behavior.
+When language-model work is disabled or no language model is configured, no
+endpoint probe is needed and the next tick in `llm` opens the post lane.
 
 ## The broker contract
 
@@ -101,13 +114,14 @@ is lost: the broker no longer considers Voxint the holder.
 
 | Status | Body | Meaning |
 |---|---|---|
-| `200` | any | Released, and the other service is running again. Voxint opens the LLM lane. |
+| `200` | any | Released, and the other service is running again. Voxint returns to `llm` and checks readiness on the next tick. |
 | `202` | `{"state": "pending"}` | The broker is still restoring the other service. Voxint stays in `releasing` and asks again on the next tick. |
-| `404` | any | No such lease; the GPU is already free. Voxint treats this as released and opens the LLM lane. |
+| `404` | any | No such lease; the GPU is already free. Voxint treats this as released and checks readiness on the next tick. |
 | `500` | any, for example `{"error": "the language model did not come back"}` | Restoring the other service failed. The phase goes to `error`. |
 
-Voxint opens the LLM lane only after a `200` or `404`. Any other answer, or no
-answer, puts the phase in `error`.
+Voxint returns to `llm` after a `200` or `404`, then checks that the language
+model answers before opening the post lane. A `202` keeps it in `releasing`;
+any other answer, or no answer, puts the phase in `error`.
 
 ### Status
 
@@ -304,8 +318,8 @@ service's lifecycle. It can be a few dozen lines in any language. It needs to:
    the same `lease_id`; with an unknown or expired one, answer `404`.
 2. **Release.** On the current `lease_id`, start the other service again. Answer
    `202 {"state": "pending"}` until it is healthy (for an LLM server, until it
-   answers a request), and `200` only then: Voxint opens the LLM lane on the
-   `200`, and opening it early would send work to a model that is not up yet.
+   answers a request), and `200` only then. Voxint also checks the configured
+   language-model endpoints before opening its post lane.
    If the other service fails to come back, answer `500`. On an unknown
    `lease_id`, answer `404`.
 3. **Status.** Report the current lease, or `"free"`.

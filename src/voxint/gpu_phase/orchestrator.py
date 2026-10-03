@@ -12,7 +12,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
@@ -25,6 +25,7 @@ from voxint.config import Settings
 from voxint.db.models import Stage
 from voxint.gpu_phase import state
 from voxint.gpu_phase.client import AcquireResult, LeaseClient, ReleaseResult, StatusResult
+from voxint.gpu_phase.llm_probe import probe_llm
 from voxint.gpu_phase.state import GpuPhase as P
 from voxint.gpu_phase.state import GpuPhaseSnapshot, OperatorRequest, PhaseFields
 
@@ -58,6 +59,7 @@ class Observed:
     release: ReleaseResult | None = None
     started: bool = False
     ready: bool = False
+    llm_ready: bool | None = None
     control_error: str | None = None
     stopped: bool = False
     # The lease id a release call used, possibly recovered from broker status.
@@ -216,7 +218,7 @@ def decide(
                 },
             )
         if o.release and o.release.kind == "pending":
-            # The LLM lane opens only once the broker confirms the other service is back.
+            # Broker release must finish before the next LLM readiness check.
             # Keep the id (it may have come from broker status) so the next tick asks
             # about this lease again instead of reading a transient "free" as released.
             if o.release_lease_id:
@@ -256,6 +258,7 @@ def tick(
     controller: ServiceController,
     probe: Callable[[Settings], list[ServiceHealth]],
     clock: Callable[[], datetime],
+    llm_probe: Callable[[Settings, Session], bool | None] = probe_llm,
 ) -> TickResult:
     if not settings.gpu_phase_enabled:
         return TickResult("disabled")
@@ -273,9 +276,13 @@ def tick(
             state.post_lane_in_flight(session),
             state.running_llm_jobs(session),
         )
-        o = _observe(s, settings, client, controller, probe)
+        o = _observe(s, settings, client, controller, probe, lambda: llm_probe(settings, session))
         now = clock()
         transition = decide(s, counts, o, now, settings)
+        staying_llm = s.phase == transition.phase == P.LLM
+        transition.fields["llm_ready"] = staying_llm and o.llm_ready is not False
+        if staying_llm:
+            transition.fields["llm_checked_at"] = now
         idle_demand = (
             s.phase == P.AUDIO and counts.gpu_lane_demand > 0 and counts.gpu_in_flight == 0
         ) or (
@@ -290,12 +297,18 @@ def tick(
             expected_request=s.operator_request,
             **transition.fields,
         )
-    if transition.phase in (P.AUDIO, P.LLM):
+        after = state.read_phase(session)
+        post_open = state.post_lane_open(after, settings, now=now)
+    if transition.phase == P.AUDIO or (transition.phase == P.LLM and post_open):
         monotonic_now = _monotonic()
         last_publish = _last_lane_publish.get(transition.phase)
-        due = transition.phase != s.phase or (
-            idle_demand
-            and (last_publish is None or monotonic_now - last_publish >= IDLE_REPUBLISH_SECONDS)
+        due = (
+            transition.phase != s.phase
+            or (post_open and not state.post_lane_open(s, settings, now=now))
+            or (
+                idle_demand
+                and (last_publish is None or monotonic_now - last_publish >= IDLE_REPUBLISH_SECONDS)
+            )
         )
         # Publication runs after the commit. Only a publish that sent (or tried to
         # send) something arms the idle throttle; an empty pass does not.
@@ -310,6 +323,7 @@ def _observe(
     client: LeaseClient,
     controller: ServiceController,
     probe: Callable[[Settings], list[ServiceHealth]],
+    llm_probe: Callable[[], bool | None],
 ) -> Observed:
     renewal = None
     try:
@@ -320,12 +334,21 @@ def _observe(
                 renewal = AcquireResult("lost")
     except Exception as exc:
         renewal = AcquireResult("failed", reason=type(exc).__name__[:240])
+    # The language model's readiness is its own fact: a Docker or broker problem
+    # this tick must not close the LLM lane while the model answers.
+    llm_ready: bool | None = None
+    if s.phase == P.LLM:
+        try:
+            llm_ready = llm_probe()
+        except Exception:
+            llm_ready = False
     try:
-        return _observe_services(s, settings, client, controller, probe, renewal)
+        observed = _observe_services(s, settings, client, controller, probe, renewal)
     except Exception as exc:
         if s.phase == P.ACQUIRING:
             return Observed(acquire=AcquireResult("failed", reason=type(exc).__name__[:240]))
-        return Observed(acquire=renewal, control_error=type(exc).__name__[:240])
+        observed = Observed(acquire=renewal, control_error=type(exc).__name__[:240])
+    return replace(observed, llm_ready=llm_ready)
 
 
 def _observe_services(

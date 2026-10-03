@@ -159,7 +159,7 @@ from voxint.enrichment.translations import (
 from voxint.export import MEDIA_TYPES, format_clock, transcript_payload
 from voxint.export.reading import layout_turns
 from voxint.gpu_phase.dispatch import open_lanes, redispatch_queued_runs
-from voxint.gpu_phase.state import gpu_lane_demand
+from voxint.gpu_phase.state import gpu_lane_demand, post_lane_queued
 from voxint.gpu_phase.visibility import GpuSharingState, GpuSharingView, build_view
 from voxint.gpu_phase.visibility import read_state as read_gpu_sharing_state
 from voxint.ingest import (
@@ -774,6 +774,7 @@ def runs(
         gpu_sharing = build_view(
             gpu_state,
             _gpu_waiting(dashboard) if dashboard is not None else gpu_lane_demand(session),
+            post_lane_queued(session) if not gpu_state.post_ready else 0,
         )
         if dashboard is not None:
             dashboard = replace(dashboard, gpu_sharing_note=gpu_sharing.note)

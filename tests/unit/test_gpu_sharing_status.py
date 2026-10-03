@@ -62,6 +62,8 @@ def snap(phase: GpuPhase, **fields: Any) -> GpuPhaseSnapshot:
         "retry_after": None,
         "operator_request": None,
         "updated_at": NOW,
+        "llm_ready": True,
+        "llm_checked_at": NOW,
     }
     values.update(fields)
     return GpuPhaseSnapshot(**values)

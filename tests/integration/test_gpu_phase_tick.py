@@ -49,6 +49,7 @@ class Rig:
     settings: Settings
     client: LeaseClient
     publishers: dict[str, MagicMock]
+    llm_ready: bool | None = None
 
     def step(self) -> TickResult:
         return tick(
@@ -58,6 +59,7 @@ class Rig:
             controller=self.controller,
             probe=self.probe,
             clock=self.clock,
+            llm_probe=lambda settings, session: self.llm_ready,
         )
 
     def seed(self, phase: P, **fields: Unpack[PhaseFields]) -> None:
@@ -122,6 +124,9 @@ def test_full_cycle_and_committed_publication(
         P.RELEASING,
         P.LLM,
     ]
+    rig.publishers["finish_pipeline"].assert_not_called()
+    rig.settings.gpu_phase_min_dwell_seconds = 600
+    assert rig.step().phase == P.LLM
     rig.publishers["finish_pipeline"].assert_called_once_with((str(post.id),), ignore_result=True)
     for name, job in zip(
         ("generate_run_asset", "translate_run", "research_speaker"), jobs, strict=True
@@ -207,8 +212,8 @@ def test_restart_each_phase_reaches_open_lane(rig: Rig, phase: P) -> None:
     else:
         rig.seed(phase)
     for _ in range(12):
-        result = rig.step()
-        if result.phase in (P.AUDIO, P.LLM):
+        rig.step()
+        if gpu_lane_open(rig.read(), rig.settings) or post_lane_open(rig.read(), rig.settings):
             break
     s = rig.read()
     assert s.phase in (P.AUDIO, P.LLM)
@@ -295,6 +300,8 @@ def test_publication_failure_is_deferred(session_factory: sessionmaker[Session],
     rig.seed(P.RELEASING)
     assert rig.step().phase == P.LLM
     assert rig.read().phase == P.LLM
+    rig.publishers["finish_pipeline"].assert_not_called()
+    assert rig.step().phase == P.LLM
     rig.publishers["finish_pipeline"].assert_called_once()
     for name in ("generate_run_asset", "translate_run", "research_speaker"):
         rig.publishers[name].assert_not_called()
@@ -566,6 +573,9 @@ def test_ambiguous_acquire_reconciles_before_publication(
     )
     assert rig.step().phase == P.LLM
     assert any(r.url.path == "/release" for r in rig.broker.calls) == (holder == "voxint")
+    rig.publishers["finish_pipeline"].assert_not_called()
+    monkeypatch.setattr(rig.client, "status", lambda: StatusResult("free"))
+    assert rig.step().phase == P.LLM
     rig.publishers["finish_pipeline"].assert_called_once()
     assert rig.read().failures == 1
 
@@ -623,6 +633,9 @@ def test_publication_stops_entire_batch_on_first_error(
         rig.seed(P.RELEASING)
     rig.publishers[failed_task].side_effect = OperationalError("offline")
     assert rig.step().phase == (P.AUDIO if failed_task == "run_pipeline" else P.LLM)
+    if failed_task != "run_pipeline":
+        rig.publishers[failed_task].assert_not_called()
+        assert rig.step().phase == P.LLM
     rig.publishers[failed_task].assert_called_once()
     order = [
         "run_pipeline",
@@ -690,7 +703,7 @@ def test_busy_or_empty_lane_does_not_republish(rig: Rig, busy: str) -> None:
     if phase == P.AUDIO:
         prepare_audio(rig)
     else:
-        rig.seed(phase)
+        rig.seed(phase, llm_ready=True, llm_checked_at=rig.clock())
     with rig.session_factory.begin() as session:
         if busy == "audio":
             seed_run(session, None)
@@ -718,6 +731,8 @@ def test_transition_publication_failure_recovers_on_idle_tick(
     publisher.side_effect = OperationalError("offline")
     rig.seed(P.RELEASING)
     assert rig.step().phase == P.LLM
+    assert publisher.call_count == 0
+    assert rig.step().phase == P.LLM
     assert publisher.call_count == 1
     assert rig.step().phase == P.LLM
     assert publisher.call_count == 1
@@ -739,7 +754,7 @@ def test_renewal_exception_is_a_failed_acquire(
     )
     monkeypatch.setattr(rig.client, "acquire", MagicMock(side_effect=RuntimeError("secret")))
     observed = orchestrator._observe(
-        rig.read(), rig.settings, rig.client, rig.controller, rig.probe
+        rig.read(), rig.settings, rig.client, rig.controller, rig.probe, lambda: None
     )
     assert observed.acquire is not None
     assert observed.acquire.kind == "failed"
@@ -790,6 +805,9 @@ def test_release_pending_keeps_both_lanes_closed_until_the_other_service_is_back
     assert snapshot is not None
     assert not post_lane_open(snapshot, rig.settings)
     assert rig.step().phase == P.LLM
+    rig.publishers["finish_pipeline"].assert_not_called()
+    rig.settings.gpu_phase_min_dwell_seconds = 600
+    assert rig.step().phase == P.LLM
     rig.publishers["finish_pipeline"].assert_called_once_with((str(post.id),), ignore_result=True)
 
 
@@ -831,3 +849,74 @@ def test_publish_lane_reports_whether_anything_was_sent(
         )
         is False
     )
+
+
+@pytest.mark.parametrize("answer", [True, None])
+def test_readiness_opens_only_after_observation(rig: Rig, answer: bool | None) -> None:
+    rig.settings.gpu_phase_min_dwell_seconds = 600
+    with rig.session_factory.begin() as session:
+        seed_run(session, Stage.ENHANCE_MATCH)
+    rig.llm_ready = False
+    rig.seed(P.RELEASING, llm_ready=True, llm_checked_at=rig.clock())
+    assert rig.step().phase == P.LLM
+    assert rig.read().llm_ready is False
+    rig.publishers["finish_pipeline"].assert_not_called()
+    rig.clock.advance()
+    assert rig.step().phase == P.LLM
+    assert rig.read().llm_ready is False
+    assert rig.read().llm_checked_at == rig.clock()
+    rig.publishers["finish_pipeline"].assert_not_called()
+    rig.llm_ready = answer
+    rig.clock.advance()
+    assert rig.step().phase == P.LLM
+    assert rig.read().llm_ready is True
+    assert rig.read().llm_checked_at == rig.clock()
+    rig.publishers["finish_pipeline"].assert_called_once()
+    assert rig.step().phase == P.LLM
+    rig.publishers["finish_pipeline"].assert_called_once()
+    rig.llm_ready = False
+    assert rig.step().phase == P.LLM
+    assert rig.read().llm_ready is False
+    rig.publishers["finish_pipeline"].assert_called_once()
+    rig.llm_ready = answer
+    assert rig.step().phase == P.LLM
+    assert rig.publishers["finish_pipeline"].call_count == 2
+    rig.seed(P.LLM, operator_request=OperatorRequest.AUDIO)
+    assert rig.step().phase == P.DRAINING_POST
+    assert rig.read().llm_ready is False
+
+
+@pytest.mark.parametrize("phase", list(P))
+def test_tick_resets_readiness_outside_llm(rig: Rig, phase: P) -> None:
+    rig.seed(phase, llm_ready=True, llm_checked_at=rig.clock())
+    rig.llm_ready = False
+    rig.step()
+    assert rig.read().llm_ready is False
+    for publisher in rig.publishers.values():
+        publisher.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["uncontrollable", "inspect_raises"])
+def test_service_control_trouble_does_not_close_a_ready_llm_lane(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    # Readiness is the language model's own fact: a Docker problem in llm is
+    # recorded as an error, but post-lane work keeps running while the model answers.
+    rig.seed(P.LLM)
+    if failure == "uncontrollable":
+        rig.controller.controllable = False
+    else:
+
+        def broken_inspect(service_key: str) -> ServiceState:
+            raise RuntimeError("docker unavailable")
+
+        monkeypatch.setattr(rig.controller, "inspect", broken_inspect)
+    rig.llm_ready = True
+    assert rig.step().phase == P.LLM
+    row = rig.read()
+    assert row.last_error
+    assert row.llm_ready is True
+    assert row.llm_checked_at == rig.clock()
+    rig.llm_ready = False
+    assert rig.step().phase == P.LLM
+    assert rig.read().llm_ready is False

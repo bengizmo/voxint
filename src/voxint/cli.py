@@ -944,7 +944,7 @@ def _gpu_phase_status(args: argparse.Namespace) -> int:
         post_lane_in_flight,
         read_phase,
     )
-    from voxint.gpu_phase.visibility import display_error, phase_summary, snapshot_phase
+    from voxint.gpu_phase.visibility import display_error, readiness_summary, snapshot_phase
 
     settings = get_settings()
     if not settings.gpu_phase_enabled:
@@ -967,7 +967,8 @@ def _gpu_phase_status(args: argparse.Namespace) -> int:
         # Only an operator request has written the row; no phase was chosen yet.
         print("phase:            none (the GPU sharing task has not run yet)")
     else:
-        print(f"phase:            {phase.value if phase else 'none'} ({phase_summary(phase)})")
+        summary = readiness_summary(snapshot, tick_seconds=settings.gpu_phase_tick_seconds)
+        print(f"phase:            {phase.value if phase else 'none'} ({summary})")
     if snapshot is not None:
         print(f"since:            {when(snapshot.phase_since)}")
         last_run = (
@@ -1152,11 +1153,11 @@ def _fetch(args: argparse.Namespace) -> int:
     return 0
 
 
-# A phase change between the up-front check and the claim leaves the job QUEUED
-# (the claim re-checks under a lock); the worker runs it in the next LLM phase.
+# A phase or readiness change before the claim leaves the job QUEUED.
+# The claim rechecks under a lock; a later ready tick republishes the job.
 _LLM_PHASE_DEFERRED = (
-    "GPU sharing switched the GPU away from the language model before this job"
-    " started; it stays queued and runs in the next language-model phase"
+    "GPU sharing paused language-model work before this job started; it stays"
+    " queued until the language-model lane is ready again"
 )
 
 

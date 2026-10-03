@@ -109,7 +109,7 @@ def test_state_round_trip_and_counts(session_factory: sessionmaker[Session]) -> 
 )
 def test_constraints(session_factory: sessionmaker[Session], assignment: str) -> None:
     with session_factory() as session:
-        set_phase(session, GpuPhase.LLM, now=NOW)
+        set_phase(session, GpuPhase.LLM, now=NOW, llm_ready=True, llm_checked_at=datetime.now(UTC))
         session.commit()
         with pytest.raises(IntegrityError):
             session.execute(text(f"UPDATE gpu_phase SET {assignment}"))
@@ -213,15 +213,26 @@ def seed_jobs(session: Session) -> tuple[RunAssetJob, TranslationJob, ResearchJo
     return jobs
 
 
-@pytest.mark.parametrize("phase", [GpuPhase.AUDIO, GpuPhase.DRAINING_POST, GpuPhase.ERROR])
+@pytest.mark.parametrize(
+    "phase", [GpuPhase.AUDIO, GpuPhase.DRAINING_POST, GpuPhase.ERROR, GpuPhase.LLM]
+)
+@pytest.mark.parametrize("ready,age", [(False, 0), (True, 91)])
 def test_post_jobs_stay_queued(
+    ready: bool,
+    age: int,
     session_factory: sessionmaker[Session],
     monkeypatch: pytest.MonkeyPatch,
     phase: GpuPhase,
 ) -> None:
     with session_factory() as session:
         jobs = seed_jobs(session)
-        set_phase(session, phase, now=NOW)
+        set_phase(
+            session,
+            phase,
+            now=NOW,
+            llm_ready=ready,
+            llm_checked_at=datetime.now(UTC) - timedelta(seconds=age),
+        )
         session.commit()
     monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
     monkeypatch.setattr(tasks, "get_settings", phase_settings)
@@ -244,7 +255,7 @@ def test_dispatch_filter_before_limit(
     settings = phase_settings(gpu_phase_enabled=phase is not None)
     with session_factory() as session:
         if phase is not None:
-            set_phase(session, phase, now=NOW)
+            set_phase(session, phase, now=NOW, llm_ready=True, llm_checked_at=datetime.now(UTC))
         gpu = seed_run(session, None, age=10000)
         post = seed_run(session, Stage.ENHANCE_MATCH, age=9000)
         session.commit()
@@ -272,7 +283,7 @@ def test_recovery_lanes_and_research(
 ) -> None:
     settings = phase_settings(recovery_publish_batch_size=1)
     with session_factory() as session:
-        set_phase(session, phase, now=NOW)
+        set_phase(session, phase, now=NOW, llm_ready=True, llm_checked_at=datetime.now(UTC))
         gpu = seed_run(session, None, age=10000)
         post = seed_run(session, Stage.ENHANCE_MATCH, age=9000)
         jobs = seed_jobs(session)
@@ -332,7 +343,7 @@ def test_resume_callers_keep_publish_failure_policy(
 
     settings = phase_settings(recovery_publish_batch_size=2)
     with session_factory() as session:
-        set_phase(session, GpuPhase.LLM, now=NOW)
+        set_phase(session, GpuPhase.LLM, now=NOW, llm_ready=True, llm_checked_at=datetime.now(UTC))
         seed_run(session, None, age=10000)
         first = seed_run(session, Stage.ENHANCE_MATCH, age=9000)
         second = seed_run(session, Stage.FINALIZE, age=8000)
@@ -456,7 +467,7 @@ def test_admission_rechecks_phase_after_early_gate(
     stage = Stage.ACQUIRE if segment == GPU_SEGMENT else Stage.ENHANCE_MATCH
     with session_factory() as session:
         run = seed_run(session, stage)
-        set_phase(session, open_phase, now=NOW)
+        set_phase(session, open_phase, now=NOW, llm_ready=True, llm_checked_at=datetime.now(UTC))
         session.commit()
         original = (run.status, run.revision, run.current_stage, run.updated_at)
 
@@ -505,11 +516,13 @@ def test_admission_lock_blocks_phase_change_until_commit(
 
 
 @pytest.mark.parametrize("command", ["research", "assets"])
+@pytest.mark.parametrize("readiness_only", [False, True])
 def test_inline_llm_cli_reports_a_phase_flip_after_the_precheck(
     session_factory: sessionmaker[Session],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     command: str,
+    readiness_only: bool,
 ) -> None:
     """The precheck passes, then the phase leaves llm before the claim."""
     import argparse
@@ -517,7 +530,7 @@ def test_inline_llm_cli_reports_a_phase_flip_after_the_precheck(
     from voxint import cli
 
     with session_factory() as session:
-        set_phase(session, GpuPhase.LLM, now=NOW)
+        set_phase(session, GpuPhase.LLM, now=NOW, llm_ready=True, llm_checked_at=datetime.now(UTC))
         run = seed_run(session, Stage.FINALIZE, status="completed")
         session.add(
             TranscriptSegment(
@@ -541,7 +554,12 @@ def test_inline_llm_cli_reports_a_phase_flip_after_the_precheck(
     def blocked_then_flip(factory: sessionmaker[Session], s: object) -> str | None:
         result = real_blocked(factory, settings)
         with session_factory() as session:
-            set_phase(session, GpuPhase.DRAINING_POST, now=NOW + timedelta(seconds=1))
+            set_phase(
+                session,
+                GpuPhase.LLM if readiness_only else GpuPhase.DRAINING_POST,
+                now=NOW + timedelta(seconds=1),
+                llm_ready=False,
+            )
             session.commit()
         return result
 
@@ -557,7 +575,10 @@ def test_inline_llm_cli_reports_a_phase_flip_after_the_precheck(
         model = RunAssetJob
     out = capsys.readouterr().out
     assert code == 1, out
-    assert "deferred: GPU sharing switched the GPU" in out
+    assert (
+        "deferred: GPU sharing paused language-model work before this job started; it stays"
+        " queued until the language-model lane is ready again"
+    ) in out
     with session_factory() as session:
         jobs = session.query(model).all()
         assert len(jobs) == 1 and jobs[0].status == "queued"
@@ -572,3 +593,84 @@ def test_llm_unavailable_message_without_a_row(session_factory: sessionmaker[Ses
         assert message is not None and "no phase record" in message
         assert llm_unavailable_message(session, phase_settings(gpu_phase_enabled=False)) is None
         session.rollback()
+
+
+@pytest.mark.parametrize("phase", [None, *GpuPhase])
+@pytest.mark.parametrize("ready", [False, True])
+@pytest.mark.parametrize("age", [None, 0, 90, 91])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_admission_readiness_table(
+    session_factory: sessionmaker[Session],
+    phase: GpuPhase | None,
+    ready: bool,
+    age: int | None,
+    enabled: bool,
+) -> None:
+    from voxint.gpu_phase.state import admit_lane
+
+    now = datetime.now(UTC)
+    with session_factory() as session:
+        if phase is None:
+            session.execute(text("DELETE FROM gpu_phase"))
+        else:
+            set_phase(
+                session,
+                phase,
+                now=now,
+                llm_ready=ready,
+                llm_checked_at=None if age is None else now - timedelta(seconds=age),
+            )
+        settings = phase_settings(gpu_phase_enabled=enabled)
+        expected = not enabled or (
+            phase == GpuPhase.LLM and ready and age is not None and age <= 90
+        )
+        assert admit_lane(session, settings, POST_SEGMENT, now=now) is expected
+        assert admit_lane(session, settings, GPU_SEGMENT, now=now) is (
+            not enabled or phase == GpuPhase.AUDIO
+        )
+
+
+def test_admission_lock_blocks_readiness_write(session_factory: sessionmaker[Session]) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    from voxint.gpu_phase.state import admit_lane
+
+    now = datetime.now(UTC)
+    with session_factory.begin() as session:
+        set_phase(session, GpuPhase.LLM, now=now, llm_ready=True, llm_checked_at=now)
+    with session_factory() as admitting:
+        assert admit_lane(admitting, phase_settings(), POST_SEGMENT, now=now)
+        with session_factory() as writer:
+            writer.execute(text("SET LOCAL lock_timeout = '200ms'"))
+            with pytest.raises(OperationalError, match="lock timeout"):
+                set_phase(writer, GpuPhase.LLM, now=now, llm_ready=False)
+            writer.rollback()
+        admitting.commit()
+    with session_factory.begin() as writer:
+        set_phase(writer, GpuPhase.LLM, now=now, llm_ready=False)
+        assert not admit_lane(writer, phase_settings(), POST_SEGMENT, now=now)
+
+
+@pytest.mark.parametrize("ready,age", [(False, 0), (True, 91)])
+def test_post_run_waits_for_recent_answer(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    ready: bool,
+    age: int,
+) -> None:
+    with session_factory.begin() as session:
+        run = seed_run(session, Stage.ENHANCE_MATCH)
+        set_phase(
+            session,
+            GpuPhase.LLM,
+            now=datetime.now(UTC),
+            llm_ready=ready,
+            llm_checked_at=datetime.now(UTC) - timedelta(seconds=age),
+        )
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+    monkeypatch.setattr(tasks, "get_settings", phase_settings)
+    assert tasks._drive_segment(object(), str(run.id), POST_SEGMENT) == "gpu-phase-wait"
+    with session_factory() as session:
+        after = session.get(PipelineRun, run.id)
+        assert after is not None and after.status == "queued"
+        assert after.current_stage == Stage.ENHANCE_MATCH

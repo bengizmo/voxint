@@ -35,6 +35,8 @@ CLOSED = "http://127.0.0.1:9"  # discard port: connection refused
 def _set(session_factory: sessionmaker[Session], phase: GpuPhase, **fields: object) -> None:
     with session_factory() as session:
         # A fresh write, as the phase task makes each tick (doctor flags a stale row).
+        fields.setdefault("llm_ready", True)
+        fields.setdefault("llm_checked_at", datetime.now(UTC))
         set_phase(session, phase, now=datetime.now(UTC), **fields)  # type: ignore[arg-type]
         session.commit()
 
@@ -625,3 +627,44 @@ def test_polled_row_dot_under_gpu_sharing(
     row = _client(session_factory, _settings()).get("/settings/status/services/transcription/row")
     assert f'class="cr-dot is-{dot}"' in row.text
     assert "<form" not in row.text and "<code>" not in row.text
+
+
+@pytest.mark.parametrize("ready,age", [(False, 0), (True, 91), (True, None)])
+def test_waiting_for_llm_copy_across_surfaces(
+    session_factory: sessionmaker[Session],
+    cli_env: list[Settings],
+    capsys: pytest.CaptureFixture[str],
+    ready: bool,
+    age: int | None,
+) -> None:
+    from voxint.diagnostics import check_gpu_phase
+    from voxint.gpu_phase.state import llm_unavailable_message
+
+    client = _client(session_factory, _settings(), llm_enabled=True)
+    now = datetime.now(UTC)
+    _set(
+        session_factory,
+        GpuPhase.LLM,
+        llm_ready=ready,
+        llm_checked_at=None if age is None else now - timedelta(seconds=age),
+    )
+    with session_factory.begin() as session:
+        seed_run(session, Stage.ENHANCE_MATCH)
+        seed_run(session, Stage.FINALIZE)
+        message = llm_unavailable_message(session, cli_env[0])
+        assert message is not None and "Waiting for the language model to answer." in message
+        check = check_gpu_phase(
+            enabled=True,
+            snapshot=read_phase(session),
+            now=now,
+            tick_seconds=30,
+        )
+        assert check is not None and not check.ok
+        assert "waiting for the language model to answer" in check.detail
+    assert main(["gpu-phase", "status"]) == 0
+    assert "llm (waiting for the language model to answer)" in capsys.readouterr().out
+    body = client.get("/runs").text
+    assert "Waiting for the language model to answer." in body
+    assert "2 recordings are queued for language-model work." in body
+    assert "waiting for the language model to answer" in client.get("/runs/progress-strip").text
+    assert "waiting for the language model to answer" in client.get("/settings/status").text
