@@ -9,6 +9,7 @@ job and leaves the previous generation current), and the post-finalize
 auto-hook's gating.
 """
 
+import logging
 import uuid
 from collections.abc import Sequence
 
@@ -282,7 +283,7 @@ class TestJobs:
                     session, pipeline_run_id=run_id, target_language="klingon",
                     settings=make_settings(),
                 )
-            with pytest.raises(TranslationJobError, match="no transcript"):
+            with pytest.raises(TranslationJobError, match=r"no transcript.*found no speech"):
                 bare_media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
                 session.add(bare_media)
                 session.flush()
@@ -551,6 +552,36 @@ class TestAutogenerateHook:
             uuid.uuid4(),
             make_settings(translation_autogenerate=True, translation_target_language="es"),
         )
+        with session_factory() as session:
+            assert session.query(TranslationJob).count() == 0
+        assert dispatches == []
+
+    def test_completed_run_without_segments_skips_quietly(
+        self,
+        session_factory: sessionmaker[Session],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Issue #775: a completed run that found no speech has nothing to
+        # translate. Finalize must skip it at INFO, not log an ERROR traceback.
+        from voxint.worker import tasks
+
+        dispatches: list[tuple[tuple[str], dict[str, object]]] = []
+        monkeypatch.setattr(
+            tasks.translate_run,
+            "apply_async",
+            lambda args, **kwargs: dispatches.append((args, kwargs)),
+        )
+        with session_factory() as session:
+            run_id = seed_run(session, texts=())
+        with caplog.at_level(logging.INFO, logger=tasks.logger.name):
+            tasks._autogenerate_translation(
+                session_factory,
+                run_id,
+                make_settings(translation_autogenerate=True, translation_target_language="es"),
+            )
+        assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
+        assert f"run {run_id} has no transcript segments; skipping translation" in caplog.messages
         with session_factory() as session:
             assert session.query(TranslationJob).count() == 0
         assert dispatches == []

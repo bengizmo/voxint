@@ -10,6 +10,7 @@ force-cancel fences the claim.
 """
 
 import hashlib
+import logging
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -208,7 +209,7 @@ def test_create_jobs_refused_without_transcript(session: Session) -> None:
     run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
     session.add(run)
     session.commit()
-    with pytest.raises(EmbeddingJobError, match="no transcript"):
+    with pytest.raises(EmbeddingJobError, match=r"no transcript segments.*found no speech"):
         create_jobs(session, pipeline_run_id=run.id, settings=make_settings())
 
 
@@ -322,6 +323,38 @@ def test_autogenerate_skips_enqueue_when_weights_absent(
     )
     assert len(jobs) == 1
     assert dispatched == [((str(jobs[0].id),), {"ignore_result": True})]
+
+
+def test_autogenerate_skips_completed_run_without_segments(
+    session_factory: sessionmaker[Session],
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Issue #775: a completed run that found no speech has nothing to index.
+    # Finalize must skip it at INFO, not log an ERROR traceback.
+    from voxint.worker import tasks
+
+    run_id = _seed_run(session, [])
+    dispatched: list[tuple[tuple[str], dict[str, object]]] = []
+    monkeypatch.setattr(
+        tasks.generate_segment_embeddings,
+        "apply_async",
+        lambda args, **kwargs: dispatched.append((args, kwargs)),
+    )
+    monkeypatch.setattr(tasks, "minilm_artifacts_available", lambda: True)
+    with caplog.at_level(logging.INFO, logger=tasks.logger.name):
+        tasks._autogenerate_segment_embeddings(session_factory, run_id, make_settings())
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
+    assert f"run {run_id} has no transcript segments; skipping semantic index" in caplog.messages
+    session.expire_all()
+    assert (
+        session.execute(
+            select(EmbeddingJob).where(EmbeddingJob.pipeline_run_id == run_id)
+        ).first()
+        is None
+    )
+    assert dispatched == []
 
 
 def test_active_job_returns_the_one_active_row(session: Session) -> None:
