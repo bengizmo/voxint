@@ -662,3 +662,30 @@ def test_pipeline_summary_carries_the_gpu_note() -> None:
     summary = _pipeline_summary({"queued": 2}, gpu_sharing_note="waiting for the GPU")
     assert summary == "waiting for the GPU · 2 queued"
     assert _pipeline_summary({"queued": 2}) == "2 queued"
+
+
+def _raise_tls_failure(request: httpx.Request) -> httpx.Response:
+    import ssl
+
+    try:
+        raise ssl.SSLCertVerificationError("certificate has expired")
+    except ssl.SSLError as tls:
+        raise httpx.ConnectError("TLS handshake failed", request=request) from tls
+
+
+def _raise_refused(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("connection refused", request=request)
+
+
+def test_tls_failure_is_not_an_expected_stop() -> None:
+    """httpx reports a TLS failure as ConnectError, but something answered."""
+    from voxint.api.health_probe import connection_never_opened
+
+    tls = httpx.Client(transport=httpx.MockTransport(_raise_tls_failure))
+    refused = httpx.Client(transport=httpx.MockTransport(_raise_refused))
+    for client, expected in ((tls, False), (refused, True)):
+        with pytest.raises(httpx.ConnectError) as caught:
+            client.get("https://transcriber.invalid/healthz")
+        assert connection_never_opened(caught.value) is expected
+    assert connection_never_opened(httpx.ReadTimeout("stalled")) is False
+    assert connection_never_opened(ValueError("other")) is False

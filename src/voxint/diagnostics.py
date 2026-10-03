@@ -37,7 +37,7 @@ from sqlalchemy import Engine, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from voxint.api.health_probe import ServiceHealth, probe_services
+from voxint.api.health_probe import ServiceHealth, connection_never_opened, probe_services
 from voxint.app_settings import (
     byo_llm_configured,
     get_app_settings,
@@ -433,7 +433,11 @@ def check_llm(
         # sharing, #748). A read/write/pool timeout means something is listening
         # but stuck, which stays an honest failure below.
         return CheckResult(
-            "llm endpoint", False, False, f"unreachable ({_safe(exc)})", not_running=True
+            "llm endpoint",
+            False,
+            False,
+            f"unreachable ({_safe(exc)})",
+            not_running=connection_never_opened(exc),
         )
     except Exception as exc:
         # Best-effort boundary: httpx.HTTPError (transport) but ALSO anything else the

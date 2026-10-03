@@ -963,7 +963,11 @@ def _gpu_phase_status(args: argparse.Namespace) -> int:
         gpu_running = gpu_lane_in_flight(session)
         post_running = post_lane_in_flight(session)
     phase = snapshot_phase(snapshot)
-    print(f"phase:            {phase.value if phase else 'none'} ({phase_summary(phase)})")
+    if snapshot is not None and snapshot.updated_at == NEVER_TICKED:
+        # Only an operator request has written the row; no phase was chosen yet.
+        print("phase:            none (the GPU sharing task has not run yet)")
+    else:
+        print(f"phase:            {phase.value if phase else 'none'} ({phase_summary(phase)})")
     if snapshot is not None:
         print(f"since:            {when(snapshot.phase_since)}")
         last_run = (

@@ -17,6 +17,7 @@ downstream results are surfaced through the authenticated setup flow, never fold
 into that endpoint.
 """
 
+import ssl
 import time
 from dataclasses import dataclass
 
@@ -105,6 +106,23 @@ def _read_body(response: httpx.Response) -> object | None:
     return data
 
 
+def connection_never_opened(exc: BaseException) -> bool:
+    """True when the connection was never established: the shape of a stopped
+    service (GPU sharing, #748). httpx also raises ``ConnectError`` for a TLS
+    failure (an expired certificate, a protocol mismatch), but then something
+    answered, so a TLS error anywhere in the cause chain stays an honest failure."""
+    if not isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+        return False
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLError):
+            return False
+        current = current.__cause__ or current.__context__
+    return True
+
+
 def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
     def outcome(
         *,
@@ -139,7 +157,7 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
             up=False,
             detail="timeout",
             latency_ms=None,
-            not_running=isinstance(exc, httpx.ConnectTimeout),
+            not_running=connection_never_opened(exc),
         )
     except httpx.InvalidURL:
         # A malformed configured URL is a config error, not a transport failure —
@@ -153,7 +171,7 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
             up=False,
             detail="unreachable",
             latency_ms=None,
-            not_running=isinstance(exc, httpx.ConnectError),
+            not_running=connection_never_opened(exc),
         )
     latency_ms = (time.monotonic() - start) * 1000.0
     if response.status_code == 503:
