@@ -881,7 +881,8 @@ How it is built:
   mark moves to preceding text when needed. A comma before a filler stays:
   `I think, um, that` becomes `I think, that`. When a filler starts a sentence,
   the next word is re-capitalised. An utterance made only of fillers disappears.
-  This is English only: `uh-huh`, `mm-hmm`, `hmm`, `like` and `you know` stay.
+  A filler written inside quotation marks is a quoted word and stays. This is
+  English only: `uh-huh`, `mm-hmm`, `hmm`, `like` and `you know` stay.
   Nothing stored changes. Filler removal is not available with a translation
   or the `blocks` style.
 - **Translations.** With `?lang=`, each translated line stays whole under its

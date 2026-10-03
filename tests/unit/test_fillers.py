@@ -65,6 +65,11 @@ def test_f1_words(word: str, case: Callable[[str], str]) -> None:
         "um_word",
         "um!x",
         "um:word",
+        '"um" so',
+        '"um," so',
+        "\u201cum,\u201d so",
+        "'uh' so",
+        "the word um\u201d",
     ],
 )
 def test_f1_not_fillers(text: str) -> None:
@@ -90,7 +95,17 @@ def test_f1_not_fillers(text: str) -> None:
         ("and um; then", "and then"),
         ("and uh: then", "and then"),
         ('"Yes" um.', '"Yes".'),
-        ('"Right?" Um.', '"Right?".'),
+        ('"Right?" Um.', '"Right?"'),
+        ("(yes) um.", "(yes)."),
+        ("[yes] um.", "[yes]."),
+        ("Done.) um, next", "Done.) Next"),
+        ("Done.] um, next", "Done.] Next"),
+        ("(Done.) um, next", "(Done.) Next"),
+        ('" um. so', '" So'),
+        ('Done. " um, so', 'Done. " So'),
+        ('"and then," um.', '"and then."'),
+        ('"Right?" Um!', '"Right?"'),
+        ("um, 3", "3"),
         ("item 1 um.", "item 1."),
         ("value / um.", "value /"),
         ("um, so", "So"),
@@ -107,7 +122,6 @@ def test_f1_not_fillers(text: str) -> None:
         ("[erm, so", "[So"),
         ("\u201cuh, so", "\u201cSo"),
         ("\u2018um, so", "\u2018So"),
-        ('"um," so', '"" So'),
         ("um, uh, so", "So"),
         ("  um,   so", "So"),
         ("and   um,   so", "and so"),
@@ -130,6 +144,9 @@ def test_f2_f3_f4_coarse(text: str, expected: str) -> None:
         ((" um,", " so"), (False, False), "So"),
         (("Right?", " Um.", " so"), (False, False, False), "Right? So"),
         (("Done.", " um,", ' "so"'), (False, False, False), 'Done. "So"'),
+        (("and", ' "um,', " so"), (False, False, False), 'and "so'),
+        (("and", '"um,', " so"), (True, True, False), 'and "so'),
+        (("and", " um,", ' "so'), (True, False, False), 'and "so'),
         (("and", " um", " uh,", " so"), (True, False, False, False), "and so"),
     ],
 )
@@ -161,6 +178,9 @@ def test_f5_empty_turns_merge_by_identity_in_order() -> None:
     )
     assert result == [turn(first, last)]
     assert drop_fillers([turn(piece(" \n")), turn(piece("")), turn(piece("um"))]) == []
+    # Punctuation around a removed filler does not keep a turn alive.
+    for text in ('"um,', "(uh", "um, ...", "Um. Uh?", "\u201cerm, uh!"):
+        assert drop_fillers([turn(piece(text, coarse=True))]) == [], text
 
 
 def test_f5_merged_turns_keep_a_separator_and_are_cleaned_as_one() -> None:
@@ -170,6 +190,16 @@ def test_f5_merged_turns_keep_a_separator_and_are_cleaned_as_one() -> None:
     )
     assert join_pieces(glued[0].pieces) == "yes right"
     assert glued[0].pieces[1] == replace(piece("right", 2), text=" right")
+    # Both sides carrying whitespace leaves exactly one separator.
+    doubled = drop_fillers(
+        [turn(piece("Hello ")), turn(piece(" um,", 1), name="Sam"), turn(piece(" world", 2))]
+    )
+    assert join_pieces(doubled[0].pieces) == "Hello world"
+    assert doubled[0].pieces == (piece("Hello "), replace(piece(" world", 2), text="world"))
+    single = drop_fillers(
+        [turn(piece("Hello ")), turn(piece(" um,", 1), name="Sam"), turn(piece("world", 2))]
+    )
+    assert single[0].pieces == (piece("Hello "), piece("world", 2))
     # A filler at the seam is judged against the merged text, not a turn start.
     mid = drop_fillers([
         turn(piece(" yes")), turn(piece(" uh,", 1), name="Sam"),
