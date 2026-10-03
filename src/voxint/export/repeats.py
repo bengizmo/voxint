@@ -212,7 +212,8 @@ def _tokens(body: str) -> list[_Token]:
 
 
 def _case_matches(tokens: list[_Token], first: int, second: int, *, initial: bool) -> bool:
-    left, right = tokens[first].raw, tokens[second].raw
+    # Apostrophe style is not a case difference.
+    left, right = (tokens[i].raw.replace("\u2019", "'") for i in (first, second))
     if left == right:
         return True
     sentence_start = first == 0 or tokens[first - 1].raw.rstrip(_CLOSE).endswith((".", "?", "!"))

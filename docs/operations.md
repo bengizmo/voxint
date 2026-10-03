@@ -854,8 +854,9 @@ raw variant, `?timestamps=false` on `txt`/`md` for the reading copy, or
 `?repeats=drop` to remove fillers and repeated words from the Markdown turns
 export). The `/api/v1/runs/{run_id}/transcript` route takes the same `style`,
 `fillers` and `repeats` parameters with `format=md`. `keep` is the default for
-both filters. On either route, `style` with any other format, or a non-empty
-`fillers` or `repeats` value outside the Markdown turns style, returns 422.
+both filters. For an existing run, on either route, `style` with any other
+format, or a non-empty `fillers` or `repeats` value outside the Markdown turns
+style, returns 422.
 RTTM uses the run's UUID as the file id and the raw diarization labels
 (`SPEAKER_00` …), so it round-trips against diarization scoring tools, and it
 deliberately does **not** substitute adjudicated speaker names.
@@ -929,7 +930,7 @@ How it is built:
   word or word pair said twice in a row: `go to the the store` becomes `go to
   the store`, and `we were we were going` becomes `we were going`. It is a
   separate option from fillers. With both, fillers go first, so `the um the`
-  becomes `the`. The rules are narrow on purpose:
+  inside one turn becomes `the`. The rules are narrow on purpose:
   - Both copies must be English function words: pronouns, auxiliaries,
     determiners, prepositions and conjunctions, plus `what`, `who` and their
     contractions (`I'm`, `don't`). Content words stay, so `going going` and
@@ -950,8 +951,10 @@ How it is built:
 
   Whisper often puts a comma between the copies of a restart, and those stay.
   On the maintainer's English test recordings this left about half of the
-  doubled function words in place. The word lists are English, so repeats in
-  other languages are not removed. Nothing stored changes. Repeat removal is
+  doubled function words in place. The word lists are English and apply
+  whatever the transcript's language, so a word in another language that is
+  spelled like one on the list (French `on on`) can be shortened too.
+  Nothing stored changes. Repeat removal is
   not available with a translation or the `blocks` style.
 - **Translations.** With `?lang=`, each translated line stays whole under its
   line's speaker. Translated text has no word timings.

@@ -109,7 +109,10 @@ def test_repeats_values(raw: str | None, expected: bool) -> None:
         (None, None),
         (TranscriptFormat.TXT, None),
         (TranscriptFormat.JSON, None),
+        (TranscriptFormat.SRT, None),
+        (TranscriptFormat.VTT, None),
         (TranscriptFormat.MARKDOWN, MarkdownStyle.BLOCKS),
+        (TranscriptFormat.MARKDOWN, None),
     ],
 )
 def test_repeats_wrong_layout(
