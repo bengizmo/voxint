@@ -787,8 +787,10 @@ the fuller live view behind the strip. It shows up to five hardware gauges:
 Processor (load-average percentage), Memory (used / total), and Disk (media
 root partition used / total) are always present; Graphics card (GPU
 utilization) and Graphics memory (VRAM used / total) appear when a GPU is
-available. CPU, memory, and disk are read from the host via stdlib
-(`os.getloadavg`, `/proc/meminfo`, `shutil.disk_usage`); GPU metrics come from
+available. CPU, memory, and disk are read from the host without extra
+dependencies (`os.getloadavg`, `shutil.disk_usage`, and memory from
+`/proc/meminfo` on Linux or `sysctl hw.memsize` plus `vm_stat` on macOS, where
+free and inactive pages count as available); GPU metrics come from
 the model services' `/healthz` telemetry. A "Parts of Voxint" component
 list shows live health for the console, each model service, the database, the
 task queue, and the two AI lanes as separate rows: "Bundled AI model" (the

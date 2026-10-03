@@ -35,6 +35,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   so Escape could not close the picker and its open list covered the card's
   other buttons. Focus now returns to the picker's text box, where Escape
   closes it and a retry needs no extra click.
+- **The Status page shows memory on native macOS** (#773). Memory was read
+  only from the Linux `/proc/meminfo` file, so a native macOS install listed
+  Processor and Disk but no Memory row. On macOS it is now read from
+  `sysctl hw.memsize` and `vm_stat`, counting free and inactive pages as
+  available. Linux is unchanged.
 
 ## [0.51.0] - 2026-10-03
 
