@@ -7,6 +7,7 @@ to end with an injected fake LLM — including failure isolation (one kind
 failing records no asset and leaves the others' assets standing).
 """
 
+import logging
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -676,7 +677,10 @@ class TestAutogenerateHook:
         assert all(kwargs == {"ignore_result": True} for _, kwargs in dispatches)
 
     def test_disabled_or_failing_never_raises(
-        self, session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+        self,
+        session_factory: sessionmaker[Session],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         from voxint.worker import tasks
 
@@ -690,13 +694,53 @@ class TestAutogenerateHook:
             run_id = seed_run(session)
         # Autogenerate off → no-op.
         tasks._autogenerate_run_assets(session_factory, run_id, make_settings())
-        # A run with no transcript → the failure is logged and swallowed,
-        # never propagated into the pipeline task.
+        # A run with no transcript → skipped before any builder runs.
         tasks._autogenerate_run_assets(
             session_factory,
             uuid.uuid4(),
             make_settings(enrichment_run_assets_autogenerate=True),
         )
+        # A builder failure → logged and swallowed, never propagated into the
+        # pipeline task.
+        def boom(*_args: object) -> tuple[RunAssetKind, ...]:
+            raise RuntimeError("builder exploded")
+
+        monkeypatch.setattr(tasks.asset_jobs, "kinds_needing_generation", boom)
+        with caplog.at_level(logging.ERROR, logger=tasks.logger.name):
+            tasks._autogenerate_run_assets(
+                session_factory, run_id, make_settings(enrichment_run_assets_autogenerate=True)
+            )
+        assert f"post-finalize run-asset enqueue failed for run {run_id}" in caplog.messages
+        assert dispatches == []
+
+    def test_completed_run_without_segments_skips_quietly(
+        self,
+        session_factory: sessionmaker[Session],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Issue #775: a completed run that found no speech has nothing to
+        # summarise. Finalize must skip it at INFO, not log an ERROR traceback.
+        from voxint.worker import tasks
+
+        dispatches: list[tuple[tuple[str], dict[str, object]]] = []
+        monkeypatch.setattr(
+            tasks.generate_run_asset,
+            "apply_async",
+            lambda args, **kwargs: dispatches.append((args, kwargs)),
+        )
+        with session_factory() as session:
+            run_id = seed_run(session)
+            session.query(TranscriptSegment).filter_by(pipeline_run_id=run_id).delete()
+            session.commit()
+        with caplog.at_level(logging.INFO, logger=tasks.logger.name):
+            tasks._autogenerate_run_assets(
+                session_factory, run_id, make_settings(enrichment_run_assets_autogenerate=True)
+            )
+        assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
+        assert f"run {run_id} has no transcript segments; skipping run assets" in caplog.messages
+        with session_factory() as session:
+            assert session.query(RunAssetJob).count() == 0
         assert dispatches == []
 
 
