@@ -1,6 +1,6 @@
 # Plan: conservative repeated-word removal in the Markdown turns export (#755)
 
-Status: in-progress
+Status: done
 
 Spec deltas: none (this project declares no living spec).
 
@@ -455,3 +455,34 @@ qwen/qwen3.8-max-prime. 3 of 3 answered.
 | Draft question: language | glm, qwen: apply regardless; codex: reject known non-English | Maintainer: apply regardless (decision 2) |
 | Draft question: `no`, `so` | codex, qwen: exclude; glm: keep | Maintainer: exclude (decision 3) |
 | Draft question: menu entry | glm, qwen: no; codex: minimal entry | Maintainer: no entry (decision 4) |
+
+## Completion notes
+
+Closed 2026-10-03 against `main` at `7e85c1df` (PR #780).
+
+- **Slices:** all four landed. Slice 1 and 2 in `cd80b07c`, slices 3 and 4 in
+  `fc8bf3dc`, review fixes in `c70ae637` and `91c4a9b7`. The slice 3 spot check
+  over real local runs is recorded in internal notes: 20 turns changed, 36 words
+  removed, no false positives.
+- **Scenarios:** every acceptance scenario has a test.
+  - Rule, decline, piece-shape, boundary, pause-guard and composition scenarios:
+    `tests/unit/test_repeats.py`.
+  - Three-surface parity, the fixed default golden, the refusal matrix with each
+    surface's precedence, text variants, declined-only byte identity, the
+    Alex / Sam / Alex seam and the stored-data rereads:
+    `tests/integration/test_turn_exports.py`.
+  - The "fillers only" scenario is pinned by the integration golden
+    `("drop", None)`, where `the the` survives `fillers=drop`.
+- **Checks run at close:** the four covering test files, 300 passed;
+  `repeats.py` and `fillers.py` at 100% line coverage; ruff and mypy clean.
+- **Design decisions:** all four maintainer decisions are in the code.
+  Rejected alternatives 1 to 5 were not reintroduced.
+- **Drift:** none in behaviour. One structural note: fillers clean and merge in
+  one call (`drop_fillers_with_seams`), then repeats run with the merge seams,
+  rather than the clean, repeats, merge order R9 first described. The
+  Affected files note explains why, and the observable result matches R9.
+- **Spec files touched:** none. This project declares no living spec.
+- **Follow-ups:** #754 should carry both options into read mode and plain text,
+  and #753 owns the runtime report for both. A console export-menu entry stays
+  deferred (decision 4).
+
