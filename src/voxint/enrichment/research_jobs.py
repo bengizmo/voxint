@@ -33,7 +33,7 @@ from voxint.app_settings import (
 )
 from voxint.clients.llm import HttpLLMClient
 from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS, Settings
-from voxint.db.models import AppSettings, ResearchJob, ResearchJobStatus
+from voxint.db.models import POST_SEGMENT, AppSettings, ResearchJob, ResearchJobStatus
 from voxint.enrichment.producers.web_researcher import (
     WebResearcherError,
     build_seed,
@@ -41,6 +41,7 @@ from voxint.enrichment.producers.web_researcher import (
     make_roster_lookup,
     record_research_outcome,
 )
+from voxint.gpu_phase.state import admit_lane
 from voxint.media.netcheck import Resolver
 from voxint.research.agent import (
     ChatJsonClient,
@@ -315,6 +316,10 @@ def execute_job(
     ``llm`` / ``search_provider`` / ``read_client_factory`` / ``read_resolver``
     are injection seams (tests; the CLI's inline mode)."""
     with session_factory() as session:
+        # GPU sharing (#748): the phase check shares the claim's transaction.
+        if not admit_lane(session, settings, POST_SEGMENT):
+            logger.info("GPU phase closed; job %s deferred (stays QUEUED)", job_id)
+            return
         job = claim_job(session, job_id)
         if job is None:
             return

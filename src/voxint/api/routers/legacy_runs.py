@@ -156,6 +156,7 @@ from voxint.enrichment.translations import (
 )
 from voxint.export import MEDIA_TYPES, format_clock, transcript_payload
 from voxint.export.reading import layout_turns
+from voxint.gpu_phase.dispatch import open_lanes, redispatch_queued_runs
 from voxint.gpu_phase.visibility import GpuSharingView, stage_pause_reason
 from voxint.gpu_phase.visibility import read_view as read_gpu_sharing_view
 from voxint.ingest import (
@@ -1421,8 +1422,6 @@ def queue_resume_route(
     _require_csrf(request, CSRF_QUEUE_RESUME, csrf_token)
     set_queue_paused(session, False, llm_enabled_default=settings.llm_enabled)
     session.commit()
-    from voxint.gpu_phase.dispatch import open_lanes, redispatch_queued_runs
-
     def publish(run_id: uuid.UUID, stage: Stage | None) -> bool:
         pipeline_task_for_stage(stage).apply_async((str(run_id),), ignore_result=True)
         return True

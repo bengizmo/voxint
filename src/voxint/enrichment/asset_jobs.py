@@ -36,6 +36,7 @@ from voxint.app_settings import (
 from voxint.clients.llm import ChatMessage, HttpLLMClient, LLMError, SamplingProfile
 from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS, Settings
 from voxint.db.models import (
+    POST_SEGMENT,
     AppSettings,
     PipelineRun,
     RunAssetJob,
@@ -59,6 +60,7 @@ from voxint.enrichment.run_assets import (
     record_asset,
     source_content_hash,
 )
+from voxint.gpu_phase.state import admit_lane
 
 logger = logging.getLogger(__name__)
 
@@ -345,6 +347,10 @@ def execute_job(
     outcomes — failures land on the row as bounded, honest ``error`` text.
     ``llm`` is an injection seam (tests; the CLI's inline mode)."""
     with session_factory() as session:
+        # GPU sharing (#748): the phase check shares the claim's transaction.
+        if not admit_lane(session, settings, POST_SEGMENT):
+            logger.info("GPU phase closed; job %s deferred (stays QUEUED)", job_id)
+            return
         job = claim_job(session, job_id)
         if job is None:
             return

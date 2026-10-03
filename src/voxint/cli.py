@@ -1102,6 +1102,26 @@ def _fetch(args: argparse.Namespace) -> int:
     return 0
 
 
+# A phase change between the up-front check and the claim leaves the job QUEUED
+# (the claim re-checks under a lock); the worker runs it in the next LLM phase.
+_LLM_PHASE_DEFERRED = (
+    "GPU sharing switched the GPU away from the language model before this job"
+    " started; it stays queued and runs in the next language-model phase"
+)
+
+
+def _llm_phase_blocked(factory: "sessionmaker[Session]", settings: "Settings") -> str | None:
+    """Refuse inline LLM work while GPU sharing has the post lane closed (#748).
+
+    The worker tasks defer such jobs; an inline command would instead claim the
+    job and call a language model that is stopped, so it refuses up front and
+    creates no job row."""
+    from voxint.gpu_phase.state import llm_unavailable_message
+
+    with factory() as session:
+        return llm_unavailable_message(session, settings)
+
+
 def _research_speaker(args: argparse.Namespace) -> int:
     """Run one web-research job for a speaker inline (issue #40).
 
@@ -1133,6 +1153,9 @@ def _research_speaker(args: argparse.Namespace) -> int:
     from sqlalchemy.exc import IntegrityError
 
     factory = build_session_factory(build_engine(settings.database_url))
+    if (blocked := _llm_phase_blocked(factory, settings)) is not None:
+        print(f"error: {blocked}")
+        return 2
     with factory() as session:
         try:
             job = create_job(
@@ -1160,6 +1183,9 @@ def _research_speaker(args: argparse.Namespace) -> int:
         )
         if finished.error:
             print(f"error: {finished.error}")
+            return 1
+        if finished.status == "queued":
+            print(f"deferred: {_LLM_PHASE_DEFERRED}")
             return 1
         if finished.producer_run_id is not None:
             print(
@@ -1191,6 +1217,9 @@ def _enrich_assets(args: argparse.Namespace) -> int:
         RunAssetKind(value) for value in (args.kind or ["summary", "topics", "entity_mentions"])
     )
     factory = build_session_factory(build_engine(settings.database_url))
+    if (blocked := _llm_phase_blocked(factory, settings)) is not None:
+        print(f"error: {blocked}")
+        return 2
     with factory() as session:
         try:
             created, already_active = create_jobs(
@@ -1213,6 +1242,8 @@ def _enrich_assets(args: argparse.Namespace) -> int:
             print(f"{kind_value}: {finished.status}")
             if finished.error:
                 print(f"error: {finished.error}")
+            if finished.status == "queued":
+                print(f"deferred: {_LLM_PHASE_DEFERRED}")
             if finished.status != "succeeded":
                 failures += 1
     return 1 if failures else 0
