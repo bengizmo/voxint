@@ -1492,6 +1492,59 @@ def _media_backfill_hashes(args: argparse.Namespace) -> int:
     return 0
 
 
+def _speakers_name(args: argparse.Namespace) -> int:
+    """List voices or name one voice in a single transaction."""
+    from voxint.adjudication.naming import NamingError, list_voices, name_voice
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.session import build_session_factory
+    from voxint.speakers.matching import gates_from_settings
+
+    if (args.voice is None) != (args.name is None):
+        print("error: provide both voice and name")
+        return 2
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    try:
+        with build_session_factory(engine).begin() as session:
+            if args.voice is None:
+                rows = list_voices(session, args.run_id)
+                table = [("Label", "Name", "Resolution", "Talk time")]
+                table.extend((r.label, r.name, r.resolution, r.talk_time) for r in rows)
+                widths = [max(len(row[i]) for row in table) for i in range(4)]
+                lines = [
+                    "  ".join(value.ljust(width)
+                              for value, width in zip(row, widths, strict=True)).rstrip()
+                    for row in table
+                ]
+            else:
+                result = name_voice(
+                    session, args.run_id, args.voice, args.name,
+                    operator=settings.voxint_user, gates=gates_from_settings(settings),
+                    activity_enabled=settings.console_activity_enabled,
+                )
+                closing = "a later ruling in the console supersedes this assignment"
+                if result.renamed:
+                    closing += "; the rename stays"
+                lines = [*result.effects, closing]
+        for line in lines:
+            print(line.replace("\u2014", ";"))
+        return 0
+    except NamingError as exc:
+        print(f"error: {exc}")
+        return 2
+    except Exception as exc:
+        print(f"error: {exc}".replace("\u2014", ";"))
+        return 1
+    finally:
+        engine.dispose()
+
+
 def _speakers_auto_enroll_backfill(args: argparse.Namespace) -> int:
     """Auto-enroll unresolved labels from completed pipeline runs (#280)."""
     from sqlalchemy import select
@@ -3076,6 +3129,20 @@ def build_parser() -> argparse.ArgumentParser:
     media_bf_p.set_defaults(fn=_media_backfill_hashes)
     speakers_p = sub.add_parser("speakers", help="speaker roster maintenance")
     speakers_sub = speakers_p.add_subparsers(dest="speakers_command", required=True)
+    name_p = speakers_sub.add_parser(
+        "name",
+        help="list a completed run's voices, or name one of them",
+        description=(
+            "With a run id alone, list each voice with its current name, how it was"
+            " decided and its talk time. With a voice and a name, assign, rename or"
+            " enroll through the same ledger the console writes. Refuses while anyone"
+            " holds a review claim on the run."
+        ),
+    )
+    name_p.add_argument("run_id", type=uuid.UUID)
+    name_p.add_argument("voice", nargs="?", help="a label (SPEAKER_01) or the current name")
+    name_p.add_argument("name", nargs="?", help="the name to give the voice")
+    name_p.set_defaults(fn=_speakers_name)
     backfill_ae_p = speakers_sub.add_parser(
         "auto-enroll-backfill",
         help="auto-enroll unmatched voices on completed runs",

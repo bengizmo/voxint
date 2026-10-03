@@ -56,6 +56,10 @@ a typo, or to replace a placeholder like "Interviewer" with a real name once
 you know it. Renaming only changes the label; it does not disturb any
 recording's decisions.
 
+> If you work from a terminal, `voxint speakers name <run-id> "Voice 3" "Sam Ortiz"`
+> names a voice in one recording without opening the console. See
+> [Naming a voice from the command line](../operations.md#naming-a-voice-from-the-command-line).
+
 ### Merge duplicates
 
 Sometimes the same person gets enrolled twice under two different names, for

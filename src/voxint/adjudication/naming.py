@@ -1,0 +1,307 @@
+"""Name a voice from the command line through the console's own ledger (#741).
+
+One transaction per call. The run row is locked and every live review claim
+is refused, the caller's own included, because ``claim_run`` rotates the
+token on a same-reviewer re-claim and would log a console tab out of its
+review. No claim is written here, so a crash leaves nothing behind.
+
+Branches, in order: the name belongs to an active roster speaker (assign it;
+a no-op when the label already resolves to that speaker); the name belongs to
+a merged or archived speaker (refuse with the roster's own wording); the
+label's speaker is an auto-enrolled placeholder (rename it and add a human
+ASSIGN); otherwise enroll a new speaker from the voice's audio.
+
+A placeholder is a speaker that auto-enrollment CREATED (an evidence row with
+decision ``created`` joined to the ``AUTO_ENROLL`` ruling that names it; a
+speaker it merely linked does not qualify) whose name still looks like
+``Voice N``, whichever way the current label reached it. Accepted residual: a
+person who renames an auto-created speaker to another ``Voice N`` name keeps
+it looking like a placeholder, because no rename history is stored. The
+no-op check reads the label state before the owner lock, so a roster rename
+racing this command can change which speaker owns the requested name; the
+single-operator deployment makes that acceptable. A fresh nonce per call,
+so A then B then A records three rulings. The caller owns commit and rollback.
+"""
+
+import re
+import uuid
+from dataclasses import dataclass
+
+from sqlalchemy import String, and_, cast, or_, select
+from sqlalchemy.orm import Session, aliased
+
+from voxint.activity import record_speaker_identified
+from voxint.adjudication.enrollment import EnrollmentError, enroll_new_speaker
+from voxint.adjudication.ledger import record_decision
+from voxint.adjudication.resolver import LabelState, label_states, newest_in_scope
+from voxint.adjudication.slots import ClaimUnavailableError, require_unclaimed
+from voxint.adjudication.transcript import label_display_name
+from voxint.db.models import (
+    AdjudicationDecision,
+    AutoEnrollEvidence,
+    Decision,
+    PipelineRun,
+    Speaker,
+    SpeakerAssignment,
+)
+from voxint.speakers.auto_enroll import NAME_PREFIX
+from voxint.speakers.matching import MatchingGates
+from voxint.speakers.roster import (
+    RosterError,
+    alias_ids,
+    describe_name_owner,
+    is_active,
+    normalize_display_name,
+    rename_speaker,
+)
+
+
+class NamingError(ValueError):
+    """An operator-visible naming refusal."""
+
+
+@dataclass(frozen=True)
+class VoiceRow:
+    label: str
+    name: str
+    resolution: str
+    talk_time: str
+
+
+@dataclass(frozen=True)
+class NamingResult:
+    effects: tuple[str, ...]
+    renamed: bool = False
+
+
+def list_voices(session: Session, run_id: uuid.UUID) -> list[VoiceRow]:
+    if session.get(PipelineRun, run_id) is None:
+        raise NamingError(f"no run {run_id}")
+    rows = []
+    for state in sorted(label_states(session, run_id), key=lambda s: s.label):
+        minutes, seconds = divmod(int(state.total_seconds), 60)
+        rows.append(
+            VoiceRow(
+                state.label,
+                label_display_name(state, state.label),
+                state.resolution.value,
+                f"{minutes}:{seconds:02}",
+            )
+        )
+    return rows
+
+
+def _resolve(states: list[LabelState], voice: str) -> LabelState:
+    for state in states:
+        if state.label == voice:
+            return state
+    matches = [s for s in states if label_display_name(s, s.label) == voice]
+    if not matches:
+        matches = [
+            s for s in states if label_display_name(s, s.label).casefold() == voice.casefold()
+        ]
+    if len(matches) == 1:
+        return matches[0]
+    voices = ", ".join(f'{s.label} "{label_display_name(s, s.label)}"' for s in states)
+    reason = "ambiguous" if matches else "unknown"
+    raise NamingError(f"{reason} voice {voice!r}; voices: {voices}")
+
+
+def _other_runs(session: Session, run_id: uuid.UUID, speaker_id: uuid.UUID) -> int:
+    """Approximate rename impact in two queries, including canonical aliases.
+
+    Count current label rulings, latest segment/range rulings and unopposed
+    grounded machine assignments. This is not a transcript projection: it does
+    not check surviving split geometry or whether overrides cover all text.
+    A machine assignment counts only while no effective label ruling exists.
+    """
+    ids = alias_ids(session, speaker_id)
+    ruling = aliased(AdjudicationDecision)
+    newer = aliased(AdjudicationDecision)
+    revoke = aliased(AdjudicationDecision)
+    newer_revoke = aliased(AdjudicationDecision)
+    opposing = aliased(AdjudicationDecision)
+    opposing_revoke = aliased(AdjudicationDecision)
+    newer_label = (
+        select(newer.id)
+        .where(
+            newer.pipeline_run_id == ruling.pipeline_run_id,
+            newer.diarization_label == ruling.diarization_label,
+            newer.transcript_segment_id.is_(None),
+            newer.detached_at.is_(None),
+            newer.decision != Decision.REVOKE.value,
+            ~select(newer_revoke.id).where(newer_revoke.voids_decision_id == newer.id).exists(),
+            or_(
+                newer.created_at > ruling.created_at,
+                and_(newer.created_at == ruling.created_at, newer.id > ruling.id),
+            ),
+        )
+        .exists()
+    )
+    live = select(ruling.pipeline_run_id).where(
+        ruling.speaker_id.in_(ids),
+        ruling.pipeline_run_id != run_id,
+        ruling.detached_at.is_(None),
+        ruling.decision.in_((Decision.ASSIGN.value, Decision.AUTO_ENROLL.value)),
+        or_(
+            and_(ruling.transcript_segment_id.is_(None), ~newer_label),
+            and_(ruling.transcript_segment_id.is_not(None), newest_in_scope(ruling)),
+        ),
+        ~select(revoke.id).where(revoke.voids_decision_id == ruling.id).exists(),
+    )
+    machine = select(SpeakerAssignment.pipeline_run_id).where(
+        SpeakerAssignment.speaker_id.in_(ids),
+        SpeakerAssignment.pipeline_run_id != run_id,
+        SpeakerAssignment.grounded.is_(True),
+        SpeakerAssignment.method == "cosine",
+        # A machine assignment renders only while no EFFECTIVE label ruling
+        # exists: a revoked or detached ruling hands the label back to it.
+        ~select(opposing.id)
+        .where(
+            opposing.pipeline_run_id == SpeakerAssignment.pipeline_run_id,
+            opposing.diarization_label == SpeakerAssignment.diarization_label,
+            opposing.transcript_segment_id.is_(None),
+            opposing.detached_at.is_(None),
+            opposing.decision != Decision.REVOKE.value,
+            ~select(opposing_revoke.id)
+            .where(opposing_revoke.voids_decision_id == opposing.id)
+            .exists(),
+        )
+        .exists(),
+    )
+    return len(session.scalars(live.union(machine)).all())
+
+
+def _auto_created(session: Session, speaker_id: uuid.UUID) -> bool:
+    """Creation provenance belongs to the identity, not its current label."""
+    return bool(
+        session.scalar(
+            select(
+                select(AdjudicationDecision.id)
+                .join(
+                    AutoEnrollEvidence,
+                    and_(
+                        AutoEnrollEvidence.pipeline_run_id == AdjudicationDecision.pipeline_run_id,
+                        AutoEnrollEvidence.diarization_label
+                        == AdjudicationDecision.diarization_label,
+                        AutoEnrollEvidence.decision == "created",
+                    ),
+                )
+                .where(
+                    AdjudicationDecision.speaker_id == speaker_id,
+                    AdjudicationDecision.decision == Decision.AUTO_ENROLL.value,
+                    AdjudicationDecision.operator == "system:auto_enroll",
+                    AdjudicationDecision.idempotency_key
+                    == (
+                        "auto_enroll:"
+                        + cast(AdjudicationDecision.pipeline_run_id, String)
+                        + ":"
+                        + AdjudicationDecision.diarization_label
+                    ),
+                )
+                .exists()
+            )
+        )
+    )
+
+
+def name_voice(
+    session: Session,
+    run_id: uuid.UUID,
+    voice: str,
+    name: str,
+    *,
+    operator: str,
+    gates: MatchingGates,
+    activity_enabled: bool,
+) -> NamingResult:
+    """Name one voice under the run lock without taking a review claim."""
+    try:
+        require_unclaimed(session, run_id)
+        state = _resolve(label_states(session, run_id), voice)
+        try:
+            name = normalize_display_name(name)
+        except ValueError as exc:
+            raise NamingError(str(exc)) from exc
+        if operator == "system:auto_enroll":
+            raise NamingError("configure VOXINT_USER as a human operator identity")
+        nonce = str(uuid.uuid4())
+        owner = session.scalar(
+            select(Speaker)
+            .where(Speaker.display_name == name)
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
+        )
+        effects = []
+        speaker: Speaker | None
+        decision_id: uuid.UUID | None = None
+        if owner is not None:
+            if not is_active(owner):
+                raise NamingError(describe_name_owner(owner))
+            if state.speaker_id == owner.id:
+                return NamingResult((f'{state.label} already assigned to "{name}"',))
+            speaker = owner
+        else:
+            # Re-read under the roster lock before deciding whether this is still
+            # a generated name. Concurrent roster renames must not be overwritten.
+            speaker = session.scalar(
+                select(Speaker)
+                .where(Speaker.id == state.speaker_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            placeholder = (
+                speaker is not None
+                and re.fullmatch(re.escape(NAME_PREFIX) + r"[0-9]+", speaker.display_name)
+                and _auto_created(session, speaker.id)
+            )
+            if placeholder and speaker is not None:
+                if not is_active(speaker):
+                    raise NamingError(describe_name_owner(speaker))
+                old_name = speaker.display_name
+                count = _other_runs(session, run_id, speaker.id)
+                speaker = rename_speaker(session, speaker.id, name)
+                noun = "recording" if count == 1 else "recordings"
+                effects.append(
+                    f'renamed "{old_name}" -> "{name}" (also appears in {count} other {noun})'
+                )
+            else:
+                enrolled = enroll_new_speaker(
+                    session,
+                    run_id=run_id,
+                    diarization_label=state.label,
+                    display_name=name,
+                    operator=operator,
+                    idempotency_key=nonce,
+                    gates=gates,
+                )
+                speaker = session.get(Speaker, enrolled.speaker_id)
+                if speaker is None:
+                    raise RuntimeError(f"enrolled speaker {enrolled.speaker_id} not found")
+                decision_id = enrolled.decision_id
+                effects.append(f'enrolled "{name}" as a new speaker')
+        if speaker is None:
+            raise RuntimeError("naming resolved no speaker")
+        if decision_id is None:
+            row = record_decision(
+                session,
+                pipeline_run_id=run_id,
+                diarization_label=state.label,
+                decision=Decision.ASSIGN,
+                speaker_id=speaker.id,
+                operator=operator,
+                idempotency_key=nonce,
+            )
+            decision_id = row.id
+        effects.append(f'assigned {state.label} -> "{name}"')
+        if activity_enabled:
+            record_speaker_identified(
+                session,
+                run_id=run_id,
+                decision_id=decision_id,
+                speaker_name=speaker.display_name,
+                speaker_id=speaker.id,
+            )
+        return NamingResult(tuple(effects), renamed=any(e.startswith('renamed ') for e in effects))
+    except (ClaimUnavailableError, EnrollmentError, RosterError, NamingError) as exc:
+        raise NamingError(str(exc).replace("\u2014", ";")) from exc

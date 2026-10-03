@@ -18,6 +18,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   and `?style=` on the Markdown download and on
   `/api/v1/runs/{id}/transcript?format=md` select the layout.
   `docs/operations.md` has the rules and the limits.
+- **Name a voice from the command line** (#741). `voxint speakers name
+  <run-id>` lists a finished recording's voices with their current names,
+  how each was decided and their talk time; `voxint speakers name <run-id>
+  <voice> "<Name>"` names one voice through the same ledger the console
+  writes. An existing roster name is assigned, an automatically created
+  `Voice N` is renamed and assigned (the output says how many other
+  recordings it appears in), and a new name is enrolled from the voice's
+  audio. It refuses while anyone holds a review claim on the run and never
+  claims the run itself.
 - **Compare with a voice from another recording** (#714). The speaker menu
   could only play people who already have a line in the recording you are
   reviewing. It now has a second list, "Compare with a voice from another

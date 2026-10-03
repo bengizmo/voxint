@@ -81,6 +81,30 @@ def claim_run(
     return token
 
 
+def require_unclaimed(
+    session: Session, run_id: uuid.UUID, *, for_update: bool = True
+) -> PipelineRun:
+    """Lock a completed run and refuse every live claim, including our own."""
+    stmt = select(PipelineRun).where(PipelineRun.id == run_id)
+    if for_update:
+        stmt = stmt.with_for_update()
+    run = session.execute(stmt.execution_options(populate_existing=True)).scalar_one_or_none()
+    if run is None:
+        raise ClaimUnavailableError(f"no run {run_id}")
+    if run.status != RunStatus.COMPLETED.value:
+        raise ClaimUnavailableError(f"run {run_id} is {run.status}, not completed")
+    if (
+        run.review_claim_token is not None
+        and run.review_claim_expires_at is not None
+        and run.review_claim_expires_at > datetime.now(tz=UTC)
+    ):
+        raise ClaimUnavailableError(
+            f"run {run_id} is claimed by {run.review_claimed_by!r} "
+            f"until {run.review_claim_expires_at.isoformat()}"
+        )
+    return run
+
+
 def verify_claim(
     session: Session, run_id: uuid.UUID, token: uuid.UUID, *, for_update: bool = False
 ) -> PipelineRun:
