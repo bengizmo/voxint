@@ -127,11 +127,20 @@ class PhaseFields(TypedDict, total=False):
     operator_request: OperatorRequest | None
 
 
-def _locked_row(session: Session, *, now: datetime | None = None) -> GpuPhaseState:
+# updated_at / phase_since of a row created by an operator request before the
+# phase task ever ran. Doctor reads it as "the task has not run yet", never as a
+# fresh write.
+NEVER_TICKED = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def _locked_row(
+    session: Session, *, now: datetime | None = None, **insert_values: object
+) -> GpuPhaseState:
     # Repair an absent singleton, with concurrent writers serialized on the row.
+    values: dict[str, object] = {"phase_since": now or datetime.now(UTC), **insert_values}
     session.execute(
         insert(GpuPhaseState)
-        .values(id=1, phase_since=now or datetime.now(UTC))
+        .values(id=1, **values)
         .on_conflict_do_nothing(index_elements=["id"])
     )
     return session.execute(
@@ -172,9 +181,12 @@ def set_phase(
 
 
 def set_request(session: Session, request: OperatorRequest | None) -> None:
-    row = _locked_row(session)
+    # A row created here has never been written by the phase task; the sentinel
+    # keeps it from looking fresh.
+    row = _locked_row(session, updated_at=NEVER_TICKED, phase_since=NEVER_TICKED)
     row.operator_request = request.value if request is not None else None
-    row.updated_at = datetime.now(UTC)
+    # updated_at is left alone: it records the phase task's last write, which
+    # is how doctor tells a stopped task from a running one.
     session.flush()
 
 

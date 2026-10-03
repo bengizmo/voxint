@@ -128,6 +128,8 @@ class ServiceResourceView:
     gpu_uuid: str | None
     admission: AdmissionInfo | None
     cpu: CpuInfo | None
+    # Copied from ServiceHealth: no answer at all (see health_probe).
+    not_running: bool = False
 
 
 @dataclass(frozen=True)
@@ -166,6 +168,7 @@ def _build_snapshot(healths: list[ServiceHealth]) -> ResourceSnapshot:
                 gpu_uuid=uuid,
                 admission=admission,
                 cpu=cpu,
+                not_running=health.not_running,
             )
         )
         if available and gpu is not None and uuid is not None:

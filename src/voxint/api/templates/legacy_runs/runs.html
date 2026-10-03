@@ -36,6 +36,18 @@
 <section class="oc-section" aria-label="Runs">
   <h2 class="oc-section-title">RUNS</h2>
 
+  {% if gpu_sharing and gpu_sharing.headline %}
+  <div class="degraded-banner" data-gpu-sharing="{{ gpu_sharing.phase.value if gpu_sharing.phase else 'none' }}" role="{{ 'alert' if gpu_sharing.is_error else 'status' }}" style="margin-bottom:var(--space-3)">
+    <div class="db-text">
+      <strong>{{ gpu_sharing.headline }}</strong> {{ gpu_sharing.detail }}
+      {%- if gpu_sharing.release_hint %} Run <code>voxint gpu-phase release</code> or see the Status page.{% endif %}
+    </div>
+    {% if gpu_sharing.is_error %}
+    <a class="cb-btn cb-btn-secondary" href="{{ settings_status_url }}">View system status</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% if queue_paused %}
   <div class="degraded-banner" role="alert" style="margin-bottom:var(--space-3)">
     <div class="db-text">

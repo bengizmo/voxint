@@ -17,6 +17,7 @@ downstream results are surfaced through the authenticated setup flow, never fold
 into that endpoint.
 """
 
+import ssl
 import time
 from dataclasses import dataclass
 
@@ -49,6 +50,12 @@ class ServiceHealth:
     # (tolerated exactly as ``device`` is). Captured on the degraded 503 path
     # too, since telemetry is most useful when a service is struggling.
     resources: dict[str, object] | None = None
+    # The connection was refused or the host name did not resolve, which is what
+    # a stopped service looks like (see connection_never_opened). False for an
+    # HTTP error, a malformed body, any timeout (including a connect or TLS
+    # handshake timeout), a TLS failure, and a bad URL. GPU sharing (#748) only treats a
+    # not-running service as an expected stop.
+    not_running: bool = False
 
 
 def _service_targets(settings: Settings) -> list[tuple[str, str]]:
@@ -99,6 +106,29 @@ def _read_body(response: httpx.Response) -> object | None:
     return data
 
 
+def connection_never_opened(exc: BaseException) -> bool:
+    """True when the connection was refused or the host name did not resolve: the
+    shape of a stopped service (GPU sharing, #748). A stopped container refuses the
+    port, or its Compose service name stops resolving; both raise ``ConnectError``.
+    httpx also raises ``ConnectError`` for a TLS failure (an expired certificate, a
+    protocol mismatch), so any ``ssl.SSLError`` in the cause chain stays an honest
+    failure. ``ConnectTimeout`` never counts: it means dropped packets or a TLS
+    handshake that stalled after the TCP connect, not a stopped service."""
+    if not isinstance(exc, httpx.ConnectError):
+        return False
+    seen: set[int] = set()
+    pending: list[BaseException] = [exc]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLError):
+            return False
+        pending.extend(e for e in (current.__cause__, current.__context__) if e is not None)
+    return True
+
+
 def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
     def outcome(
         *,
@@ -108,6 +138,7 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
         device: str | None = None,
         embedding_space: str | None = None,
         resources: dict[str, object] | None = None,
+        not_running: bool = False,
     ) -> ServiceHealth:
         return ServiceHealth(
             name=name,
@@ -118,22 +149,36 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
             device=device,
             embedding_space=embedding_space,
             resources=resources,
+            not_running=not_running,
         )
 
     url = f"{base_url.rstrip('/')}/healthz"
     start = time.monotonic()
     try:
         response = client.get(url)
-    except httpx.TimeoutException:
-        # No completed round-trip → no latency to report.
-        return outcome(up=False, detail="timeout", latency_ms=None)
+    except httpx.TimeoutException as exc:
+        # No completed round-trip → no latency to report. No timeout counts as a
+        # stopped service: a connect timeout can be a stalled TLS handshake.
+        return outcome(
+            up=False,
+            detail="timeout",
+            latency_ms=None,
+            not_running=connection_never_opened(exc),
+        )
     except httpx.InvalidURL:
         # A malformed configured URL is a config error, not a transport failure —
         # and InvalidURL is NOT an httpx.HTTPError, so it must be caught explicitly
         # to keep this probe's "never raises into the request" contract.
         return outcome(up=False, detail="invalid url", latency_ms=None)
-    except httpx.HTTPError:
-        return outcome(up=False, detail="unreachable", latency_ms=None)
+    except httpx.HTTPError as exc:
+        # Only a failed connect means nothing is listening; a protocol error
+        # mid-response came from something that answered.
+        return outcome(
+            up=False,
+            detail="unreachable",
+            latency_ms=None,
+            not_running=connection_never_opened(exc),
+        )
     latency_ms = (time.monotonic() - start) * 1000.0
     if response.status_code == 503:
         # Reachable, but the model is not loaded (the contract's degraded state) —
