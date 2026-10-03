@@ -1,0 +1,406 @@
+"""Real Postgres state, constraints, task gates and bounded lane dispatch."""
+
+import uuid
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+from sqlalchemy import Engine, event, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, sessionmaker
+
+from tests.unit.test_gpu_phase import phase_settings
+from voxint.app_settings import set_queue_paused
+from voxint.db.models import (
+    GPU_SEGMENT,
+    POST_SEGMENT,
+    MediaItem,
+    PipelineRun,
+    ResearchJob,
+    RunAssetJob,
+    Speaker,
+    Stage,
+    TranslationJob,
+)
+from voxint.gpu_phase.dispatch import open_lanes, redispatch_queued_runs
+from voxint.gpu_phase.state import (
+    GpuPhase,
+    OperatorRequest,
+    gpu_lane_demand,
+    gpu_lane_in_flight,
+    post_lane_in_flight,
+    read_phase,
+    read_phase_if_enabled,
+    set_phase,
+    set_request,
+)
+from voxint.worker import tasks
+
+NOW = datetime.now(UTC)
+
+
+def seed_run(
+    session: Session, stage: Stage | None, *, status: str = "queued", age: int = 7200
+) -> PipelineRun:
+    media = MediaItem(source_path=f"phase/{uuid.uuid4()}.wav")
+    session.add(media)
+    session.flush()
+    run = PipelineRun(
+        media_item_id=media.id,
+        current_stage=stage,
+        status=status,
+        updated_at=NOW - timedelta(seconds=age),
+    )
+    session.add(run)
+    session.flush()
+    return run
+
+
+def test_state_round_trip_and_counts(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        session.execute(text("DELETE FROM gpu_phase"))
+        assert read_phase(session) is None
+        set_phase(
+            session,
+            GpuPhase.AUDIO,
+            now=NOW,
+            lease_id="lease",
+            failures=2,
+            lease_expires_at=NOW + timedelta(hours=1),
+            last_error="bounded error",
+            retry_after=NOW + timedelta(minutes=1),
+        )
+        session.commit()
+        snapshot = read_phase(session)
+        assert snapshot is not None and snapshot.phase == GpuPhase.AUDIO
+        assert snapshot.phase_since == snapshot.updated_at == NOW
+        assert snapshot.lease_id == "lease" and snapshot.failures == 2
+        assert snapshot.lease_expires_at == NOW + timedelta(hours=1)
+        assert snapshot.last_error == "bounded error"
+        assert snapshot.retry_after == NOW + timedelta(minutes=1)
+        set_phase(session, GpuPhase.AUDIO, now=NOW + timedelta(seconds=1), last_error=None)
+        set_request(session, OperatorRequest.RELEASE)
+        session.commit()
+        snapshot = read_phase(session)
+        assert snapshot is not None and snapshot.phase_since == NOW
+        assert snapshot.operator_request == OperatorRequest.RELEASE
+        assert snapshot.last_error is None
+        set_request(session, None)
+        set_phase(session, GpuPhase.LLM, now=NOW + timedelta(seconds=2))
+        session.commit()
+        snapshot = read_phase(session)
+        assert snapshot is not None and snapshot.operator_request is None
+        assert snapshot.phase_since == NOW + timedelta(seconds=2)
+        for stage in [None, *Stage]:
+            seed_run(session, stage)
+            seed_run(session, stage, status="running")
+            seed_run(session, stage, status="completed")
+        assert gpu_lane_demand(session) == 5
+        assert gpu_lane_in_flight(session) == 4
+        assert post_lane_in_flight(session) == 2
+
+
+@pytest.mark.parametrize(
+    "assignment", ["phase = 'invalid'", "id = 2", "failures = -1", "operator_request = 'invalid'"]
+)
+def test_constraints(session_factory: sessionmaker[Session], assignment: str) -> None:
+    with session_factory() as session:
+        set_phase(session, GpuPhase.LLM, now=NOW)
+        session.commit()
+        with pytest.raises(IntegrityError):
+            session.execute(text(f"UPDATE gpu_phase SET {assignment}"))
+        session.rollback()
+
+
+@pytest.mark.parametrize("segment", [GPU_SEGMENT, POST_SEGMENT])
+@pytest.mark.parametrize("skip_pause", [False, True])
+def test_drive_closed_leaves_run_untouched(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    segment: frozenset[Stage],
+    skip_pause: bool,
+) -> None:
+    with session_factory() as session:
+        run = seed_run(session, next(iter(segment)))
+        set_phase(session, GpuPhase.DRAINING, now=NOW)
+        if skip_pause:
+            set_queue_paused(session, True, llm_enabled_default=False)
+        session.commit()
+        original = (run.status, run.revision, run.current_stage, run.updated_at)
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+    monkeypatch.setattr(tasks, "get_settings", phase_settings)
+    assert (
+        tasks._drive_segment(object(), str(run.id), segment, skip_queue_pause=skip_pause)
+        == "gpu-phase-wait"
+    )
+    with session_factory() as session:
+        after = session.get(PipelineRun, run.id)
+        assert after is not None
+        assert (after.status, after.revision, after.current_stage, after.updated_at) == original
+
+
+def test_disabled_has_no_phase_queries(
+    session_factory: sessionmaker[Session],
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = phase_settings(gpu_phase_enabled=False)
+    with session_factory() as session:
+        run = seed_run(session, Stage.ACQUIRE)
+        set_phase(session, GpuPhase.ERROR, now=NOW)
+        session.commit()
+    statements: list[str] = []
+
+    def record(
+        conn: object,
+        cursor: object,
+        statement: str,
+        parameters: object,
+        context: object,
+        executemany: bool,
+    ) -> None:
+        statements.append(statement)
+
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+    monkeypatch.setattr(tasks, "get_settings", lambda: settings)
+    monkeypatch.setattr(tasks, "apply_run_preferences", lambda *a, **kw: SimpleNamespace(llm=None))
+    monkeypatch.setattr(tasks, "build_stage_fns", lambda ctx: {})
+    execute = MagicMock(
+        return_value=SimpleNamespace(status=tasks.RunStatus.QUEUED, current_stage=Stage.ACQUIRE)
+    )
+    monkeypatch.setattr(tasks, "execute_run", execute)
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        with session_factory() as session:
+            assert read_phase_if_enabled(session, settings) is None
+            assert open_lanes(session, settings) is None
+        assert tasks._drive_segment(object(), str(run.id), GPU_SEGMENT) == "queued"
+        for task, module, name in [
+            (tasks.generate_run_asset, tasks.asset_jobs, "execute_job"),
+            (tasks.translate_run, tasks.translation_jobs, "execute_job"),
+            (tasks.research_speaker, tasks, "execute_job"),
+        ]:
+            execute_job = MagicMock()
+            monkeypatch.setattr(module, name, execute_job)
+            task(str(uuid.uuid4()))
+            execute_job.assert_called_once()
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    execute.assert_called_once()
+    assert not any("gpu_phase" in sql.lower() for sql in statements)
+
+
+def seed_jobs(session: Session) -> tuple[RunAssetJob, TranslationJob, ResearchJob]:
+    run = seed_run(session, Stage.FINALIZE, status="completed")
+    speaker = Speaker(display_name="Phase test")
+    session.add(speaker)
+    session.flush()
+    jobs = (
+        RunAssetJob(pipeline_run_id=run.id, asset_kind="summary", config={}),
+        TranslationJob(
+            pipeline_run_id=run.id, target_language="fr", config={}, source_content_hash="a" * 64
+        ),
+        ResearchJob(speaker_id=speaker.id, budget={}),
+    )
+    for job in jobs:
+        job.created_at = NOW - timedelta(hours=2)
+        session.add(job)
+    session.flush()
+    return jobs
+
+
+@pytest.mark.parametrize("phase", [GpuPhase.AUDIO, GpuPhase.ERROR])
+def test_post_jobs_stay_queued(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    phase: GpuPhase,
+) -> None:
+    with session_factory() as session:
+        jobs = seed_jobs(session)
+        set_phase(session, phase, now=NOW)
+        session.commit()
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+    monkeypatch.setattr(tasks, "get_settings", phase_settings)
+    for job, task in zip(
+        jobs, [tasks.generate_run_asset, tasks.translate_run, tasks.research_speaker], strict=True
+    ):
+        task(str(job.id))
+    with session_factory() as session:
+        for job in jobs:
+            after = session.get(type(job), job.id)
+            assert after is not None and after.status == "queued"
+            assert after.started_at is None
+
+
+@pytest.mark.parametrize("phase", [None, GpuPhase.AUDIO, GpuPhase.LLM, GpuPhase.ERROR])
+def test_dispatch_filter_before_limit(
+    session_factory: sessionmaker[Session],
+    phase: GpuPhase | None,
+) -> None:
+    settings = phase_settings(gpu_phase_enabled=phase is not None)
+    with session_factory() as session:
+        if phase is not None:
+            set_phase(session, phase, now=NOW)
+        gpu = seed_run(session, None, age=10000)
+        post = seed_run(session, Stage.ENHANCE_MATCH, age=9000)
+        session.commit()
+        sent: list[uuid.UUID] = []
+
+        def publish(rid: uuid.UUID, stage: Stage | None) -> bool:
+            sent.append(rid)
+            return True
+
+        result = redispatch_queued_runs(
+            session, lanes=open_lanes(session, settings), limit=1, publish=publish
+        )
+        expected = [] if phase == GpuPhase.ERROR else [post.id if phase == GpuPhase.LLM else gpu.id]
+        assert sent == expected
+        assert result.selected == result.dispatched == len(expected)
+
+
+@pytest.mark.parametrize("phase", [GpuPhase.AUDIO, GpuPhase.LLM, GpuPhase.ERROR])
+@pytest.mark.parametrize("paused", [False, True])
+def test_recovery_lanes_and_research(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    phase: GpuPhase,
+    paused: bool,
+) -> None:
+    settings = phase_settings(recovery_publish_batch_size=1)
+    with session_factory() as session:
+        set_phase(session, phase, now=NOW)
+        gpu = seed_run(session, None, age=10000)
+        post = seed_run(session, Stage.ENHANCE_MATCH, age=9000)
+        jobs = seed_jobs(session)
+        set_queue_paused(session, paused, llm_enabled_default=False)
+        session.commit()
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+    monkeypatch.setattr(tasks, "get_settings", lambda: settings)
+    # Both recovered IDs also enter the resumable re-read, exercising its pre-LIMIT filter.
+    monkeypatch.setattr(tasks, "recover_interrupted_runs", lambda *a, **kw: [gpu.id, post.id])
+    pipeline = MagicMock()
+    monkeypatch.setattr(tasks, "pipeline_task_for_stage", lambda stage: pipeline)
+    publishers = [MagicMock() for _ in jobs]
+    for task, publisher in zip(
+        [tasks.generate_run_asset, tasks.translate_run, tasks.research_speaker],
+        publishers,
+        strict=True,
+    ):
+        monkeypatch.setattr(task, "apply_async", publisher)
+    result = tasks.recovery_sweep()
+    expected = (
+        []
+        if paused or phase == GpuPhase.ERROR
+        else [str(post.id if phase == GpuPhase.LLM else gpu.id)]
+    )
+    assert [call.args[0][0] for call in pipeline.apply_async.call_args_list] == expected
+    assert result["dispatched"] == len(expected)
+    assert result["stale_queued"] == len(expected)
+    for job, publisher, key in zip(
+        jobs,
+        publishers,
+        ["stale_asset_jobs", "stale_translation_jobs", "stale_research_jobs"],
+        strict=True,
+    ):
+        assert result[key] == (1 if phase == GpuPhase.LLM else 0)
+        if phase == GpuPhase.LLM:
+            publisher.assert_called_once_with((str(job.id),), ignore_result=True)
+        else:
+            publisher.assert_not_called()
+    with session_factory() as session:
+        assert tasks.research_jobs.stale_queued_job_ids(session, cutoff=NOW, limit=1) == [
+            jobs[2].id
+        ]
+        assert tasks.research_jobs.stale_queued_job_ids(session, cutoff=NOW) == [jobs[2].id]
+
+
+def test_resume_callers_keep_publish_failure_policy(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import argparse
+
+    from celery.exceptions import OperationalError
+
+    from voxint import cli
+    from voxint.api.routers import legacy_runs
+
+    settings = phase_settings(recovery_publish_batch_size=2)
+    with session_factory() as session:
+        set_phase(session, GpuPhase.LLM, now=NOW)
+        seed_run(session, None, age=10000)
+        first = seed_run(session, Stage.ENHANCE_MATCH, age=9000)
+        second = seed_run(session, Stage.FINALIZE, age=8000)
+        session.commit()
+    monkeypatch.setattr("voxint.config.get_settings", lambda: settings)
+    monkeypatch.setattr("voxint.db.session.build_engine", lambda: None)
+    monkeypatch.setattr("voxint.db.session.build_session_factory", lambda _: session_factory)
+    publish = MagicMock(side_effect=[False, True])
+    monkeypatch.setattr(cli, "_publish_or_defer", publish)
+    assert cli._queue_resume(argparse.Namespace()) == 0
+    assert [call.args[0] for call in publish.call_args_list] == [first.id, second.id]
+    assert capsys.readouterr().out == (
+        "queue resumed; 1 queued runs dispatched; "
+        "remaining queued runs drain via the recovery sweep\n"
+    )
+    task = MagicMock()
+    task.apply_async.side_effect = OperationalError("broker unavailable")
+    monkeypatch.setattr(tasks, "pipeline_task_for_stage", lambda stage: task)
+    monkeypatch.setattr(legacy_runs, "_require_csrf", lambda *a: None)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)))
+    with session_factory() as session:
+        response = legacy_runs.queue_resume_route(request, None, session)
+    assert response.status_code == 303 and response.headers["location"] == "/runs"
+    task.apply_async.assert_called_once_with((str(first.id),), ignore_result=True)
+
+
+def test_research_recovery_broker_failure_keeps_queued(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from celery.exceptions import OperationalError
+
+    with session_factory() as session:
+        jobs = seed_jobs(session)
+        session.commit()
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+    monkeypatch.setattr(tasks, "get_settings", lambda: phase_settings(gpu_phase_enabled=False))
+    for task in [tasks.generate_run_asset, tasks.translate_run]:
+        monkeypatch.setattr(task, "apply_async", MagicMock())
+    publisher = MagicMock(side_effect=OperationalError("broker unavailable"))
+    monkeypatch.setattr(tasks.research_speaker, "apply_async", publisher)
+    result = tasks.recovery_sweep()
+    assert result["stale_research_jobs"] == 1
+    publisher.assert_called_once_with((str(jobs[2].id),), ignore_result=True)
+    with session_factory() as session:
+        job = session.get(ResearchJob, jobs[2].id)
+        assert job is not None and job.status == "queued" and job.started_at is None
+
+
+def test_missing_row_allows_post_jobs_and_embeddings_ignore_phase(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+    monkeypatch.setattr(tasks, "get_settings", phase_settings)
+    with session_factory() as session:
+        session.execute(text("DELETE FROM gpu_phase"))
+        session.commit()
+    for task, module, name in [
+        (tasks.generate_run_asset, tasks.asset_jobs, "execute_job"),
+        (tasks.translate_run, tasks.translation_jobs, "execute_job"),
+        (tasks.research_speaker, tasks, "execute_job"),
+    ]:
+        execute = MagicMock()
+        monkeypatch.setattr(module, name, execute)
+        task(str(uuid.uuid4()))
+        execute.assert_called_once()
+    with session_factory() as session:
+        set_phase(session, GpuPhase.ERROR, now=NOW)
+        session.commit()
+    execute = MagicMock()
+    monkeypatch.setattr(tasks.embedding_jobs, "execute_job", execute)
+    tasks.generate_segment_embeddings(str(uuid.uuid4()))
+    execute.assert_called_once()

@@ -512,3 +512,20 @@ def execute_job(
                 status=ResearchJobStatus.FAILED,
                 error=f"unexpected error ({type(exc).__name__}) — see worker logs",
             )
+
+
+def stale_queued_job_ids(
+    session: Session, *, cutoff: datetime, limit: int | None = None
+) -> list[uuid.UUID]:
+    """Return oldest QUEUED job ids created before ``cutoff``."""
+    query = (
+        select(ResearchJob.id)
+        .where(
+            ResearchJob.status == ResearchJobStatus.QUEUED.value,
+            ResearchJob.created_at < cutoff,
+        )
+        .order_by(ResearchJob.created_at)
+    )
+    if limit is not None:
+        query = query.limit(limit)
+    return list(session.execute(query).scalars())

@@ -903,30 +903,26 @@ def _queue_pause(args: argparse.Namespace) -> int:
 
 
 def _queue_resume(args: argparse.Namespace) -> int:
-    from sqlalchemy import select
-
     from voxint.app_settings import set_queue_paused
     from voxint.config import get_settings
-    from voxint.db.models import PipelineRun, RunStatus, Stage
     from voxint.db.session import build_engine, build_session_factory, session_scope
+    from voxint.gpu_phase.dispatch import open_lanes, redispatch_queued_runs
 
     settings = get_settings()
     factory = build_session_factory(build_engine())
     with session_scope(factory) as session:
         set_queue_paused(session, False, llm_enabled_default=settings.llm_enabled)
     with factory() as session:
-        queued = session.execute(
-            select(PipelineRun.id, PipelineRun.current_stage)
-            .where(PipelineRun.status == RunStatus.QUEUED.value)
-            .order_by(PipelineRun.updated_at, PipelineRun.id)
-            .limit(settings.recovery_publish_batch_size)
-        ).all()
-    dispatched = 0
-    for run_id, stage_value in queued:
-        stage = Stage(stage_value) if stage_value else None
-        if _publish_or_defer(run_id, stage=stage):
-            dispatched += 1
-    remaining = "" if not queued else "; remaining queued runs drain via the recovery sweep"
+        result = redispatch_queued_runs(
+            session,
+            lanes=open_lanes(session, settings),
+            limit=settings.recovery_publish_batch_size,
+            publish=lambda run_id, stage: _publish_or_defer(run_id, stage=stage),
+        )
+    dispatched = result.dispatched
+    remaining = (
+        "" if not result.selected else "; remaining queued runs drain via the recovery sweep"
+    )
     print(f"queue resumed; {dispatched} queued runs dispatched{remaining}")
     return 0
 

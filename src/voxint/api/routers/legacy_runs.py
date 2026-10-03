@@ -1390,19 +1390,21 @@ def queue_resume_route(
     _require_csrf(request, CSRF_QUEUE_RESUME, csrf_token)
     set_queue_paused(session, False, llm_enabled_default=settings.llm_enabled)
     session.commit()
-    queued = session.execute(
-        select(PipelineRun.id, PipelineRun.current_stage)
-        .where(PipelineRun.status == RunStatus.QUEUED.value)
-        .order_by(PipelineRun.updated_at, PipelineRun.id)
-        .limit(settings.recovery_publish_batch_size)
-    ).all()
-    for run_id, stage_value in queued:
-        stage = Stage(stage_value) if stage_value else None
-        try:
-            pipeline_task_for_stage(stage).apply_async((str(run_id),), ignore_result=True)
-        except OperationalError:
-            logger.warning("queue resume: broker unavailable; remaining runs deferred to sweep")
-            break
+    from voxint.gpu_phase.dispatch import open_lanes, redispatch_queued_runs
+
+    def publish(run_id: uuid.UUID, stage: Stage | None) -> bool:
+        pipeline_task_for_stage(stage).apply_async((str(run_id),), ignore_result=True)
+        return True
+
+    try:
+        redispatch_queued_runs(
+            session,
+            lanes=open_lanes(session, settings),
+            limit=settings.recovery_publish_batch_size,
+            publish=publish,
+        )
+    except OperationalError:
+        logger.warning("queue resume: broker unavailable; remaining runs deferred to sweep")
     return RedirectResponse("/runs", status_code=303)
 
 

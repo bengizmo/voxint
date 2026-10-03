@@ -7,6 +7,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Shared-GPU phase gates** (#748), off by default. A new `gpu_phase` table
+  (migration `0068`) records whether the GPU is in its audio or LLM phase.
+  With `GPU_PHASE_ENABLED=true`, GPU-lane runs wait in the queue until the
+  phase is audio, and post-lane runs, run assets, translations and speaker
+  research wait until it is LLM. The orchestrator that moves between phases
+  is not in this change, so enabling the setting on its own leaves audio
+  work queued. Settings are documented in `.env.example`.
 - **A Markdown export laid out as speaker turns** (#741). The Markdown
   export and the on-screen reading view now show `[HH:MM:SS] **Name:** text`
   paragraphs, and the Markdown file opens with the recording's title. Speakers are assigned word by word
@@ -41,6 +48,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `GET /media/{id}/editor/voice-sample/{speaker_id}`.
 
 ### Fixed
+- The recovery sweep now re-dispatches speaker-research jobs left queued
+  after a lost dispatch, as it already did for run assets and translations
+  (#748).
 - **Editor requests are no longer cacheable** (#714). The media editor page
   was sent with `Cache-Control: no-store`, but the requests under it were
   not: claiming, refreshing and releasing a claim, and their error replies.

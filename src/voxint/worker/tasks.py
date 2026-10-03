@@ -49,8 +49,15 @@ from voxint.db.models import (
 from voxint.db.session import build_engine, build_session_factory
 from voxint.domain_packs.registry import domain_pack_from_snapshot
 from voxint.embeddings.onnx_embedder import minilm_artifacts_available
-from voxint.enrichment import asset_jobs, embedding_jobs, translation_jobs
+from voxint.enrichment import asset_jobs, embedding_jobs, research_jobs, translation_jobs
 from voxint.enrichment.research_jobs import execute_job
+from voxint.gpu_phase.dispatch import lane_filters, open_lanes
+from voxint.gpu_phase.state import (
+    gates_enabled,
+    lane_open_for_segment,
+    post_lane_open,
+    read_phase_if_enabled,
+)
 from voxint.ingest.watch import sweep_watch_folders
 from voxint.media.reclaim import (
     ReclaimSummary,
@@ -220,6 +227,10 @@ def _drive_segment(
         if not skip_queue_pause and row is not None and row.queue_paused:
             logger.info("queue paused; run %s deferred (stays QUEUED)", run_id)
             return "queue-paused"
+        snapshot = read_phase_if_enabled(session, settings)
+        if not lane_open_for_segment(snapshot, settings, segment):
+            logger.info("GPU phase closed; run %s deferred (stays QUEUED)", run_id)
+            return "gpu-phase-wait"
         prefs = resolve_run_preferences(row, settings)
         # Resolve the effective key (a UI-stored row value wins over env) inside the
         # session, so it reaches the per-run HttpLLMClient the same no-restart way as
@@ -399,6 +410,8 @@ def recovery_sweep() -> dict[str, int]:
     cutoff = datetime.now(tz=UTC) - timedelta(seconds=settings.queued_run_stale_seconds)
     with factory() as session:
         queue_paused = app_settings.is_queue_paused(session)
+        phase_lanes = open_lanes(session, settings)
+        post_open = phase_lanes is None or phase_lanes >= POST_SEGMENT
     if queue_paused:
         logger.info("queue paused; skipping pipeline re-dispatch")
         stale_queued: Sequence[uuid.UUID] = []
@@ -410,6 +423,7 @@ def recovery_sweep() -> dict[str, int]:
                     .where(
                         PipelineRun.status == RunStatus.QUEUED.value,
                         PipelineRun.updated_at < cutoff,
+                        *lane_filters(phase_lanes),
                     )
                     .order_by(PipelineRun.updated_at, PipelineRun.id)
                     .limit(settings.recovery_publish_batch_size)
@@ -428,6 +442,7 @@ def recovery_sweep() -> dict[str, int]:
                 select(PipelineRun.id, PipelineRun.current_stage)
                 .where(
                     PipelineRun.id.in_(publish_ids),
+                    *lane_filters(phase_lanes),
                     PipelineRun.status == RunStatus.QUEUED.value,
                 )
                 .order_by(PipelineRun.updated_at, PipelineRun.id)
@@ -481,8 +496,12 @@ def recovery_sweep() -> dict[str, int]:
                     exc_info=True,
                 )
     with factory() as session:
-        stale_asset_jobs = asset_jobs.stale_queued_job_ids(
-            session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
+        stale_asset_jobs = (
+            asset_jobs.stale_queued_job_ids(
+                session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
+            )
+            if post_open
+            else []
         )
     for job_id in stale_asset_jobs:
         try:
@@ -495,8 +514,12 @@ def recovery_sweep() -> dict[str, int]:
                 exc_info=True,
             )
     with factory() as session:
-        stale_translation_jobs = translation_jobs.stale_queued_job_ids(
-            session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
+        stale_translation_jobs = (
+            translation_jobs.stale_queued_job_ids(
+                session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
+            )
+            if post_open
+            else []
         )
     for job_id in stale_translation_jobs:
         try:
@@ -504,6 +527,24 @@ def recovery_sweep() -> dict[str, int]:
         except OperationalError:
             logger.warning(
                 "translation recovery enqueue deferred (broker unavailable); "
+                "job %s stays QUEUED for a later sweep",
+                job_id,
+                exc_info=True,
+            )
+    with factory() as session:
+        stale_research_jobs = (
+            research_jobs.stale_queued_job_ids(
+                session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
+            )
+            if post_open
+            else []
+        )
+    for job_id in stale_research_jobs:
+        try:
+            research_speaker.apply_async((str(job_id),), ignore_result=True)
+        except OperationalError:
+            logger.warning(
+                "research recovery enqueue deferred (broker unavailable); "
                 "job %s stays QUEUED for a later sweep",
                 job_id,
                 exc_info=True,
@@ -521,6 +562,7 @@ def recovery_sweep() -> dict[str, int]:
         "stale_embedding_jobs": len(stale_embedding_jobs),
         "stale_asset_jobs": len(stale_asset_jobs),
         "stale_translation_jobs": len(stale_translation_jobs),
+        "stale_research_jobs": len(stale_research_jobs),
     }
     # Surface the plugin-lane count only when a plugin actually declares a lane;
     # built-in lane counts above are always present.
@@ -645,6 +687,13 @@ def watch_sweep() -> dict[str, Any]:
     return summary.as_dict()
 
 
+def _post_job_phase_closed(factory: sessionmaker[Session], settings: Settings) -> bool:
+    if not gates_enabled(settings):
+        return False
+    with factory() as session:
+        return not post_lane_open(read_phase_if_enabled(session, settings), settings)
+
+
 @app.task(name="voxint.generate_run_asset", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
 def generate_run_asset(job_id_str: str) -> None:
     """Run one queued run-asset generation job (issue #41).
@@ -654,7 +703,11 @@ def generate_run_asset(job_id_str: str) -> None:
     see. A duplicate delivery no-ops on the guarded queued→running claim.
     """
     factory, _ = _runtime()
-    asset_jobs.execute_job(factory, uuid.UUID(job_id_str), settings=get_settings())
+    settings = get_settings()
+    if _post_job_phase_closed(factory, settings):
+        logger.info("GPU phase closed; job %s deferred (stays QUEUED)", job_id_str)
+        return
+    asset_jobs.execute_job(factory, uuid.UUID(job_id_str), settings=settings)
 
 
 def _autogenerate_run_assets(
@@ -697,7 +750,11 @@ def translate_run(job_id_str: str) -> None:
     duplicate delivery no-ops on the guarded queued→running claim.
     """
     factory, _ = _runtime()
-    translation_jobs.execute_job(factory, uuid.UUID(job_id_str), settings=get_settings())
+    settings = get_settings()
+    if _post_job_phase_closed(factory, settings):
+        logger.info("GPU phase closed; job %s deferred (stays QUEUED)", job_id_str)
+        return
+    translation_jobs.execute_job(factory, uuid.UUID(job_id_str), settings=settings)
 
 
 def _autogenerate_translation(
@@ -898,4 +955,8 @@ def research_speaker(job_id_str: str) -> None:
     failure. A duplicate delivery no-ops on the guarded queued→running claim.
     """
     factory, _ = _runtime()
-    execute_job(factory, uuid.UUID(job_id_str), settings=get_settings())
+    settings = get_settings()
+    if _post_job_phase_closed(factory, settings):
+        logger.info("GPU phase closed; job %s deferred (stays QUEUED)", job_id_str)
+        return
+    execute_job(factory, uuid.UUID(job_id_str), settings=settings)
