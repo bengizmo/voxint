@@ -1697,11 +1697,15 @@ def _persist_web_research(
 
 @setup_pending_router.get("/setup/pending", include_in_schema=False)
 def setup_pending(request: Request, identity: CurrentUserDep, session: SessionDep) -> Response:
-    if is_onboarded(session):
-        return RedirectResponse("/", status_code=303)
-    if identity.role == "admin":
-        return RedirectResponse("/setup", status_code=303)
-    return templates.TemplateResponse(request, "settings/setup_pending.html", {})
+    target = "/" if is_onboarded(session) else "/setup" if identity.role == "admin" else None
+    if target is not None:
+        if request.headers.get("HX-Request"):
+            return Response(status_code=204, headers={"HX-Redirect": target})
+        return RedirectResponse(target, status_code=303)
+    response = templates.TemplateResponse(request, "settings/setup_pending.html", {})
+    # The page carries a per-session logout token; keep it out of shared caches.
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @setup_router.get("/setup", include_in_schema=False)
