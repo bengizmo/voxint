@@ -2435,6 +2435,7 @@ class TestCpuImageProvenance:
             "compose.ytdlp-egress.yaml",
             "compose.llm.yaml",
             "compose.plugin-synthdetect.yaml",
+            "compose.gpu-phase.yaml",
         ):
             services = yaml.safe_load((REPO_ROOT / name).read_text())["services"]
             for svc_name, svc in services.items():
