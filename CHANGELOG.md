@@ -6,6 +6,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Repeated-word removal in the Markdown turns export** (#755). The new
+  `--drop-repeats` flag (`?repeats=drop` on the console and `/api/v1` export
+  routes) removes the second copy of an English function word or word pair
+  said twice in a row, so `go to the the store` becomes `go to the store`. The
+  rules are narrow: punctuation between or touching the copies, three or more
+  copies, quoted text, content words and grammatical doubles such as
+  `had had` and `her her` are left alone. It is separate from `--drop-fillers`
+  and can be combined with it. Nothing stored changes, and an export without
+  the option is unchanged.
+
 ### Fixed
 - **Large browser uploads no longer time out after 5 minutes.** The upload
   page cancelled any file still uploading after a fixed 5 minutes, so on a

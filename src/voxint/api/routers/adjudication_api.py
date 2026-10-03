@@ -203,6 +203,7 @@ from voxint.export.service import (
     ExportOptionError,
     TranslationMismatchError,
     parse_fillers,
+    parse_repeats,
     parse_style,
     render_run_rttm,
     render_run_transcript,
@@ -1295,6 +1296,7 @@ def _export_transcript(
     lang: str | None = None,
     style: str | None = None,
     fillers: str | None = None,
+    repeats: str | None = None,
 ) -> Response:
     _run_or_404(session, run_id)
     try:
@@ -1303,6 +1305,9 @@ def _export_transcript(
         drop_fillers = parse_fillers(fillers, fmt, selected_style)
         if drop_fillers and lang is not None:
             raise ExportOptionError("fillers cannot be combined with a translation")
+        drop_repeats = parse_repeats(repeats, fmt, selected_style)
+        if drop_repeats and lang is not None:
+            raise ExportOptionError("repeats cannot be combined with a translation")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     texts = _export_translated_texts(session, run_id, lang, variant) if lang is not None else None
@@ -1316,6 +1321,7 @@ def _export_transcript(
             style=selected_style,
             translated_texts=texts,
             drop_fillers=drop_fillers,
+            drop_repeats=drop_repeats,
         )
     except TranslationMismatchError as exc:
         raise HTTPException(status_code=409, detail=_translation_stale_detail(lang or "")) from exc
@@ -1342,6 +1348,7 @@ def export_transcript_txt(
     lang: str | None = None,
     style: str | None = None,
     fillers: str | None = None,
+    repeats: str | None = None,
 ) -> Response:
     # ?timestamps=false drops the [start end] bracket column for a clean
     # reading copy (issue #52). Only txt and md honor the flag.
@@ -1356,6 +1363,7 @@ def export_transcript_txt(
         lang=lang,
         style=style,
         fillers=fillers,
+        repeats=repeats,
     )
 
 
@@ -1369,6 +1377,7 @@ def export_transcript_md(
     lang: str | None = None,
     style: str | None = None,
     fillers: str | None = None,
+    repeats: str | None = None,
 ) -> Response:
     # Readable Markdown (issue #65): ## speaker headings + merged blockquotes.
     # ?timestamps=false drops the per-paragraph time range for a clean copy.
@@ -1381,6 +1390,7 @@ def export_transcript_md(
         lang=lang,
         style=style,
         fillers=fillers,
+        repeats=repeats,
     )
 
 
@@ -1393,9 +1403,17 @@ def export_transcript_srt(
     lang: str | None = None,
     style: str | None = None,
     fillers: str | None = None,
+    repeats: str | None = None,
 ) -> Response:
     return _export_transcript(
-        run_id, session, TranscriptFormat.SRT, text, lang=lang, style=style, fillers=fillers
+        run_id,
+        session,
+        TranscriptFormat.SRT,
+        text,
+        lang=lang,
+        style=style,
+        fillers=fillers,
+        repeats=repeats,
     )
 
 
@@ -1408,9 +1426,17 @@ def export_transcript_vtt(
     lang: str | None = None,
     style: str | None = None,
     fillers: str | None = None,
+    repeats: str | None = None,
 ) -> Response:
     return _export_transcript(
-        run_id, session, TranscriptFormat.VTT, text, lang=lang, style=style, fillers=fillers
+        run_id,
+        session,
+        TranscriptFormat.VTT,
+        text,
+        lang=lang,
+        style=style,
+        fillers=fillers,
+        repeats=repeats,
     )
 
 
@@ -1423,9 +1449,17 @@ def export_transcript_json(
     lang: str | None = None,
     style: str | None = None,
     fillers: str | None = None,
+    repeats: str | None = None,
 ) -> Response:
     return _export_transcript(
-        run_id, session, TranscriptFormat.JSON, text, lang=lang, style=style, fillers=fillers
+        run_id,
+        session,
+        TranscriptFormat.JSON,
+        text,
+        lang=lang,
+        style=style,
+        fillers=fillers,
+        repeats=repeats,
     )
 
 
@@ -1436,11 +1470,13 @@ def export_transcript_rttm(
     session: SessionDep,
     style: str | None = None,
     fillers: str | None = None,
+    repeats: str | None = None,
 ) -> Response:
     _run_or_404(session, run_id)
     try:
         selected_style = parse_style(style, None)
         parse_fillers(fillers, None, selected_style)
+        parse_repeats(repeats, None, selected_style)
     except ExportOptionError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return Response(content=render_run_rttm(session, run_id), media_type=MEDIA_TYPES["rttm"])

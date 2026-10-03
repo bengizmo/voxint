@@ -18,8 +18,9 @@ from voxint.api.presentation import (
 )
 from voxint.db.models import DiarizationTurn, PipelineRun
 from voxint.export import TranscriptFormat, render_transcript, to_markdown_turns, to_rttm
-from voxint.export.fillers import drop_fillers as remove_fillers
+from voxint.export.fillers import drop_fillers_with_seams
 from voxint.export.reading import layout_turns
+from voxint.export.repeats import drop_repeats as remove_repeats
 
 
 class MarkdownStyle(enum.StrEnum):
@@ -53,19 +54,37 @@ def parse_style(raw: str | None, fmt: TranscriptFormat | None) -> MarkdownStyle 
         raise ExportOptionError(f"unknown style {raw!r}; valid: turns, blocks") from exc
 
 
+def _parse_turn_filter(
+    name: str,
+    raw: str | None,
+    fmt: TranscriptFormat | None,
+    style: MarkdownStyle | None,
+) -> bool:
+    if raw in (None, ""):
+        return False
+    if fmt is not TranscriptFormat.MARKDOWN or style is not MarkdownStyle.TURNS:
+        raise ExportOptionError(f"{name} applies to the md turns style only")
+    if raw not in ("keep", "drop"):
+        raise ExportOptionError(f"unknown {name} value {raw!r}; valid: keep, drop")
+    return raw == "drop"
+
+
 def parse_fillers(
     raw: str | None,
     fmt: TranscriptFormat | None,
     style: MarkdownStyle | None,
 ) -> bool:
     """Validate the opt-in filler filter before loading any transcript data."""
-    if raw in (None, ""):
-        return False
-    if fmt is not TranscriptFormat.MARKDOWN or style is not MarkdownStyle.TURNS:
-        raise ExportOptionError("fillers applies to the md turns style only")
-    if raw not in ("keep", "drop"):
-        raise ExportOptionError(f"unknown fillers value {raw!r}; valid: keep, drop")
-    return raw == "drop"
+    return _parse_turn_filter("fillers", raw, fmt, style)
+
+
+def parse_repeats(
+    raw: str | None,
+    fmt: TranscriptFormat | None,
+    style: MarkdownStyle | None,
+) -> bool:
+    """Validate the opt-in repeated-word filter before loading any transcript data."""
+    return _parse_turn_filter("repeats", raw, fmt, style)
 
 
 def export_title(session: Session, run_id: uuid.UUID) -> str:
@@ -93,6 +112,7 @@ def render_run_transcript(
     style: MarkdownStyle | None = None,
     translated_texts: Sequence[str] | None = None,
     drop_fillers: bool = False,
+    drop_repeats: bool = False,
 ) -> str:
     """Load one attributed view and render it without transport-specific behavior."""
     resolved = parse_style(style, fmt)
@@ -100,6 +120,10 @@ def render_run_transcript(
         if translated_texts is not None:
             raise ExportOptionError("fillers cannot be combined with a translation")
         parse_fillers("drop", fmt, resolved)
+    if drop_repeats:
+        if translated_texts is not None:
+            raise ExportOptionError("repeats cannot be combined with a translation")
+        parse_repeats("drop", fmt, resolved)
     if fmt is TranscriptFormat.MARKDOWN and resolved is MarkdownStyle.TURNS:
         if translated_texts is None:
             turns = attributed_turns(session, run_id, text=text)
@@ -108,8 +132,13 @@ def render_run_transcript(
                 turns = translated_turns(session, run_id, translated_texts)
             except ValueError as exc:
                 raise TranslationMismatchError from exc
+        seams: list[frozenset[int]] | None = None
         if drop_fillers:
-            turns = remove_fillers(turns)
+            cleaned = drop_fillers_with_seams(turns)
+            turns = [turn for turn, _ in cleaned]
+            seams = [turn_seams for _, turn_seams in cleaned]
+        if drop_repeats:
+            turns = remove_repeats(turns, seams)
         return to_markdown_turns(
             layout_turns(turns),
             header=export_title(session, run_id),

@@ -7,7 +7,7 @@ import pytest
 
 from voxint.adjudication.turns import PieceRule, SpeakerTurn, TextMapping, TurnPiece, join_pieces
 from voxint.export import to_markdown_turns
-from voxint.export.fillers import drop_fillers
+from voxint.export.fillers import drop_fillers, drop_fillers_with_seams
 from voxint.export.reading import layout_turns
 
 
@@ -252,4 +252,37 @@ def test_mixed_grain_and_punctuation_move_preserve_metadata() -> None:
         replace(original.pieces[0], text="Yes."),
         replace(original.pieces[2], text=" So we start"),
         original.pieces[3],
+    )
+
+
+def test_seams_mark_where_a_dropped_turn_joined_two_turns() -> None:
+    result = drop_fillers_with_seams(
+        [turn(piece("Hello", 0)), turn(piece(" um", 1), name="Sam"), turn(piece(" there", 2))]
+    )
+
+    assert [(join_pieces(t.pieces), seams) for t, seams in result] == [
+        ("Hello there", frozenset({1}))
+    ]
+
+
+def test_seam_moves_to_first_survivor_when_the_joined_head_is_a_filler() -> None:
+    result = drop_fillers_with_seams(
+        [
+            turn(piece("so", 0), piece(" yes", 1)),
+            turn(piece(" um", 2), name="Sam"),
+            turn(piece(" um", 3), piece(" right", 4)),
+        ]
+    )
+
+    assert [(join_pieces(t.pieces), seams) for t, seams in result] == [
+        ("so yes right", frozenset({2}))
+    ]
+
+
+def test_no_seams_without_a_merge() -> None:
+    result = drop_fillers_with_seams([turn(piece("um so")), turn(piece(" yes", 1), name="Sam")])
+
+    assert [seams for _, seams in result] == [frozenset(), frozenset()]
+    assert [t for t, _ in result] == drop_fillers(
+        [turn(piece("um so")), turn(piece(" yes", 1), name="Sam")]
     )

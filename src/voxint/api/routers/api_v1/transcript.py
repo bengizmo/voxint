@@ -14,6 +14,7 @@ from voxint.export import MEDIA_TYPES, TranscriptFormat
 from voxint.export.service import (
     ExportOptionError,
     parse_fillers,
+    parse_repeats,
     parse_style,
     render_run_rttm,
     render_run_transcript,
@@ -34,6 +35,7 @@ def export_transcript(
     timestamps: bool = True,
     style: str | None = None,
     fillers: str | None = None,
+    repeats: str | None = None,
 ) -> Response:
     if format not in _VALID_FORMATS:
         raise HTTPException(
@@ -45,6 +47,7 @@ def export_transcript(
     try:
         selected_style = parse_style(style, fmt)
         drop_fillers = parse_fillers(fillers, fmt, selected_style)
+        drop_repeats = parse_repeats(repeats, fmt, selected_style)
     except ExportOptionError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -68,5 +71,6 @@ def export_transcript(
         timestamps=timestamps,
         style=selected_style,
         drop_fillers=drop_fillers,
+        drop_repeats=drop_repeats,
     )
     return Response(content=content, media_type=MEDIA_TYPES[format])
