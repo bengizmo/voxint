@@ -81,6 +81,8 @@ class GpuPhaseState(Base):
     phase_since: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    llm_ready: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    llm_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lease_id: Mapped[str | None] = mapped_column(Text)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)

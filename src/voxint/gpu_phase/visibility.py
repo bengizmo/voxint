@@ -12,7 +12,14 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from voxint.config import Settings
-from voxint.gpu_phase.state import NEVER_TICKED, GpuPhase, GpuPhaseSnapshot, read_phase
+from voxint.gpu_phase.state import (
+    NEVER_TICKED,
+    GpuPhase,
+    GpuPhaseSnapshot,
+    llm_lane_ready,
+    post_lane_open,
+    read_phase,
+)
 
 # One short phrase per phase, for status rows and the CLI.
 PHASE_SUMMARY: dict[GpuPhase, str] = {
@@ -66,6 +73,27 @@ def snapshot_phase(snapshot: GpuPhaseSnapshot | None) -> GpuPhase | None:
 
 def phase_summary(phase: GpuPhase | None) -> str:
     return PHASE_SUMMARY[phase] if phase is not None else NO_ROW_SUMMARY
+
+
+def readiness_summary(
+    snapshot: GpuPhaseSnapshot | None, *, tick_seconds: int, now: datetime | None = None
+) -> str:
+    if (
+        snapshot is not None
+        and snapshot.phase == GpuPhase.LLM
+        and not llm_lane_ready(
+            snapshot.phase,
+            snapshot.llm_ready,
+            snapshot.llm_checked_at,
+            tick_seconds=tick_seconds,
+            now=now,
+        )
+    ):
+        if not is_fresh(snapshot, now=now or datetime.now(UTC), tick_seconds=tick_seconds):
+            # A stale check means the phase task stopped, not that the model is silent.
+            return "language-model work is paused because the GPU sharing task stopped updating"
+        return "waiting for the language model to answer"
+    return phase_summary(snapshot_phase(snapshot))
 
 
 def utc_minute(value: datetime) -> str:
@@ -131,12 +159,21 @@ def _recordings(count: int) -> str:
     return "1 recording is queued" if count == 1 else f"{count} recordings are queued"
 
 
+def _llm_jobs(count: int) -> str:
+    return (
+        "1 language-model job is queued."
+        if count == 1
+        else f"{count} language-model jobs are queued."
+    )
+
+
 @dataclass(frozen=True)
 class GpuSharingState:
     """The stored phase as the console reads it, without any lane counts."""
 
     phase: GpuPhase | None  # None: no row recorded yet
     stale_since: datetime | None  # set when the phase task stopped writing the row
+    post_ready: bool = True
 
     @property
     def trusted_phase(self) -> GpuPhase | None:
@@ -147,6 +184,8 @@ class GpuSharingState:
     @property
     def stage_reason(self) -> str | None:
         phase = self.trusted_phase
+        if phase == GpuPhase.LLM and not self.post_ready:
+            return "waiting for the language model to answer"
         return stage_pause_reason(phase) if phase is not None else None
 
 
@@ -166,7 +205,7 @@ class GpuSharingView:
     release_hint: bool  # the template adds the release command
 
 
-def build_view(state: GpuSharingState, waiting: int) -> GpuSharingView:
+def build_view(state: GpuSharingState, waiting: int, post_waiting: int = 0) -> GpuSharingView:
     phase = state.phase
     headline: str | None = None
     detail: str | None = None
@@ -193,7 +232,18 @@ def build_view(state: GpuSharingState, waiting: int) -> GpuSharingView:
         detail = "LLM work is paused."
         note = "GPU sharing needs attention"
     elif phase == GpuPhase.LLM:
-        if waiting:
+        if not state.post_ready:
+            headline = "Waiting for the language model to answer."
+            parts = [
+                _llm_jobs(post_waiting)
+                if post_waiting
+                else "Language-model work starts once it answers."
+            ]
+            if waiting:
+                parts.append(f"{_recordings(waiting)} for the next audio window.")
+            detail = " ".join(parts)
+            note = "waiting for the language model to answer"
+        elif waiting:
             headline = "Waiting for the GPU."
             detail = (
                 f"{_recordings(waiting)}; the GPU is serving the language model "
@@ -210,7 +260,10 @@ def build_view(state: GpuSharingState, waiting: int) -> GpuSharingView:
         note = "switching the GPU to audio work"
     elif phase in _TO_LLM:
         headline = "Switching the GPU back."
-        detail = "Language-model work resumes once the GPU is handed back." + (
+        detail = (
+            "Language-model work resumes once the GPU is handed back "
+            "and the language model answers."
+        ) + (
             f" {_recordings(waiting)} for the next audio window." if waiting else ""
         )
         note = "switching the GPU back"
@@ -236,9 +289,10 @@ def read_state(
     snapshot = read_phase(session)
     if snapshot is None:
         return GpuSharingState(phase=None, stale_since=None)
-    fresh = is_fresh(
-        snapshot, now=now or datetime.now(UTC), tick_seconds=settings.gpu_phase_tick_seconds
-    )
+    current = now or datetime.now(UTC)
+    fresh = is_fresh(snapshot, now=current, tick_seconds=settings.gpu_phase_tick_seconds)
     return GpuSharingState(
-        phase=snapshot.phase, stale_since=None if fresh else snapshot.updated_at
+        phase=snapshot.phase,
+        stale_since=None if fresh else snapshot.updated_at,
+        post_ready=post_lane_open(snapshot, settings, now=current),
     )

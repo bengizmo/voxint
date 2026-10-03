@@ -43,6 +43,8 @@ class GpuPhaseSnapshot:
     retry_after: datetime | None
     operator_request: OperatorRequest | None
     updated_at: datetime
+    llm_ready: bool = False
+    llm_checked_at: datetime | None = None
 
 
 def read_phase(session: Session) -> GpuPhaseSnapshot | None:
@@ -60,6 +62,8 @@ def read_phase(session: Session) -> GpuPhaseSnapshot | None:
         retry_after=row.retry_after,
         operator_request=OperatorRequest(row.operator_request) if row.operator_request else None,
         updated_at=row.updated_at,
+        llm_ready=row.llm_ready,
+        llm_checked_at=row.llm_checked_at,
     )
 
 
@@ -71,54 +75,107 @@ def read_phase_if_enabled(session: Session, settings: Settings) -> GpuPhaseSnaps
     return read_phase(session) if gates_enabled(settings) else None
 
 
-def _phase_opens(phase: str | None, segment: frozenset[Stage]) -> bool:
+def llm_freshness_seconds(tick_seconds: int) -> int:
+    return max(3 * tick_seconds, 90)
+
+
+def llm_lane_ready(
+    phase: str | None,
+    ready: bool,
+    checked_at: datetime | None,
+    *,
+    tick_seconds: int,
+    now: datetime | None = None,
+) -> bool:
+    return (
+        phase == GpuPhase.LLM
+        and ready
+        and checked_at is not None
+        and ((now or datetime.now(UTC)) - checked_at).total_seconds()
+        <= llm_freshness_seconds(tick_seconds)
+    )
+
+
+def _phase_opens(
+    phase: str | None,
+    segment: frozenset[Stage],
+    settings: Settings,
+    llm_ready: bool = False,
+    llm_checked_at: datetime | None = None,
+    *,
+    now: datetime | None = None,
+) -> bool:
     # A missing row closes both lanes; the orchestrator's next write repairs it.
     if segment == GPU_SEGMENT:
         return phase == GpuPhase.AUDIO
     if segment == POST_SEGMENT:
-        return phase == GpuPhase.LLM
+        return llm_lane_ready(
+            phase, llm_ready, llm_checked_at, tick_seconds=settings.gpu_phase_tick_seconds, now=now
+        )
     raise ValueError("Unknown pipeline segment")
 
 
 def gpu_lane_open(snapshot: GpuPhaseSnapshot | None, settings: Settings) -> bool:
-    return not gates_enabled(settings) or _phase_opens(
-        snapshot.phase if snapshot is not None else None, GPU_SEGMENT
-    )
+    return lane_open_for_segment(snapshot, settings, GPU_SEGMENT)
 
 
-def post_lane_open(snapshot: GpuPhaseSnapshot | None, settings: Settings) -> bool:
-    return not gates_enabled(settings) or _phase_opens(
-        snapshot.phase if snapshot is not None else None, POST_SEGMENT
-    )
+def post_lane_open(
+    snapshot: GpuPhaseSnapshot | None, settings: Settings, *, now: datetime | None = None
+) -> bool:
+    return lane_open_for_segment(snapshot, settings, POST_SEGMENT, now=now)
 
 
 def lane_open_for_segment(
-    snapshot: GpuPhaseSnapshot | None, settings: Settings, segment: frozenset[Stage]
+    snapshot: GpuPhaseSnapshot | None,
+    settings: Settings,
+    segment: frozenset[Stage],
+    *,
+    now: datetime | None = None,
 ) -> bool:
     if not gates_enabled(settings):
         return True
-    return _phase_opens(snapshot.phase if snapshot is not None else None, segment)
+    return _phase_opens(
+        snapshot.phase if snapshot else None,
+        segment,
+        settings,
+        snapshot.llm_ready if snapshot else False,
+        snapshot.llm_checked_at if snapshot else None,
+        now=now,
+    )
 
 
-def admit_lane(session: Session, settings: Settings, segment: frozenset[Stage]) -> bool:
-    """Lane check for the transaction that moves work from QUEUED to RUNNING.
+def admit_lane(
+    session: Session,
+    settings: Settings,
+    segment: frozenset[Stage],
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Check admission in the transaction moving QUEUED work to RUNNING.
 
-    Reads the phase under FOR SHARE. ``set_phase`` takes FOR UPDATE, so a phase
-    change waits for an admitting transaction to commit (the orchestrator then
-    counts the admitted work as in flight), or the admission sees the new phase.
-    The early gate read in a worker task cannot give that guarantee on its own:
-    a task can pass it, stall, and claim after the orchestrator has drained.
-    Call this in the same transaction as the QUEUED to RUNNING write. Issues no
-    query when the feature is off."""
+    FOR SHARE serializes admission with phase and readiness writes by set_phase.
+    Issues no query when the feature is off.
+    """
     if not gates_enabled(settings):
         return True
-    phase = session.execute(
-        select(GpuPhaseState.phase).where(GpuPhaseState.id == 1).with_for_update(read=True)
-    ).scalar_one_or_none()
-    return _phase_opens(phase, segment)
+    row = session.execute(
+        select(GpuPhaseState.phase, GpuPhaseState.llm_ready, GpuPhaseState.llm_checked_at)
+        .where(GpuPhaseState.id == 1)
+        .with_for_update(read=True)
+    ).one_or_none()
+    return _phase_opens(
+        row.phase if row else None,
+        segment,
+        settings,
+        row.llm_ready if row else False,
+        row.llm_checked_at if row else None,
+        now=now,
+    )
 
 
 class PhaseFields(TypedDict, total=False):
+    llm_ready: bool
+    llm_checked_at: datetime | None
     lease_id: str | None
     lease_expires_at: datetime | None
     last_error: str | None
@@ -139,9 +196,7 @@ def _locked_row(
     # Repair an absent singleton, with concurrent writers serialized on the row.
     values: dict[str, object] = {"phase_since": now or datetime.now(UTC), **insert_values}
     session.execute(
-        insert(GpuPhaseState)
-        .values(id=1, **values)
-        .on_conflict_do_nothing(index_elements=["id"])
+        insert(GpuPhaseState).values(id=1, **values).on_conflict_do_nothing(index_elements=["id"])
     )
     return session.execute(
         select(GpuPhaseState)
@@ -280,6 +335,8 @@ def llm_unavailable_message(session: Session, settings: Settings) -> str | None:
             "GPU sharing has no phase record yet, so the language model is treated as"
             " unavailable. Try again after the next phase update."
         )
+    if snapshot.phase == GpuPhase.LLM:
+        return "Waiting for the language model to answer. Language-model work is paused."
     return (
         f"GPU sharing has the GPU in the {snapshot.phase.value} phase, so the language"
         " model is not available. Try again once the phase is back to llm."

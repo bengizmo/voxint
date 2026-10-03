@@ -231,8 +231,8 @@ def check_gpu_phase(
 ) -> CheckResult | None:
     """Advisory: which phase GPU sharing is in, in plain words. None when off.
 
-    ``error`` (the GPU could not be handed back, so language-model work is
-    paused) is the one not-ok phase; a failed attempt that is backing off is
+    ``error`` and an unanswered or stale LLM readiness check are not ok.
+    A failed attempt that is backing off is
     reported in the detail but stays ok, since the next tick retries it. A row
     the phase task has not written for ``max(3 * tick, 120)`` seconds means the
     task is not running, which is reported first: nothing else can change then.
@@ -277,7 +277,14 @@ def check_gpu_phase(
         if snapshot.phase_since != NEVER_TICKED
         else ""
     )
-    parts = [PHASE_SUMMARY[phase] + since]
+    from voxint.gpu_phase.state import llm_lane_ready
+    from voxint.gpu_phase.visibility import readiness_summary
+
+    ready = phase != GpuPhase.LLM or llm_lane_ready(
+        phase, snapshot.llm_ready, snapshot.llm_checked_at, tick_seconds=tick_seconds, now=now
+    )
+    summary = readiness_summary(snapshot, tick_seconds=tick_seconds, now=now)
+    parts = [summary + since if ready else summary]
     if snapshot.operator_request is not None:
         parts.append(_REQUEST_TEXT[snapshot.operator_request])
     if snapshot.failures and snapshot.retry_after is not None:
@@ -285,7 +292,7 @@ def check_gpu_phase(
         if snapshot.last_error:
             failed += f" ({display_error(snapshot.last_error)})"
         parts.append(failed)
-    return CheckResult(GPU_SHARING_CHECK, True, False, "; ".join(parts))
+    return CheckResult(GPU_SHARING_CHECK, ready, False, "; ".join(parts))
 
 
 def apply_gpu_phase(results: list[CheckResult], phase: GpuPhase) -> list[CheckResult]:

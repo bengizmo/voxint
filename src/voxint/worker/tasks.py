@@ -963,6 +963,7 @@ def gpu_phase_tick() -> str:
     from voxint.api.health_probe import probe_services
     from voxint.api.service_control import get_controller
     from voxint.gpu_phase.client import LeaseClient
+    from voxint.gpu_phase.llm_probe import probe_llm
     from voxint.gpu_phase.orchestrator import tick
 
     settings = get_settings()
@@ -975,5 +976,6 @@ def gpu_phase_tick() -> str:
         client=LeaseClient(settings),
         controller=get_controller(settings),
         probe=probe_services,
+        llm_probe=probe_llm,
         clock=lambda: datetime.now(UTC),
     ).kind
