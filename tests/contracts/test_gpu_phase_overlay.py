@@ -3,8 +3,9 @@
 ``compose.gpu-phase.yaml`` is the second, deliberate Docker socket grant in the
 repo (the first is ``compose.service-controls.yaml``, pinned by
 ``test_service_control_overlay.py``). It adds a dedicated ``gpu-phase`` Celery
-worker that starts and stops the model services, and pins the regular worker to
-the ``celery`` and ``post`` queues so it never runs an orchestrator tick.
+worker that starts and stops the model services. It leaves the regular worker
+alone: the app does not declare the ``gpu_phase`` queue, so a worker started
+without ``-Q`` never consumes an orchestrator tick.
 
 These are YAML-level checks, like the service-controls contract: CI has no
 Docker, so ``docker compose config`` is not run here. ``gpu-phase`` is built with
@@ -15,7 +16,6 @@ way.
 
 from __future__ import annotations
 
-import re
 import shlex
 from typing import Any
 
@@ -72,8 +72,9 @@ def _layers(tier: str, *, service_controls: bool) -> list[str]:
 
 def test_overlay_shape() -> None:
     services = _services(OVERLAY)
-    assert set(services) == {"worker", "gpu-phase"}
-    assert set(services["worker"]) == {"command"}
+    # The overlay adds gpu-phase and touches no other service, so it composes
+    # with the installer's compose.hardware.yaml worker command in any order.
+    assert set(services) == {"gpu-phase"}
 
     gpu_phase = services["gpu-phase"]
     # Inherit from the base worker so the image pin, .env, settings, media volume
@@ -89,20 +90,18 @@ def test_overlay_shape() -> None:
     assert environment["VOXINT_SERVICE_CONTROL"] == "docker"
     # DockerController finds model containers by compose project label; the
     # project this container runs in is where they live.
-    assert environment["VOXINT_COMPOSE_PROJECT"] == "${COMPOSE_PROJECT_NAME}"
+    assert environment["VOXINT_COMPOSE_PROJECT"] == "${COMPOSE_PROJECT_NAME:-voxint}"
     # No GPU for the orchestrator itself.
     assert "deploy" not in gpu_phase and "devices" not in gpu_phase
 
 
-def test_worker_consumes_every_lane_except_gpu_phase() -> None:
-    worker_queues = _queues(_services(OVERLAY)["worker"]["command"])
-    assert worker_queues == {"celery", POST_QUEUE}
-    assert app.conf.task_default_queue == "celery"
-    # Every declared queue other than gpu_phase must keep a consumer here, so a
-    # new lane added to task_queues fails this test until the overlay is updated.
+def test_flagless_workers_never_consume_gpu_phase_ticks() -> None:
+    # A worker without -Q consumes exactly the declared queues. gpu_phase must
+    # stay undeclared so only the dedicated gpu-phase worker runs ticks.
     declared = {queue.name for queue in app.conf.task_queues}
-    assert worker_queues == declared - {GPU_PHASE_QUEUE}
-    assert GPU_PHASE_QUEUE not in worker_queues
+    assert GPU_PHASE_QUEUE not in declared
+    assert {"celery", POST_QUEUE} <= declared
+    assert app.conf.task_create_missing_queues is True  # -Q gpu_phase creates it
 
 
 def test_gpu_phase_consumes_only_its_queue_at_concurrency_one() -> None:
@@ -114,25 +113,12 @@ def test_gpu_phase_consumes_only_its_queue_at_concurrency_one() -> None:
     assert node is not None and node.startswith("gpu-phase@"), node
 
 
-def test_header_concurrency_line_keeps_the_queue_list() -> None:
-    # The header shows operators the full worker line to use when they also set
-    # --concurrency. It must stay a working command with the same queue list.
-    text = (REPO_ROOT / OVERLAY).read_text()
-    lines = re.findall(r"^#\s+command: (celery .*)$", text, re.MULTILINE)
-    assert len(lines) == 1, lines
-    assert _queues(lines[0]) == _queues(_services(OVERLAY)["worker"]["command"])
-    assert _flag(shlex.split(lines[0]), "-c", "--concurrency") is not None
-    assert "-f compose.gpu-phase.yaml up -d" in text
-
-
 @pytest.mark.parametrize("tier", CONTAINER_TIERS)
 def test_tier_overlays_leave_the_overlay_in_charge(tier: str) -> None:
     tier_services = _services(f"compose.{tier}.yaml")
     # A tier entry named gpu-phase would merge into it (GPU reservations, tier
-    # environment). Tier overlays leave the worker command alone; the overlay
-    # header covers the files that do set it (compose.hardware.yaml).
+    # environment).
     assert "gpu-phase" not in tier_services
-    assert "command" not in tier_services.get("worker", {})
     # extends reads compose.yaml only, so tier fields never reach gpu-phase;
     # the base worker it copies must carry no GPU access of its own.
     base_worker = _services("compose.yaml")["worker"]
@@ -185,11 +171,3 @@ def test_socket_is_gpu_phase_only_across_tiers(tier: str, service_controls: bool
             )
             assert "${DOCKER_GID:-999}" not in service.get("group_add", []), f"{filename}:{name}"
     assert api_socket_mounts == (1 if "api" in granted else 0)
-
-    # The overlay's worker command is the one that wins in the documented order.
-    worker_commands = [
-        services["worker"]["command"]
-        for services in layers.values()
-        if "command" in services.get("worker", {})
-    ]
-    assert worker_commands[-1] == layers[OVERLAY]["worker"]["command"]

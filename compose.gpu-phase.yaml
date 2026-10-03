@@ -6,8 +6,12 @@
 # To do that it mounts the Docker socket, which grants this one process
 # host-equivalent control over all containers. That is acceptable for a
 # single-operator deployment, but it is a real privilege escalation. No other
-# service gains the socket from this overlay. The regular worker is pinned to
-# the `celery` and `post` queues so it never runs an orchestrator tick.
+# service gains the socket from this overlay.
+#
+# Only gpu-phase consumes the `gpu_phase` queue. The app does not declare that
+# queue, so a worker started without -Q (the regular worker, including the
+# command the installer writes into compose.hardware.yaml) never runs an
+# orchestrator tick, and this overlay leaves the regular worker alone.
 #
 # Usage:
 #   docker compose -f compose.yaml -f compose.gpu.yaml \
@@ -27,22 +31,11 @@
 #   getent group docker | cut -d: -f3
 # Default 999 works on most Linux installs. Set it in .env if yours differs.
 #
-# Worker command: Compose keeps the last `command:` it reads for a service,
-# and a worker command without -Q consumes every queue, gpu_phase included.
-# Any file listed after this one that sets the worker command must keep the
-# -Q list. That includes compose.hardware.yaml, which the installer writes on
-# the gpu and rocm tiers with a --concurrency flag. If you set --concurrency
-# (docs/operations.md), use this full line in the file that wins:
-#   command: celery -A voxint.worker.app worker --loglevel=INFO -Q celery,post --concurrency=1
-#
-# gpu-phase copies the image, .env, settings, media volume and dependencies
+# gpu-phase copies the image, .env, settings, media volume and depends_on
 # of the `worker` service in compose.yaml (`extends`), not what other overlays
 # add to `worker`. With compose.build.yaml, give gpu-phase
 # `image: voxint-app:dev` and `pull_policy: never` in your own override.
 services:
-  worker:
-    command: celery -A voxint.worker.app worker --loglevel=INFO -Q celery,post
-
   gpu-phase:
     extends:
       file: compose.yaml
@@ -65,7 +58,7 @@ services:
       VOXINT_SERVICE_CONTROL: docker
       # The project this container runs in, which is where the model
       # containers live, whatever name or -p the operator used.
-      VOXINT_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME}
+      VOXINT_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-voxint}
       # The readiness probe reaches the model services by service DNS name,
       # the same URLs the gpu and rocm tier overlays give the worker.
       ASR_URL: http://whisper:8022
