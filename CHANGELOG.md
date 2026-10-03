@@ -13,6 +13,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   "Upload timed out". An upload is now cancelled only when no bytes have moved
   for 2 minutes, or when the server has not answered 10 minutes after the last
   byte. A cancelled file keeps its Retry button.
+- **The Status page shows memory on native macOS** (#773). Memory was read
+  only from the Linux `/proc/meminfo` file, so a native macOS install listed
+  Processor and Disk but no Memory row. On macOS it is now read from
+  `sysctl hw.memsize` and `vm_stat`, counting free and inactive pages as
+  available. Linux is unchanged.
 
 ## [0.51.0] - 2026-10-03
 
