@@ -1659,6 +1659,53 @@ def _media_backfill_hashes(args: argparse.Namespace) -> int:
     return 0
 
 
+def _media_backfill_recorded_dates(args: argparse.Namespace) -> int:
+    """Fill recording dates from source metadata for rows missing them."""
+    from datetime import date
+
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.session import build_session_factory
+    from voxint.media.recorded_date import backfill_recorded_dates
+
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    def _report(media_id: uuid.UUID, recorded: date) -> None:
+        prefix = "would set " if args.dry_run else ""
+        print(f"{media_id}: {prefix}{recorded.isoformat()}")
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    try:
+        with build_session_factory(engine)() as session:
+            result = backfill_recorded_dates(
+                session, settings.media_root, ffprobe_bin=settings.ffprobe_bin,
+                dry_run=args.dry_run, on_found=_report,
+            )
+    finally:
+        engine.dispose()
+
+    if not result.dated and not result.no_tag and not result.skipped_missing:
+        print("nothing to backfill: every unpurged media row already has a recording date")
+        return 0
+    action = "would set" if args.dry_run else "set"
+    suffix = " (dry run, nothing written)" if args.dry_run else ""
+    print(f"{action} the recording date on {len(result.dated)} media row(s){suffix}")
+    print(f"{result.no_tag} row(s) have no usable creation date tag (left empty)")
+    if result.skipped_missing:
+        print(
+            f"skipped {len(result.skipped_missing)} row(s) whose bytes could not be"
+            " read under MEDIA_ROOT (left NULL, retried on the next run):"
+        )
+        for source_path in result.skipped_missing:
+            print(f"  - {source_path}")
+    return 0
+
+
 def _speakers_name(args: argparse.Namespace) -> int:
     """List voices or name one voice in a single transaction."""
     from voxint.adjudication.naming import NamingError, list_voices, name_voice
@@ -3330,6 +3377,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="compute sha256 for media rows missing it (integrity aid; idempotent)",
     )
     media_bf_p.set_defaults(fn=_media_backfill_hashes)
+    media_dates_p = media_sub.add_parser(
+        "backfill-recorded-dates",
+        help=(
+            "fill media_items.recorded_on from each source file's creation date tag "
+            "(NULL rows only)"
+        ),
+    )
+    media_dates_p.add_argument("--dry-run", action="store_true")
+    media_dates_p.set_defaults(fn=_media_backfill_recorded_dates)
     speakers_p = sub.add_parser("speakers", help="speaker roster maintenance")
     speakers_sub = speakers_p.add_subparsers(dest="speakers_command", required=True)
     name_p = speakers_sub.add_parser(

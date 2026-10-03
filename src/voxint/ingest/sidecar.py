@@ -10,9 +10,10 @@ and upload paths can adopt it after v1 (watch-folder only).
 Machine-read keys (applied strictly — a bad type or value HOLDS the file):
 ``title`` (display name), ``speakers`` (list of names, unioned into the
 run's frozen domain-pack ``name_seeds``), ``domain_pack`` (pack name),
-``notes`` (operator notes). Every other key is ignored for application but
-preserved verbatim in the stored snapshot (``Sidecar.raw``), so a sidecar
-can carry reference-only context from other tooling without being rejected.
+``recorded`` (recording date), ``notes`` (operator notes). Every other key is
+ignored for application but preserved verbatim in the stored snapshot
+(``Sidecar.raw``), so a sidecar can carry reference-only context from other
+tooling without being rejected.
 A ``description`` key is deliberately NOT applied to notes — notes are for
 deliberate operator remarks.
 
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import unicodedata
 from dataclasses import dataclass
@@ -65,7 +67,7 @@ _MAX_NODES = 10_000
 _MAX_SNAPSHOT_BYTES = 4 * MAX_SIDECAR_BYTES
 
 _APPLIED_KEYS = frozenset(
-    {"title", "speakers", "domain_pack", "notes", "max_speakers", "num_speakers"}
+    {"title", "speakers", "domain_pack", "notes", "max_speakers", "num_speakers", "recorded"}
 )
 
 # Same rejected categories as domain-pack corrections: Cc control, Cf format
@@ -102,6 +104,7 @@ class Sidecar:
     # forces an exact count and wins over the bound. Both None ⇒ not supplied.
     max_speakers: int | None
     num_speakers: int | None
+    recorded: date | None
     raw: dict[str, Any]
     ignored_keys: tuple[str, ...]
 
@@ -205,9 +208,37 @@ def parse_sidecar(text: str, *, source_name: str) -> Sidecar:
         notes=notes,
         max_speakers=max_speakers,
         num_speakers=num_speakers,
+        recorded=_recorded_field(data, source_name),
         raw=raw,
         ignored_keys=ignored,
     )
+
+
+def _recorded_field(data: dict[Any, Any], source_name: str) -> date | None:
+    """Validate a recording day without accepting timestamps or partial dates."""
+    if "recorded" not in data:
+        return None
+    value = data["recorded"]
+    message = (
+        f"{source_name}: 'recorded' must be a date written as YYYY-MM-DD, "
+        "like 'recorded: 2026-10-02'"
+    )
+    if isinstance(value, datetime):
+        raise SidecarError(message)
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            raise SidecarError(
+                f"{source_name}: 'recorded' is empty. Write a date like 'recorded: 2026-10-02'"
+            )
+        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+            try:
+                return date.fromisoformat(value)
+            except ValueError:
+                pass
+    raise SidecarError(message)
 
 
 def _yaml_error_detail(exc: yaml.YAMLError) -> str:

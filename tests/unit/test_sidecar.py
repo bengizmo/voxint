@@ -77,6 +77,7 @@ def test_empty_mapping_is_valid() -> None:
         notes=None,
         max_speakers=None,
         num_speakers=None,
+        recorded=None,
         raw={},
         ignored_keys=(),
     )
@@ -643,3 +644,28 @@ def test_speaker_count_rejects_non_integer(key: str) -> None:
 def test_speaker_count_rejects_out_of_range(key: str, value: int) -> None:
     with pytest.raises(SidecarError, match=str(MAX_SIDECAR_SPEAKER_CEILING)):
         parse_sidecar(f"{key}: {value}", source_name="x.yaml")
+
+
+@pytest.mark.parametrize("value", ["2026-10-02", "'2026-10-02'", "' 2026-10-02 '"])
+def test_recorded_sidecar_date(value: str) -> None:
+    from datetime import date
+
+    sc = parse_sidecar(f"recorded: {value}", source_name="source.yaml")
+    assert sc.recorded == date(2026, 10, 2)
+    assert "recorded" not in sc.ignored_keys
+    if value == "2026-10-02":
+        assert sc.raw["recorded"] == "2026-10-02"
+    # Whatever the parser accepted, the render-time reader of the frozen
+    # snapshot must agree with it.
+    from voxint.api.presentation import recorded_from_snapshot
+
+    assert recorded_from_snapshot(sc.raw) == sc.recorded
+
+
+@pytest.mark.parametrize("value", [
+    "2026-10-02T10:00:00Z", "02/10/2026", "2026-13-01", "2026-1-2",
+    "''", "", "123", "[]",
+])
+def test_recorded_sidecar_invalid(value: str) -> None:
+    with pytest.raises(SidecarError, match=r"source\.yaml"):
+        parse_sidecar(f"recorded: {value}", source_name="source.yaml")
