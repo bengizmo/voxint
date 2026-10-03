@@ -60,7 +60,10 @@ GPU back, because then neither side can run.
 
 The post lane also waits for the language model to answer. During the `llm`
 phase, Voxint checks each active language-model endpoint every tick. Work stays
-queued until all configured endpoints answer successfully. Returning the GPU
+queued until all configured endpoints answer successfully. That includes a
+configured endpoint that no enabled feature uses at the moment: if one is
+down, remove it from the settings or bring it back, and the banner on the
+Runs page says the work is waiting for the language model. Returning the GPU
 starts this wait; it does not immediately start language-model work.
 
 An answer older than `max(3 * GPU_PHASE_TICK_SECONDS, 90)` seconds counts as

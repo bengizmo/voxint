@@ -16,7 +16,7 @@ from sqlalchemy import Engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
-from tests.integration.test_gpu_phase import NOW, seed_run
+from tests.integration.test_gpu_phase import NOW, seed_jobs, seed_run
 from tests.integration.test_jobs_pages import _prime_resource_cache
 from tests.unit.test_gpu_phase import phase_settings
 from voxint.api.app import create_app
@@ -651,6 +651,8 @@ def test_waiting_for_llm_copy_across_surfaces(
     with session_factory.begin() as session:
         seed_run(session, Stage.ENHANCE_MATCH)
         seed_run(session, Stage.FINALIZE)
+        # Queued asset, translation and research jobs count as waiting work too.
+        seed_jobs(session)
         message = llm_unavailable_message(session, cli_env[0])
         assert message is not None and "Waiting for the language model to answer." in message
         check = check_gpu_phase(
@@ -665,6 +667,6 @@ def test_waiting_for_llm_copy_across_surfaces(
     assert "llm (waiting for the language model to answer)" in capsys.readouterr().out
     body = client.get("/runs").text
     assert "Waiting for the language model to answer." in body
-    assert "2 language-model jobs are queued." in body
+    assert "5 language-model jobs are queued." in body
     assert "waiting for the language model to answer" in client.get("/runs/progress-strip").text
     assert "waiting for the language model to answer" in client.get("/settings/status").text
