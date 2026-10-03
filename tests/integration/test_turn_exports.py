@@ -205,3 +205,130 @@ def test_turn_header_title_selection(
     assert response.content == (
         f"# {expected_title}\n\n**Alex:** Hello\n\n**Sam:** there.\n"
     ).encode()
+
+
+@pytest.mark.parametrize("timestamps", [True, False])
+def test_fillers_three_surface_golden_and_default(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    timestamps: bool,
+) -> None:
+    with session_factory() as session:
+        run_id = seed_words(session)
+        segment = session.scalars(
+            select(TranscriptSegment).where(
+                TranscriptSegment.pipeline_run_id == run_id,
+            )
+        ).one()
+        segment.raw_text = "Hello um, there."
+        segment.words = [
+            {"word": "Hello", "start": 0, "end": 0.4},
+            {"word": " um,", "start": 0.4, "end": 0.8},
+            {"word": " there.", "start": 1, "end": 2},
+        ]
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        run.sidecar = {"title": "Synthetic filler example"}
+        session.commit()
+    client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
+    monkeypatch.setattr(
+        "voxint.cli._engine_or_report",
+        lambda: (
+            create_engine(session_factory.kw["bind"].url),
+            0,
+        ),
+    )
+    for fillers in (None, "keep", "drop"):
+        path = tmp_path / f"{fillers}.md"
+        args = ["export", str(run_id), "--format", "md", "-o", str(path)]
+        params = {"timestamps": str(timestamps).lower()}
+        if fillers:
+            params["fillers"] = fillers
+        if fillers == "drop":
+            args.append("--drop-fillers")
+        if not timestamps:
+            args.append("--no-timestamps")
+        assert main(args) == 0
+        console = client.get(f"/review/{run_id}/export.md", params=params)
+        public = client.get(
+            f"/api/v1/runs/{run_id}/transcript",
+            params={"format": "md", **params},
+            auth=None,
+            headers={"Authorization": "Bearer synthetic-api-key"},
+        )
+        assert console.status_code == public.status_code == 200
+        a, b = ("[00:00:00] ", "[00:00:01] ") if timestamps else ("", "")
+        suffix = "" if fillers == "drop" else " um,"
+        golden = (
+            f"# Synthetic filler example\n\n{a}**Alex:** Hello{suffix}\n\n{b}**Sam:** there.\n"
+        ).encode()
+        assert path.read_bytes() == console.content == public.content == golden
+    with session_factory() as session:
+        segment = session.scalars(
+            select(TranscriptSegment).where(
+                TranscriptSegment.pipeline_run_id == run_id,
+            )
+        ).one()
+        assert segment.raw_text == "Hello um, there."
+        assert segment.words is not None and segment.words[1]["word"] == " um,"
+
+
+def test_fillers_refusal_matrix(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def no_db() -> None:
+        pytest.fail("invalid CLI filler options must not touch the database")
+
+    monkeypatch.setattr("voxint.cli._engine_or_report", no_db)
+    for args in (
+        ["--format", "txt"],
+        ["--format", "rttm"],
+        ["--format", "md", "--style", "blocks"],
+    ):
+        assert main(["export", str(uuid.uuid4()), "--drop-fillers", *args]) == 2
+        assert capsys.readouterr().out == "error: fillers applies to the md turns style only\n"
+    with session_factory() as session:
+        run_id = seed_words(session)
+        record_spanish(session, run_id)
+        session.commit()
+    client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
+    cases = [
+        (fmt, {"fillers": "drop"}, "fillers applies to the md turns style only")
+        for fmt in ("txt", "rttm", "srt", "vtt", "json")
+    ] + [
+        (
+            "md",
+            {"fillers": "drop", "style": "blocks"},
+            "fillers applies to the md turns style only",
+        ),
+        ("md", {"fillers": "bogus"}, "unknown fillers value 'bogus'; valid: keep, drop"),
+    ]
+    # Only the console routes take a translation; /api/v1 never had lang.
+    conflict = client.get(f"/review/{run_id}/export.md", params={"fillers": "drop", "lang": "es"})
+    assert conflict.status_code == 422
+    assert conflict.json()["detail"] == "fillers cannot be combined with a translation"
+    for fmt, params, detail in cases:
+        console = client.get(f"/review/{run_id}/export.{fmt}", params=params)
+        assert console.status_code == 422
+        assert console.json()["detail"] == detail
+        public = client.get(
+            f"/api/v1/runs/{run_id}/transcript",
+            params={"format": fmt, **params},
+            auth=None,
+            headers={"Authorization": "Bearer synthetic-api-key"},
+        )
+        assert public.status_code == 422
+        assert public.json()["error"]["message"] == detail
+        missing_console = client.get(f"/review/{uuid.uuid4()}/export.{fmt}", params=params)
+        assert missing_console.status_code == 404
+        missing_public = client.get(
+            f"/api/v1/runs/{uuid.uuid4()}/transcript",
+            params={"format": fmt, **params},
+            auth=None,
+            headers={"Authorization": "Bearer synthetic-api-key"},
+        )
+        assert missing_public.status_code == 422
+        assert missing_public.json()["error"]["message"] == detail

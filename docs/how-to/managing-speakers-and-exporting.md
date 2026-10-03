@@ -236,6 +236,11 @@ the transcript are written literally, so a stray symbol at the start of a line
 cannot turn into an accidental heading, list, or other formatting. A web address
 in the text stays as text, though some viewers will still make it clickable.
 
+To leave out standalone English fillers such as "um" and "uh" from the Markdown
+turns export, add `--drop-fillers` on the command line or `&fillers=drop` to the
+download link. Your saved transcript stays unchanged; this option is not
+available for translations or `--style blocks`.
+
 ### Speaker names always appear
 
 Every text, Markdown, subtitle, and data export labels each passage with the
