@@ -319,6 +319,7 @@ def execute_run(
     lease_seconds: int | Mapping[Stage, int] | None = None,
     settings: "Settings | None" = None,
     stages: AbstractSet[Stage] | None = None,
+    admit: Callable[[Session], bool] | None = None,
 ) -> RunSnapshot:
     """Advance a QUEUED (or requeued) run through its stages.
 
@@ -329,7 +330,8 @@ def execute_run(
     consistent, resumable run. ``stages=None`` preserves the original all-stage
     execution. A restricted stage set returns without mutation on wrong-lane
     delivery and parks QUEUED at the first stage outside its lane after a
-    successful owned stage.
+    successful owned stage. ``admit`` (GPU phase gate, #748) runs in the entry
+    CAS transaction; False returns the QUEUED run without mutation.
     """
     worker = worker_id or default_worker_id()
     if lease_seconds is None:
@@ -350,6 +352,8 @@ def execute_run(
             # particular, do not take the QUEUED -> RUNNING entry CAS and leave
             # an ownerless RUNNING run for lease recovery to repair.
             if stages is not None and stage not in stages:
+                return held
+            if admit is not None and not admit(session):
                 return held
             try:
                 held = cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=stage)

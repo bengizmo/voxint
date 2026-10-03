@@ -379,7 +379,7 @@ def test_recovery_sweep_redispatches_stale_queued_embedding_job(
     # now present in the result alongside the built-in lane counts.
     assert {"recovered", "stale_queued", "cancelled_claims_closed",
             "stale_embedding_jobs", "stale_asset_jobs",
-            "stale_translation_jobs"}.issubset(set(result))
+            "stale_translation_jobs", "stale_research_jobs"}.issubset(set(result))
     assert dispatched == [str(stale_id)]  # the fresh job is spared
     with session_factory() as session:
         row = session.get(EmbeddingJob, stale_id)
