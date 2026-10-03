@@ -50,10 +50,10 @@ class ServiceHealth:
     # (tolerated exactly as ``device`` is). Captured on the degraded 503 path
     # too, since telemetry is most useful when a service is struggling.
     resources: dict[str, object] | None = None
-    # The connection never opened (refused, or the connect itself timed out),
-    # which is what a stopped service looks like. False once anything is
-    # listening: an HTTP error, a malformed body, a read/write/pool timeout (a
-    # wedged service), and a bad URL. GPU sharing (#748) only treats a
+    # The connection was refused or the host name did not resolve, which is what
+    # a stopped service looks like (see connection_never_opened). False for an
+    # HTTP error, a malformed body, any timeout (including a connect or TLS
+    # handshake timeout), a TLS failure, and a bad URL. GPU sharing (#748) only treats a
     # not-running service as an expected stop.
     not_running: bool = False
 
@@ -157,8 +157,8 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
     try:
         response = client.get(url)
     except httpx.TimeoutException as exc:
-        # No completed round-trip → no latency to report. Only a connect timeout
-        # means nothing is listening; a read timeout is a wedged service.
+        # No completed round-trip → no latency to report. No timeout counts as a
+        # stopped service: a connect timeout can be a stalled TLS handshake.
         return outcome(
             up=False,
             detail="timeout",

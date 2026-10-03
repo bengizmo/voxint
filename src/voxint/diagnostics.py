@@ -429,9 +429,9 @@ def check_llm(
         # otherwise escape this advisory check and abort the whole doctor run.
         return CheckResult("llm endpoint", False, False, "invalid url")
     except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-        # The connection never opened: the shape of a stopped server (GPU
-        # sharing, #748). A read/write/pool timeout means something is listening
-        # but stuck, which stays an honest failure below.
+        # A refused or unresolved connection is the shape of a stopped server
+        # (GPU sharing, #748); connection_never_opened keeps TLS failures and
+        # connect timeouts honest. A read/write/pool timeout falls through below.
         return CheckResult(
             "llm endpoint",
             False,
