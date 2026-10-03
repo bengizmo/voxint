@@ -70,14 +70,25 @@ def read_phase_if_enabled(session: Session, settings: Settings) -> GpuPhaseSnaps
     return read_phase(session) if gates_enabled(settings) else None
 
 
+def _phase_opens(phase: str | None, segment: frozenset[Stage]) -> bool:
+    # A missing row closes both lanes; the orchestrator's next write repairs it.
+    if segment == GPU_SEGMENT:
+        return phase == GpuPhase.AUDIO
+    if segment == POST_SEGMENT:
+        return phase == GpuPhase.LLM
+    raise ValueError("Unknown pipeline segment")
+
+
 def gpu_lane_open(snapshot: GpuPhaseSnapshot | None, settings: Settings) -> bool:
-    return not gates_enabled(settings) or (
-        snapshot is not None and snapshot.phase == GpuPhase.AUDIO
+    return not gates_enabled(settings) or _phase_opens(
+        snapshot.phase if snapshot is not None else None, GPU_SEGMENT
     )
 
 
 def post_lane_open(snapshot: GpuPhaseSnapshot | None, settings: Settings) -> bool:
-    return not gates_enabled(settings) or snapshot is None or snapshot.phase == GpuPhase.LLM
+    return not gates_enabled(settings) or _phase_opens(
+        snapshot.phase if snapshot is not None else None, POST_SEGMENT
+    )
 
 
 def lane_open_for_segment(
@@ -85,11 +96,25 @@ def lane_open_for_segment(
 ) -> bool:
     if not gates_enabled(settings):
         return True
-    if segment == GPU_SEGMENT:
-        return gpu_lane_open(snapshot, settings)
-    if segment == POST_SEGMENT:
-        return post_lane_open(snapshot, settings)
-    raise ValueError("Unknown pipeline segment")
+    return _phase_opens(snapshot.phase if snapshot is not None else None, segment)
+
+
+def admit_lane(session: Session, settings: Settings, segment: frozenset[Stage]) -> bool:
+    """Lane check for the transaction that moves work from QUEUED to RUNNING.
+
+    Reads the phase under FOR SHARE. ``set_phase`` takes FOR UPDATE, so a phase
+    change waits for an admitting transaction to commit (the orchestrator then
+    counts the admitted work as in flight), or the admission sees the new phase.
+    The early gate read in a worker task cannot give that guarantee on its own:
+    a task can pass it, stall, and claim after the orchestrator has drained.
+    Call this in the same transaction as the QUEUED to RUNNING write. Issues no
+    query when the feature is off."""
+    if not gates_enabled(settings):
+        return True
+    phase = session.execute(
+        select(GpuPhaseState.phase).where(GpuPhaseState.id == 1).with_for_update(read=True)
+    ).scalar_one_or_none()
+    return _phase_opens(phase, segment)
 
 
 class PhaseFields(TypedDict, total=False):
@@ -161,4 +186,26 @@ def gpu_lane_in_flight(session: Session) -> int:
 
 
 def post_lane_in_flight(session: Session) -> int:
+    """RUNNING pipeline runs in the post lane. LLM jobs are not counted here."""
     return _in_flight(session, POST_SEGMENT)
+
+
+def llm_unavailable_message(session: Session, settings: Settings) -> str | None:
+    """Why inline LLM work must wait, or None when the post lane is open.
+
+    For CLI commands that run LLM jobs synchronously instead of through the
+    gated worker tasks. Issues no query when the feature is off."""
+    if not gates_enabled(settings):
+        return None
+    snapshot = read_phase(session)
+    if post_lane_open(snapshot, settings):
+        return None
+    if snapshot is None:
+        return (
+            "GPU sharing has no phase record yet, so the language model is treated as"
+            " unavailable. Try again after the next phase update."
+        )
+    return (
+        f"GPU sharing has the GPU in the {snapshot.phase.value} phase, so the language"
+        " model is not available. Try again once the phase is back to llm."
+    )

@@ -379,24 +379,24 @@ def test_research_recovery_broker_failure_keeps_queued(
         assert job is not None and job.status == "queued" and job.started_at is None
 
 
-def test_missing_row_allows_post_jobs_and_embeddings_ignore_phase(
+def test_missing_row_closes_post_jobs_and_embeddings_ignore_phase(
     session_factory: sessionmaker[Session],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
     monkeypatch.setattr(tasks, "get_settings", phase_settings)
     with session_factory() as session:
+        jobs = seed_jobs(session)
         session.execute(text("DELETE FROM gpu_phase"))
         session.commit()
-    for task, module, name in [
-        (tasks.generate_run_asset, tasks.asset_jobs, "execute_job"),
-        (tasks.translate_run, tasks.translation_jobs, "execute_job"),
-        (tasks.research_speaker, tasks, "execute_job"),
-    ]:
-        execute = MagicMock()
-        monkeypatch.setattr(module, name, execute)
-        task(str(uuid.uuid4()))
-        execute.assert_called_once()
+    for job, task in zip(
+        jobs, [tasks.generate_run_asset, tasks.translate_run, tasks.research_speaker], strict=True
+    ):
+        task(str(job.id))
+    with session_factory() as session:
+        for job in jobs:
+            after = session.get(type(job), job.id)
+            assert after is not None and after.status == "queued"
     with session_factory() as session:
         set_phase(session, GpuPhase.ERROR, now=NOW)
         session.commit()
@@ -404,3 +404,98 @@ def test_missing_row_allows_post_jobs_and_embeddings_ignore_phase(
     monkeypatch.setattr(tasks.embedding_jobs, "execute_job", execute)
     tasks.generate_segment_embeddings(str(uuid.uuid4()))
     execute.assert_called_once()
+
+
+@pytest.mark.parametrize("command", ["research", "assets"])
+def test_inline_llm_cli_refuses_while_post_lane_closed(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+) -> None:
+    import argparse
+
+    from sqlalchemy import func, select
+
+    from voxint import cli
+
+    with session_factory() as session:
+        set_phase(session, GpuPhase.AUDIO, now=NOW)
+        run = seed_run(session, Stage.FINALIZE, status="completed")
+        speaker = Speaker(display_name="Inline phase test")
+        session.add(speaker)
+        session.commit()
+        run_id, speaker_id = run.id, speaker.id
+    monkeypatch.setattr("voxint.config.get_settings", phase_settings)
+    monkeypatch.setattr("voxint.db.session.build_engine", lambda *a, **kw: None)
+    monkeypatch.setattr("voxint.db.session.build_session_factory", lambda _: session_factory)
+    if command == "research":
+        code = cli._research_speaker(argparse.Namespace(speaker_id=str(speaker_id), note=None))
+        model: type[ResearchJob] | type[RunAssetJob] = ResearchJob
+    else:
+        code = cli._enrich_assets(argparse.Namespace(run_id=run_id, kind=["summary"]))
+        model = RunAssetJob
+    assert code == 2
+    assert "audio phase" in capsys.readouterr().out
+    with session_factory() as session:
+        assert session.execute(select(func.count()).select_from(model)).scalar_one() == 0
+
+
+@pytest.mark.parametrize("segment", [GPU_SEGMENT, POST_SEGMENT])
+def test_admission_rechecks_phase_after_early_gate(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    segment: frozenset[Stage],
+) -> None:
+    """A task passes the early gate, then the phase flips before the entry CAS."""
+    open_phase = GpuPhase.AUDIO if segment == GPU_SEGMENT else GpuPhase.LLM
+    closing_phase = GpuPhase.DRAINING if segment == GPU_SEGMENT else GpuPhase.DRAINING_POST
+    stage = Stage.ACQUIRE if segment == GPU_SEGMENT else Stage.ENHANCE_MATCH
+    with session_factory() as session:
+        run = seed_run(session, stage)
+        set_phase(session, open_phase, now=NOW)
+        session.commit()
+        original = (run.status, run.revision, run.current_stage, run.updated_at)
+
+    def flip_phase(ctx: object) -> dict[Stage, object]:
+        with session_factory() as session:
+            set_phase(session, closing_phase, now=NOW + timedelta(seconds=1))
+            session.commit()
+        return {}
+
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+    monkeypatch.setattr(tasks, "get_settings", phase_settings)
+    monkeypatch.setattr(tasks, "apply_run_preferences", lambda *a, **kw: SimpleNamespace(llm=None))
+    monkeypatch.setattr(tasks, "build_stage_fns", flip_phase)
+    assert tasks._drive_segment(object(), str(run.id), segment) == "gpu-phase-wait"
+    with session_factory() as session:
+        after = session.get(PipelineRun, run.id)
+        assert after is not None
+        assert (after.status, after.revision, after.current_stage, after.updated_at) == original
+
+
+def test_admission_lock_blocks_phase_change_until_commit(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """set_phase cannot slip between an admission read and its commit."""
+    from sqlalchemy.exc import OperationalError
+
+    from voxint.gpu_phase.state import admit_lane
+
+    settings = phase_settings()
+    with session_factory() as session:
+        set_phase(session, GpuPhase.AUDIO, now=NOW)
+        session.commit()
+    with session_factory() as admitting:
+        assert admit_lane(admitting, settings, GPU_SEGMENT) is True
+        with session_factory() as orchestrator:
+            orchestrator.execute(text("SET LOCAL lock_timeout = '200ms'"))
+            with pytest.raises(OperationalError, match="lock timeout"):
+                set_phase(orchestrator, GpuPhase.DRAINING, now=NOW)
+            orchestrator.rollback()
+        admitting.commit()
+    with session_factory() as orchestrator:
+        set_phase(orchestrator, GpuPhase.DRAINING, now=NOW)
+        orchestrator.commit()
+        assert admit_lane(orchestrator, settings, GPU_SEGMENT) is False
+        assert admit_lane(orchestrator, phase_settings(gpu_phase_enabled=False), GPU_SEGMENT)
