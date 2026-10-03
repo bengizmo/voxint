@@ -427,7 +427,9 @@ def _vocabulary_field(data: dict[Any, Any], source_name: str) -> tuple[str, ...]
         cleaned = item.strip()
         if not cleaned:
             raise SidecarError(f"{source_name}: {label} is empty; give it a term or remove it")
-        if "\n" in cleaned or "\r" in cleaned:
+        # splitlines() also catches U+2028/U+2029 (Zl/Zp), which the
+        # non-printing check below does not; a term reaches the ASR prompt.
+        if len(cleaned.splitlines()) > 1:
             raise SidecarError(f"{source_name}: {label} must be a single line")
         if len(cleaned) > MAX_VOCABULARY_TERM_CHARS:
             raise SidecarError(

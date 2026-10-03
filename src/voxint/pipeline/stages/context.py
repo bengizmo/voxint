@@ -73,7 +73,8 @@ def parse_sidecar_vocabulary(pack_snapshot: dict[str, Any] | None) -> tuple[str,
     if not isinstance(raw, list) or any(not isinstance(term, str) for term in raw):
         logger.warning("malformed sidecar_vocabulary; ignoring transcription priority terms")
         return ()
-    return tuple(raw)
+    # Dedup so a hand-edited snapshot can never render a reserved term twice.
+    return tuple(dict.fromkeys(raw))
 
 
 class StageDataError(Exception):

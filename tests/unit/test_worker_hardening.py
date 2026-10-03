@@ -123,6 +123,7 @@ def test_parse_config_resolution_version_accepts_valid_snapshot() -> None:
     (None, (), False), ({}, (), False),
     ({"sidecar_vocabulary": []}, (), False),
     ({"sidecar_vocabulary": ["a", "b"]}, ("a", "b"), False),
+    ({"sidecar_vocabulary": ["b", "a", "b"]}, ("b", "a"), False),
     ({"sidecar_vocabulary": None}, (), True),
     ({"sidecar_vocabulary": "a"}, (), True),
     ({"sidecar_vocabulary": ["a", 1]}, (), True),

@@ -699,6 +699,8 @@ def test_vocabulary_valid(text: str, expected: tuple[str, ...]) -> None:
     ("['   ']", "term 1 is empty"),
     ('["a\\nb"]', "single line"),
     ('["a\\rb"]', "single line"),
+    ('["a\\u2028b"]', "single line"),
+    ('["a\\u2029b"]', "single line"),
     ('["a\\tb"]', "non-printing"),
     ('["a\\u200bb"]', "non-printing"),
     ("[" + ", ".join(["a"] * 65) + "]", "maximum is 64"),
