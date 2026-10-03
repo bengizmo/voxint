@@ -122,9 +122,21 @@ services:
     <<: *voxint-app
     command: celery -A voxint.worker.app beat --loglevel=INFO -s /tmp/celerybeat-schedule
     restart: unless-stopped
+    # Beat builds its schedule from the same settings as the worker: opt-in
+    # entries (GPU phase ticks, media retention, notifications, activity prune)
+    # exist only when .env enables them.
+    env_file:
+      - path: .env
+        required: false
     environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-voxint}:${POSTGRES_PASSWORD:-voxint}@postgres:5432/${POSTGRES_DB:-voxint}
       REDIS_URL: redis://redis:6379/0
+      MEDIA_ROOT: /data/media
+    volumes:
+      - ${MEDIA_ROOT:-./media}:/data/media:ro
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 

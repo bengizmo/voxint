@@ -2506,7 +2506,7 @@ class TestCpuImageProvenance:
 
     def test_metal_overlay_is_rewiring_only(self) -> None:
         # The metal tier's model services run natively on the host — the
-        # overlay's ONLY job is pointing api/worker at them and stamping the
+        # overlay's ONLY job is pointing api/worker/beat at them and stamping the
         # tier. An image, volume, or port sneaking in here would silently
         # turn "bare-metal tier" back into a container deployment (or expose
         # a listener) without any gate noticing.
@@ -2517,9 +2517,8 @@ class TestCpuImageProvenance:
         doc = yaml.safe_load((REPO_ROOT / "compose.metal.yaml").read_text())
         assert set(doc) == {"services"}, f"unexpected top-level keys: {set(doc) - {'services'}}"
         services = doc["services"]
-        # BOTH core callers must be rewired: a missing one would resolve the
-        # base compose.yaml URLs and call services that do not exist.
-        assert set(services) == {"api", "worker"}, f"unexpected services: {set(services)}"
+        # All Settings consumers must share the tier and model-service URLs.
+        assert set(services) == {"api", "worker", "beat"}, f"unexpected services: {set(services)}"
         expected_urls = {
             "ASR_URL": "http://host.docker.internal:8022",
             "DIARIZER_URL": "http://host.docker.internal:8024",
