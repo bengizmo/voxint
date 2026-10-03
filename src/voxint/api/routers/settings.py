@@ -922,7 +922,7 @@ _COMPONENT_ORDER = (
 
 
 def _build_components(
-    checks: list[dict[str, Any]], controller: ServiceController
+    checks: list[dict[str, Any]], controller: ServiceController, *, gpu_sharing: bool = False
 ) -> list[dict[str, Any]]:
     """Map doctor checks to the R6 component list with friendly names.
 
@@ -1012,10 +1012,11 @@ def _build_components(
             "diarization": "diarization",
             "speaker embedding": "speaker_embedding",
         }.get(key)
-        # A service GPU sharing stopped gets no start/stop controls or hint:
-        # starting it by hand would load models onto a GPU the language model
-        # holds. The GPU sharing orchestrator starts it for the next audio window.
-        sharing_owned = bool(check and check.get("expected_stop"))
+        # With GPU sharing on, the orchestrator owns the model services in every
+        # phase, healthy or not: no start/stop/restart controls and no hint.
+        # Starting one by hand could load models onto a GPU the language model
+        # holds; stopping one could break an audio window (#748).
+        sharing_owned = gpu_sharing and service_key is not None
         container_state = (
             controller.inspect(service_key)
             if (controller.controllable and service_key and not sharing_owned)
@@ -2514,7 +2515,9 @@ def settings_status_page(request: Request, operator: OperatorDep, session: Sessi
             },
         )
     checks = _doctor_checks(request, session)
-    components = _build_components(checks, request.app.state.service_controller)
+    components = _build_components(
+        checks, request.app.state.service_controller, gpu_sharing=settings.gpu_phase_enabled
+    )
     csrf_token = mint_csrf_token(request.app.state.csrf_secret, CSRF_SERVICE_CONTROL)
     overall_ok = all(c["dot"] != "warn" for c in components)
     context = _sub_page_context(
@@ -2528,6 +2531,12 @@ def settings_status_page(request: Request, operator: OperatorDep, session: Sessi
         warnings=warnings,
     )
     return templates.TemplateResponse(request, "settings/status.html", context)
+
+
+GPU_SHARING_OWNS_SERVICES = (
+    "GPU sharing manages this service. Use voxint gpu-phase audio-now or"
+    " voxint gpu-phase release to change it."
+)
 
 
 def _service_row_html(
@@ -2558,6 +2567,18 @@ async def _service_control_action(
     if service_key not in SERVICE_KEYS:
         raise HTTPException(status_code=404, detail="Unknown service")
     _require_csrf(request, CSRF_SERVICE_CONTROL, csrf_token)
+    settings: Settings = request.app.state.settings
+    if settings.gpu_phase_enabled:
+        # A stale form from before GPU sharing was turned on (#748).
+        logger.info(
+            "service_control action=%s actor=%s service_key=%s outcome=refused_gpu_sharing",
+            action,
+            operator,
+            service_key,
+        )
+        return HTMLResponse(
+            _service_row_html(service_key, GPU_SHARING_OWNS_SERVICES, "off"), status_code=409
+        )
     controller: ServiceController = request.app.state.service_controller
     method = {"start": controller.start, "stop": controller.stop, "restart": controller.restart}[
         action
@@ -2634,6 +2655,14 @@ def settings_service_row(service_key: str, request: Request, admin: AdminDep) ->
     # This synchronous route runs in FastAPI's thread pool, including Docker inspection.
     with httpx.Client(timeout=httpx.Timeout(settings.health_probe_timeout_seconds)) as client:
         health = _probe_one(client, service.label, getattr(settings, service.settings_url_attr))
+    if settings.gpu_phase_enabled:
+        # GPU sharing owns the service (#748): its state only, no controls, no
+        # hint, and no further polling (no action of ours is in progress).
+        response = HTMLResponse(
+            _service_row_html(service_key, health.detail, "ok" if health.up else "off")
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
     state = controller.inspect(service_key) if controller.controllable else ServiceState.UNKNOWN
     dot = "ok" if health.up else "off" if state == ServiceState.STOPPED else "warn"
     action = ""

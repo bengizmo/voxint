@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
@@ -20,6 +20,7 @@ from tests.integration.test_gpu_phase import NOW, seed_run
 from tests.integration.test_jobs_pages import _prime_resource_cache
 from tests.unit.test_gpu_phase import phase_settings
 from voxint.api.app import create_app
+from voxint.api.csrf import CSRF_SERVICE_CONTROL, mint_csrf_token
 from voxint.api.resource_status import _reset_cache_for_tests
 from voxint.cli import main
 from voxint.config import Settings
@@ -322,14 +323,14 @@ def test_status_page_error_phase_needs_attention(
 def test_runs_waiting_banner_strip_and_summary(
     session_factory: sessionmaker[Session], clean_resource_cache: None
 ) -> None:
-    settings = _runs_settings(llm_enabled=True)
+    # Closed ports: every service is not running, the shape GPU sharing leaves.
+    settings = _settings(llm_enabled=True)
     client = _client(session_factory, settings, llm_enabled=True)
     _set(session_factory, GpuPhase.LLM)
     with session_factory() as session:
         seed_run(session, None)
         seed_run(session, Stage.TRANSCRIBE)
         session.commit()
-    _prime_resource_cache(settings, transcription_up=False)
 
     body = client.get("/runs").text
     assert "<strong>Waiting for the GPU.</strong>" in body
@@ -398,3 +399,183 @@ def test_runs_audio_phase_and_off_show_no_gpu_copy(
         # A down service outside the expected window is still reported as down.
         assert "Transcription is paused." in body
         assert "paused: transcriber is down" in body
+
+
+def test_runs_answered_failure_still_reported_beside_the_gpu_banner(
+    session_factory: sessionmaker[Session], clean_resource_cache: None
+) -> None:
+    # The primed transcriber answers 503: something is listening and failing,
+    # which GPU sharing never explains away.
+    settings = _runs_settings(llm_enabled=True)
+    client = _client(session_factory, settings, llm_enabled=True)
+    _set(session_factory, GpuPhase.LLM)
+    with session_factory() as session:
+        seed_run(session, None)
+        session.commit()
+    _prime_resource_cache(settings, transcription_up=False)
+    body = client.get("/runs").text
+    assert "<strong>Waiting for the GPU.</strong>" in body
+    assert "Transcription is paused." in body
+    assert "paused: transcriber is down" in body
+
+
+def test_runs_stale_row_alerts_and_does_not_relabel(
+    session_factory: sessionmaker[Session], clean_resource_cache: None
+) -> None:
+    client = _client(session_factory, _settings())
+    with session_factory() as session:
+        set_phase(session, GpuPhase.LLM, now=datetime.now(UTC) - timedelta(minutes=10))
+        seed_run(session, None)
+        session.commit()
+    body = client.get("/runs").text
+    assert "<strong>GPU sharing is not running.</strong>" in body
+    assert "voxint gpu-phase release" not in body
+    assert "Transcription is paused." in body  # the dead service is not excused
+
+
+# ---- honest signals around requests and missing or stale rows ----------------------
+
+
+def _stale(session_factory: sessionmaker[Session], phase: GpuPhase = GpuPhase.LLM) -> None:
+    with session_factory() as session:
+        set_phase(session, phase, now=datetime.now(UTC) - timedelta(minutes=10))
+        session.commit()
+
+
+def test_request_leaves_a_stale_warning_intact(
+    cli_env: list[Settings],
+    engine: Engine,
+    session_factory: sessionmaker[Session],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _stale(session_factory)
+    assert main(["gpu-phase", "audio-now"]) == 0
+    out = capsys.readouterr().out
+    assert "note: the GPU sharing task has not run since " in out
+    sharing = next(r for r in _diagnose(engine, _settings()) if r.name == GPU_SHARING_CHECK)
+    assert sharing.detail.startswith("the GPU sharing task has not run since ")
+
+
+def test_audio_now_without_a_row_records_the_request_honestly(
+    cli_env: list[Settings],
+    session_factory: sessionmaker[Session],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with session_factory() as session:
+        session.execute(text("DELETE FROM gpu_phase"))
+        session.commit()
+    assert main(["gpu-phase", "audio-now"]) == 0
+    assert capsys.readouterr().out == (
+        "audio requested; no GPU phase was recorded yet, so the request waits for the "
+        "GPU sharing task's first run (watch with 'voxint gpu-phase status')\n"
+    )
+    with session_factory() as session:
+        snapshot = read_phase(session)
+        assert snapshot is not None and snapshot.operator_request == OperatorRequest.AUDIO
+
+
+@pytest.mark.parametrize("row", ["missing", "stale"])
+def test_doctor_missing_or_stale_row_keeps_dead_services_failing(
+    engine: Engine, session_factory: sessionmaker[Session], row: str
+) -> None:
+    # Deliberate (#748 review): only a present, fresh phase can excuse a stopped
+    # service. Without one the transcriber's hard FAIL stands beside the warning.
+    if row == "missing":
+        with session_factory() as session:
+            session.execute(text("DELETE FROM gpu_phase"))
+            session.commit()
+    else:
+        _stale(session_factory)
+    results = _diagnose(engine, _settings())
+    assert not any(r.expected_stop for r in results)
+    assert not next(r for r in results if r.name == GPU_SHARING_CHECK).ok
+    assert exit_code(results) == 1
+
+
+def test_doctor_answered_401_in_llm_phase_is_a_hard_failure(
+    engine: Engine, session_factory: sessionmaker[Session]
+) -> None:
+    _set(session_factory, GpuPhase.LLM)
+    settings = _runs_settings()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.port == 8022:
+            return httpx.Response(401)
+        raise httpx.ConnectError("refused", request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        results = run_diagnostics(
+            settings, engine, http_client=client, redis_client=_Ping(), include_hf_token=False
+        )
+    by_name = {r.name: r for r in results}
+    assert by_name["transcription"] == CheckResult("transcription", False, True, "HTTP 401")
+    assert by_name["diarization"].expected_stop
+    assert exit_code(results) == 1
+
+
+# ---- Status page ownership -----------------------------------------------------
+
+
+def test_polled_service_row_has_no_controls_under_gpu_sharing(
+    session_factory: sessionmaker[Session],
+) -> None:
+    _set(session_factory, GpuPhase.AUDIO)
+    on = _client(session_factory, _settings()).get("/settings/status/services/transcription/row")
+    assert on.status_code == 200
+    assert "<code>" not in on.text and "<form" not in on.text and "hx-get" not in on.text
+    off = _client(session_factory, _settings(gpu_phase_enabled=False)).get(
+        "/settings/status/services/transcription/row"
+    )
+    assert off.status_code == 200 and "<code>" in off.text  # the terminal hint, as before
+
+
+@pytest.mark.parametrize("action", ["start", "stop", "restart"])
+def test_stale_service_form_is_refused_under_gpu_sharing(
+    session_factory: sessionmaker[Session], action: str
+) -> None:
+    settings = _settings()
+    client = _client(session_factory, settings)
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_SERVICE_CONTROL)  # type: ignore[attr-defined]
+    response = client.post(
+        f"/settings/status/services/transcription/{action}", data={"csrf_token": token}
+    )
+    assert response.status_code == 409
+    assert "GPU sharing manages this service." in response.text
+    assert "voxint gpu-phase audio-now" in response.text
+
+
+# ---- feature off: no gpu_phase SQL anywhere ----------------------------------------
+
+
+def test_feature_off_issues_no_gpu_phase_sql(
+    engine: Engine, session_factory: sessionmaker[Session], clean_resource_cache: None
+) -> None:
+    _set(session_factory, GpuPhase.ERROR)
+    with session_factory() as session:
+        run = seed_run(session, Stage.TRANSCRIBE, status="running")
+        session.commit()
+    settings = _settings(gpu_phase_enabled=False)
+    client = _client(session_factory, settings)
+    statements: list[str] = []
+
+    def record(
+        conn: object,
+        cursor: object,
+        statement: str,
+        parameters: object,
+        context: object,
+        executemany: bool,
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        assert client.get("/runs").status_code == 200
+        assert client.get("/runs/progress-strip").status_code == 200
+        assert client.get(f"/runs/live-rows?ids={run.id}").status_code == 200
+        assert client.get("/settings/status").status_code == 200
+        _diagnose(engine, settings)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    assert statements, "the listener saw no SQL at all"
+    assert not [sql for sql in statements if "gpu_phase" in sql]

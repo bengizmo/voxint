@@ -18,6 +18,7 @@ import json
 import logging
 import uuid
 from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, BinaryIO
@@ -116,6 +117,7 @@ from voxint.app_settings import (
 )
 from voxint.config import Settings
 from voxint.db.models import (
+    GPU_SEGMENT,
     PipelineRun,
     RunAssetJob,
     RunAssetJobStatus,
@@ -157,8 +159,9 @@ from voxint.enrichment.translations import (
 from voxint.export import MEDIA_TYPES, format_clock, transcript_payload
 from voxint.export.reading import layout_turns
 from voxint.gpu_phase.dispatch import open_lanes, redispatch_queued_runs
-from voxint.gpu_phase.visibility import GpuSharingView, stage_pause_reason
-from voxint.gpu_phase.visibility import read_view as read_gpu_sharing_view
+from voxint.gpu_phase.state import gpu_lane_demand
+from voxint.gpu_phase.visibility import GpuSharingState, GpuSharingView, build_view
+from voxint.gpu_phase.visibility import read_state as read_gpu_sharing_state
 from voxint.ingest import (
     MissingStageError,
     RestartPrerequisiteError,
@@ -651,13 +654,36 @@ def _stage_progress_for(
     return stage_progress
 
 
-def _gpu_sharing(
-    session: Session, settings: Settings
-) -> tuple[GpuSharingView | None, str | None]:
-    """The GPU-sharing view (None when off) and the strip's stage reason while
-    GPU sharing keeps the model services stopped (#748)."""
-    view = read_gpu_sharing_view(session, settings)
-    return view, stage_pause_reason(view.phase) if view is not None else None
+def _degraded_with_gpu_sharing(
+    session: Session, settings: Settings, snapshot: ResourceSnapshot
+) -> tuple[GpuSharingState | None, dict[str, str], frozenset[str]]:
+    """GPU-sharing state (None when off, with no phase query), the strip's
+    degraded stages, and the services GPU sharing stopped on purpose (#748).
+
+    A service counts as stopped on purpose only when the stored phase is present
+    and fresh and the service did not answer at all; anything else keeps its
+    "is down" reason. One primary-key read; no lane counts.
+    """
+    state = read_gpu_sharing_state(session, settings)
+    reason = state.stage_reason if state is not None else None
+    expected = (
+        frozenset(s.name for s in snapshot.services if not s.up and s.not_running)
+        if reason is not None
+        else frozenset()
+    )
+    degraded = degraded_stages(
+        ((service.name, service.up) for service in snapshot.services),
+        llm_enabled=settings.llm_enabled,
+        expected_stop_reason=reason,
+        expected_stop_services=expected,
+    )
+    return state, degraded, expected
+
+
+def _gpu_waiting(dashboard: PipelineDashboardState) -> int:
+    """Queued GPU-lane runs, from counts the dashboard already holds."""
+    gpu_stages = {stage.value for stage in GPU_SEGMENT}
+    return sum(s.queued for s in dashboard.stages if s.stage in gpu_stages)
 
 
 @core_router.get("/runs")
@@ -732,28 +758,26 @@ def runs(
     grouped_items = group_failed_runs(page.items) if active_view is LifecycleView.FAILED else None
     _queue_paused = is_queue_paused(session)
     _now = datetime.now(UTC)
-    gpu_sharing, stop_reason = _gpu_sharing(session, settings)
-    gpu_note = gpu_sharing.note if gpu_sharing is not None else None
     # Degraded stage cells read the cached resource snapshot (short-TTL,
     # single-flight); never a fresh probe on the page or the strip poll.
     snapshot = collect_resource_status_or_empty(settings)
-    degraded = degraded_stages(
-        ((service.name, service.up) for service in snapshot.services),
-        llm_enabled=settings.llm_enabled,
-        expected_stop_reason=stop_reason,
-    )
+    gpu_state, degraded, expected_stops = _degraded_with_gpu_sharing(session, settings, snapshot)
     dashboard = (
         pipeline_dashboard_state(
-            session,
-            _now,
-            settings.compute_tier,
-            _queue_paused,
-            degraded=degraded,
-            gpu_sharing_note=gpu_note,
+            session, _now, settings.compute_tier, _queue_paused, degraded=degraded
         )
         if not show_archived
         else None
     )
+    gpu_sharing: GpuSharingView | None = None
+    if gpu_state is not None:
+        gpu_sharing = build_view(
+            gpu_state,
+            _gpu_waiting(dashboard) if dashboard is not None else gpu_lane_demand(session),
+        )
+        if dashboard is not None:
+            dashboard = replace(dashboard, gpu_sharing_note=gpu_sharing.note)
+    gpu_note = gpu_sharing.note if gpu_sharing is not None else None
     stage_progress = _stage_progress_for(page.items, dashboard, _now)
     live_ids = (
         _run_ids_with_status(page.items, _LIVE_STATUSES)[:RUNS_LIVE_ROWS_MAX]
@@ -822,7 +846,7 @@ def runs(
             "degraded": _detect_degraded(
                 ((service.name, service.up) for service in snapshot.services),
                 llm_enabled=settings.llm_enabled,
-                model_services_expected_down=stop_reason is not None,
+                expected_stop_services=expected_stops,
             ),
             "gpu_sharing": gpu_sharing,
             "aux_jobs": recent_aux_jobs(session),
@@ -870,21 +894,16 @@ def runs_progress_strip(
     settings: Settings = request.app.state.settings
     now = datetime.now(UTC)
     _queue_paused = is_queue_paused(session)
-    gpu_sharing, stop_reason = _gpu_sharing(session, settings)
     snapshot = collect_resource_status_or_empty(settings)
-    degraded = degraded_stages(
-        ((service.name, service.up) for service in snapshot.services),
-        llm_enabled=settings.llm_enabled,
-        expected_stop_reason=stop_reason,
-    )
+    gpu_state, degraded, _ = _degraded_with_gpu_sharing(session, settings, snapshot)
     dashboard = pipeline_dashboard_state(
-        session,
-        now,
-        settings.compute_tier,
-        _queue_paused,
-        degraded=degraded,
-        gpu_sharing_note=gpu_sharing.note if gpu_sharing is not None else None,
+        session, now, settings.compute_tier, _queue_paused, degraded=degraded
     )
+    if gpu_state is not None:
+        # The waiting count comes from the dashboard's own stage counts: the
+        # 15 s poll adds no lane-demand query.
+        note = build_view(gpu_state, _gpu_waiting(dashboard)).note
+        dashboard = replace(dashboard, gpu_sharing_note=note)
     response = templates.TemplateResponse(
         request,
         "legacy_runs/_progress_strip.html",
@@ -942,13 +961,8 @@ def runs_live_rows(
     # The dashboard read model only feeds the stage chip, so a queued-only or
     # all-terminal tick skips it (the strip polls it on its own schedule).
     if any(item.status == RunStatus.RUNNING.value for item in items):
-        _, stop_reason = _gpu_sharing(session, settings)
         snapshot = collect_resource_status_or_empty(settings)
-        degraded = degraded_stages(
-            ((service.name, service.up) for service in snapshot.services),
-            llm_enabled=settings.llm_enabled,
-            expected_stop_reason=stop_reason,
-        )
+        _, degraded, _ = _degraded_with_gpu_sharing(session, settings, snapshot)
         dashboard = pipeline_dashboard_state(
             session, now, settings.compute_tier, is_queue_paused(session), degraded=degraded
         )

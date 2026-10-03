@@ -53,9 +53,12 @@ from voxint.gpu_phase.visibility import (
     LLM_EXPECTED_DOWN_DETAIL,
     NO_ROW_SUMMARY,
     PHASE_SUMMARY,
+    display_error,
+    is_fresh,
     llm_expected_down,
     model_service_stop_detail,
-    snapshot_phase,
+    stale_after_seconds,
+    utc_minute,
 )
 
 HF_WHOAMI_URL = "https://huggingface.co/api/whoami-v2"
@@ -77,6 +80,10 @@ class CheckResult:
     # Down on purpose (GPU sharing stopped it). Always paired with ok=False and
     # hard=False, so the exit code ignores it; displays render it as "off".
     expected_stop: bool = False
+    # No answer at all (connection failed or timed out), which is how a stopped
+    # service looks. Only such a result can become an expected stop; an answered
+    # failure (HTTP 401/5xx, a malformed body) or a bad URL is always reported.
+    not_running: bool = False
 
 
 def _safe(exc: Exception) -> str:
@@ -124,7 +131,9 @@ def _model_results(health: list[ServiceHealth]) -> list[CheckResult]:
     results = []
     for item in health:
         detail = f"ready ({item.device})" if item.up and item.device else item.detail
-        results.append(CheckResult(item.name, item.up, True, detail))
+        results.append(
+            CheckResult(item.name, item.up, True, detail, not_running=item.not_running)
+        )
     return results
 
 
@@ -201,14 +210,8 @@ _REQUEST_TEXT = {
 }
 
 
-def _utc(value: datetime) -> str:
-    return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
-
-
 def gpu_phase_stale_after_seconds(tick_seconds: int) -> int:
-    """The phase task writes the row every tick; this long without a write means
-    it is not running."""
-    return max(3 * tick_seconds, 120)
+    return stale_after_seconds(tick_seconds)
 
 
 def check_gpu_phase(
@@ -226,7 +229,8 @@ def check_gpu_phase(
     reported in the detail but stays ok, since the next tick retries it. A row
     the phase task has not written for ``max(3 * tick, 120)`` seconds means the
     task is not running, which is reported first: nothing else can change then.
-    ``last_error`` is the orchestrator's bounded message and is shown as is.
+    ``last_error`` is shown through :func:`display_error` (control characters
+    stripped, length bounded).
     """
     if not enabled:
         return None
@@ -243,17 +247,17 @@ def check_gpu_phase(
             False,
             f"{NO_ROW_SUMMARY}; check that the gpu-phase worker is running",
         )
-    if (now - snapshot.updated_at).total_seconds() > gpu_phase_stale_after_seconds(tick_seconds):
+    if not is_fresh(snapshot, now=now, tick_seconds=tick_seconds):
         return CheckResult(
             GPU_SHARING_CHECK,
             False,
             False,
-            f"the GPU sharing task has not run since {_utc(snapshot.updated_at)}; check "
+            f"the GPU sharing task has not run since {utc_minute(snapshot.updated_at)}; check "
             "that the gpu-phase service from compose.gpu-phase.yaml is running",
         )
     phase = snapshot.phase
     if phase == GpuPhase.ERROR:
-        reason = snapshot.last_error
+        reason = display_error(snapshot.last_error) if snapshot.last_error else None
         detail = PHASE_SUMMARY[phase] + (f" ({reason})" if reason else "")
         return CheckResult(
             GPU_SHARING_CHECK,
@@ -261,32 +265,40 @@ def check_gpu_phase(
             False,
             f"{detail}; language-model work is paused; run voxint gpu-phase release",
         )
-    parts = [f"{PHASE_SUMMARY[phase]} since {_utc(snapshot.phase_since)}"]
+    parts = [f"{PHASE_SUMMARY[phase]} since {utc_minute(snapshot.phase_since)}"]
     if snapshot.operator_request is not None:
         parts.append(_REQUEST_TEXT[snapshot.operator_request])
     if snapshot.failures and snapshot.retry_after is not None:
-        failed = f"last attempt failed, next try after {_utc(snapshot.retry_after)}"
+        failed = f"last attempt failed, next try after {utc_minute(snapshot.retry_after)}"
         if snapshot.last_error:
-            failed += f" ({snapshot.last_error})"
+            failed += f" ({display_error(snapshot.last_error)})"
         parts.append(failed)
     return CheckResult(GPU_SHARING_CHECK, True, False, "; ".join(parts))
 
 
-def apply_gpu_phase(results: list[CheckResult], phase: GpuPhase | None) -> list[CheckResult]:
+def apply_gpu_phase(results: list[CheckResult], phase: GpuPhase) -> list[CheckResult]:
     """Re-mark the dependencies GPU sharing stopped on purpose as expected stops.
 
-    Only a result that is down changes: a service that answers is reported as it
-    is, whatever the phase.
+    The caller passes a phase only from a present, fresh row. Only a result that
+    did not answer at all (``not_running``) changes: a service that answers, or
+    answers with an error, is reported as it is, whatever the phase.
     """
     service_detail = model_service_stop_detail(phase)
     llm_down = llm_expected_down(phase)
     adjusted: list[CheckResult] = []
     for result in results:
-        if not result.ok and result.name in _MODEL_SERVICE_CHECKS and service_detail:
-            result = CheckResult(result.name, False, False, service_detail, expected_stop=True)
-        elif not result.ok and result.name == _SHARED_LLM_CHECK and llm_down:
+        if result.not_running and result.name in _MODEL_SERVICE_CHECKS and service_detail:
             result = CheckResult(
-                result.name, False, False, LLM_EXPECTED_DOWN_DETAIL, expected_stop=True
+                result.name, False, False, service_detail, expected_stop=True, not_running=True
+            )
+        elif result.not_running and result.name == _SHARED_LLM_CHECK and llm_down:
+            result = CheckResult(
+                result.name,
+                False,
+                False,
+                LLM_EXPECTED_DOWN_DETAIL,
+                expected_stop=True,
+                not_running=True,
             )
         adjusted.append(result)
     return adjusted
@@ -404,6 +416,11 @@ def check_llm(
         # InvalidURL is NOT an httpx.HTTPError; a malformed llm_base_url would
         # otherwise escape this advisory check and abort the whole doctor run.
         return CheckResult("llm endpoint", False, False, "invalid url")
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        # Nothing answered: the shape of a stopped server (GPU sharing, #748).
+        return CheckResult(
+            "llm endpoint", False, False, f"unreachable ({_safe(exc)})", not_running=True
+        )
     except Exception as exc:
         # Best-effort boundary: httpx.HTTPError (transport) but ALSO anything else the
         # request construction/send can raise — e.g. a non-ASCII env ``api_key`` httpx
@@ -533,16 +550,22 @@ def run_diagnostics(
     if js_rt is not None:
         results.append(js_rt)
     snapshot, phase_error = _read_gpu_phase(settings, engine)
+    now = datetime.now(UTC)
     gpu_check = check_gpu_phase(
         enabled=settings.gpu_phase_enabled,
         snapshot=snapshot,
-        now=datetime.now(UTC),
+        now=now,
         tick_seconds=settings.gpu_phase_tick_seconds,
         read_error=phase_error,
     )
     if gpu_check is not None:
-        if phase_error is None:
-            results = apply_gpu_phase(results, snapshot_phase(snapshot))
+        # Relabel only on a present, fresh row. A missing or stale row means the
+        # phase task is not running, so nothing is stopped on purpose and a dead
+        # service keeps its honest failure next to the GPU sharing warning.
+        if snapshot is not None and is_fresh(
+            snapshot, now=now, tick_seconds=settings.gpu_phase_tick_seconds
+        ):
+            results = apply_gpu_phase(results, snapshot.phase)
         results.append(gpu_check)
     return results
 

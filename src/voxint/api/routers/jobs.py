@@ -52,13 +52,13 @@ def _detect_degraded(
     services: Iterable[tuple[str, bool]],
     *,
     llm_enabled: bool | None,
-    model_services_expected_down: bool = False,
+    expected_stop_services: frozenset[str] = frozenset(),
 ) -> list[DegradedService]:
-    """``model_services_expected_down``: GPU sharing stopped them on purpose
-    (#748), and the GPU-sharing banner explains the wait instead."""
+    """``expected_stop_services``: services GPU sharing stopped on purpose
+    (#748); the GPU-sharing banner explains the wait instead."""
     degraded = []
     for name, up in services:
-        if not up and name in _SERVICE_CONSEQUENCES and not model_services_expected_down:
+        if not up and name in _SERVICE_CONSEQUENCES and name not in expected_stop_services:
             headline, detail = _SERVICE_CONSEQUENCES[name]
             degraded.append(
                 DegradedService(

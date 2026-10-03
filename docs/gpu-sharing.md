@@ -203,10 +203,19 @@ recordings take and how long the other service takes to stop and start.
 
 | Where | What it shows |
 |---|---|
-| Runs page | A banner while recordings wait for the GPU ("Waiting for the GPU. 3 recordings are queued; the GPU is serving the language model until the next audio window."), short notes while the GPU switches, and an alert in `error`. The progress strip and the page summary carry the same note. |
-| Settings > Status | A **GPU sharing** row with the phase in plain words. Model services stopped by GPU sharing show as off with the reason, not as failures, and have no start or stop buttons. |
-| `voxint doctor` | A `gpu sharing` line. Services stopped on purpose print as `[off ]` and never change the exit code. While Voxint holds the GPU, an unreachable `llm endpoint` also prints as `[off ]`. |
+| Runs page | A banner while recordings wait for the GPU ("Waiting for the GPU. 3 recordings are queued; the GPU is serving the language model until the next audio window."), short notes while the GPU switches, and an alert in `error` or when the phase task has stopped running. The progress strip and the page summary carry the same note. |
+| Settings > Status | A **GPU sharing** row with the phase in plain words. GPU sharing manages the three model services in every phase, so they have no start, stop or restart buttons, and an old form for one is refused. A model service GPU sharing stopped shows as off with the reason. |
+| `voxint doctor` | A `gpu sharing` line. A model service GPU sharing stopped prints as `[off ]` and does not change the exit code. While Voxint holds the GPU, an `llm endpoint` that does not answer also prints as `[off ]`. |
 | `voxint gpu-phase status` | Phase, since when, lease expiry, last error, failure count, retry time, pending operator request, and how many runs are waiting for or running on each lane. |
+
+A stopped service is only called expected when nothing answered at all (the
+connection was refused or timed out) and the phase task is running: the
+stored phase is present and was written within the last
+`max(3 * GPU_PHASE_TICK_SECONDS, 120)` seconds. A service that answers with an
+error (HTTP 401, a 5xx, a malformed reply), or a bad URL, is always reported
+as a failure. So is a stopped service while the phase task is not running or no
+phase is recorded, because then nothing stopped it on purpose. The last error
+is shown with control characters removed and cut to 300 characters.
 
 Commands (run them where the CLI can reach the database, for example
 `docker compose exec api ...`):
@@ -218,7 +227,9 @@ voxint gpu-phase release     # hand the GPU back now, or retry after an error
 ```
 
 `audio-now` and `release` record a request; the phase task acts on it over the
-next few ticks. With GPU sharing off, they exit with an error and change
+next few ticks. Recording a request does not count as a run of the phase task,
+so it never hides the "has not run since" warning, and with no phase recorded
+yet the request waits for the task's first run. With GPU sharing off, they exit with an error and change
 nothing; `status` says GPU sharing is off.
 
 How a request plays out depends on the phase:

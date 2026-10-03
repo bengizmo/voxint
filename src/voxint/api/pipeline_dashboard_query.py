@@ -250,6 +250,7 @@ def degraded_stages(
     *,
     llm_enabled: bool | None,
     expected_stop_reason: str | None = None,
+    expected_stop_services: frozenset[str] = frozenset(),
 ) -> dict[str, str]:
     """Map cached service reachability to ``{stage: reason}`` for the strip.
 
@@ -259,15 +260,16 @@ def degraded_stages(
     stage. Two services pausing the same stage join their reasons with "and".
 
     ``expected_stop_reason`` is set while GPU sharing has stopped the model
-    services on purpose (#748): a down service's stage then shows that reason
-    once, instead of claiming the service is down.
+    services on purpose (#748): a service named in ``expected_stop_services``
+    then gives its stage that reason once instead of claiming it is down. Any
+    other down service keeps its own reason.
     """
     reasons: dict[str, list[str]] = {}
     down_services = {name for name, up in services if not up}
     for name, (stage, reason) in _SERVICE_STAGE.items():
         if name in down_services:
             stage_reasons = reasons.setdefault(stage.value, [])
-            if expected_stop_reason is None:
+            if expected_stop_reason is None or name not in expected_stop_services:
                 stage_reasons.append(reason)
             elif expected_stop_reason not in stage_reasons:
                 stage_reasons.append(expected_stop_reason)

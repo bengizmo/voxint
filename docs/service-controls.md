@@ -119,11 +119,12 @@ not loaded, start them with `scripts/metal/voxint-metal.sh up`.
 
 With [GPU sharing](gpu-sharing.md) on (`GPU_PHASE_ENABLED=true`), a dedicated
 `gpu-phase` worker starts and stops the three model services as the GPU passes
-between Voxint and another service such as a local LLM. While GPU sharing has a
-service stopped, the Status page shows it as off with the reason and offers no
-**Start** button: starting it by hand would load models onto a GPU the other
-service holds. Use `voxint gpu-phase audio-now` to bring the services up for
-audio work instead.
+between Voxint and another service such as a local LLM. GPU sharing owns the
+services in every phase, so the Status page shows no **Start**, **Stop** or
+**Restart** buttons for them, even when they are running, and refuses a
+control request with HTTP 409. Starting one by hand could load models onto a
+GPU the other service holds, and stopping one could cut an audio window short.
+Use `voxint gpu-phase audio-now` or `voxint gpu-phase release` instead.
 
 ## Limitations
 

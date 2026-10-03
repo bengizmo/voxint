@@ -2,7 +2,7 @@
 
 import enum
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TypedDict, Unpack
 
 from sqlalchemy import func, or_, select
@@ -155,7 +155,8 @@ def set_phase(
 def set_request(session: Session, request: OperatorRequest | None) -> None:
     row = _locked_row(session)
     row.operator_request = request.value if request is not None else None
-    row.updated_at = datetime.now(UTC)
+    # updated_at is left alone: it records the phase task's last write, which
+    # is how doctor tells a stopped task from a running one.
     session.flush()
 
 

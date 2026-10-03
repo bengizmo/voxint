@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import create_engine
 
 from tests.unit.test_gpu_phase import phase_settings
+from voxint.api.health_probe import _probe_one
 from voxint.api.pipeline_dashboard_query import degraded_stages
 from voxint.api.routers.jobs import _detect_degraded, _pipeline_summary
 from voxint.api.routers.settings import _build_components
@@ -23,6 +24,7 @@ from voxint.diagnostics import (
     CheckResult,
     apply_gpu_phase,
     check_gpu_phase,
+    check_llm,
     check_state,
     exit_code,
     gpu_phase_stale_after_seconds,
@@ -33,7 +35,10 @@ from voxint.gpu_phase.visibility import (
     LLM_EXPECTED_DOWN_DETAIL,
     NO_ROW_SUMMARY,
     PHASE_SUMMARY,
+    GpuSharingState,
+    GpuSharingView,
     build_view,
+    display_error,
     llm_expected_down,
     model_service_stop_detail,
     phase_summary,
@@ -69,8 +74,24 @@ def gpu_check(**kwargs: Any) -> CheckResult | None:
     return check_gpu_phase(**kwargs)
 
 
+def make_view(phase: GpuPhase | None, waiting: int) -> GpuSharingView:
+    return build_view(GpuSharingState(phase=phase, stale_since=None), waiting)
+
+
 def down_models() -> list[CheckResult]:
-    return [CheckResult(name, False, True, "unreachable (ConnectError)") for name in MODEL_CHECKS]
+    """Model services that did not answer at all: the shape of a stopped service."""
+    return [
+        CheckResult(name, False, True, "unreachable", not_running=True) for name in MODEL_CHECKS
+    ]
+
+
+def answered_failures() -> list[CheckResult]:
+    """Model services that answered with an error: never an expected stop."""
+    return [
+        CheckResult("transcription", False, True, "HTTP 401"),
+        CheckResult("diarization", False, True, "degraded (model not loaded)"),
+        CheckResult("speaker embedding", False, True, "invalid url"),
+    ]
 
 
 # ---- phase copy ------------------------------------------------------------
@@ -82,22 +103,21 @@ def test_every_phase_has_a_summary() -> None:
     assert phase_summary(GpuPhase.AUDIO) == "the GPU is doing audio work"
 
 
-def test_missing_row_closes_both_lanes_in_every_helper() -> None:
+def test_missing_row_banner_and_no_relabel() -> None:
     # A missing row closes both lanes while the feature is on (the orchestrator
-    # repairs it): services and the language model are both treated as waiting.
+    # repairs it). Nothing is stopped on purpose then, so no stage reason.
     assert snapshot_phase(None) is None
     assert phase_summary(None) == NO_ROW_SUMMARY
-    assert model_service_stop_detail(None) == "stopped; GPU sharing has not recorded a phase yet"
-    assert stage_pause_reason(None) == "GPU sharing has not started"
-    assert llm_expected_down(None) is False
-    view = build_view(None, 2)
-    assert view.headline == "Waiting for GPU sharing to start."
-    assert view.detail == (
+    state = GpuSharingState(phase=None, stale_since=None)
+    assert state.trusted_phase is None and state.stage_reason is None
+    missing = make_view(None, 2)
+    assert missing.headline == "Waiting for GPU sharing to start."
+    assert missing.detail == (
         "2 recordings are queued. No GPU phase is recorded yet, so audio and "
         "language-model work wait until the GPU sharing task records one."
     )
-    assert view.note == "waiting for GPU sharing to start" and not view.is_error
-    assert build_view(None, 0).detail == (
+    assert missing.note == "waiting for GPU sharing to start" and not missing.is_error
+    assert make_view(None, 0).detail == (
         "No GPU phase is recorded yet, so audio and language-model work wait "
         "until the GPU sharing task records one."
     )
@@ -117,19 +137,19 @@ def test_llm_expected_down_only_while_voxint_holds_or_moves_the_gpu(phase: GpuPh
 
 
 def test_waiting_banner_copy_and_plural() -> None:
-    view = build_view(GpuPhase.LLM, 3)
+    view = make_view(GpuPhase.LLM, 3)
     assert view.headline == "Waiting for the GPU."
     assert view.detail == (
         "3 recordings are queued; the GPU is serving the language model "
         "until the next audio window."
     )
     assert view.note == "waiting for the GPU" and not view.is_error
-    assert build_view(GpuPhase.LLM, 1).detail is not None
-    assert "1 recording is queued;" in str(build_view(GpuPhase.LLM, 1).detail)
+    assert make_view(GpuPhase.LLM, 1).detail is not None
+    assert "1 recording is queued;" in str(make_view(GpuPhase.LLM, 1).detail)
 
 
 def test_llm_phase_with_nothing_waiting_and_audio_have_no_banner() -> None:
-    for view in (build_view(GpuPhase.LLM, 0), build_view(GpuPhase.AUDIO, 0)):
+    for view in (make_view(GpuPhase.LLM, 0), make_view(GpuPhase.AUDIO, 0)):
         assert view.headline is None and view.detail is None and view.note is None
 
 
@@ -137,28 +157,27 @@ def test_llm_phase_with_nothing_waiting_and_audio_have_no_banner() -> None:
     "phase", [GpuPhase.DRAINING_POST, GpuPhase.ACQUIRING, GpuPhase.STARTING_SERVICES]
 )
 def test_switching_to_audio_copy(phase: GpuPhase) -> None:
-    view = build_view(phase, 2)
+    view = make_view(phase, 2)
     assert view.headline == "Switching the GPU to audio work."
     assert view.detail == "2 recordings are queued and will start once the model services are up."
-    assert build_view(phase, 0).detail == "Audio work starts once the model services are up."
+    assert make_view(phase, 0).detail == "Audio work starts once the model services are up."
 
 
 @pytest.mark.parametrize(
     "phase", [GpuPhase.DRAINING, GpuPhase.STOPPING_SERVICES, GpuPhase.RELEASING]
 )
 def test_switching_back_copy(phase: GpuPhase) -> None:
-    assert build_view(phase, 0).headline == "Switching the GPU back."
-    assert build_view(phase, 0).detail == (
-        "Language-model work resumes once the GPU is handed back."
-    )
-    assert build_view(phase, 1).detail == (
+    assert make_view(phase, 0).headline == "Switching the GPU back."
+    handed_back = "Language-model work resumes once the GPU is handed back."
+    assert make_view(phase, 0).detail == handed_back
+    assert make_view(phase, 1).detail == (
         "Language-model work resumes once the GPU is handed back. "
         "1 recording is queued for the next audio window."
     )
 
 
 def test_error_copy() -> None:
-    view = build_view(GpuPhase.ERROR, 4)
+    view = make_view(GpuPhase.ERROR, 4)
     assert view.is_error
     assert view.headline == "Could not return the GPU to the language model."
     assert view.detail == "LLM work is paused."
@@ -182,6 +201,34 @@ def test_check_gpu_phase_llm_is_ok_advisory() -> None:
     )
 
 
+def test_stale_row_banner_is_an_alert_without_relabel_or_release_hint() -> None:
+    written = NOW - timedelta(minutes=5)
+    state = GpuSharingState(phase=GpuPhase.LLM, stale_since=written)
+    assert state.trusted_phase is None and state.stage_reason is None
+    stale = build_view(state, 3)
+    assert stale.headline == "GPU sharing is not running."
+    assert stale.detail == (
+        "The GPU sharing task has not run since 2026-10-02 17:55 UTC, so the GPU is "
+        "not switching between audio and language-model work. Check that the "
+        "gpu-phase service is running; see the Status page."
+    )
+    assert stale.is_error and not stale.release_hint
+    assert stale.note == "GPU sharing is not running"
+    fresh_error = make_view(GpuPhase.ERROR, 0)
+    assert fresh_error.is_error and fresh_error.release_hint
+
+
+def test_display_error_strips_controls_and_bounds_length() -> None:
+    assert display_error("bad\x1b[31m\nthing\x00\x7f done") == "bad [31m thing done"
+    long = display_error("x" * 1000)
+    assert len(long) == 300 and long.endswith("...")
+    result = gpu_check(
+        enabled=True, snapshot=snap(GpuPhase.ERROR, last_error="a\rb\x07" + "y" * 900)
+    )
+    assert result is not None and "\r" not in result.detail and "\x07" not in result.detail
+    assert len(result.detail) < 450
+
+
 def test_check_gpu_phase_missing_row_needs_attention() -> None:
     result = gpu_check(enabled=True, snapshot=None)
     assert result == CheckResult(
@@ -193,11 +240,24 @@ def test_check_gpu_phase_missing_row_needs_attention() -> None:
     assert exit_code([result]) == 0
 
 
-def test_apply_gpu_phase_missing_row() -> None:
-    adjusted = apply_gpu_phase(down_models(), None)
-    assert all(r.expected_stop for r in adjusted) and exit_code(adjusted) == 0
-    endpoint = [CheckResult("llm endpoint", False, False, "unreachable (ConnectError)")]
-    assert apply_gpu_phase(endpoint, None) == endpoint
+@pytest.mark.parametrize("phase", list(GpuPhase))
+def test_answered_failures_are_never_expected_stops(phase: GpuPhase) -> None:
+    # An HTTP 401, a 503 or a bad URL means something answered or is
+    # misconfigured: a real fault even while GPU sharing has the services down.
+    assert apply_gpu_phase(answered_failures(), phase) == answered_failures()
+    assert exit_code(apply_gpu_phase(answered_failures(), phase)) == 1
+
+
+def test_mixed_failures_keep_the_real_one_hard() -> None:
+    mixed = [
+        CheckResult("transcription", False, True, "HTTP 401"),
+        CheckResult("diarization", False, True, "unreachable", not_running=True),
+        CheckResult("speaker embedding", False, True, "timeout", not_running=True),
+    ]
+    transcription, diarization, embedding = apply_gpu_phase(mixed, GpuPhase.LLM)
+    assert transcription == mixed[0]
+    assert diarization.expected_stop and embedding.expected_stop
+    assert exit_code([transcription, diarization, embedding]) == 1
 
 
 def test_check_gpu_phase_reports_request_and_backoff() -> None:
@@ -288,17 +348,76 @@ def test_apply_gpu_phase_reports_running_services_as_they_are() -> None:
 @pytest.mark.parametrize("phase", list(GpuPhase))
 def test_apply_gpu_phase_llm_endpoint(phase: GpuPhase) -> None:
     down = [
-        CheckResult("llm endpoint", False, False, "unreachable (ConnectError)"),
-        CheckResult("llm bundled", False, False, "unreachable (ConnectError)"),
+        CheckResult("llm endpoint", False, False, "unreachable (ConnectError)", not_running=True),
+        CheckResult("llm bundled", False, False, "unreachable (ConnectError)", not_running=True),
+        CheckResult("llm endpoint", False, False, "rejected (HTTP 401)"),
     ]
-    endpoint, bundled = apply_gpu_phase(down, phase)
+    endpoint, bundled, rejected = apply_gpu_phase(down, phase)
     assert bundled == down[1]  # a Voxint container GPU sharing never stops
+    assert rejected == down[2]  # an auth error is never expected
     if llm_expected_down(phase):
         assert endpoint == CheckResult(
-            "llm endpoint", False, False, LLM_EXPECTED_DOWN_DETAIL, expected_stop=True
+            "llm endpoint",
+            False,
+            False,
+            LLM_EXPECTED_DOWN_DETAIL,
+            expected_stop=True,
+            not_running=True,
         )
     else:
         assert endpoint == down[0]
+
+
+@pytest.mark.parametrize(
+    ("raised", "not_running"),
+    [
+        (httpx.ConnectError("refused"), True),
+        (httpx.ConnectTimeout("slow"), True),
+        (httpx.ReadTimeout("slow"), True),
+        (httpx.RemoteProtocolError("garbled"), False),
+    ],
+)
+def test_check_llm_marks_only_no_answer_as_not_running(
+    raised: Exception, not_running: bool
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise raised
+
+    result = check_llm(
+        enabled=True,
+        configured=True,
+        base_url="http://llm.invalid/v1",
+        api_key="k",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    assert result is not None and not result.ok
+    assert result.not_running is not_running
+
+
+@pytest.mark.parametrize(
+    ("respond", "not_running", "detail"),
+    [
+        (httpx.ConnectError("refused"), True, "unreachable"),
+        (httpx.ConnectTimeout("slow"), True, "timeout"),
+        (httpx.ReadError("reset"), False, "unreachable"),
+        (httpx.Response(401), False, "HTTP 401"),
+        (httpx.Response(503, json={"status": "degraded"}), False, "degraded (model not loaded)"),
+        (httpx.Response(200, text="not json"), False, "invalid response"),
+    ],
+)
+def test_probe_marks_only_no_answer_as_not_running(
+    respond: object, not_running: bool, detail: str
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if isinstance(respond, Exception):
+            raise respond
+        assert isinstance(respond, httpx.Response)
+        return respond
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        health = _probe_one(client, "transcription", "http://asr.invalid")
+    assert not health.up and health.detail == detail
+    assert health.not_running is not_running
 
 
 def test_run_diagnostics_off_adds_no_gpu_row() -> None:
@@ -401,7 +520,7 @@ def test_status_rows_expected_stop_is_off_without_controls() -> None:
     checks.append(
         _check(CheckResult(GPU_SHARING_CHECK, True, False, "the GPU is serving the language model"))
     )
-    rows = _build_components(checks, _DockerController("test"))
+    rows = _build_components(checks, _DockerController("test"), gpu_sharing=True)
     transcriber = _row(rows, "Transcriber")
     assert transcriber["dot"] == "off"
     assert transcriber["state_text"] == "stopped while the GPU serves the language model"
@@ -411,6 +530,21 @@ def test_status_rows_expected_stop_is_off_without_controls() -> None:
     assert sharing["dot"] == "ok"
     assert sharing["state_text"] == "the GPU is serving the language model"
     assert all(r["dot"] != "warn" for r in rows)  # the banner stays green
+
+
+def test_status_rows_healthy_service_under_gpu_sharing_has_no_controls() -> None:
+    # Ownership does not depend on health: in audio a running service still
+    # gets no Start/Stop/Restart and no terminal hint.
+    checks = [_check(CheckResult(name, True, True, "ready (cuda)")) for name in MODEL_CHECKS]
+    rows = _build_components(checks, _DockerController("test"), gpu_sharing=True)
+    for label in ("Transcriber", "Voice separation", "Voice identity"):
+        row = _row(rows, label)
+        assert row["dot"] == "ok" and row["state_text"] == "running · ready (cuda)"
+        assert row["controllable"] is False and row["terminal_hint"] is None
+        assert row["state"] is None
+    # Feature off: unchanged, the controller decides.
+    off = _row(_build_components(checks, _DockerController("test")), "Transcriber")
+    assert off["controllable"] is True and off["state"] == ServiceState.STOPPED
 
 
 def test_status_rows_gpu_sharing_error_warns() -> None:
@@ -423,7 +557,8 @@ def test_status_rows_gpu_sharing_error_warns() -> None:
 
 def test_status_rows_expected_llm_stop_is_off() -> None:
     (endpoint,) = apply_gpu_phase(
-        [CheckResult("llm endpoint", False, False, "unreachable (ConnectError)")], GpuPhase.AUDIO
+        [CheckResult("llm endpoint", False, False, "unreachable", not_running=True)],
+        GpuPhase.AUDIO,
     )
     rows = _build_components([_check(endpoint)], NoopController("test"))
     byo = _row(rows, "Your own AI endpoint")
@@ -436,22 +571,41 @@ def test_status_rows_expected_llm_stop_is_off() -> None:
 def test_degraded_stages_uses_the_gpu_sharing_reason_once() -> None:
     services = [("transcription", False), ("diarization", False), ("speaker embedding", False)]
     reason = stage_pause_reason(GpuPhase.LLM)
-    assert degraded_stages(services, llm_enabled=True, expected_stop_reason=reason) == {
+    everything = frozenset(name for name, _ in services)
+    assert degraded_stages(
+        services,
+        llm_enabled=True,
+        expected_stop_reason=reason,
+        expected_stop_services=everything,
+    ) == {
         "transcribe": "the GPU is serving the language model",
         "diarize_embed": "the GPU is serving the language model",
     }
+    # A service that answered with an error keeps its own reason beside it.
+    mixed = degraded_stages(
+        services,
+        llm_enabled=True,
+        expected_stop_reason=reason,
+        expected_stop_services=frozenset({"diarization", "speaker embedding"}),
+    )
+    assert mixed["transcribe"] == "transcriber is down"
+    assert mixed["diarize_embed"] == "the GPU is serving the language model"
     # Without GPU sharing the per-service reasons are unchanged.
     assert degraded_stages(services, llm_enabled=True)["transcribe"] == "transcriber is down"
 
 
 def test_detect_degraded_suppresses_model_banners_for_expected_stops() -> None:
     services = [("transcription", False), ("diarization", False)]
-    assert _detect_degraded(services, llm_enabled=True, model_services_expected_down=True) == []
+    both = frozenset({"transcription", "diarization"})
+    assert _detect_degraded(services, llm_enabled=True, expected_stop_services=both) == []
     names = [
-        d.name
-        for d in _detect_degraded(services, llm_enabled=False, model_services_expected_down=True)
+        d.name for d in _detect_degraded(services, llm_enabled=False, expected_stop_services=both)
     ]
     assert names == ["enrichment"]
+    only = _detect_degraded(
+        services, llm_enabled=True, expected_stop_services=frozenset({"diarization"})
+    )
+    assert [d.name for d in only] == ["transcription"]
     assert len(_detect_degraded(services, llm_enabled=True)) == 2
 
 

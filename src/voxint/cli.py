@@ -943,7 +943,7 @@ def _gpu_phase_status(args: argparse.Namespace) -> int:
         post_lane_in_flight,
         read_phase,
     )
-    from voxint.gpu_phase.visibility import phase_summary, snapshot_phase
+    from voxint.gpu_phase.visibility import display_error, phase_summary, snapshot_phase
 
     settings = get_settings()
     if not settings.gpu_phase_enabled:
@@ -964,7 +964,8 @@ def _gpu_phase_status(args: argparse.Namespace) -> int:
     if snapshot is not None:
         print(f"since:            {when(snapshot.phase_since)}")
         print(f"lease expires:    {when(snapshot.lease_expires_at)}")
-        print(f"last error:       {snapshot.last_error or '-'}")
+        last_error = display_error(snapshot.last_error) if snapshot.last_error else "-"
+        print(f"last error:       {last_error}")
         print(f"failures:         {snapshot.failures}")
         print(f"retry after:      {when(snapshot.retry_after)}")
         request = snapshot.operator_request.value if snapshot.operator_request else "-"
@@ -975,10 +976,12 @@ def _gpu_phase_status(args: argparse.Namespace) -> int:
 
 
 def _gpu_phase_request(request_value: str) -> int:
+    from datetime import UTC, datetime
+
     from voxint.config import get_settings
     from voxint.db.session import build_engine, build_session_factory, session_scope
     from voxint.gpu_phase.state import GpuPhase, OperatorRequest, read_phase, set_request
-    from voxint.gpu_phase.visibility import snapshot_phase
+    from voxint.gpu_phase.visibility import is_fresh, utc_minute
 
     settings = get_settings()
     if not settings.gpu_phase_enabled:
@@ -987,22 +990,56 @@ def _gpu_phase_request(request_value: str) -> int:
     request = OperatorRequest(request_value)
     factory = build_session_factory(build_engine())
     with session_scope(factory) as session:
+        before = read_phase(session)
+        # Upserts a missing row (phase llm) and never touches updated_at, which
+        # only the phase task writes.
         set_request(session, request)
-        phase = snapshot_phase(read_phase(session))
     watch = "watch with 'voxint gpu-phase status'"
-    if request == OperatorRequest.AUDIO:
+    phase = before.phase if before is not None else None
+    teardown = {GpuPhase.DRAINING, GpuPhase.STOPPING_SERVICES, GpuPhase.RELEASING, GpuPhase.ERROR}
+    if phase is None:
+        print(
+            f"{request.value} requested; no GPU phase was recorded yet, so the request "
+            f"waits for the GPU sharing task's first run ({watch})"
+        )
+    elif request == OperatorRequest.AUDIO:
         if phase == GpuPhase.AUDIO:
             print(f"audio work requested; the GPU is already doing audio work ({watch})")
+        elif phase in teardown:
+            print(
+                "audio work requested; the GPU is being handed back first, and the "
+                f"request is acted on once it serves the language model again ({watch})"
+            )
         else:
             print(f"audio work requested; the GPU switches over the next few ticks ({watch})")
     elif phase == GpuPhase.ERROR:
         print(f"release requested; the next tick retries handing the GPU back ({watch})")
     elif phase == GpuPhase.LLM:
-        print(f"release requested; the GPU already serves the language model ({watch})")
-    else:
+        print(
+            "release requested; the GPU already serves the language model, and the next "
+            f"switch to audio waits at least GPU_PHASE_MIN_DWELL_SECONDS ({watch})"
+        )
+    elif phase == GpuPhase.AUDIO:
         print(
             "release requested; the GPU goes back to the language model once audio "
             f"work in progress finishes ({watch})"
+        )
+    elif phase == GpuPhase.DRAINING:
+        print(
+            "release requested; the model services stop now, and audio runs still in "
+            f"progress retry their stage in the next audio window ({watch})"
+        )
+    else:
+        print(
+            "release requested; the GPU goes back to the language model over the next "
+            f"few ticks ({watch})"
+        )
+    if before is not None and not is_fresh(
+        before, now=datetime.now(UTC), tick_seconds=settings.gpu_phase_tick_seconds
+    ):
+        print(
+            f"note: the GPU sharing task has not run since {utc_minute(before.updated_at)}; "
+            "nothing changes until the gpu-phase service runs"
         )
     return 0
 

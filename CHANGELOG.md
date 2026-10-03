@@ -18,9 +18,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   prints the phase, lease, last error and waiting work; `voxint gpu-phase
   audio-now` and `voxint gpu-phase release` ask for the next switch. With
   GPU sharing on, `voxint doctor` and Settings > Status gain a GPU sharing
-  row, and a model service stopped for the language model's turn (or the
+  row, which also warns when the phase task has stopped running. A model
+  service that GPU sharing stopped for the language model's turn (or the
   language model stopped for Voxint's) reads as off with the reason instead
-  of a failure, so doctor's exit code is unchanged. The Runs page, its
+  of a failure, so doctor's exit code is unchanged; a service that answers
+  with an error still fails. Settings > Status offers no start, stop or
+  restart buttons for the model services while GPU sharing manages them. The Runs page, its
   progress strip and summary say when recordings are waiting for the GPU,
   when the GPU is switching, and when it could not be handed back. New
   `docs/gpu-sharing.md` covers setup, the broker HTTP contract, settings and

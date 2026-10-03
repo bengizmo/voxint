@@ -49,6 +49,11 @@ class ServiceHealth:
     # (tolerated exactly as ``device`` is). Captured on the degraded 503 path
     # too, since telemetry is most useful when a service is struggling.
     resources: dict[str, object] | None = None
+    # No answer at all: the connection failed or timed out, which is what a
+    # stopped service looks like. False for every answered failure (an HTTP
+    # error, a malformed body) and for a bad URL. GPU sharing (#748) only treats
+    # a not-running service as an expected stop.
+    not_running: bool = False
 
 
 def _service_targets(settings: Settings) -> list[tuple[str, str]]:
@@ -108,6 +113,7 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
         device: str | None = None,
         embedding_space: str | None = None,
         resources: dict[str, object] | None = None,
+        not_running: bool = False,
     ) -> ServiceHealth:
         return ServiceHealth(
             name=name,
@@ -118,6 +124,7 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
             device=device,
             embedding_space=embedding_space,
             resources=resources,
+            not_running=not_running,
         )
 
     url = f"{base_url.rstrip('/')}/healthz"
@@ -126,14 +133,21 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
         response = client.get(url)
     except httpx.TimeoutException:
         # No completed round-trip → no latency to report.
-        return outcome(up=False, detail="timeout", latency_ms=None)
+        return outcome(up=False, detail="timeout", latency_ms=None, not_running=True)
     except httpx.InvalidURL:
         # A malformed configured URL is a config error, not a transport failure —
         # and InvalidURL is NOT an httpx.HTTPError, so it must be caught explicitly
         # to keep this probe's "never raises into the request" contract.
         return outcome(up=False, detail="invalid url", latency_ms=None)
-    except httpx.HTTPError:
-        return outcome(up=False, detail="unreachable", latency_ms=None)
+    except httpx.HTTPError as exc:
+        # Only a failed connect means nothing is listening; a protocol error
+        # mid-response came from something that answered.
+        return outcome(
+            up=False,
+            detail="unreachable",
+            latency_ms=None,
+            not_running=isinstance(exc, httpx.ConnectError),
+        )
     latency_ms = (time.monotonic() - start) * 1000.0
     if response.status_code == 503:
         # Reachable, but the model is not loaded (the contract's degraded state) —

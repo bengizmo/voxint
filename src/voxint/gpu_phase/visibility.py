@@ -5,12 +5,14 @@ progress strip, the Status page, doctor) takes its wording from here so the
 copy cannot drift between them.
 """
 
+import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
 from voxint.config import Settings
-from voxint.gpu_phase.state import GpuPhase, GpuPhaseSnapshot, gpu_lane_demand, read_phase
+from voxint.gpu_phase.state import GpuPhase, GpuPhaseSnapshot, read_phase
 
 # One short phrase per phase, for status rows and the CLI.
 PHASE_SUMMARY: dict[GpuPhase, str] = {
@@ -51,8 +53,11 @@ LLM_EXPECTED_DOWN_DETAIL = "not answering; expected while Voxint holds the GPU f
 
 
 # A missing row closes both lanes while the feature is on; the orchestrator
-# repairs it on its next write. Every helper below takes ``None`` for it.
+# repairs it on its next write.
 NO_ROW_SUMMARY = "no phase recorded yet; both lanes wait until the GPU sharing task records one"
+
+_LAST_ERROR_MAX = 300
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]+")
 
 
 def snapshot_phase(snapshot: GpuPhaseSnapshot | None) -> GpuPhase | None:
@@ -63,10 +68,32 @@ def phase_summary(phase: GpuPhase | None) -> str:
     return PHASE_SUMMARY[phase] if phase is not None else NO_ROW_SUMMARY
 
 
-def model_service_stop_detail(phase: GpuPhase | None) -> str | None:
-    """Why a down model service is expected in ``phase``, or None when it should be up."""
-    if phase is None:
-        return "stopped; GPU sharing has not recorded a phase yet"
+def utc_minute(value: datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def display_error(text: str) -> str:
+    """``last_error`` made safe to print: control characters become spaces and
+    the length is bounded."""
+    flat = " ".join(_CONTROL_CHARS.sub(" ", text).split())
+    if len(flat) <= _LAST_ERROR_MAX:
+        return flat
+    return flat[: _LAST_ERROR_MAX - 3].rstrip() + "..."
+
+
+def stale_after_seconds(tick_seconds: int) -> int:
+    """The phase task writes the row every tick; this long without a write means
+    it is not running."""
+    return max(3 * tick_seconds, 120)
+
+
+def is_fresh(snapshot: GpuPhaseSnapshot, *, now: datetime, tick_seconds: int) -> bool:
+    return (now - snapshot.updated_at).total_seconds() <= stale_after_seconds(tick_seconds)
+
+
+def model_service_stop_detail(phase: GpuPhase) -> str | None:
+    """Why a not-running model service is expected in ``phase``, or None when it
+    should be up."""
     if phase in _SERVICES_UP:
         return None
     if phase in {GpuPhase.LLM, GpuPhase.DRAINING_POST}:
@@ -78,14 +105,12 @@ def model_service_stop_detail(phase: GpuPhase | None) -> str | None:
     return "stopped while GPU sharing hands the GPU back"
 
 
-def llm_expected_down(phase: GpuPhase | None) -> bool:
+def llm_expected_down(phase: GpuPhase) -> bool:
     return phase in _LLM_DOWN
 
 
-def stage_pause_reason(phase: GpuPhase | None) -> str | None:
-    """Progress-strip reason for a GPU stage whose model service is down on purpose."""
-    if phase is None:
-        return "GPU sharing has not started"
+def stage_pause_reason(phase: GpuPhase) -> str | None:
+    """Progress-strip reason for a GPU stage whose model service is stopped on purpose."""
     if phase in _SERVICES_UP:
         return None
     if phase in {GpuPhase.LLM, GpuPhase.DRAINING_POST}:
@@ -100,10 +125,29 @@ def _recordings(count: int) -> str:
 
 
 @dataclass(frozen=True)
+class GpuSharingState:
+    """The stored phase as the console reads it, without any lane counts."""
+
+    phase: GpuPhase | None  # None: no row recorded yet
+    stale_since: datetime | None  # set when the phase task stopped writing the row
+
+    @property
+    def trusted_phase(self) -> GpuPhase | None:
+        """The phase when the row is present and fresh: the only case in which a
+        stopped service may be called expected."""
+        return self.phase if self.stale_since is None else None
+
+    @property
+    def stage_reason(self) -> str | None:
+        phase = self.trusted_phase
+        return stage_pause_reason(phase) if phase is not None else None
+
+
+@dataclass(frozen=True)
 class GpuSharingView:
     """What the Runs page says about GPU sharing right now."""
 
-    phase: GpuPhase | None  # None: no row recorded yet
+    phase: GpuPhase | None
     waiting: int
     # Banner headline and detail; None when no banner is due (audio, or the
     # language-model phase with nothing waiting).
@@ -111,14 +155,24 @@ class GpuSharingView:
     detail: str | None
     # Short footer text for the progress strip and the page summary.
     note: str | None
-    is_error: bool
+    is_error: bool  # shown as an alert
+    release_hint: bool  # the template adds the release command
 
 
-def build_view(phase: GpuPhase | None, waiting: int) -> GpuSharingView:
+def build_view(state: GpuSharingState, waiting: int) -> GpuSharingView:
+    phase = state.phase
     headline: str | None = None
     detail: str | None = None
     note: str | None = None
-    if phase is None:
+    if state.stale_since is not None:
+        headline = "GPU sharing is not running."
+        detail = (
+            f"The GPU sharing task has not run since {utc_minute(state.stale_since)}, "
+            "so the GPU is not switching between audio and language-model work. "
+            "Check that the gpu-phase service is running; see the Status page."
+        )
+        note = "GPU sharing is not running"
+    elif phase is None:
         headline = "Waiting for GPU sharing to start."
         detail = (f"{_recordings(waiting)}. " if waiting else "") + (
             "No GPU phase is recorded yet, so audio and language-model work wait "
@@ -152,20 +206,31 @@ def build_view(phase: GpuPhase | None, waiting: int) -> GpuSharingView:
             f" {_recordings(waiting)} for the next audio window." if waiting else ""
         )
         note = "switching the GPU back"
+    stale = state.stale_since is not None
     return GpuSharingView(
         phase=phase,
         waiting=waiting,
         headline=headline,
         detail=detail,
         note=note,
-        is_error=phase == GpuPhase.ERROR,
+        is_error=stale or phase == GpuPhase.ERROR,
+        release_hint=not stale and phase == GpuPhase.ERROR,
     )
 
 
-def read_view(session: Session, settings: Settings) -> GpuSharingView | None:
-    """None when GPU sharing is off: no ``gpu_phase`` query is made."""
+def read_state(
+    session: Session, settings: Settings, *, now: datetime | None = None
+) -> GpuSharingState | None:
+    """None when GPU sharing is off: no ``gpu_phase`` query is made. One
+    primary-key read otherwise; lane counts are the caller's choice."""
     if not settings.gpu_phase_enabled:
         return None
-    phase = snapshot_phase(read_phase(session))
-    waiting = gpu_lane_demand(session) if phase != GpuPhase.AUDIO else 0
-    return build_view(phase, waiting)
+    snapshot = read_phase(session)
+    if snapshot is None:
+        return GpuSharingState(phase=None, stale_since=None)
+    fresh = is_fresh(
+        snapshot, now=now or datetime.now(UTC), tick_seconds=settings.gpu_phase_tick_seconds
+    )
+    return GpuSharingState(
+        phase=snapshot.phase, stale_since=None if fresh else snapshot.updated_at
+    )
