@@ -136,6 +136,8 @@ def test_read_memory_macos_runs_sysctl_and_vm_stat(monkeypatch: pytest.MonkeyPat
 
     def fake_run(args: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append(tuple(args))
+        # A hung command must fail fast rather than hold a request thread.
+        assert kwargs == {"capture_output": True, "check": True, "text": True, "timeout": 2.0}
         stdout = _MEMSIZE if args[0].endswith("sysctl") else _VM_STAT
         return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
 
