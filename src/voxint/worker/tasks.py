@@ -46,6 +46,7 @@ from voxint.db.models import (
     Stage,
     StageRun,
     StageStatus,
+    TranscriptSegment,
 )
 from voxint.db.session import build_engine, build_session_factory
 from voxint.domain_packs.registry import domain_pack_from_snapshot
@@ -714,6 +715,21 @@ def generate_run_asset(job_id_str: str) -> None:
     asset_jobs.execute_job(factory, uuid.UUID(job_id_str), settings=get_settings())
 
 
+def _has_transcript_segments(session: Session, run_id: uuid.UUID) -> bool:
+    """True when the run produced at least one transcript segment.
+
+    A completed run with none (silence, a test tone) has nothing to summarise,
+    index or translate, so the post-finalize hooks skip it quietly instead of
+    logging the builders' "no transcript" errors as failures (issue #775).
+    """
+    return (
+        session.execute(
+            select(TranscriptSegment.id).where(TranscriptSegment.pipeline_run_id == run_id).limit(1)
+        ).first()
+        is not None
+    )
+
+
 def _autogenerate_run_assets(
     factory: sessionmaker[Session], run_id: uuid.UUID, settings: Settings
 ) -> None:
@@ -730,6 +746,9 @@ def _autogenerate_run_assets(
             if not app_settings.resolve_effective_enrichment_run_assets_autogenerate(row, settings):
                 return
             if not asset_jobs.run_asset_gates_open(settings, row):
+                return
+            if not _has_transcript_segments(session, run_id):
+                logger.info("run %s has no transcript segments; skipping run assets", run_id)
                 return
             needed = asset_jobs.kinds_needing_generation(session, run_id)
             if not needed:
@@ -780,6 +799,9 @@ def _autogenerate_translation(
             run = session.get(PipelineRun, run_id)
             if run is None:
                 return
+            if not _has_transcript_segments(session, run_id):
+                logger.info("run %s has no transcript segments; skipping translation", run_id)
+                return
             if translation_jobs.normalized_language(run.detected_language) == target:
                 # Already in the preferred language — nothing to translate.
                 return
@@ -821,6 +843,9 @@ def _autogenerate_segment_embeddings(
             if not app_settings.resolve_effective_semantic_index_autogenerate(row, settings):
                 return
             if not embedding_jobs.embedding_gates_open(settings, row):
+                return
+            if not _has_transcript_segments(session, run_id):
+                logger.info("run %s has no transcript segments; skipping semantic index", run_id)
                 return
             if not minilm_artifacts_available():
                 # Semantic search is enabled but the vendored MiniLM weights are

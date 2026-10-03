@@ -152,8 +152,8 @@ def load_embedding_source(session: Session, pipeline_run_id: uuid.UUID) -> Embed
     lines = attributed_transcript(session, pipeline_run_id, text=TranscriptText.CORRECTED)
     if not lines:
         raise EmbeddingError(
-            "run has no transcript segments yet — the embedding index is built"
-            " from the transcript, so the run must finish transcription first"
+            "run has no transcript segments, so there is nothing to index"
+            " (transcription has not finished, or it found no speech)"
         )
     # Per-segment rendering: enhanced-text presence + whether a correction exists.
     enhanced_present: dict[uuid.UUID, bool] = {

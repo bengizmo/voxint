@@ -121,8 +121,8 @@ def load_translation_source(session: Session, pipeline_run_id: uuid.UUID) -> Tra
     lines = attributed_transcript(session, pipeline_run_id, text=TranscriptText.CORRECTED)
     if not lines:
         raise TranslationError(
-            "run has no transcript yet — translation reads the finished"
-            " transcript, so the run must finish transcription first"
+            "run has no transcript, so there is nothing to translate"
+            " (transcription has not finished, or it found no speech)"
         )
     if len(lines) > MAX_LINES:
         raise TranslationError(

@@ -196,8 +196,8 @@ def load_source(session: Session, pipeline_run_id: uuid.UUID) -> RunAssetSource:
     )
     if not rows:
         raise RunAssetError(
-            "run has no transcript segments yet — assets are generated from the"
-            " transcript, so the run must finish transcription first"
+            "run has no transcript segments, so there is nothing to generate assets"
+            " from (transcription has not finished, or it found no speech)"
         )
     # Resolve every diarization label of the run once (bulk queries, not N+1),
     # keyed by label; a segment whose label has no resolver state (e.g. no

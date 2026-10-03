@@ -150,6 +150,7 @@ class TestConsole:
         resp = _generate(client, run_id)
         assert resp.status_code == 200
         assert "no transcript segments" in resp.text
+        assert "found no speech" in resp.text
         assert not published
 
     def test_fragment_renders_finished_asset_with_staleness(
