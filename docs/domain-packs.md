@@ -367,19 +367,24 @@ segments is never matched (steer such terms to pack `vocabulary`).
 
 ## Vocabulary precedence: pack vs. custom vocabulary
 
-Operators can also add custom vocabulary in the setup wizard (per deployment).
-For a run, the **effective vocabulary is the pack's words first, then the
-operator's custom words appended**, with duplicates removed on
-first-occurrence-wins:
+New runs resolve vocabulary by field: an explicit per-run pack wins, then a
+project vocabulary list, then a folder pack, then the global baseline. The
+global baseline combines the default pack's words with the operator's custom
+vocabulary, removing duplicates in first-occurrence order. An empty project
+list replaces the lower layers; an unset list inherits them.
 
-```text
-effective_vocabulary = dedup_order_preserving(pack.vocabulary + custom_vocabulary)
-```
+A [sidecar `vocabulary:` list](how-to/add-media-and-manage-runs.md#describe-a-recording-with-a-sidecar-file)
+adds terms after that effective vocabulary is resolved. A term already present
+moves to the end. The frozen snapshot records these terms in
+`sidecar_vocabulary`; the enhancement prompt renders the full effective list.
 
-So a pack term always appears before a custom term, and listing the same word in
-both keeps only the pack's (earlier) position. The combined list biases Whisper's
-`initial_prompt` and is rendered into the enhancement prompt's "Domain
-vocabulary" line.
+Sidecar terms get the transcription hint's 2000-character budget first, with
+other terms filling the remaining space. They are placed last in the hint
+because the transcriber keeps the end of the hint (the last 223 tokens in the
+pinned faster-whisper version). Whole terms that do not fit are skipped. The
+character cap can still exceed that token window; the general mismatch is
+tracked in #743. An absent or empty sidecar vocabulary leaves the frozen
+configuration and transcription request unchanged.
 
 ## See also
 

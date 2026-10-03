@@ -1,7 +1,9 @@
 import uuid
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
 from celery.exceptions import OperationalError
 
 from voxint.config import Settings
@@ -115,3 +117,23 @@ def test_parse_config_resolution_version_defaults_to_live_union() -> None:
 
 def test_parse_config_resolution_version_accepts_valid_snapshot() -> None:
     assert parse_config_resolution_version({"config_resolution_version": 2}) == 2
+
+
+@pytest.mark.parametrize("snapshot, expected, warning", [
+    (None, (), False), ({}, (), False),
+    ({"sidecar_vocabulary": []}, (), False),
+    ({"sidecar_vocabulary": ["a", "b"]}, ("a", "b"), False),
+    ({"sidecar_vocabulary": None}, (), True),
+    ({"sidecar_vocabulary": "a"}, (), True),
+    ({"sidecar_vocabulary": ["a", 1]}, (), True),
+    ({"sidecar_vocabulary": [True]}, (), True),
+    ({"sidecar_vocabulary": {}}, (), True),
+    ([], (), True),
+])
+def test_parse_sidecar_vocabulary(
+    snapshot: Any, expected: tuple[str, ...], warning: bool, caplog: pytest.LogCaptureFixture,
+) -> None:
+    from voxint.pipeline.stages.context import parse_sidecar_vocabulary
+
+    assert parse_sidecar_vocabulary(snapshot) == expected
+    assert bool(caplog.records) is warning

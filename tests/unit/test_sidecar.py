@@ -71,6 +71,7 @@ def test_parse_each_field_alone(text: str, field: str, expected: object) -> None
 def test_empty_mapping_is_valid() -> None:
     sc = parse_sidecar("{}", source_name="x.yaml")
     assert sc == Sidecar(
+        vocabulary=(),
         title=None,
         speakers=(),
         domain_pack=None,
@@ -669,3 +670,48 @@ def test_recorded_sidecar_date(value: str) -> None:
 def test_recorded_sidecar_invalid(value: str) -> None:
     with pytest.raises(SidecarError, match=r"source\.yaml"):
         parse_sidecar(f"recorded: {value}", source_name="source.yaml")
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("vocabulary: [alpha, ' beta ', alpha, Beta]", ("alpha", "beta", "Beta")),
+    ("vocabulary: []", ()),
+    ("vocabulary: [" + "a" * 120 + "]", ("a" * 120,)),
+    ("vocabulary: [" + ", ".join(f"term-{i}" for i in range(64)) + "]",
+     tuple(f"term-{i}" for i in range(64))),
+    ("title: Recording", ()),
+])
+def test_vocabulary_valid(text: str, expected: tuple[str, ...]) -> None:
+    sc = parse_sidecar(text, source_name="x.yaml")
+    assert sc.vocabulary == expected
+    assert "vocabulary" not in sc.ignored_keys
+
+
+@pytest.mark.parametrize("value, message", [
+    ("null", "one '- term' per line"),
+    ("word", "one '- term' per line"),
+    ("{}", "one '- term' per line"),
+    ("[true]", "term 1 must be text, not a yes/no value"),
+    ("[42]", "term 1 must be text, not a number"),
+    ("[1.5]", "term 1 must be text, not a number"),
+    ("[null]", "term 1 must be text, not empty"),
+    ("[{}]", "term 1 must be text, not a mapping"),
+    ("[[]]", "term 1 must be text, not a list"),
+    ("['   ']", "term 1 is empty"),
+    ('["a\\nb"]', "single line"),
+    ('["a\\rb"]', "single line"),
+    ('["a\\tb"]', "non-printing"),
+    ('["a\\u200bb"]', "non-printing"),
+    ("[" + ", ".join(["a"] * 65) + "]", "maximum is 64"),
+    ("[" + "a" * 121 + "]", "longer than 120"),
+    ("[" + ", ".join(str(i) + "x" * 118 for i in range(17)) + "]", "shorten it"),
+])
+def test_vocabulary_rejected(value: str, message: str) -> None:
+    with pytest.raises(SidecarError) as exc:
+        parse_sidecar("vocabulary: " + value, source_name="x.yaml")
+    assert message in str(exc.value)
+
+
+def test_vocabulary_total_checked_after_dedup() -> None:
+    term = "a" * 120
+    sc = parse_sidecar("vocabulary: [" + ", ".join([term] * 64) + "]", source_name="x.yaml")
+    assert sc.vocabulary == (term,)

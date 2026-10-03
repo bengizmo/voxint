@@ -60,6 +60,22 @@ def parse_config_resolution_version(pack_snapshot: dict[str, Any] | None) -> int
         return 1
 
 
+def parse_sidecar_vocabulary(pack_snapshot: dict[str, Any] | None) -> tuple[str, ...]:
+    """Read optional priority terms without raising outside the run failure lane."""
+    if pack_snapshot is None:
+        return ()
+    if not isinstance(pack_snapshot, dict):
+        logger.warning("malformed pack snapshot; ignoring sidecar vocabulary")
+        return ()
+    if "sidecar_vocabulary" not in pack_snapshot:
+        return ()
+    raw = pack_snapshot["sidecar_vocabulary"]
+    if not isinstance(raw, list) or any(not isinstance(term, str) for term in raw):
+        logger.warning("malformed sidecar_vocabulary; ignoring transcription priority terms")
+        return ()
+    return tuple(raw)
+
+
 class StageDataError(Exception):
     """A stage's persisted inputs are missing or inconsistent — a pipeline bug
     or operator error, never transient."""
@@ -123,6 +139,8 @@ class StageContext:
     # Effective ASR/enhancement vocabulary for the run (domain pack + user words).
     # Surfaced to the whisper initial_prompt and rendered into enhancement_context.
     vocabulary: tuple[str, ...] = ()
+    # Frozen sidecar terms get ASR prompt budget first and are rendered last.
+    sidecar_vocabulary: tuple[str, ...] = ()
     matching_gates: MatchingGates = field(default_factory=MatchingGates)
     # Speaker-count hint handed to the diarizer for this run (issue #128). Both
     # None ⇒ no bound is sent and the service applies its own default. The max is
@@ -251,6 +269,7 @@ def apply_run_preferences(
     llm_api_key: str,
     bundled: bool = False,
     config_resolution_version: int = 1,
+    sidecar_vocabulary: tuple[str, ...] = (),
 ) -> StageContext:
     """Layer ``prefs`` and the run's ``pack`` onto the cached ``base`` for one run.
 
@@ -376,6 +395,11 @@ def apply_run_preferences(
         domain_pack=pack,
         enhancement_context=enhancement_context,
         vocabulary=vocabulary,
+        sidecar_vocabulary=(
+            tuple(t for t in sidecar_vocabulary if t in vocabulary)
+            if config_resolution_version == 2
+            else ()
+        ),
     )
 
 

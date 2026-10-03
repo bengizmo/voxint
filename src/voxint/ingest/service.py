@@ -473,6 +473,7 @@ def _resolve_run_config(
     settings: Settings | None,
     domain_pack_name: str | None,
     extra_name_seeds: tuple[str, ...] = (),
+    extra_vocabulary: tuple[str, ...] = (),
 ) -> tuple[dict[str, Any], EffectiveConfigProvenance]:
     """The ONE config-resolution walk for a run — snapshot plus its provenance.
 
@@ -501,6 +502,10 @@ def _resolve_run_config(
     pre-#153 (unversioned) run keeps its live-union path, byte-identical. The
     returned :class:`EffectiveConfigProvenance` records which branch each field
     took so the re-run preview can show it without a second, drift-prone walk.
+
+    ``extra_vocabulary`` adds sidecar terms after per-field resolution, moving
+    duplicates to the tail and recording their transcription budget priority in
+    ``sidecar_vocabulary``. An empty tuple leaves the snapshot unchanged.
 
     ``extra_name_seeds`` (issue #104) are sidecar speaker names, unioned onto the
     resolved pack's ``name_seeds`` inside this freeze. Raises
@@ -558,6 +563,11 @@ def _resolve_run_config(
         vocab = dedup_order_preserving((*snapshot["vocabulary"], *glossary))
         vocabulary_source = "global"
     snapshot["vocabulary"] = list(vocab)
+    sidecar_terms = dedup_order_preserving(extra_vocabulary)
+    if sidecar_terms:
+        reserved = set(sidecar_terms)
+        snapshot["vocabulary"] = [t for t in vocab if t not in reserved] + list(sidecar_terms)
+        snapshot["sidecar_vocabulary"] = list(sidecar_terms)
 
     # Corrections, same precedence. An explicit or folder-pack layer keeps the
     # resolved pack's own rules (no app_settings union); a project REPLACES with
@@ -600,6 +610,7 @@ def _run_domain_pack_snapshot(
     settings: Settings | None,
     domain_pack_name: str | None,
     extra_name_seeds: tuple[str, ...] = (),
+    extra_vocabulary: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Freeze the config-resolution snapshot for a NEW run (issues #11, #153).
 
@@ -612,6 +623,7 @@ def _run_domain_pack_snapshot(
         settings=settings,
         domain_pack_name=domain_pack_name,
         extra_name_seeds=extra_name_seeds,
+        extra_vocabulary=extra_vocabulary,
     )
     return snapshot
 
@@ -726,6 +738,7 @@ def submit_media_item(
         settings=settings,
         domain_pack_name=_effective_pack_name(domain_pack_name, sidecar),
         extra_name_seeds=sidecar.speakers if sidecar is not None else (),
+        extra_vocabulary=sidecar.vocabulary if sidecar is not None else (),
     )
     max_hint, num_hint = _resolve_speaker_hint(
         diarization_max_speakers, diarization_num_speakers, sidecar
@@ -805,6 +818,7 @@ def submit_media_item_if_new(
         settings=settings,
         domain_pack_name=_effective_pack_name(domain_pack_name, sidecar),
         extra_name_seeds=sidecar.speakers if sidecar is not None else (),
+        extra_vocabulary=sidecar.vocabulary if sidecar is not None else (),
     )
     max_hint, num_hint = _resolve_speaker_hint(
         diarization_max_speakers, diarization_num_speakers, sidecar
