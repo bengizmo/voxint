@@ -202,6 +202,7 @@ from voxint.export.manifest import (
 from voxint.export.service import (
     ExportOptionError,
     TranslationMismatchError,
+    parse_fillers,
     parse_style,
     render_run_rttm,
     render_run_transcript,
@@ -1293,18 +1294,28 @@ def _export_transcript(
     timestamps: bool = True,
     lang: str | None = None,
     style: str | None = None,
+    fillers: str | None = None,
 ) -> Response:
     _run_or_404(session, run_id)
     try:
         variant = parse_transcript_text(text)
         selected_style = parse_style(style, fmt)
+        drop_fillers = parse_fillers(fillers, fmt, selected_style)
+        if drop_fillers and lang is not None:
+            raise ExportOptionError("fillers cannot be combined with a translation")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     texts = _export_translated_texts(session, run_id, lang, variant) if lang is not None else None
     try:
         content = render_run_transcript(
-            session, run_id, fmt, text=variant, timestamps=timestamps,
-            style=selected_style, translated_texts=texts,
+            session,
+            run_id,
+            fmt,
+            text=variant,
+            timestamps=timestamps,
+            style=selected_style,
+            translated_texts=texts,
+            drop_fillers=drop_fillers,
         )
     except TranslationMismatchError as exc:
         raise HTTPException(status_code=409, detail=_translation_stale_detail(lang or "")) from exc
@@ -1330,13 +1341,21 @@ def export_transcript_txt(
     timestamps: bool = True,
     lang: str | None = None,
     style: str | None = None,
+    fillers: str | None = None,
 ) -> Response:
     # ?timestamps=false drops the [start end] bracket column for a clean
     # reading copy (issue #52). Only txt and md honor the flag.
     # ?lang=<code> substitutes the current fresh translation (issue #133) —
     # fail closed, see _export_translated_texts. All five formats take it.
     return _export_transcript(
-        run_id, session, TranscriptFormat.TXT, text, timestamps=timestamps, lang=lang, style=style
+        run_id,
+        session,
+        TranscriptFormat.TXT,
+        text,
+        timestamps=timestamps,
+        lang=lang,
+        style=style,
+        fillers=fillers,
     )
 
 
@@ -1349,6 +1368,7 @@ def export_transcript_md(
     timestamps: bool = True,
     lang: str | None = None,
     style: str | None = None,
+    fillers: str | None = None,
 ) -> Response:
     # Readable Markdown (issue #65): ## speaker headings + merged blockquotes.
     # ?timestamps=false drops the per-paragraph time range for a clean copy.
@@ -1360,6 +1380,7 @@ def export_transcript_md(
         timestamps=timestamps,
         lang=lang,
         style=style,
+        fillers=fillers,
     )
 
 
@@ -1371,8 +1392,11 @@ def export_transcript_srt(
     text: str | None = None,
     lang: str | None = None,
     style: str | None = None,
+    fillers: str | None = None,
 ) -> Response:
-    return _export_transcript(run_id, session, TranscriptFormat.SRT, text, lang=lang, style=style)
+    return _export_transcript(
+        run_id, session, TranscriptFormat.SRT, text, lang=lang, style=style, fillers=fillers
+    )
 
 
 @router.get("/review/{run_id}/export.vtt")
@@ -1383,8 +1407,11 @@ def export_transcript_vtt(
     text: str | None = None,
     lang: str | None = None,
     style: str | None = None,
+    fillers: str | None = None,
 ) -> Response:
-    return _export_transcript(run_id, session, TranscriptFormat.VTT, text, lang=lang, style=style)
+    return _export_transcript(
+        run_id, session, TranscriptFormat.VTT, text, lang=lang, style=style, fillers=fillers
+    )
 
 
 @router.get("/review/{run_id}/export.json")
@@ -1395,18 +1422,25 @@ def export_transcript_json(
     text: str | None = None,
     lang: str | None = None,
     style: str | None = None,
+    fillers: str | None = None,
 ) -> Response:
-    return _export_transcript(run_id, session, TranscriptFormat.JSON, text, lang=lang, style=style)
+    return _export_transcript(
+        run_id, session, TranscriptFormat.JSON, text, lang=lang, style=style, fillers=fillers
+    )
 
 
 @router.get("/review/{run_id}/export.rttm")
 def export_transcript_rttm(
-    run_id: uuid.UUID, operator: OperatorDep, session: SessionDep,
+    run_id: uuid.UUID,
+    operator: OperatorDep,
+    session: SessionDep,
     style: str | None = None,
+    fillers: str | None = None,
 ) -> Response:
     _run_or_404(session, run_id)
     try:
-        parse_style(style, None)
+        selected_style = parse_style(style, None)
+        parse_fillers(fillers, None, selected_style)
     except ExportOptionError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return Response(content=render_run_rttm(session, run_id), media_type=MEDIA_TYPES["rttm"])

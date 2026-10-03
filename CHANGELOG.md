@@ -7,6 +7,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Leave fillers out of a Markdown export** (#741). Use `--drop-fillers` or
+  `?fillers=drop` with the turns style to remove standalone English "um", "uh",
+  "umm", "uhh", "uhm" and "erm". Sentence starts are re-capitalised and
+  filler-only utterances disappear. Saved text stays unchanged. Translations
+  and the blocks style do not support this option.
 - **Shared-GPU phase gates** (#748), off by default. A new `gpu_phase` table
   (migration `0068`) records whether the GPU is in its audio or LLM phase.
   With `GPU_PHASE_ENABLED=true`, GPU-lane runs wait in the queue until the
