@@ -6,6 +6,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-10-03
+
 ### Added
 - **Per-recording vocabulary in sidecars** (#741). A `vocabulary:` list adds
   words to the recording's effective vocabulary, reserves their transcription
@@ -5078,7 +5080,8 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.50.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.51.0...HEAD
+[0.51.0]: https://github.com/bengizmo/voxint/compare/v0.50.0...v0.51.0
 [0.50.0]: https://github.com/bengizmo/voxint/compare/v0.49.0...v0.50.0
 [0.49.0]: https://github.com/bengizmo/voxint/compare/v0.48.0...v0.49.0
 [0.48.0]: https://github.com/bengizmo/voxint/compare/v0.47.0...v0.48.0
