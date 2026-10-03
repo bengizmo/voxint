@@ -663,7 +663,7 @@ def test_idle_lane_republishes_with_monotonic_throttle(
                 if kind != work:
                     job.status = "succeeded"
     elapsed = 0.0
-    monkeypatch.setattr(orchestrator.time, "monotonic", lambda: elapsed)
+    monkeypatch.setattr(orchestrator, "_monotonic", lambda: elapsed)
 
     def assert_committed(*args: object, **kwargs: object) -> None:
         assert rig.read().updated_at == rig.clock()
@@ -713,7 +713,7 @@ def test_transition_publication_failure_recovers_on_idle_tick(
     with rig.session_factory.begin() as session:
         seed_run(session, Stage.ENHANCE_MATCH)
     elapsed = 0.0
-    monkeypatch.setattr(orchestrator.time, "monotonic", lambda: elapsed)
+    monkeypatch.setattr(orchestrator, "_monotonic", lambda: elapsed)
     publisher = rig.publishers["finish_pipeline"]
     publisher.side_effect = OperationalError("offline")
     rig.seed(P.RELEASING)
@@ -791,3 +791,43 @@ def test_release_pending_keeps_both_lanes_closed_until_the_other_service_is_back
     assert not post_lane_open(snapshot, rig.settings)
     assert rig.step().phase == P.LLM
     rig.publishers["finish_pipeline"].assert_called_once_with((str(post.id),), ignore_result=True)
+
+
+def test_pending_release_keeps_the_lease_recovered_from_status(rig: Rig) -> None:
+    """A transient "free" status after a 202 must not count as a confirmed release."""
+    rig.broker.lease_id = "test-lease"
+    rig.seed(P.RELEASING, lease_id=None)
+    for key in sorted(SERVICE_KEYS):
+        rig.controller.states[key] = ServiceState.STOPPED
+    rig.broker.release_pending = 1
+    assert rig.step().phase == P.RELEASING
+    after = rig.read()
+    assert after is not None and after.lease_id == "test-lease"
+    assert rig.step().phase == P.LLM
+    releases = [call for call in rig.broker.calls if call.url.path == "/release"]
+    assert len(releases) == 2
+
+
+def test_publish_lane_reports_whether_anything_was_sent(
+    session_factory: sessionmaker[Session], rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from voxint.gpu_phase import orchestrator
+
+    now = rig.clock()
+    assert orchestrator._publish_lane(session_factory, rig.settings, P.AUDIO, now) is False
+    with session_factory.begin() as session:
+        seed_run(session, None)
+    assert orchestrator._publish_lane(session_factory, rig.settings, P.AUDIO, now) is True
+
+    def broken_factory() -> Session:
+        raise RuntimeError("database unavailable")
+
+    assert (
+        orchestrator._publish_lane(
+            broken_factory,  # type: ignore[arg-type]
+            rig.settings,
+            P.AUDIO,
+            now,
+        )
+        is False
+    )

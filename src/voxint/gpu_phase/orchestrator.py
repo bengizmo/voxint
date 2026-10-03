@@ -37,6 +37,8 @@ ACQUIRE_PENDING_SECONDS = 600
 RELEASE_PENDING_SECONDS = 900
 IDLE_REPUBLISH_SECONDS = 300
 _last_lane_publish: dict[P, float] = {}
+# Module alias so tests can fake the clock without patching the stdlib.
+_monotonic = time.monotonic
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,8 @@ class Observed:
     ready: bool = False
     control_error: str | None = None
     stopped: bool = False
+    # The lease id a release call used, possibly recovered from broker status.
+    release_lease_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -213,7 +217,14 @@ def decide(
             )
         if o.release and o.release.kind == "pending":
             # The LLM lane opens only once the broker confirms the other service is back.
+            # Keep the id (it may have come from broker status) so the next tick asks
+            # about this lease again instead of reading a transient "free" as released.
+            if o.release_lease_id:
+                fields["lease_id"] = o.release_lease_id
             if age >= RELEASE_PENDING_SECONDS:
+                if release:
+                    # Do not let a stale release request bounce error straight back here.
+                    fields["operator_request"] = None
                 return failure(
                     P.ERROR,
                     "could not return the GPU: the other service did not come back within "
@@ -280,15 +291,16 @@ def tick(
             **transition.fields,
         )
     if transition.phase in (P.AUDIO, P.LLM):
-        monotonic_now = time.monotonic()
+        monotonic_now = _monotonic()
         last_publish = _last_lane_publish.get(transition.phase)
-        if transition.phase != s.phase or (
+        due = transition.phase != s.phase or (
             idle_demand
             and (last_publish is None or monotonic_now - last_publish >= IDLE_REPUBLISH_SECONDS)
-        ):
-            # Throttle attempts, including broker failures, only after the commit.
+        )
+        # Publication runs after the commit. Only a publish that sent (or tried to
+        # send) something arms the idle throttle; an empty pass does not.
+        if due and _publish_lane(session_factory, settings, transition.phase, now):
             _last_lane_publish[transition.phase] = monotonic_now
-            _publish_lane(session_factory, settings, transition.phase, now)
     return TickResult("advanced" if transition.phase != s.phase else "waiting", transition.phase)
 
 
@@ -376,13 +388,14 @@ def _observe_services(
             if status.kind == "free" or status.holder != "voxint":
                 return Observed(release=ReleaseResult("released"))
             lease_id = status.lease_id
-        return Observed(release=client.release(lease_id or ""))
+        return Observed(release=client.release(lease_id or ""), release_lease_id=lease_id)
     return Observed(acquire=renewal)
 
 
 def _publish_lane(
     factory: sessionmaker[Session], settings: Settings, phase: P, now: datetime
-) -> None:
+) -> bool:
+    """Publish the lane's queued work. True when anything was sent or attempted."""
     # Lazy imports keep task registration out of the pure decision module's import path.
     from celery.exceptions import OperationalError
 
@@ -391,7 +404,11 @@ def _publish_lane(
     from voxint.gpu_phase.dispatch import redispatch_queued_runs
     from voxint.worker import tasks
 
+    attempted = False
+
     def publish(run_id: uuid.UUID, stage: Stage | None) -> bool:
+        nonlocal attempted
+        attempted = True
         tasks.pipeline_task_for_stage(stage).apply_async((str(run_id),), ignore_result=True)
         return True
 
@@ -412,6 +429,14 @@ def _publish_lane(
                     for job_id in module.stale_queued_job_ids(
                         session, cutoff=now, limit=tasks.STALE_EMBEDDING_REDISPATCH_LIMIT
                     ):
+                        attempted = True
                         task.apply_async((str(job_id),), ignore_result=True)
     except OperationalError:
         logger.warning("GPU phase lane publication deferred")
+        return True
+    except Exception:
+        # A database error here must not escape after the phase commit; the next
+        # idle tick or the recovery sweep publishes the work.
+        logger.exception("GPU phase lane publication failed")
+        return attempted
+    return attempted

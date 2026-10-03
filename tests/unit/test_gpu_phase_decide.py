@@ -313,3 +313,17 @@ def test_release_pending_waits_for_the_other_service(age: int, expected: P) -> N
     assert result.phase == expected
     if expected == P.ERROR:
         assert "did not come back" in str(result.fields["last_error"])
+
+
+def test_release_pending_timeout_clears_a_release_request() -> None:
+    result = decide(
+        snapshot(
+            P.RELEASING, age=900, lease_id="lease", operator_request=OperatorRequest.RELEASE
+        ),
+        Counts(),
+        Observed(services=(), release=ReleaseResult("pending"), release_lease_id="lease"),
+        NOW,
+        phase_settings(),
+    )
+    assert result.phase == P.ERROR
+    assert result.fields["operator_request"] is None
