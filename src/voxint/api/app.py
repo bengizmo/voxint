@@ -77,7 +77,12 @@ from voxint.api.routers.media import router as media_router
 from voxint.api.routers.palette import router as palette_router
 from voxint.api.routers.projects import router as projects_router
 from voxint.api.routers.quotes import router as quotes_router
-from voxint.api.routers.settings import _settings_context, _settings_page_template, setup_router
+from voxint.api.routers.settings import (
+    _settings_context,
+    _settings_page_template,
+    setup_pending_router,
+    setup_router,
+)
 from voxint.api.routers.settings import router as settings_router
 from voxint.api.routers.speakers import router as speakers_router
 from voxint.config import Settings, get_settings
@@ -547,6 +552,7 @@ def _register_routes(app: FastAPI) -> None:
     # ---- First-run setup wizard (issue #3): moved to routers/settings.py
     # (setup_router, registered on `app` so the onboarding gate exempts it).
     app.include_router(setup_router)
+    app.include_router(setup_pending_router)
     app.include_router(auth_router)
     app.include_router(account_router)
 

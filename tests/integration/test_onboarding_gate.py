@@ -46,6 +46,8 @@ EXEMPT_PATHS = {
     # on the setup wizard too. Auth-gated by its own OperatorDep, not open.
     "/favicon.ico",
     "/setup",
+    # Authenticated non-admins must reach the waiting page before setup completes.
+    "/setup/pending",
     "/setup/folders/browse",
     "/setup/folders",
     "/setup/scan",
