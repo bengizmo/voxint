@@ -54,9 +54,9 @@ from voxint.enrichment import asset_jobs, embedding_jobs, research_jobs, transla
 from voxint.enrichment.research_jobs import execute_job
 from voxint.gpu_phase.dispatch import lane_filters, open_lanes
 from voxint.gpu_phase.state import (
+    admit_lane,
     gates_enabled,
     lane_open_for_segment,
-    post_lane_open,
     read_phase_if_enabled,
 )
 from voxint.ingest.watch import sweep_watch_folders
@@ -278,8 +278,23 @@ def _drive_segment(
             diarization_num_speakers=num_speakers_hint,
         )
     stage_fns = build_stage_fns(ctx)
+    # The early gate above is advisory; this admission re-checks the phase inside
+    # the entry CAS transaction (see voxint.gpu_phase.state.admit_lane).
+    phase_refused = False
+
+    def admit(session: Session) -> bool:
+        nonlocal phase_refused
+        phase_refused = not admit_lane(session, settings, segment)
+        return not phase_refused
+
     try:
-        final = execute_run(factory, run_id, stage_fns, settings=settings, stages=segment)
+        # Feature off: the call is unchanged (no admit keyword at all).
+        if gates_enabled(settings):
+            final = execute_run(
+                factory, run_id, stage_fns, settings=settings, stages=segment, admit=admit
+            )
+        else:
+            final = execute_run(factory, run_id, stage_fns, settings=settings, stages=segment)
     except StageFailedError as exc:
         if not retryable_cause(exc) or exc.failed_snapshot is None:
             raise  # deterministic — the failure lane owns it now
@@ -306,6 +321,9 @@ def _drive_segment(
             exc=exc, countdown=delay + random.uniform(0, delay * 0.1)
         )
     else:
+        if phase_refused:
+            logger.info("GPU phase closed at admission; run %s deferred (stays QUEUED)", run_id)
+            return "gpu-phase-wait"
         if final.status is RunStatus.COMPLETED and segment == POST_SEGMENT:
             # Only the owning post lane performs completion side effects. A
             # late/redelivered GPU task may observe an already-COMPLETED row;
@@ -682,13 +700,6 @@ def watch_sweep() -> dict[str, Any]:
     return summary.as_dict()
 
 
-def _post_job_phase_closed(factory: sessionmaker[Session], settings: Settings) -> bool:
-    if not gates_enabled(settings):
-        return False
-    with factory() as session:
-        return not post_lane_open(read_phase_if_enabled(session, settings), settings)
-
-
 @app.task(name="voxint.generate_run_asset", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
 def generate_run_asset(job_id_str: str) -> None:
     """Run one queued run-asset generation job (issue #41).
@@ -698,11 +709,7 @@ def generate_run_asset(job_id_str: str) -> None:
     see. A duplicate delivery no-ops on the guarded queued→running claim.
     """
     factory, _ = _runtime()
-    settings = get_settings()
-    if _post_job_phase_closed(factory, settings):
-        logger.info("GPU phase closed; job %s deferred (stays QUEUED)", job_id_str)
-        return
-    asset_jobs.execute_job(factory, uuid.UUID(job_id_str), settings=settings)
+    asset_jobs.execute_job(factory, uuid.UUID(job_id_str), settings=get_settings())
 
 
 def _autogenerate_run_assets(
@@ -745,11 +752,7 @@ def translate_run(job_id_str: str) -> None:
     duplicate delivery no-ops on the guarded queued→running claim.
     """
     factory, _ = _runtime()
-    settings = get_settings()
-    if _post_job_phase_closed(factory, settings):
-        logger.info("GPU phase closed; job %s deferred (stays QUEUED)", job_id_str)
-        return
-    translation_jobs.execute_job(factory, uuid.UUID(job_id_str), settings=settings)
+    translation_jobs.execute_job(factory, uuid.UUID(job_id_str), settings=get_settings())
 
 
 def _autogenerate_translation(
@@ -950,11 +953,7 @@ def research_speaker(job_id_str: str) -> None:
     failure. A duplicate delivery no-ops on the guarded queued→running claim.
     """
     factory, _ = _runtime()
-    settings = get_settings()
-    if _post_job_phase_closed(factory, settings):
-        logger.info("GPU phase closed; job %s deferred (stays QUEUED)", job_id_str)
-        return
-    execute_job(factory, uuid.UUID(job_id_str), settings=settings)
+    execute_job(factory, uuid.UUID(job_id_str), settings=get_settings())
 
 
 @app.task(name="voxint.gpu_phase_tick", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]

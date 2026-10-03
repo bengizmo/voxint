@@ -38,7 +38,8 @@ def test_all_phase_predicates(phase: GpuPhase | None, enabled: bool) -> None:
     )
     settings = phase_settings(gpu_phase_enabled=enabled)
     gpu = not enabled or phase == GpuPhase.AUDIO
-    post = not enabled or phase in (None, GpuPhase.LLM)
+    # A missing row (None) closes both lanes while enabled.
+    post = not enabled or phase == GpuPhase.LLM
     assert gpu_lane_open(snapshot, settings) is gpu
     assert post_lane_open(snapshot, settings) is post
     assert lane_open_for_segment(snapshot, settings, GPU_SEGMENT) is gpu
@@ -70,6 +71,10 @@ def test_config_bounds_and_secrets() -> None:
     ]:
         with pytest.raises(ValidationError, match=field):
             phase_settings(**{field: value})
+    # The timing relation only binds when the feature is on.
+    assert Settings(
+        _env_file=None, gpu_phase_min_dwell_seconds=8000, gpu_phase_max_audio_seconds=100
+    ).gpu_phase_enabled is False
     settings = phase_settings(
         gpu_phase_min_dwell_seconds=0,
         gpu_phase_max_audio_seconds=0,

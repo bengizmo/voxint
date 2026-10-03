@@ -860,9 +860,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_gpu_phase(self) -> "Settings":
-        if self.gpu_phase_max_audio_seconds < self.gpu_phase_min_dwell_seconds:
-            raise ValueError("gpu_phase_max_audio_seconds must be >= gpu_phase_min_dwell_seconds")
         if self.gpu_phase_enabled:
+            if self.gpu_phase_max_audio_seconds < self.gpu_phase_min_dwell_seconds:
+                raise ValueError(
+                    "gpu_phase_max_audio_seconds must be >= gpu_phase_min_dwell_seconds"
+                )
             for name in ("gpu_lease_acquire_url", "gpu_lease_release_url", "gpu_lease_status_url"):
                 try:
                     url = urlsplit(getattr(self, name))
