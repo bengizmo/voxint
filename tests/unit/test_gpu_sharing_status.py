@@ -390,7 +390,7 @@ def test_apply_gpu_phase_llm_endpoint(phase: GpuPhase) -> None:
     ("raised", "not_running"),
     [
         (httpx.ConnectError("refused"), True),
-        (httpx.ConnectTimeout("slow"), True),
+        (httpx.ConnectTimeout("slow"), False),
         # Something accepted the connection and then stalled: a wedged server,
         # never an expected stop (#748 re-review).
         (httpx.ReadTimeout("slow"), False),
@@ -420,7 +420,7 @@ def test_check_llm_marks_only_no_answer_as_not_running(
     ("respond", "not_running", "detail"),
     [
         (httpx.ConnectError("refused"), True, "unreachable"),
-        (httpx.ConnectTimeout("slow"), True, "timeout"),
+        (httpx.ConnectTimeout("slow"), False, "timeout"),
         # Connected but wedged: a read/write/pool timeout stays an honest failure.
         (httpx.ReadTimeout("slow"), False, "timeout"),
         (httpx.WriteTimeout("slow"), False, "timeout"),
@@ -667,10 +667,16 @@ def test_pipeline_summary_carries_the_gpu_note() -> None:
 def _raise_tls_failure(request: httpx.Request) -> httpx.Response:
     import ssl
 
+    import httpcore
+
+    # The real wrap: httpcore maps the ssl error, then httpx maps httpcore's.
     try:
-        raise ssl.SSLCertVerificationError("certificate has expired")
-    except ssl.SSLError as tls:
-        raise httpx.ConnectError("TLS handshake failed", request=request) from tls
+        try:
+            raise ssl.SSLCertVerificationError("certificate has expired")
+        except ssl.SSLError as tls:
+            raise httpcore.ConnectError("TLS handshake failed") from tls
+    except httpcore.ConnectError as core:
+        raise httpx.ConnectError("TLS handshake failed", request=request) from core
 
 
 def _raise_refused(request: httpx.Request) -> httpx.Response:
@@ -688,4 +694,6 @@ def test_tls_failure_is_not_an_expected_stop() -> None:
             client.get("https://transcriber.invalid/healthz")
         assert connection_never_opened(caught.value) is expected
     assert connection_never_opened(httpx.ReadTimeout("stalled")) is False
+    # A connect timeout can be a TLS handshake that stalled after the TCP connect.
+    assert connection_never_opened(httpx.ConnectTimeout("handshake timed out")) is False
     assert connection_never_opened(ValueError("other")) is False

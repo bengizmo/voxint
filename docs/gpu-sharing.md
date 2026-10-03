@@ -211,13 +211,13 @@ recordings take and how long the other service takes to stop and start.
 | `voxint doctor` | A `gpu sharing` line. A model service GPU sharing stopped prints as `[off ]` and does not change the exit code. While Voxint holds the GPU, an `llm endpoint` that does not answer also prints as `[off ]`. |
 | `voxint gpu-phase status` | Phase, since when, lease expiry, last error, failure count, retry time, pending operator request, and how many runs are waiting for or running on each lane. |
 
-A stopped service is only called expected when the connection could not be
-opened at all (refused, or the connect itself timed out) and the phase task is
-running: the
-stored phase is present and was written within the last
-`max(3 * GPU_PHASE_TICK_SECONDS, 120)` seconds. A service that answers with an
-error (HTTP 401, a 5xx, a malformed reply), one that accepts the connection
-and then stalls, or a bad URL, is always reported as a failure. So is a stopped service while the phase task is not running or no
+A stopped service is only called expected when the connection was refused or
+the service's host name did not resolve (what a stopped container looks like),
+and the phase task is running: the stored phase is present and was written
+within the last `max(3 * GPU_PHASE_TICK_SECONDS, 120)` seconds. A service that
+answers with an error (HTTP 401, a 5xx, a malformed reply), a TLS failure, a
+connect that times out, one that accepts the connection and then stalls, or a
+bad URL, is always reported as a failure. So is a stopped service while the phase task is not running or no
 phase is recorded, because then nothing stopped it on purpose. The last error
 is shown with control characters removed and cut to 300 characters.
 

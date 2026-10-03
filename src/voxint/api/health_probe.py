@@ -107,19 +107,25 @@ def _read_body(response: httpx.Response) -> object | None:
 
 
 def connection_never_opened(exc: BaseException) -> bool:
-    """True when the connection was never established: the shape of a stopped
-    service (GPU sharing, #748). httpx also raises ``ConnectError`` for a TLS
-    failure (an expired certificate, a protocol mismatch), but then something
-    answered, so a TLS error anywhere in the cause chain stays an honest failure."""
-    if not isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+    """True when the connection was refused or the host name did not resolve: the
+    shape of a stopped service (GPU sharing, #748). A stopped container refuses the
+    port, or its Compose service name stops resolving; both raise ``ConnectError``.
+    httpx also raises ``ConnectError`` for a TLS failure (an expired certificate, a
+    protocol mismatch), so any ``ssl.SSLError`` in the cause chain stays an honest
+    failure. ``ConnectTimeout`` never counts: it means dropped packets or a TLS
+    handshake that stalled after the TCP connect, not a stopped service."""
+    if not isinstance(exc, httpx.ConnectError):
         return False
     seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
+    pending: list[BaseException] = [exc]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
         seen.add(id(current))
         if isinstance(current, ssl.SSLError):
             return False
-        current = current.__cause__ or current.__context__
+        pending.extend(e for e in (current.__cause__, current.__context__) if e is not None)
     return True
 
 
