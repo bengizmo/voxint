@@ -8,6 +8,7 @@ from typing import TypedDict, Unpack
 from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from voxint.config import Settings
 from voxint.db.models import GPU_SEGMENT, POST_SEGMENT, GpuPhaseState, PipelineRun, RunStatus, Stage
@@ -126,10 +127,12 @@ class PhaseFields(TypedDict, total=False):
     operator_request: OperatorRequest | None
 
 
-def _locked_row(session: Session) -> GpuPhaseState:
+def _locked_row(session: Session, *, now: datetime | None = None) -> GpuPhaseState:
     # Repair an absent singleton, with concurrent writers serialized on the row.
     session.execute(
-        insert(GpuPhaseState).values(id=1).on_conflict_do_nothing(index_elements=["id"])
+        insert(GpuPhaseState)
+        .values(id=1, phase_since=now or datetime.now(UTC))
+        .on_conflict_do_nothing(index_elements=["id"])
     )
     return session.execute(
         select(GpuPhaseState)
@@ -139,15 +142,31 @@ def _locked_row(session: Session) -> GpuPhaseState:
     ).scalar_one()
 
 
+class _AnyRequest(enum.Enum):
+    VALUE = "any"
+
+
 def set_phase(
-    session: Session, phase: GpuPhase, *, now: datetime, **fields: Unpack[PhaseFields]
+    session: Session,
+    phase: GpuPhase,
+    *,
+    now: datetime,
+    expected_request: OperatorRequest | _AnyRequest | None = _AnyRequest.VALUE,
+    **fields: Unpack[PhaseFields],
 ) -> None:
-    row = _locked_row(session)
+    # Compare under the same lock as the write so operator I/O cannot be overwritten.
+    row = _locked_row(session, now=now)
     if row.phase != phase:
         row.phase_since = now
     row.phase = phase.value
     row.updated_at = now
     for name, value in fields.items():
+        if (
+            name == "operator_request"
+            and expected_request is not _AnyRequest.VALUE
+            and row.operator_request != expected_request
+        ):
+            continue
         setattr(row, name, value)
     session.flush()
 
@@ -170,24 +189,68 @@ def gpu_lane_demand(session: Session) -> int:
     ).scalar_one()
 
 
+def post_lane_queued(session: Session) -> int:
+    return session.execute(
+        select(func.count())
+        .select_from(PipelineRun)
+        .where(
+            PipelineRun.status == RunStatus.QUEUED.value,
+            PipelineRun.current_stage.in_(POST_SEGMENT),
+        )
+    ).scalar_one()
+
+
 def _in_flight(session: Session, segment: frozenset[Stage]) -> int:
+    stage_filter: ColumnElement[bool] = PipelineRun.current_stage.in_(segment)
+    if segment == GPU_SEGMENT:
+        stage_filter = or_(PipelineRun.current_stage.is_(None), stage_filter)
     return session.execute(
         select(func.count())
         .select_from(PipelineRun)
         .where(
             PipelineRun.status == RunStatus.RUNNING.value,
-            PipelineRun.current_stage.in_(segment),
+            stage_filter,
         )
     ).scalar_one()
 
 
 def gpu_lane_in_flight(session: Session) -> int:
+    """Count RUNNING NULL current_stage only on the GPU side because the engine sets
+    it on entry CAS and never clears it mid-pipeline (completed runs have NULL
+    with status COMPLETED).
+    """
     return _in_flight(session, GPU_SEGMENT)
 
 
 def post_lane_in_flight(session: Session) -> int:
-    """RUNNING pipeline runs in the post lane. LLM jobs are not counted here."""
+    """Exclude RUNNING NULL current_stage (GPU only) because the engine sets it on
+    entry CAS and never clears it mid-pipeline (completed runs are NULL with status COMPLETED).
+    """
     return _in_flight(session, POST_SEGMENT)
+
+
+def running_llm_jobs(session: Session) -> int:
+    """Only active LLM work blocks borrowing; queued work stays behind the gate."""
+    return _llm_jobs(session, "running")
+
+
+def queued_llm_jobs(session: Session) -> int:
+    return _llm_jobs(session, "queued")
+
+
+def _llm_jobs(session: Session, status: str) -> int:
+    from voxint.db.models import (
+        ResearchJob,
+        RunAssetJob,
+        TranslationJob,
+    )
+
+    return sum(
+        session.execute(
+            select(func.count()).select_from(model).where(model.status == status)
+        ).scalar_one()
+        for model in (ResearchJob, RunAssetJob, TranslationJob)
+    )
 
 
 def llm_unavailable_message(session: Session, settings: Settings) -> str | None:

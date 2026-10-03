@@ -16,9 +16,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   (migration `0068`) records whether the GPU is in its audio or LLM phase.
   With `GPU_PHASE_ENABLED=true`, GPU-lane runs wait in the queue until the
   phase is audio, and post-lane runs, run assets, translations and speaker
-  research wait until it is LLM. The orchestrator that moves between phases
-  is not in this change, so enabling the setting on its own leaves audio
-  work queued. Settings are documented in `.env.example`.
+  research wait until it is LLM. A periodic task borrows the GPU through
+  operator-configured HTTP broker hooks, starts and checks audio services,
+  and stops them before returning the lease. The task uses a dedicated
+  `gpu_phase` queue. See `docs/gpu-sharing.md` for the broker contract and
+  recovery behavior. Settings are documented in `.env.example`.
 - **A Markdown export laid out as speaker turns** (#741). The Markdown
   export and the on-screen reading view now show `[HH:MM:SS] **Name:** text`
   paragraphs, and the Markdown file opens with the recording's title. Speakers are assigned word by word
