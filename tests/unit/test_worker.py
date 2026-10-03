@@ -8,7 +8,7 @@ from voxint.clients.errors import ProtocolError, ServiceError
 from voxint.config import Settings
 from voxint.db.models import GPU_SEGMENT, POST_SEGMENT, RunStatus, Stage
 from voxint.pipeline.engine import StageFailedError
-from voxint.worker.app import POST_QUEUE, app, build_beat_schedule
+from voxint.worker.app import GPU_PHASE_QUEUE, POST_QUEUE, app, build_beat_schedule
 from voxint.worker.tasks import (
     activity_prune,
     backoff_seconds,
@@ -29,8 +29,9 @@ def test_worker_reliability_settings() -> None:
     assert app.conf.broker_transport_options["visibility_timeout"] >= 21600
     assert "recovery-sweep" in app.conf.beat_schedule
     assert app.conf.task_default_queue == "celery"
-    assert {queue.name for queue in app.conf.task_queues} == {"celery", POST_QUEUE}
+    assert {queue.name for queue in app.conf.task_queues} == {"celery", POST_QUEUE, GPU_PHASE_QUEUE}
     assert app.conf.task_routes == {
+        "voxint.gpu_phase_tick": {"queue": GPU_PHASE_QUEUE},
         "voxint.finish_pipeline": {"queue": POST_QUEUE},
         "voxint.generate_run_asset": {"queue": POST_QUEUE},
         "voxint.research_speaker": {"queue": POST_QUEUE},

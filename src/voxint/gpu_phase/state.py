@@ -101,10 +101,12 @@ class PhaseFields(TypedDict, total=False):
     operator_request: OperatorRequest | None
 
 
-def _locked_row(session: Session) -> GpuPhaseState:
+def _locked_row(session: Session, *, now: datetime | None = None) -> GpuPhaseState:
     # Repair an absent singleton, with concurrent writers serialized on the row.
     session.execute(
-        insert(GpuPhaseState).values(id=1).on_conflict_do_nothing(index_elements=["id"])
+        insert(GpuPhaseState)
+        .values(id=1, phase_since=now or datetime.now(UTC))
+        .on_conflict_do_nothing(index_elements=["id"])
     )
     return session.execute(
         select(GpuPhaseState)
@@ -117,7 +119,7 @@ def _locked_row(session: Session) -> GpuPhaseState:
 def set_phase(
     session: Session, phase: GpuPhase, *, now: datetime, **fields: Unpack[PhaseFields]
 ) -> None:
-    row = _locked_row(session)
+    row = _locked_row(session, now=now)
     if row.phase != phase:
         row.phase_since = now
     row.phase = phase.value
@@ -162,3 +164,26 @@ def gpu_lane_in_flight(session: Session) -> int:
 
 def post_lane_in_flight(session: Session) -> int:
     return _in_flight(session, POST_SEGMENT)
+
+
+def running_llm_jobs(session: Session) -> int:
+    """Only active LLM work blocks borrowing; queued work stays behind the gate."""
+    from voxint.db.models import (
+        ResearchJob,
+        ResearchJobStatus,
+        RunAssetJob,
+        RunAssetJobStatus,
+        TranslationJob,
+        TranslationJobStatus,
+    )
+
+    return sum(
+        session.execute(
+            select(func.count()).select_from(model).where(model.status == status)
+        ).scalar_one()
+        for model, status in (
+            (ResearchJob, ResearchJobStatus.RUNNING.value),
+            (RunAssetJob, RunAssetJobStatus.RUNNING.value),
+            (TranslationJob, TranslationJobStatus.RUNNING.value),
+        )
+    )

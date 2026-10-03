@@ -32,6 +32,7 @@ _CORE_TASK_NAMES: frozenset[str] = frozenset(
         "voxint.compute_term_stats",
         "voxint.finish_pipeline",
         "voxint.gc_sweep",
+        "voxint.gpu_phase_tick",
         "voxint.generate_run_asset",
         "voxint.media_reconcile",
         "voxint.generate_segment_embeddings",
@@ -46,16 +47,14 @@ _CORE_TASK_NAMES: frozenset[str] = frozenset(
 _core_task_collisions = sorted(_CORE_TASK_NAMES.intersection(_registry.task_names()))
 if _core_task_collisions:
     raise PluginError(
-        "plugin Celery task name(s) collide with core tasks: "
-        + ", ".join(_core_task_collisions)
+        "plugin Celery task name(s) collide with core tasks: " + ", ".join(_core_task_collisions)
     )
 # Every active plugin's task modules, appended to the core include. Empty ⇒ the
 # include list carries only the core module, unchanged.
-_plugin_task_modules = [
-    module for plugin in _registry.plugins for module in plugin.task_modules()
-]
+_plugin_task_modules = [module for plugin in _registry.plugins for module in plugin.task_modules()]
 
 POST_QUEUE = "post"
+GPU_PHASE_QUEUE = "gpu_phase"
 
 # Fixed cadence for the activity-outbox retention prune (issue #162): hourly is
 # ample for a 500-row cap, and this earns no env knob (anti-bloat).
@@ -108,6 +107,12 @@ def build_beat_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
             "task": "voxint.activity_prune",
             "schedule": _ACTIVITY_PRUNE_SECONDS,
         }
+    if settings.gpu_phase_enabled:
+        schedule["gpu-phase-tick"] = {
+            "task": "voxint.gpu_phase_tick",
+            "schedule": settings.gpu_phase_tick_seconds,
+            "options": {"expires": settings.gpu_phase_tick_seconds},
+        }
     return schedule
 
 
@@ -119,11 +124,9 @@ app = Celery(
 )
 app.conf.task_acks_late = True
 app.conf.worker_prefetch_multiplier = 1
-# Declare both lanes explicitly while retaining Celery's conventional default
-# queue. A worker started without ``-Q`` therefore consumes BOTH queues, keeping
-# the base Compose command and native launcher unchanged; GPU deployments alone
-# split the lanes into separate workers with overlay-level ``-Q`` flags.
-app.conf.task_queues = (Queue("celery"), Queue(POST_QUEUE))
+# A flagless worker consumes all three queues. The opt-in compose.gpu-phase.yaml
+# overlay pins the regular worker to celery,post and gives gpu_phase its own worker.
+app.conf.task_queues = (Queue("celery"), Queue(POST_QUEUE), Queue(GPU_PHASE_QUEUE))
 app.conf.task_default_queue = "celery"
 # Run assets and speaker research are LLM-bound too: they must not serialize
 # behind GPU work on a concurrency-1 GPU-lane worker. The beat sweeps route to
@@ -132,9 +135,9 @@ app.conf.task_default_queue = "celery"
 # so on a split deployment it must never sit queued behind a multi-hour GPU
 # segment (observed on maintainer hardware: a sweep parked behind hundreds of
 # backlogged GPU-lane messages). Sweeps are DB/broker-bound, never GPU-bound.
-# Flagless single-worker deployments are unaffected: one worker drains both
-# queues either way.
+# Flagless single-worker deployments consume all declared queues.
 app.conf.task_routes = {
+    "voxint.gpu_phase_tick": {"queue": GPU_PHASE_QUEUE},
     "voxint.finish_pipeline": {"queue": POST_QUEUE},
     "voxint.generate_run_asset": {"queue": POST_QUEUE},
     "voxint.research_speaker": {"queue": POST_QUEUE},

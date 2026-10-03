@@ -6,6 +6,7 @@
   "voxint.gc_sweep",
   "voxint.generate_run_asset",
   "voxint.generate_segment_embeddings",
+  "voxint.gpu_phase_tick",
   "voxint.media_reconcile",
   "voxint.notify_sweep",
   "voxint.recovery_sweep",
