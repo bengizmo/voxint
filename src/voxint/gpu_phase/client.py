@@ -1,6 +1,6 @@
 """Host broker hooks (all calls have a ten-second timeout).
 
-POST acquire sends holder=voxint, ttl_seconds=max(4*tick_seconds, 120), and
+POST acquire sends holder=voxint, ttl_seconds=max(10*tick_seconds, 600), and
 lease_id (null for acquisition, current ID for renew-on-acquire). 200 returns
 lease_id and optional ISO8601 expires_at; null/absent expiry means explicit
 release only. 202 state=pending requests another tick; 409 holder plus optional
@@ -75,7 +75,7 @@ class LeaseClient:
         self._settings = settings
         self._client = client
         self._transport = transport
-        self.ttl_seconds = max(4 * settings.gpu_phase_tick_seconds, 120)
+        self.ttl_seconds = max(10 * settings.gpu_phase_tick_seconds, 600)
 
     def _request(
         self,
@@ -99,10 +99,10 @@ class LeaseClient:
         else:
             with httpx.Client(transport=self._transport) as client:
                 response = send(client)
-        # Release and renewal-loss responses need no JSON body.
+        # Release, unexpected status codes and renewal loss need no JSON body.
         if (
             body_optional
-            or response.status_code == 404
+            or response.status_code not in (200, 202, 409)
             or (
                 response.status_code == 409
                 and body is not None
@@ -110,12 +110,18 @@ class LeaseClient:
             )
         ):
             return response.status_code, {}
-        data = response.json()
-        if not isinstance(data, dict):
-            raise ValueError
+        try:
+            data = response.json()
+            if not isinstance(data, dict):
+                raise ValueError
+        except ValueError:
+            if response.status_code != 200:
+                return response.status_code, {}
+            raise
         return response.status_code, data
 
     def acquire(self, lease_id: str | None = None) -> AcquireResult:
+        code: int | None = None
         try:
             code, body = self._request(
                 "POST",
@@ -127,7 +133,7 @@ class LeaseClient:
                 },
             )
             if lease_id is not None and code in (404, 409):
-                return AcquireResult("lost", reason="lease lost")
+                return AcquireResult("lost", reason=f"lease lost (HTTP {code})")
             if code == 200:
                 return AcquireResult("held", _string(body.get("lease_id")), _expiry(body))
             if code == 202 and body.get("state") == "pending":
@@ -137,10 +143,19 @@ class LeaseClient:
                 delay = body.get("retry_after_seconds", 0)
                 if type(delay) is not int or delay < 0:
                     raise ValueError
-                return AcquireResult("busy", retry_after_seconds=delay, reason="GPU is busy")
-            return AcquireResult("failed", reason="unexpected broker response")
+                return AcquireResult(
+                    "busy", retry_after_seconds=delay, reason=f"GPU is busy (HTTP {code})"
+                )
+            return AcquireResult("failed", reason=f"unexpected broker response (HTTP {code})")
         except Exception:
-            return AcquireResult("failed", reason="broker unavailable or invalid response")
+            return AcquireResult(
+                "failed",
+                reason=(
+                    f"invalid broker response (HTTP {code})"
+                    if code is not None and code != 200
+                    else "broker unavailable or invalid response"
+                ),
+            )
 
     def release(self, lease_id: str) -> ReleaseResult:
         try:
@@ -152,19 +167,18 @@ class LeaseClient:
             )
             if code in (200, 404):
                 return ReleaseResult("released")
-            return ReleaseResult("failed", "broker refused release")
+            return ReleaseResult("failed", f"broker refused release (HTTP {code})")
         except Exception:
             return ReleaseResult("failed", "broker unavailable or invalid response")
 
     def status(self) -> StatusResult:
+        code: int | None = None
         try:
             code, body = self._request("GET", self._settings.gpu_lease_status_url)
             if code == 200:
                 expiry = _expiry(body)
                 if (
                     body.get("state") == "free"
-                    and "holder" in body
-                    and "lease_id" in body
                     and body.get("holder") is None
                     and body.get("lease_id") is None
                 ):
@@ -173,6 +187,13 @@ class LeaseClient:
                     return StatusResult(
                         "held", _string(body.get("holder")), _string(body.get("lease_id")), expiry
                     )
-            return StatusResult("failed", reason="unexpected broker response")
+            return StatusResult("failed", reason=f"unexpected broker response (HTTP {code})")
         except Exception:
-            return StatusResult("failed", reason="broker unavailable or invalid response")
+            return StatusResult(
+                "failed",
+                reason=(
+                    f"invalid broker response (HTTP {code})"
+                    if code is not None and code != 200
+                    else "broker unavailable or invalid response"
+                ),
+            )

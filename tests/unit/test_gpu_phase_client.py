@@ -34,24 +34,27 @@ from voxint.gpu_phase.client import LeaseClient
         (409, {"holder": "other", "retry_after_seconds": -1}, False, "failed"),
     ],
 )
-def test_acquire_responses(code, body, renew, kind):
+def test_acquire_responses(code: int, body: object, renew: bool, kind: str) -> None:
     client = LeaseClient(
         phase_settings(), transport=httpx.MockTransport(lambda r: httpx.Response(code, json=body))
     )
     assert client.acquire("old" if renew else None).kind == kind
 
 
+@pytest.mark.parametrize("tick_seconds,ttl", [(30, 600), (60, 600), (90, 900)])
 @pytest.mark.parametrize("token", ["", "private-token"])
-def test_headers_ttl_and_renew(token):
+def test_headers_ttl_and_renew(token: str, tick_seconds: int, ttl: int) -> None:
     clock = FakeClock()
     broker = FakeGpuBroker(clock)
     with httpx.Client(transport=broker.transport) as http:
-        client = LeaseClient(phase_settings(gpu_lease_token=token, gpu_phase_tick_seconds=60), http)
+        client = LeaseClient(
+            phase_settings(gpu_lease_token=token, gpu_phase_tick_seconds=tick_seconds), http
+        )
         held = client.acquire()
         assert held.kind == "held"
         assert client.acquire(held.lease_id).kind == "held"
         body = json.loads(broker.calls[-1].content)
-        assert body == {"holder": "voxint", "ttl_seconds": 240, "lease_id": held.lease_id}
+        assert body == {"holder": "voxint", "ttl_seconds": ttl, "lease_id": held.lease_id}
         assert broker.calls[-1].headers.get("Authorization") == (
             f"Bearer {token}" if token else None
         )
@@ -63,10 +66,10 @@ def test_headers_ttl_and_renew(token):
 
 
 @pytest.mark.parametrize("mode", ["timeout", "down", "malformed", "5xx"])
-def test_failures_never_echo_secrets(mode, caplog):
+def test_failures_never_echo_secrets(mode: str, caplog: pytest.LogCaptureFixture) -> None:
     secret = "private-broker-token"
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         if mode == "timeout":
             raise httpx.ReadTimeout(secret)
         if mode == "down":
@@ -81,33 +84,38 @@ def test_failures_never_echo_secrets(mode, caplog):
     assert results[0].kind == results[1].kind == "failed"
     assert results[2].kind == ("released" if mode == "malformed" else "failed")
     assert secret not in repr(results) + caplog.text
+    if mode == "5xx":
+        assert all("HTTP 503" in result.reason for result in results)
 
 
 @pytest.mark.parametrize(
     "body,kind",
     [
         ({"state": "free", "holder": None, "lease_id": None}, "free"),
-        ({"state": "free"}, "failed"),
+        ({"state": "free"}, "free"),
         ({"state": "held", "holder": "voxint", "lease_id": "id"}, "held"),
+        ({"state": "held"}, "failed"),
+        ({"state": "held", "holder": "voxint"}, "failed"),
+        ({"state": "held", "lease_id": "id"}, "failed"),
         ({"state": "held", "holder": 4, "lease_id": "id"}, "failed"),
         ({"state": "free", "holder": "someone"}, "failed"),
         ({"state": "wrong"}, "failed"),
         ([], "failed"),
     ],
 )
-def test_status_shapes(body, kind):
+def test_status_shapes(body: object, kind: str) -> None:
     client = LeaseClient(
         phase_settings(), transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body))
     )
     assert client.status().kind == kind
 
 
-def test_expiry_frees_lease():
+def test_expiry_frees_lease() -> None:
     clock = FakeClock()
     broker = FakeGpuBroker(clock)
     client = LeaseClient(phase_settings(), transport=broker.transport)
     held = client.acquire()
-    clock.advance(121)
+    clock.advance(601)
     assert client.status().kind == "free"
     assert client.acquire(held.lease_id).kind == "lost"
     broker.explicit_release = True
@@ -115,8 +123,22 @@ def test_expiry_frees_lease():
 
 
 @pytest.mark.parametrize("code", [404, 409])
-def test_renew_lost_without_json(code):
+def test_renew_lost_without_json(code: int) -> None:
     client = LeaseClient(
         phase_settings(), transport=httpx.MockTransport(lambda r: httpx.Response(code))
     )
     assert client.acquire("existing").kind == "lost"
+
+
+@pytest.mark.parametrize("code", [202, 409, 503])
+@pytest.mark.parametrize("content", [b"private-token", b'["private-token"]'])
+def test_non_success_codes_survive_invalid_bodies(code: int, content: bytes) -> None:
+    client = LeaseClient(
+        phase_settings(gpu_lease_token="private-token"),
+        transport=httpx.MockTransport(lambda request: httpx.Response(code, content=content)),
+    )
+    results = [client.acquire(), client.release("lease"), client.status()]
+    for result in results:
+        assert result.kind == "failed"
+        assert f"HTTP {code}" in result.reason
+        assert "private-token" not in result.reason

@@ -4,6 +4,8 @@ Inspect services and broker ownership in llm even when idle: stopped containers
 alone cannot prove a broker lease was returned. Active phases renew instead of
 also issuing a redundant status request. Startup uses idempotent starts and
 inspection, so restarting the worker needs no process-local startup marker.
+Leases last at least 600 seconds (ten tick intervals) and renew before stopping
+services so sequential Docker stops have time to finish before broker release.
 """
 
 import logging
@@ -147,7 +149,7 @@ def decide(
         if (
             snapshot.phase in (P.AUDIO, P.DRAINING)
             and o.services
-            and any(x != ServiceState.RUNNING for x in o.services)
+            and ServiceState.STOPPED in o.services
         ):
             return failure(P.STOPPING_SERVICES, "audio service is not running")
         if snapshot.phase == P.STARTING_SERVICES:
@@ -264,6 +266,9 @@ def _observe(
             )
         return Observed(acquire=renewal, services=services)
     if s.phase == P.STOPPING_SERVICES:
+        if s.lease_id:
+            renewal = client.acquire(s.lease_id)
+            logger.info("GPU lease renewal before teardown: %s", renewal.kind)
         results = [controller.stop(k) for k in sorted(SERVICE_KEYS)]
         stopped = all(controller.inspect(k) == ServiceState.STOPPED for k in sorted(SERVICE_KEYS))
         ok = stopped and all(

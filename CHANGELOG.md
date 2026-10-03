@@ -14,7 +14,7 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   research wait until it is LLM. A periodic task borrows the GPU through
   operator-configured HTTP broker hooks, starts and checks audio services,
   and stops them before returning the lease. The task uses a dedicated
-  `gpu_phase` queue. See `docs/gpu-phase.md` for the broker contract and
+  `gpu_phase` queue. See `docs/gpu-sharing.md` for the broker contract and
   recovery behavior. Settings are documented in `.env.example`.
 - **A Markdown export laid out as speaker turns** (#741). The Markdown
   export and the on-screen reading view now show `[HH:MM:SS] **Name:** text`

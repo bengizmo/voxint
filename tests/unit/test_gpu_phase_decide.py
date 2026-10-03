@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import Unpack
 
 import pytest
 
@@ -10,12 +11,12 @@ from voxint.api.service_control import ServiceState
 from voxint.gpu_phase.client import AcquireResult, ReleaseResult, StatusResult
 from voxint.gpu_phase.orchestrator import Counts, Observed, decide
 from voxint.gpu_phase.state import GpuPhase as P
-from voxint.gpu_phase.state import GpuPhaseSnapshot, OperatorRequest
+from voxint.gpu_phase.state import GpuPhaseSnapshot, OperatorRequest, PhaseFields
 
 NOW = datetime.now(UTC)
 
 
-def snapshot(phase, age=0, **kw):
+def snapshot(phase: P, age: int = 0, **kw: Unpack[PhaseFields]) -> GpuPhaseSnapshot:
     return replace(
         GpuPhaseSnapshot(
             1, phase, NOW - timedelta(seconds=age), None, None, None, 0, None, None, NOW
@@ -135,7 +136,9 @@ def snapshot(phase, age=0, **kw):
         ),
     ],
 )
-def test_matrix(phase, age, counts, observed, fields, expected):
+def test_matrix(
+    phase: P, age: int, counts: Counts, observed: Observed, fields: PhaseFields, expected: P
+) -> None:
     assert (
         decide(snapshot(phase, age, **fields), counts, observed, NOW, phase_settings()).phase
         == expected
@@ -143,13 +146,13 @@ def test_matrix(phase, age, counts, observed, fields, expected):
 
 
 @pytest.mark.parametrize("phase", list(P))
-def test_uncontrollable(phase):
+def test_uncontrollable(phase: P) -> None:
     result = decide(snapshot(phase), Counts(), Observed(controllable=False), NOW, phase_settings())
     assert result.phase == (P.LLM if phase == P.LLM else P.ERROR)
     assert result.fields["last_error"] == "service control unavailable"
 
 
-def test_backoff_and_failure_preservation():
+def test_backoff_and_failure_preservation() -> None:
     result = decide(
         snapshot(P.ACQUIRING, failures=2),
         Counts(),
@@ -165,7 +168,7 @@ def test_backoff_and_failure_preservation():
     assert result.fields["retry_after"] == NOW
 
 
-def test_busy_backoff_honors_long_broker_delay():
+def test_busy_backoff_honors_long_broker_delay() -> None:
     result = decide(
         snapshot(P.ACQUIRING),
         Counts(),
@@ -176,7 +179,7 @@ def test_busy_backoff_honors_long_broker_delay():
     assert result.fields["retry_after"] == NOW + timedelta(seconds=100000)
 
 
-def test_backoff_caps_repeated_failures():
+def test_backoff_caps_repeated_failures() -> None:
     result = decide(
         snapshot(P.STOPPING_SERVICES, failures=100),
         Counts(),

@@ -47,11 +47,14 @@ _CORE_TASK_NAMES: frozenset[str] = frozenset(
 _core_task_collisions = sorted(_CORE_TASK_NAMES.intersection(_registry.task_names()))
 if _core_task_collisions:
     raise PluginError(
-        "plugin Celery task name(s) collide with core tasks: " + ", ".join(_core_task_collisions)
+        "plugin Celery task name(s) collide with core tasks: "
+        + ", ".join(_core_task_collisions)
     )
 # Every active plugin's task modules, appended to the core include. Empty ⇒ the
 # include list carries only the core module, unchanged.
-_plugin_task_modules = [module for plugin in _registry.plugins for module in plugin.task_modules()]
+_plugin_task_modules = [
+    module for plugin in _registry.plugins for module in plugin.task_modules()
+]
 
 POST_QUEUE = "post"
 GPU_PHASE_QUEUE = "gpu_phase"
