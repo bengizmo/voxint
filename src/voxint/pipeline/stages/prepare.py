@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 from sqlalchemy.orm import Session
 
 from voxint.db.models import ArtifactKind, AudioArtifact, MediaItem, PipelineRun
@@ -16,6 +16,7 @@ from voxint.media.integrity import openable_current
 from voxint.media.normalize import normalize_to_wav
 from voxint.media.operations import has_active_operation
 from voxint.media.peaks import peaks_relative
+from voxint.media.recorded_date import probe_recorded_on
 from voxint.pipeline.stages.context import StageContext, StageDataError, StageDeferError
 
 # Run-scoped so retries overwrite their own output and runs never collide.
@@ -51,6 +52,16 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
     # The normalized stream's duration is canonical — source headers lie.
     media.duration_seconds = info.duration_seconds
     media.size_bytes = source.stat().st_size
+
+    # First write wins. Probe only the source; the normalized WAV has no tags.
+    if media.recorded_on is None:
+        found = probe_recorded_on(source, ffprobe_bin=ctx.ffprobe_bin)
+        if found is not None:
+            session.execute(
+                update(MediaItem)
+                .where(MediaItem.id == media.id, MediaItem.recorded_on.is_(None))
+                .values(recorded_on=found)
+            )
 
     # Also drop any waveform-peaks cache (issue #57): the WAV it described no
     # longer exists, and its row-level source fingerprint would fail anyway —

@@ -562,3 +562,36 @@ def test_confidence_band(score: float | None, expected: str) -> None:
 )
 def test_folder_label(path: str, expected: str | None) -> None:
     assert folder_label(path) == expected
+
+
+@pytest.mark.parametrize("month, label", list(enumerate(
+    ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"),
+    start=1,
+)))
+def test_format_recorded_date(month: int, label: str) -> None:
+    from datetime import date
+
+    from voxint.api.presentation import format_recorded_date
+
+    assert format_recorded_date(date(2026, month, 2)) == f"2 {label} 2026"
+    assert format_recorded_date(date(1999, 12, 31)) == "31 Dec 1999"
+    assert format_recorded_date(date(1, 1, 1)) == "1 Jan 0001"
+
+
+@pytest.mark.parametrize("snapshot", [
+    None, [], "date", {}, {"recorded": 123}, {"recorded": "2026-10-02T10:00"},
+    {"recorded": "2026-02-30"}, {"recorded": " "},
+])
+def test_recorded_from_snapshot_tolerates_tampering(snapshot: object) -> None:
+    from voxint.api.presentation import recorded_from_snapshot
+
+    assert recorded_from_snapshot(snapshot) is None
+
+
+def test_recorded_from_snapshot() -> None:
+    from datetime import date
+
+    from voxint.api.presentation import recorded_from_snapshot
+
+    assert recorded_from_snapshot({"recorded": "2026-10-02"}) == date(2026, 10, 2)
+    assert recorded_from_snapshot({"recorded": " 2026-10-02 "}) == date(2026, 10, 2)

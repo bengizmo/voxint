@@ -553,6 +553,9 @@ class MediaItem(Base):
     duration_seconds: Mapped[float | None] = mapped_column(Float)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     sha256: Mapped[str | None] = mapped_column(Text)
+    # Source creation date at the device's offset, first write wins; NULL if unknown.
+    # The sidecar recorded: key overrides at render time and is never stored here.
+    recorded_on: Mapped[date | None] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     trashed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

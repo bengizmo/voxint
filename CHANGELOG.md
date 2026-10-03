@@ -7,6 +7,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Recording dates in Markdown turns headings** (#741). PREPARE reads the
+  source file's Apple creation date tag into `media_items.recorded_on`, keeping
+  the day at the device's own UTC offset and the first value found. The sidecar
+  `recorded:` key overrides the date in the heading. Use `voxint media
+  backfill-recorded-dates [--dry-run]` to fill dates for existing media. A sidecar
+  with an invalid `recorded:` value is now held like other invalid keys; this
+  key used to be ignored. An earlier run whose stored sidecar already holds a
+  valid `recorded:` date shows that date in its heading too.
 - **Leave fillers out of a Markdown export** (#741). Use `--drop-fillers` or
   `?fillers=drop` with the turns style to remove standalone English "um", "uh",
   "umm", "uhh", "uhm" and "erm". Sentence starts are re-capitalised and

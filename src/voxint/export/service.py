@@ -10,7 +10,12 @@ from sqlalchemy.orm import Session
 
 from voxint.adjudication.transcript import TranscriptText, attributed_transcript
 from voxint.adjudication.turns import attributed_turns, translated_turns
-from voxint.api.presentation import friendly_media_label, title_from_snapshot
+from voxint.api.presentation import (
+    format_recorded_date,
+    friendly_media_label,
+    recorded_from_snapshot,
+    title_from_snapshot,
+)
 from voxint.db.models import DiarizationTurn, PipelineRun
 from voxint.export import TranscriptFormat, render_transcript, to_markdown_turns, to_rttm
 from voxint.export.fillers import drop_fillers as remove_fillers
@@ -64,11 +69,18 @@ def parse_fillers(
 
 
 def export_title(session: Session, run_id: uuid.UUID) -> str:
-    """Use the frozen title or friendly source basename for the export header."""
+    """Use the frozen title or friendly source basename for the export header.
+
+    A known recording date follows as ``<title> | <D Mon YYYY>``: the frozen
+    sidecar ``recorded`` value first, else the source file's creation date. The
+    Markdown renderer escapes the whole header, so the separator reads ``\\|``.
+    """
     run = session.get(PipelineRun, run_id)
     if run is None:
         raise ValueError(f"run {run_id} not found")
-    return friendly_media_label(title_from_snapshot(run.sidecar), run.media_item.source_path)
+    title = friendly_media_label(title_from_snapshot(run.sidecar), run.media_item.source_path)
+    recorded = recorded_from_snapshot(run.sidecar) or run.media_item.recorded_on
+    return f"{title} | {format_recorded_date(recorded)}" if recorded is not None else title
 
 
 def render_run_transcript(
