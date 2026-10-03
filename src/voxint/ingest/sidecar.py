@@ -10,7 +10,8 @@ and upload paths can adopt it after v1 (watch-folder only).
 Machine-read keys (applied strictly — a bad type or value HOLDS the file):
 ``title`` (display name), ``speakers`` (list of names, unioned into the
 run's frozen domain-pack ``name_seeds``), ``domain_pack`` (pack name),
-``recorded`` (recording date), ``notes`` (operator notes). Every other key is
+``vocabulary`` (transcription terms), ``recorded`` (recording date),
+``notes`` (operator notes). Every other key is
 ignored for application but preserved verbatim in the stored snapshot
 (``Sidecar.raw``), so a sidecar can carry reference-only context from other
 tooling without being rejected.
@@ -51,6 +52,9 @@ MAX_SIDECAR_BYTES = 65_536
 MAX_TITLE_CHARS = 300
 MAX_SPEAKERS = 64
 MAX_SPEAKER_CHARS = 120
+MAX_VOCABULARY_TERMS = 64
+MAX_VOCABULARY_TERM_CHARS = 120
+MAX_VOCABULARY_CHARS = 2000
 MAX_NOTES_CHARS = 10_000
 MAX_PACK_NAME_CHARS = 120
 # Upper bound for the diarization speaker-count keys (issue #128), matching the
@@ -67,7 +71,10 @@ _MAX_NODES = 10_000
 _MAX_SNAPSHOT_BYTES = 4 * MAX_SIDECAR_BYTES
 
 _APPLIED_KEYS = frozenset(
-    {"title", "speakers", "domain_pack", "notes", "max_speakers", "num_speakers", "recorded"}
+    {
+        "title", "speakers", "domain_pack", "notes", "max_speakers", "num_speakers",
+        "recorded", "vocabulary",
+    }
 )
 
 # Same rejected categories as domain-pack corrections: Cc control, Cf format
@@ -97,6 +104,7 @@ class Sidecar:
 
     title: str | None
     speakers: tuple[str, ...]
+    vocabulary: tuple[str, ...]
     domain_pack: str | None
     notes: str | None
     # Diarization speaker-count hint (issue #128), distinct from ``speakers``
@@ -204,6 +212,7 @@ def parse_sidecar(text: str, *, source_name: str) -> Sidecar:
     return Sidecar(
         title=title,
         speakers=speakers,
+        vocabulary=_vocabulary_field(data, source_name),
         domain_pack=domain_pack,
         notes=notes,
         max_speakers=max_speakers,
@@ -392,6 +401,50 @@ def _speakers_field(data: dict[Any, Any], source_name: str) -> tuple[str, ...]:
         _reject_non_printing(cleaned, f"speaker {index + 1}", source_name)
         names.append(cleaned)
     return tuple(names)
+
+
+def _vocabulary_field(data: dict[Any, Any], source_name: str) -> tuple[str, ...]:
+    if "vocabulary" not in data:
+        return ()
+    value = data["vocabulary"]
+    if not isinstance(value, list):
+        raise SidecarError(
+            f"{source_name}: 'vocabulary' must be a list of terms (one '- term' "
+            f"per line), not {_type_word(value)}"
+        )
+    if len(value) > MAX_VOCABULARY_TERMS:
+        raise SidecarError(
+            f"{source_name}: 'vocabulary' lists {len(value)} terms; the maximum "
+            f"is {MAX_VOCABULARY_TERMS}"
+        )
+    terms: list[str] = []
+    for index, item in enumerate(value, 1):
+        label = f"term {index}"
+        if not isinstance(item, str):
+            raise SidecarError(
+                f"{source_name}: {label} must be text, not {_type_word(item)}"
+            )
+        cleaned = item.strip()
+        if not cleaned:
+            raise SidecarError(f"{source_name}: {label} is empty; give it a term or remove it")
+        # splitlines() also catches U+2028/U+2029 (Zl/Zp), which the
+        # non-printing check below does not; a term reaches the ASR prompt.
+        if len(cleaned.splitlines()) > 1:
+            raise SidecarError(f"{source_name}: {label} must be a single line")
+        if len(cleaned) > MAX_VOCABULARY_TERM_CHARS:
+            raise SidecarError(
+                f"{source_name}: {label} is longer than "
+                f"{MAX_VOCABULARY_TERM_CHARS} characters"
+            )
+        _reject_non_printing(cleaned, label, source_name)
+        if cleaned not in terms:
+            terms.append(cleaned)
+    if len(", ".join(terms)) > MAX_VOCABULARY_CHARS:
+        raise SidecarError(
+            f"{source_name}: 'vocabulary' list is too long for the transcription hint; "
+            "shorten it"
+        )
+    return tuple(terms)
 
 
 def _reject_non_printing(text: str, label: str, source_name: str) -> None:

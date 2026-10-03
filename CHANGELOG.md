@@ -7,6 +7,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Per-recording vocabulary in sidecars** (#741). A `vocabulary:` list adds
+  words to the recording's effective vocabulary, reserves their transcription
+  hint budget first, and places them last where the transcriber keeps them.
+  Limits are 64 terms, 120 characters per term, and 2000 characters including
+  separators. A sidecar with an invalid `vocabulary:` is now held like other
+  invalid keys; this key used to be ignored. An absent or empty list leaves
+  the frozen configuration and transcription request unchanged.
 - **Recording dates in Markdown turns headings** (#741). PREPARE reads the
   source file's Apple creation date tag into `media_items.recorded_on`, keeping
   the day at the device's own UTC offset and the first value found. The sidecar

@@ -148,8 +148,8 @@ Two things help it behave the way you expect:
 #### Describe a recording with a sidecar file
 
 When automatic ingest picks a recording up, you can hand Voxint some context
-along with it: a title, the names of the people speaking, working notes, or a
-domain pack. You do this with a **sidecar file**, a small text file that
+along with it: a title, the names of the people speaking, words to listen for,
+working notes, or a domain pack. You do this with a **sidecar file**, a small text file that
 travels next to the recording and is written in a simple `key: value` format
 called YAML.
 
@@ -162,6 +162,9 @@ recorded: 2026-10-02
 speakers:
   - Jane Doe
   - John Smith
+vocabulary:
+  - echocardiogram
+  - Dr. Patel
 domain_pack: medical
 notes: |
   Recorded at the spring conference.
@@ -175,6 +178,7 @@ Every line is optional. Here is what each one does:
 | `title` | Becomes the recording's display name in the queue and on the run page. |
 | `recorded` | The day the recording was made, written as YYYY-MM-DD. It appears after the title at the top of the Markdown transcript (the standard layout; the older `blocks` layout has no title line). Recordings added before this feature get their file date when they are processed again, or when an administrator runs `voxint media backfill-recorded-dates`. Without it, Voxint uses the creation date stored in the file by Apple devices, when there is one. |
 | `speakers` | Names of people likely in the recording. Voxint treats them as trusted name hints when it suggests speaker names during review, so these names surface sooner and more confidently. |
+| `vocabulary` | Words or names to listen for in this recording, one term per list line. Up to 64 terms, 120 characters per term, and 2000 characters total including the comma and space between terms. Each term must be non-empty text on a single line. Repeated terms are kept once after surrounding spaces are removed; the list must still have no more than 64 entries. An empty list (`vocabulary: []`) adds nothing. |
 | `domain_pack` | Picks the [domain pack](../domain-packs.md) for this one recording. It wins over the folder's pack setting. |
 | `notes` | Free text, saved as the run's operator notes. |
 
