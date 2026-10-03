@@ -16,7 +16,10 @@ import enum
 import json
 import logging
 import os
+import re
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -178,7 +181,8 @@ class NoopController:
 # Docker controller (via Docker Engine API over Unix socket)
 # ---------------------------------------------------------------------------
 
-_DOCKER_API_VERSION = "v1.43"
+# Highest Docker Engine API version supported by this client (SDK-style negotiation cap).
+_DOCKER_API_MAX = (1, 52)
 _GRACEFUL_SECONDS = 10
 _CONTROL_TIMEOUT_SECONDS = 30
 
@@ -193,6 +197,8 @@ class DockerController:
     ) -> None:
         self._socket_path = socket_path
         self._compose_project = compose_project
+        self._api_version: str | None = None
+        self._api_version_lock = threading.Lock()
         self._locks: dict[str, threading.Lock] = {key: threading.Lock() for key in SERVICE_KEYS}
 
     @property
@@ -203,13 +209,35 @@ class DockerController:
     def backend_name(self) -> str:
         return "docker"
 
-    def _client(self, timeout: float = 10.0) -> httpx.Client:
-        transport = httpx.HTTPTransport(uds=self._socket_path)
-        return httpx.Client(
-            transport=transport,
-            base_url=f"http://docker/{_DOCKER_API_VERSION}",
+    @contextmanager
+    def _client(self, timeout: float = 10.0) -> Iterator[httpx.Client]:
+        version = self._api_version
+        if version is None:
+            with httpx.Client(
+                transport=httpx.HTTPTransport(uds=self._socket_path),
+                base_url="http://docker",
+                timeout=httpx.Timeout(timeout),
+            ) as ping_client:
+                resp = ping_client.get("/_ping")
+                resp.raise_for_status()
+                match = re.fullmatch(
+                    r"v?([0-9]+)\.([0-9]+)(?:\.[0-9]+)?",
+                    resp.headers.get("Api-Version", "").strip(),
+                )
+                if match is not None:
+                    negotiated = min((int(match[1]), int(match[2])), _DOCKER_API_MAX)
+                    with self._api_version_lock:
+                        if self._api_version is None:
+                            self._api_version = f"v{negotiated[0]}.{negotiated[1]}"
+                        version = self._api_version
+            # Missing or malformed headers use unversioned paths for this
+            # call only, so the next call can retry negotiation.
+        with httpx.Client(
+            transport=httpx.HTTPTransport(uds=self._socket_path),
+            base_url=f"http://docker/{version}" if version else "http://docker",
             timeout=httpx.Timeout(timeout),
-        )
+        ) as client:
+            yield client
 
     def _find_container(self, client: httpx.Client, compose_service: str) -> str | None:
         """Find the container ID for a compose service. Returns None if not
