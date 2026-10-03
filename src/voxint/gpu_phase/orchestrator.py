@@ -80,6 +80,11 @@ def decide(
     due = snapshot.retry_after is None or now >= snapshot.retry_after
     release = snapshot.operator_request == OperatorRequest.RELEASE
     fields: PhaseFields = {}
+    a = o.acquire
+    if a and a.kind == "held" and a.expires_at is not None and a.expires_at <= now:
+        a = AcquireResult("lost", reason="GPU lease lost")
+    if snapshot.phase != P.ACQUIRING and a and a.kind == "held":
+        fields.update({"lease_id": a.lease_id, "lease_expires_at": a.expires_at})
 
     def failure(phase: P, reason: str, delay: int = 0) -> Transition:
         return Transition(
@@ -100,6 +105,10 @@ def decide(
 
     if not o.controllable:
         return failure(P.LLM if snapshot.phase == P.LLM else P.ERROR, "service control unavailable")
+    if o.control_error:
+        if snapshot.phase in (P.STOPPING_SERVICES, P.RELEASING):
+            return failure(P.ERROR, "could not return the GPU: " + o.control_error)
+        return failure(P.LLM if snapshot.phase == P.LLM else P.STOPPING_SERVICES, o.control_error)
     if (
         snapshot.phase == P.RELEASING
         and o.services
@@ -115,6 +124,14 @@ def decide(
                     {"lease_id": o.status.lease_id, "lease_expires_at": o.status.expires_at}
                 )
             return Transition(P.STOPPING_SERVICES, fields)
+        if release:
+            return Transition(
+                P.LLM,
+                {
+                    "operator_request": None,
+                    "retry_after": now + timedelta(seconds=settings.gpu_phase_min_dwell_seconds),
+                },
+            )
         if snapshot.operator_request == OperatorRequest.AUDIO or (
             counts.gpu_lane_demand > 0 and age >= settings.gpu_phase_min_dwell_seconds and due
         ):
@@ -127,7 +144,6 @@ def decide(
         if counts.post_in_flight == counts.running_llm_jobs == 0:
             return Transition(P.ACQUIRING)
     elif snapshot.phase == P.ACQUIRING:
-        a = o.acquire
         if a:
             if a.kind == "held":
                 return Transition(
@@ -136,10 +152,11 @@ def decide(
                 )
             if a.kind != "pending" or age >= ACQUIRE_PENDING_SECONDS:
                 return failure(
-                    P.LLM, a.reason or "acquire pending window exceeded", a.retry_after_seconds
+                    P.LLM if a.kind == "busy" else P.RELEASING,
+                    a.reason or "acquire pending window exceeded",
+                    a.retry_after_seconds,
                 )
     elif snapshot.phase in (P.STARTING_SERVICES, P.AUDIO, P.DRAINING):
-        a = o.acquire
         if a and a.kind == "held":
             fields.update({"lease_id": a.lease_id, "lease_expires_at": a.expires_at})
         elif (a and a.kind == "lost") or (
@@ -153,8 +170,6 @@ def decide(
         ):
             return failure(P.STOPPING_SERVICES, "audio service is not running")
         if snapshot.phase == P.STARTING_SERVICES:
-            if o.control_error:
-                return failure(P.STOPPING_SERVICES, o.control_error)
             if o.ready:
                 return Transition(P.AUDIO, fields)
             if age >= SERVICE_READY_SECONDS:
@@ -169,13 +184,13 @@ def decide(
                 )
             ):
                 return Transition(P.DRAINING, {**fields, "operator_request": None})
-        elif counts.gpu_in_flight == 0:
+        elif release or counts.gpu_in_flight == 0:
+            if release:
+                fields["operator_request"] = None
             return Transition(P.STOPPING_SERVICES, fields)
     elif snapshot.phase == P.STOPPING_SERVICES:
-        if o.control_error:
-            return failure(P.ERROR, "could not return the GPU: " + o.control_error)
         if o.stopped:
-            return Transition(P.RELEASING)
+            return Transition(P.RELEASING, fields)
     elif snapshot.phase == P.RELEASING:
         if o.release and o.release.kind == "released":
             return Transition(
@@ -183,15 +198,25 @@ def decide(
                 {
                     "lease_id": None,
                     "lease_expires_at": None,
-                    "operator_request": None,
+                    **({"operator_request": None} if release else {}),
                     "failures": snapshot.failures if snapshot.last_error else 0,
                     "retry_after": snapshot.retry_after if snapshot.last_error else None,
                 },
             )
         if o.release:
             return failure(P.ERROR, "could not return the GPU: " + o.release.reason)
-    elif snapshot.phase == P.ERROR and (due or release):
-        return Transition(P.STOPPING_SERVICES, {"operator_request": None})
+    elif snapshot.phase == P.ERROR:
+        if a and a.kind == "lost":
+            # Keep the original reason the hand-back failed; add the lease loss.
+            prior = snapshot.last_error or ""
+            if "GPU lease lost" not in prior:
+                fields["last_error"] = (f"{prior}; GPU lease lost" if prior else "GPU lease lost")[
+                    :240
+                ]
+        if due or release:
+            if release:
+                fields["operator_request"] = None
+            return Transition(P.STOPPING_SERVICES, fields)
     return Transition(snapshot.phase, fields)
 
 
@@ -209,10 +234,9 @@ def tick(
     with session_factory.begin() as session:
         if not session.scalar(select(func.pg_try_advisory_xact_lock(GPU_PHASE_ADVISORY_LOCK_KEY))):
             return TickResult("busy")
-        now = clock()
         s = state.read_phase(session)
         if s is None:
-            state.set_phase(session, P.LLM, now=now)
+            state.set_phase(session, P.LLM, now=clock())
             s = state.read_phase(session)
             assert s is not None
         counts = Counts(
@@ -222,8 +246,15 @@ def tick(
             state.running_llm_jobs(session),
         )
         o = _observe(s, settings, client, controller, probe)
+        now = clock()
         transition = decide(s, counts, o, now, settings)
-        state.set_phase(session, transition.phase, now=now, **transition.fields)
+        state.set_phase(
+            session,
+            transition.phase,
+            now=now,
+            expected_request=s.operator_request,
+            **transition.fields,
+        )
     if transition.phase != s.phase and transition.phase in (P.AUDIO, P.LLM):
         _publish_lane(session_factory, settings, transition.phase, now)
     return TickResult("advanced" if transition.phase != s.phase else "waiting", transition.phase)
@@ -236,8 +267,28 @@ def _observe(
     controller: ServiceController,
     probe: Callable[[Settings], list[ServiceHealth]],
 ) -> Observed:
+    renewal = None
+    if s.phase in (P.STARTING_SERVICES, P.AUDIO, P.DRAINING, P.STOPPING_SERVICES, P.ERROR):
+        if s.lease_id:
+            renewal = client.acquire(s.lease_id)
+        elif s.phase in (P.STARTING_SERVICES, P.AUDIO, P.DRAINING):
+            renewal = AcquireResult("lost")
+    try:
+        return _observe_services(s, settings, client, controller, probe, renewal)
+    except Exception as exc:
+        return Observed(acquire=renewal, control_error=type(exc).__name__[:240])
+
+
+def _observe_services(
+    s: GpuPhaseSnapshot,
+    settings: Settings,
+    client: LeaseClient,
+    controller: ServiceController,
+    probe: Callable[[Settings], list[ServiceHealth]],
+    renewal: AcquireResult | None,
+) -> Observed:
     if not controller.controllable:
-        return Observed(controllable=False)
+        return Observed(controllable=False, acquire=renewal)
     if s.phase == P.LLM:
         return Observed(
             services=tuple(controller.inspect(k) for k in sorted(SERVICE_KEYS)),
@@ -246,7 +297,7 @@ def _observe(
     if s.phase == P.ACQUIRING:
         return Observed(acquire=client.acquire(s.lease_id))
     if s.phase in (P.STARTING_SERVICES, P.AUDIO, P.DRAINING):
-        renewal = client.acquire(s.lease_id) if s.lease_id else AcquireResult("lost")
+        assert renewal is not None
         services = tuple(controller.inspect(k) for k in sorted(SERVICE_KEYS))
         if s.phase == P.STARTING_SERVICES and renewal.kind == "held":
             if all(x == ServiceState.RUNNING for x in services):
@@ -266,15 +317,16 @@ def _observe(
             )
         return Observed(acquire=renewal, services=services)
     if s.phase == P.STOPPING_SERVICES:
-        if s.lease_id:
-            renewal = client.acquire(s.lease_id)
-            logger.info("GPU lease renewal before teardown: %s", renewal.kind)
         results = [controller.stop(k) for k in sorted(SERVICE_KEYS)]
         stopped = all(controller.inspect(k) == ServiceState.STOPPED for k in sorted(SERVICE_KEYS))
         ok = stopped and all(
             r.outcome in (ControlOutcome.STOPPED, ControlOutcome.ALREADY_STOPPED) for r in results
         )
-        return Observed(stopped=ok, control_error=None if ok else "could not stop audio services")
+        return Observed(
+            acquire=renewal,
+            stopped=ok,
+            control_error=None if ok else "could not stop audio services",
+        )
     if s.phase == P.RELEASING:
         services = tuple(controller.inspect(k) for k in sorted(SERVICE_KEYS))
         if any(value != ServiceState.STOPPED for value in services):
@@ -288,7 +340,7 @@ def _observe(
                 return Observed(release=ReleaseResult("released"))
             lease_id = status.lease_id
         return Observed(release=client.release(lease_id or ""))
-    return Observed()
+    return Observed(acquire=renewal)
 
 
 def _publish_lane(
@@ -303,29 +355,26 @@ def _publish_lane(
     from voxint.worker import tasks
 
     def publish(run_id: uuid.UUID, stage: Stage | None) -> bool:
-        try:
-            tasks.pipeline_task_for_stage(stage).apply_async((str(run_id),), ignore_result=True)
-            return True
-        except OperationalError:
-            return False
+        tasks.pipeline_task_for_stage(stage).apply_async((str(run_id),), ignore_result=True)
+        return True
 
-    with factory() as session:
-        redispatch_queued_runs(
-            session,
-            lanes=GPU_SEGMENT if phase == P.AUDIO else POST_SEGMENT,
-            limit=settings.recovery_publish_batch_size,
-            publish=publish,
-        )
-        if phase == P.LLM:
-            for module, task in (
-                (asset_jobs, tasks.generate_run_asset),
-                (translation_jobs, tasks.translate_run),
-                (research_jobs, tasks.research_speaker),
-            ):
-                for job_id in module.stale_queued_job_ids(
-                    session, cutoff=now, limit=tasks.STALE_EMBEDDING_REDISPATCH_LIMIT
+    try:
+        with factory() as session:
+            redispatch_queued_runs(
+                session,
+                lanes=GPU_SEGMENT if phase == P.AUDIO else POST_SEGMENT,
+                limit=settings.recovery_publish_batch_size,
+                publish=publish,
+            )
+            if phase == P.LLM:
+                for module, task in (
+                    (asset_jobs, tasks.generate_run_asset),
+                    (translation_jobs, tasks.translate_run),
+                    (research_jobs, tasks.research_speaker),
                 ):
-                    try:
+                    for job_id in module.stale_queued_job_ids(
+                        session, cutoff=now, limit=tasks.STALE_EMBEDDING_REDISPATCH_LIMIT
+                    ):
                         task.apply_async((str(job_id),), ignore_result=True)
-                    except OperationalError:
-                        logger.warning("GPU phase job publication deferred")
+    except OperationalError:
+        logger.warning("GPU phase lane publication deferred")

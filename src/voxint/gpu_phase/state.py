@@ -8,6 +8,7 @@ from typing import TypedDict, Unpack
 from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from voxint.config import Settings
 from voxint.db.models import GPU_SEGMENT, POST_SEGMENT, GpuPhaseState, PipelineRun, RunStatus, Stage
@@ -141,15 +142,31 @@ def _locked_row(session: Session, *, now: datetime | None = None) -> GpuPhaseSta
     ).scalar_one()
 
 
+class _AnyRequest(enum.Enum):
+    VALUE = "any"
+
+
 def set_phase(
-    session: Session, phase: GpuPhase, *, now: datetime, **fields: Unpack[PhaseFields]
+    session: Session,
+    phase: GpuPhase,
+    *,
+    now: datetime,
+    expected_request: OperatorRequest | _AnyRequest | None = _AnyRequest.VALUE,
+    **fields: Unpack[PhaseFields],
 ) -> None:
+    # Compare under the same lock as the write so operator I/O cannot be overwritten.
     row = _locked_row(session, now=now)
     if row.phase != phase:
         row.phase_since = now
     row.phase = phase.value
     row.updated_at = now
     for name, value in fields.items():
+        if (
+            name == "operator_request"
+            and expected_request is not _AnyRequest.VALUE
+            and row.operator_request != expected_request
+        ):
+            continue
         setattr(row, name, value)
     session.flush()
 
@@ -173,12 +190,15 @@ def gpu_lane_demand(session: Session) -> int:
 
 
 def _in_flight(session: Session, segment: frozenset[Stage]) -> int:
+    stage_filter: ColumnElement[bool] = PipelineRun.current_stage.in_(segment)
+    if segment == GPU_SEGMENT:
+        stage_filter = or_(PipelineRun.current_stage.is_(None), stage_filter)
     return session.execute(
         select(func.count())
         .select_from(PipelineRun)
         .where(
             PipelineRun.status == RunStatus.RUNNING.value,
-            PipelineRun.current_stage.in_(segment),
+            stage_filter,
         )
     ).scalar_one()
 

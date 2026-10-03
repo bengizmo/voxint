@@ -136,7 +136,7 @@ def test_acquire_failure_backoff(rig: Rig, mode: str, elapsed: int) -> None:
     rig.seed(P.ACQUIRING)
     rig.broker.mode = mode
     rig.clock.advance(elapsed)
-    assert rig.step().phase == P.LLM
+    assert rig.step().phase == (P.LLM if mode == "busy" else P.RELEASING)
     s = rig.read()
     assert s.failures == 1
     assert s.last_error
@@ -293,8 +293,9 @@ def test_publication_failure_is_deferred(session_factory: sessionmaker[Session],
     rig.seed(P.RELEASING)
     assert rig.step().phase == P.LLM
     assert rig.read().phase == P.LLM
-    for name in ("finish_pipeline", "generate_run_asset", "translate_run", "research_speaker"):
-        assert rig.publishers[name].call_count == 1
+    rig.publishers["finish_pipeline"].assert_called_once()
+    for name in ("generate_run_asset", "translate_run", "research_speaker"):
+        rig.publishers[name].assert_not_called()
 
 
 @pytest.mark.parametrize("mode", ["held", "down"])
@@ -416,3 +417,218 @@ def test_missing_row_closes_lanes_until_tick_repairs(
     assert rig.step().phase == P.LLM
     assert not gpu_lane_open(rig.read(), rig.settings)
     assert post_lane_open(rig.read(), rig.settings)
+
+
+def test_error_renews_through_long_backoff(rig: Rig) -> None:
+    prepare_audio(rig, P.STOPPING_SERVICES)
+    rig.seed(P.STOPPING_SERVICES, failures=100)
+    rig.controller.failures[("stop", "transcription")] = ControlOutcome.TIMEOUT
+    assert rig.step().phase == P.ERROR
+    retry = rig.read().retry_after
+    assert retry == rig.clock() + timedelta(seconds=900)
+    for _ in range(8):
+        rig.clock.advance(100)
+        assert rig.step().phase == P.ERROR
+        assert rig.read().lease_expires_at == rig.clock() + timedelta(seconds=600)
+        assert rig.read().retry_after == retry
+        assert rig.client.status().kind == "held"
+    rig.clock.advance(100)
+    assert rig.step().phase == P.STOPPING_SERVICES
+
+
+def test_error_lost_lease_does_not_reschedule_teardown(rig: Rig) -> None:
+    prepare_audio(rig, P.ERROR)
+    retry = rig.clock() + timedelta(seconds=900)
+    rig.seed(P.ERROR, retry_after=retry, failures=5)
+    rig.broker.lease_id = None
+    assert rig.step().phase == P.ERROR
+    assert rig.read().last_error == "GPU lease lost"
+    assert rig.read().failures == 5
+    assert rig.read().retry_after == retry
+    rig.clock.advance(900)
+    assert rig.step().phase == P.STOPPING_SERVICES
+
+
+@pytest.mark.parametrize("renewal_held", [False, True])
+def test_slow_io_uses_fresh_decision_clock(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, renewal_held: bool
+) -> None:
+    prepare_audio(rig)
+    rig.settings.gpu_phase_min_dwell_seconds = 600
+    rig.seed(P.AUDIO, lease_expires_at=rig.clock() + timedelta(seconds=60))
+    if not renewal_held:
+        rig.broker.mode = "down"
+    inspect = rig.controller.inspect
+
+    def slow_inspect(key: str) -> ServiceState:
+        rig.clock.advance(210)
+        return inspect(key)
+
+    monkeypatch.setattr(rig.controller, "inspect", slow_inspect)
+    assert rig.step().phase == P.STOPPING_SERVICES
+    after = rig.read()
+    assert after.last_error == "GPU lease lost"
+    assert after.phase_since == after.updated_at == rig.clock()
+    assert after.retry_after == rig.clock() + timedelta(seconds=30)
+
+
+@pytest.mark.parametrize(
+    "phase,old,new,expected",
+    [
+        (P.LLM, None, OperatorRequest.RELEASE, P.DRAINING_POST),
+        (P.LLM, OperatorRequest.AUDIO, OperatorRequest.RELEASE, P.DRAINING_POST),
+        (P.RELEASING, OperatorRequest.RELEASE, OperatorRequest.AUDIO, P.LLM),
+    ],
+)
+def test_request_committed_during_observe_survives(
+    rig: Rig,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: P,
+    old: OperatorRequest | None,
+    new: OperatorRequest,
+    expected: P,
+) -> None:
+    rig.seed(phase, operator_request=old)
+    with rig.session_factory.begin() as session:
+        seed_run(session, None)
+    status = rig.client.status
+
+    def request_during_status() -> StatusResult:
+        with rig.session_factory.begin() as session:
+            set_request(session, new)
+        return status()
+
+    monkeypatch.setattr(rig.client, "status", request_during_status)
+    assert rig.step().phase == expected
+    assert rig.read().operator_request == new
+
+
+def test_llm_release_acknowledges_and_delays_demand(rig: Rig) -> None:
+    rig.settings.gpu_phase_min_dwell_seconds = 600
+    rig.seed(P.LLM, operator_request=OperatorRequest.RELEASE)
+    with rig.session_factory.begin() as session:
+        seed_run(session, None)
+    rig.clock.advance(1000)
+    assert rig.step().phase == P.LLM
+    assert rig.read().operator_request is None
+    assert rig.read().retry_after == rig.clock() + timedelta(seconds=600)
+    rig.clock.advance(599)
+    assert rig.step().phase == P.LLM
+    rig.clock.advance(1)
+    assert rig.step().phase == P.DRAINING_POST
+
+
+@pytest.mark.parametrize("phase", [P.ERROR, P.STOPPING_SERVICES, P.RELEASING])
+def test_audio_request_survives_teardown(rig: Rig, phase: P) -> None:
+    rig.seed(phase, operator_request=OperatorRequest.AUDIO)
+    for _ in range(3):
+        if rig.step().phase == P.LLM:
+            break
+        assert rig.read().operator_request == OperatorRequest.AUDIO
+    assert rig.read().phase == P.LLM
+    assert rig.read().operator_request == OperatorRequest.AUDIO
+    assert rig.step().phase == P.DRAINING_POST
+    assert rig.read().operator_request is None
+
+
+def test_null_stage_running_blocks_drain_until_operator_release(rig: Rig) -> None:
+    prepare_audio(rig, P.DRAINING)
+    with rig.session_factory.begin() as session:
+        seed_run(session, None, status="running")
+    assert rig.step().phase == P.DRAINING
+    with rig.session_factory.begin() as session:
+        set_request(session, OperatorRequest.RELEASE)
+    assert rig.step().phase == P.STOPPING_SERVICES
+    assert rig.read().operator_request is None
+
+
+@pytest.mark.parametrize("mode", ["down", "pending"])
+@pytest.mark.parametrize("holder", ["voxint", "other", None])
+def test_ambiguous_acquire_reconciles_before_publication(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, mode: str, holder: str | None
+) -> None:
+    rig.broker.explicit_release = True
+    rig.client.acquire()  # The grant can exist even though its response was lost.
+    rig.seed(P.ACQUIRING)
+    rig.broker.mode = mode
+    rig.clock.advance(600 if mode == "pending" else 0)
+    with rig.session_factory.begin() as session:
+        seed_run(session, Stage.ENHANCE_MATCH)
+    assert rig.step().phase == P.RELEASING
+    rig.publishers["finish_pipeline"].assert_not_called()
+    rig.broker.mode = "held"
+    monkeypatch.setattr(
+        rig.client,
+        "status",
+        lambda: StatusResult("held", holder, "test-lease") if holder else StatusResult("free"),
+    )
+    assert rig.step().phase == P.LLM
+    assert any(r.url.path == "/release" for r in rig.broker.calls) == (holder == "voxint")
+    rig.publishers["finish_pipeline"].assert_called_once()
+    assert rig.read().failures == 1
+
+
+@pytest.mark.parametrize(
+    "phase,operation,expected",
+    [
+        (P.LLM, "inspect", P.LLM),
+        (P.AUDIO, "inspect", P.STOPPING_SERVICES),
+        (P.STARTING_SERVICES, "start", P.STOPPING_SERVICES),
+        (P.STARTING_SERVICES, "probe", P.STOPPING_SERVICES),
+        (P.STOPPING_SERVICES, "stop", P.ERROR),
+        (P.STOPPING_SERVICES, "inspect", P.ERROR),
+        (P.RELEASING, "inspect", P.ERROR),
+    ],
+)
+def test_control_exceptions_are_persisted_without_secrets(
+    rig: Rig,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    phase: P,
+    operation: str,
+    expected: P,
+) -> None:
+    prepare_audio(rig, phase)
+    if operation == "start":
+        rig.controller.states = dict.fromkeys(SERVICE_KEYS, ServiceState.STOPPED)
+    failure = MagicMock(side_effect=RuntimeError("private-control-secret"))
+    if operation == "probe":
+        monkeypatch.setattr(rig, "probe", failure)
+    else:
+        monkeypatch.setattr(rig.controller, operation, failure)
+    assert rig.step().phase == expected
+    after = rig.read()
+    assert after.failures == 1
+    assert "RuntimeError" in after.last_error
+    assert after.retry_after == rig.clock() + timedelta(seconds=30)
+    assert "private-control-secret" not in after.last_error + caplog.text
+
+
+@pytest.mark.parametrize(
+    "failed_task",
+    ["run_pipeline", "finish_pipeline", "generate_run_asset", "translate_run", "research_speaker"],
+)
+def test_publication_stops_entire_batch_on_first_error(
+    rig: Rig, caplog: pytest.LogCaptureFixture, failed_task: str
+) -> None:
+    with rig.session_factory.begin() as session:
+        for _ in range(3):
+            seed_run(session, None if failed_task == "run_pipeline" else Stage.ENHANCE_MATCH)
+            seed_jobs(session)
+    if failed_task == "run_pipeline":
+        prepare_audio(rig, P.STARTING_SERVICES)
+    else:
+        rig.seed(P.RELEASING)
+    rig.publishers[failed_task].side_effect = OperationalError("offline")
+    assert rig.step().phase == (P.AUDIO if failed_task == "run_pipeline" else P.LLM)
+    rig.publishers[failed_task].assert_called_once()
+    order = [
+        "run_pipeline",
+        "finish_pipeline",
+        "generate_run_asset",
+        "translate_run",
+        "research_speaker",
+    ]
+    for name in order[order.index(failed_task) + 1 :]:
+        rig.publishers[name].assert_not_called()
+    assert caplog.text.count("GPU phase lane publication deferred") == 1

@@ -127,9 +127,15 @@ app = Celery(
 )
 app.conf.task_acks_late = True
 app.conf.worker_prefetch_multiplier = 1
-# A flagless worker consumes all three queues. The opt-in compose.gpu-phase.yaml
-# overlay pins the regular worker to celery,post and gives gpu_phase its own worker.
-app.conf.task_queues = (Queue("celery"), Queue(POST_QUEUE), Queue(GPU_PHASE_QUEUE))
+# Declare both lanes explicitly while retaining Celery's conventional default
+# queue. A worker started without ``-Q`` therefore consumes BOTH queues, keeping
+# the base Compose command and native launcher unchanged; GPU deployments alone
+# split the lanes into separate workers with overlay-level ``-Q`` flags.
+# Do not declare gpu_phase: a regular worker without -Q (including the installer's
+# hardware overlay command) must never consume ticks. The dedicated gpu-phase
+# worker uses -Q gpu_phase; Celery creates that queue on demand because
+# task_create_missing_queues defaults to True.
+app.conf.task_queues = (Queue("celery"), Queue(POST_QUEUE))
 app.conf.task_default_queue = "celery"
 # Run assets and speaker research are LLM-bound too: they must not serialize
 # behind GPU work on a concurrency-1 GPU-lane worker. The beat sweeps route to

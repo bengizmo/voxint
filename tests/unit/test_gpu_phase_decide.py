@@ -70,9 +70,9 @@ def snapshot(phase: P, age: int = 0, **kw: Unpack[PhaseFields]) -> GpuPhaseSnaps
             P.STARTING_SERVICES,
         ),
         (P.ACQUIRING, 599, Counts(), Observed(acquire=AcquireResult("pending")), {}, P.ACQUIRING),
-        (P.ACQUIRING, 600, Counts(), Observed(acquire=AcquireResult("pending")), {}, P.LLM),
+        (P.ACQUIRING, 600, Counts(), Observed(acquire=AcquireResult("pending")), {}, P.RELEASING),
         (P.ACQUIRING, 0, Counts(), Observed(acquire=AcquireResult("busy")), {}, P.LLM),
-        (P.ACQUIRING, 0, Counts(), Observed(acquire=AcquireResult("failed")), {}, P.LLM),
+        (P.ACQUIRING, 0, Counts(), Observed(acquire=AcquireResult("failed")), {}, P.RELEASING),
         (P.STARTING_SERVICES, 0, Counts(), Observed(started=True), {}, P.STARTING_SERVICES),
         (P.STARTING_SERVICES, 0, Counts(), Observed(ready=True), {}, P.AUDIO),
         (P.STARTING_SERVICES, 600, Counts(), Observed(), {}, P.STOPPING_SERVICES),
@@ -189,3 +189,93 @@ def test_backoff_caps_repeated_failures() -> None:
     )
     assert result.fields["failures"] == 101
     assert result.fields["retry_after"] == NOW + timedelta(seconds=900)
+
+
+@pytest.mark.parametrize("phase", [P.STARTING_SERVICES, P.AUDIO, P.DRAINING, P.ERROR])
+@pytest.mark.parametrize("expiry", [-1, 0, 1, None])
+def test_renewal_expiry_at_decision_time(phase: P, expiry: int | None) -> None:
+    expires_at = NOW + timedelta(seconds=expiry) if expiry is not None else None
+    result = decide(
+        snapshot(phase, retry_after=NOW + timedelta(seconds=900)),
+        Counts(gpu_in_flight=1),
+        Observed(acquire=AcquireResult("held", "id", expires_at)),
+        NOW,
+        phase_settings(),
+    )
+    if expiry in (-1, 0):
+        assert result.phase == (P.ERROR if phase == P.ERROR else P.STOPPING_SERVICES)
+        assert result.fields["last_error"] == "GPU lease lost"
+        if phase == P.ERROR:
+            assert "retry_after" not in result.fields
+            assert "failures" not in result.fields
+    else:
+        assert result.phase == phase
+        assert result.fields["lease_expires_at"] == expires_at
+
+
+@pytest.mark.parametrize(
+    "phase,operator_request,expected,cleared",
+    [
+        (P.LLM, OperatorRequest.RELEASE, P.LLM, True),
+        (P.DRAINING, OperatorRequest.RELEASE, P.STOPPING_SERVICES, True),
+        (P.RELEASING, OperatorRequest.AUDIO, P.LLM, False),
+        (P.RELEASING, OperatorRequest.RELEASE, P.LLM, True),
+        (P.ERROR, OperatorRequest.AUDIO, P.STOPPING_SERVICES, False),
+        (P.ERROR, OperatorRequest.RELEASE, P.STOPPING_SERVICES, True),
+    ],
+)
+def test_operator_request_semantics(
+    phase: P, operator_request: OperatorRequest, expected: P, cleared: bool
+) -> None:
+    result = decide(
+        snapshot(phase, age=1000, operator_request=operator_request),
+        Counts(1, 1),
+        Observed(release=ReleaseResult("released")),
+        NOW,
+        phase_settings(),
+    )
+    assert result.phase == expected
+    assert ("operator_request" in result.fields) == cleared
+    if cleared:
+        assert result.fields["operator_request"] is None
+    if phase == P.LLM:
+        assert result.fields["retry_after"] == NOW + timedelta(seconds=600)
+
+
+@pytest.mark.parametrize("kind", ["failed", "pending"])
+def test_ambiguous_acquire_records_backoff(kind: str) -> None:
+    result = decide(
+        snapshot(P.ACQUIRING, age=600),
+        Counts(),
+        Observed(acquire=AcquireResult("failed" if kind == "failed" else "pending")),
+        NOW,
+        phase_settings(),
+    )
+    assert result.phase == P.RELEASING
+    assert result.fields["failures"] == 1
+    assert result.fields["last_error"]
+    assert result.fields["retry_after"] == NOW + timedelta(seconds=30)
+
+
+def test_error_lease_loss_keeps_the_original_reason() -> None:
+    result = decide(
+        snapshot(P.ERROR, retry_after=NOW + timedelta(seconds=900)),
+        Counts(),
+        Observed(acquire=AcquireResult("lost", reason="lease lost (HTTP 404)")),
+        NOW,
+        phase_settings(),
+    )
+    assert result.phase == P.ERROR
+    assert "last_error" in result.fields
+    base = snapshot(P.ERROR, retry_after=NOW + timedelta(seconds=900))
+    with_prior = replace(base, last_error="could not return the GPU: could not stop audio services")
+    result = decide(
+        with_prior,
+        Counts(),
+        Observed(acquire=AcquireResult("lost")),
+        NOW,
+        phase_settings(),
+    )
+    assert result.fields["last_error"] == (
+        "could not return the GPU: could not stop audio services; GPU lease lost"
+    )

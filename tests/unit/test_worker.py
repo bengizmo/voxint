@@ -29,7 +29,7 @@ def test_worker_reliability_settings() -> None:
     assert app.conf.broker_transport_options["visibility_timeout"] >= 21600
     assert "recovery-sweep" in app.conf.beat_schedule
     assert app.conf.task_default_queue == "celery"
-    assert {queue.name for queue in app.conf.task_queues} == {"celery", POST_QUEUE, GPU_PHASE_QUEUE}
+    assert {queue.name for queue in app.conf.task_queues} == {"celery", POST_QUEUE}
     assert app.conf.task_routes == {
         "voxint.gpu_phase_tick": {"queue": GPU_PHASE_QUEUE},
         "voxint.finish_pipeline": {"queue": POST_QUEUE},

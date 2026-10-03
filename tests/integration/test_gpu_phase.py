@@ -98,7 +98,7 @@ def test_state_round_trip_and_counts(session_factory: sessionmaker[Session]) -> 
             seed_run(session, stage, status="running")
             seed_run(session, stage, status="completed")
         assert gpu_lane_demand(session) == 5
-        assert gpu_lane_in_flight(session) == 4
+        assert gpu_lane_in_flight(session) == 5
         assert post_lane_in_flight(session) == 2
 
 
@@ -194,7 +194,7 @@ def test_disabled_has_no_phase_queries(
 
 def seed_jobs(session: Session) -> tuple[RunAssetJob, TranslationJob, ResearchJob]:
     run = seed_run(session, Stage.FINALIZE, status="completed")
-    speaker = Speaker(display_name="Phase test")
+    speaker = Speaker(display_name=f"Phase test {uuid.uuid4()}")
     session.add(speaker)
     session.flush()
     jobs = (

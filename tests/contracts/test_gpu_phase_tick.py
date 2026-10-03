@@ -5,6 +5,7 @@ from voxint.worker.app import GPU_PHASE_QUEUE, app, build_beat_schedule
 
 
 def test_tick_queue_and_schedule() -> None:
+    assert GPU_PHASE_QUEUE not in {queue.name for queue in app.conf.task_queues}
     assert app.conf.task_routes["voxint.gpu_phase_tick"] == {"queue": GPU_PHASE_QUEUE}
     assert "gpu-phase-tick" not in build_beat_schedule(phase_settings(gpu_phase_enabled=False))
     assert build_beat_schedule(phase_settings(gpu_phase_tick_seconds=45))["gpu-phase-tick"] == {
