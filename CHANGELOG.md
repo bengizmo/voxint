@@ -19,6 +19,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   generation. Automatic summaries, search indexing and translation now skip
   such a run with an INFO line. Asking for them by hand still fails, with a
   message that says the run has not finished transcribing or found no speech.
+- **The speaker picker keeps focus after a failed Create** (#772). When
+  creating a new person from the speaker rail failed, focus fell to the page,
+  so Escape could not close the picker and its open list covered the card's
+  other buttons. Focus now returns to the picker's text box, where Escape
+  closes it and a retry needs no extra click.
 - **The Status page shows memory on native macOS** (#773). Memory was read
   only from the Linux `/proc/meminfo` file, so a native macOS install listed
   Processor and Disk but no Memory row. On macOS it is now read from
