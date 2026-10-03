@@ -50,6 +50,7 @@ def rendered(turns: list[SpeakerTurn]) -> str:
         ("Hi?] The the cat", "Hi?] The cat"),
         ('"Hi!" The the cat', '"Hi!" The cat'),
         ("we we were were going", "we were going"),
+        ("the the and and it", "the and it"),
         ("It\u2019s it's fine", "It\u2019s fine"),
         ("I'm I'm here", "I'm here"),
         ("don't don't", "don't"),
