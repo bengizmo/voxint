@@ -18,6 +18,7 @@ freezing the effective config rather than reasoning about it.
 
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from voxint.app_settings import get_or_create
 from voxint.config import Settings
 from voxint.db.models import MediaFolder, PipelineRun, Project
 from voxint.ingest import preview_effective_config, submit_media_item
+from voxint.ingest.service import _resolve_run_config, submit_media_item_if_new
 from voxint.ingest.sidecar import parse_sidecar
 from voxint.projects.lifecycle import archive_project, restore_project
 
@@ -490,3 +492,113 @@ def test_archived_project_drops_out_of_resolution(
     assert snapshot is not None
     assert snapshot["vocabulary"] == PROJECT_VOCAB
     assert _corr_ids(snapshot) == ["pj"]
+
+
+@pytest.mark.parametrize("branch", ["explicit", "project", "folder", "global"])
+@pytest.mark.parametrize("submit_new", [False, True])
+def test_sidecar_vocabulary_freeze(
+    session_factory: sessionmaker[Session], tmp_path: Path, branch: str, submit_new: bool,
+) -> None:
+    settings = _make_settings(tmp_path)
+    _seed_global(session_factory)
+    folder_path, folder_id = _seed_project_folder(
+        session_factory, suffix="sidecar",
+        project_vocab=PROJECT_VOCAB if branch == "project" else None,
+        project_corr=None,
+        folder_pack=FOLDER_PACK if branch in ("explicit", "folder") else None,
+    )
+    explicit = EXPLICIT_PACK if branch == "explicit" else None
+    with session_factory() as session:
+        baseline, _ = _resolve_run_config(
+            session, uuid.UUID(folder_id), settings=settings, domain_pack_name=explicit,
+        )
+        duplicate = baseline["vocabulary"][0]
+        sc = parse_sidecar(
+            yaml.safe_dump({"vocabulary": ["new-term", duplicate, "new-term"],
+                            "speakers": ["Speaker"]}), source_name="a.wav.yaml",
+        )
+        snapshot, _ = _resolve_run_config(
+            session, uuid.UUID(folder_id), settings=settings, domain_pack_name=explicit,
+            extra_vocabulary=sc.vocabulary, extra_name_seeds=sc.speakers,
+        )
+        assert snapshot["vocabulary"] == [*baseline["vocabulary"][1:], "new-term", duplicate]
+        assert snapshot["sidecar_vocabulary"] == ["new-term", duplicate]
+        assert snapshot["name_seeds"] == ["Speaker"]
+        assert snapshot["corrections"] == baseline["corrections"]
+        assert list(snapshot)[-1] == "config_resolution_version"
+        submit_fn = submit_media_item_if_new if submit_new else submit_media_item
+        result = submit_fn(
+            session, f"{folder_path}/a.wav", settings=settings,
+            domain_pack_name=explicit, sidecar=sc,
+        )
+        assert result is not None
+        session.commit()
+        stored = session.get(PipelineRun, result.run_id)
+        assert stored is not None
+        assert stored.domain_pack == snapshot
+
+
+# Captured by running _resolve_run_config from main 2aeec3f7 against the
+# synthetic packs and real DB above, before adding sidecar vocabulary support.
+_SIDECAR_ABSENT_GOLDENS = {
+    "explicit": (
+        '{"name": "explicitpack", "description": "", "vocabulary": ["explicit-term"], '
+        '"name_seeds": [], "prompt_fragments": {}, "corrections": [{"id": "ex", "match": '
+        '"exmatch", "replace": "EX", "case_sensitive": true, "whole_word": true}], '
+        '"config_resolution_version": 2}'
+    ),
+    "project": (
+        '{"name": "base", "description": "", "vocabulary": ["project-term"], "name_seeds": '
+        '[], "prompt_fragments": {}, "corrections": [{"id": "ba", "match": "bamatch", '
+        '"replace": "BA", "case_sensitive": true, "whole_word": true}, {"id": "gl", "match": '
+        '"glmatch", "replace": "GL", "case_sensitive": true, "whole_word": true}], '
+        '"config_resolution_version": 2}'
+    ),
+    "folder": (
+        '{"name": "folderpack", "description": "", "vocabulary": ["folder-term"], '
+        '"name_seeds": [], "prompt_fragments": {}, "corrections": [{"id": "fo", "match": '
+        '"fomatch", "replace": "FO", "case_sensitive": true, "whole_word": true}], '
+        '"config_resolution_version": 2}'
+    ),
+    "global": (
+        '{"name": "base", "description": "", "vocabulary": ["base-term", "glossary-term"], '
+        '"name_seeds": [], "prompt_fragments": {}, "corrections": [{"id": "ba", "match": '
+        '"bamatch", "replace": "BA", "case_sensitive": true, "whole_word": true}, {"id": '
+        '"gl", "match": "glmatch", "replace": "GL", "case_sensitive": true, "whole_word": '
+        'true}], "config_resolution_version": 2}'
+    ),
+}
+
+
+@pytest.mark.parametrize("branch", ["explicit", "project", "folder", "global"])
+@pytest.mark.parametrize("sidecar_text", [None, "title: Recording", "vocabulary: []"])
+def test_absent_sidecar_vocabulary_frozen_bytes(
+    session_factory: sessionmaker[Session], tmp_path: Path, branch: str,
+    sidecar_text: str | None,
+) -> None:
+    from voxint.pipeline.stages.transcribe import _initial_prompt
+
+    settings = _make_settings(tmp_path)
+    _seed_global(session_factory)
+    _, folder_id = _seed_project_folder(
+        session_factory, suffix="golden",
+        project_vocab=PROJECT_VOCAB if branch == "project" else None,
+        project_corr=None,
+        folder_pack=FOLDER_PACK if branch in ("explicit", "folder") else None,
+    )
+    sc = parse_sidecar(sidecar_text, source_name="a.yaml") if sidecar_text is not None else None
+    with session_factory() as session:
+        snapshot, _ = _resolve_run_config(
+            session, uuid.UUID(folder_id), settings=settings,
+            domain_pack_name=EXPLICIT_PACK if branch == "explicit" else None,
+            extra_vocabulary=sc.vocabulary if sc is not None else (),
+        )
+    assert json.dumps(snapshot) == _SIDECAR_ABSENT_GOLDENS[branch]
+    assert "sidecar_vocabulary" not in snapshot
+    assert list(snapshot)[-1] == "config_resolution_version"
+    vocabulary = tuple(snapshot["vocabulary"])
+    golden_prompt = {
+        "explicit": "explicit-term", "project": "project-term",
+        "folder": "folder-term", "global": "base-term, glossary-term",
+    }[branch]
+    assert _initial_prompt(vocabulary) == _initial_prompt(vocabulary, ()) == golden_prompt

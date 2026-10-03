@@ -80,6 +80,7 @@ from voxint.pipeline.stages.context import (
     build_stage_context,
     build_stage_fns,
     parse_config_resolution_version,
+    parse_sidecar_vocabulary,
     resolve_run_preferences,
 )
 from voxint.pipeline.transitions import (
@@ -264,6 +265,7 @@ def _drive_segment(
         llm_api_key=llm_api_key,
         bundled=bundled,
         config_resolution_version=config_resolution_version,
+        sidecar_vocabulary=parse_sidecar_vocabulary(pack_snapshot),
     )
     # Per-run diarization speaker-count hint (issue #128), frozen on the run at
     # submit. A stored max overrides the install-wide ceiling already on ctx; a

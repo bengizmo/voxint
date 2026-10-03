@@ -15,14 +15,38 @@ from voxint.pipeline.stages.context import StageContext, normalized_audio_path
 INITIAL_PROMPT_MAX_CHARS = 2000
 
 
-def _initial_prompt(vocabulary: tuple[str, ...]) -> str | None:
+def _initial_prompt(
+    vocabulary: tuple[str, ...], reserved: tuple[str, ...] = ()
+) -> str | None:
     """Render the run's vocabulary as a bounded whisper ``initial_prompt``.
 
     ``vocabulary`` is already deduped/ordered upstream; this joins terms with
     ", " up to the char cap (whole terms only) and returns None when empty. A
     single over-cap term is skipped rather than aborting the rest, so one
     pathological entry can't starve every later term.
+
+    Reserve sidecar budget first, but render those terms last: the app cap
+    keeps the head while faster-whisper keeps the last 223 prompt tokens.
+    The general character cap versus engine window mismatch remains in #743.
     """
+    if reserved:
+        selected_reserved: list[str] = []
+        selected_other: list[str] = []
+        length = 0
+        reserved_set = set(reserved)
+        for terms, selected in (
+            (reserved, selected_reserved),
+            (tuple(t for t in vocabulary if t not in reserved_set), selected_other),
+        ):
+            for term in terms:
+                addition = len(term) + (2 if selected_reserved or selected_other else 0)
+                if length + addition > INITIAL_PROMPT_MAX_CHARS:
+                    continue
+                selected.append(term)
+                length += addition
+        combined = selected_other + selected_reserved
+        return ", ".join(combined) if combined else None
+
     parts: list[str] = []
     length = 0
     for term in vocabulary:
@@ -101,7 +125,7 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
     # never transcribed records no prompt, independent of the engine's rollback.
     # Idempotent under at-least-once stage re-runs: the same effective vocabulary
     # renders the same prompt, and a re-run reflects the final decode.
-    prompt = _initial_prompt(ctx.vocabulary)
+    prompt = _initial_prompt(ctx.vocabulary, ctx.sidecar_vocabulary)
     result = ctx.asr.transcribe(audio, initial_prompt=prompt)
     pipeline_run = session.get(PipelineRun, run_id)
     if pipeline_run is not None:

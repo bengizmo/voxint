@@ -508,3 +508,36 @@ remainder empties a turn) and two declined (bare quoted fillers kept by the
 quoted-word rule above; a CLI `--lang` conflict that cannot occur because
 the CLI export has no `--lang`). Second round: a Unicode case-expansion
 crash (`ß`) and whitespace runs at the seam, both fixed.
+
+### Slice 5 implementation notes (2026-10-02)
+
+Landed as PR #762 (`2aeec3f7`). Beyond section 7, these calls were made:
+
+- **The stored day is the device's wall-clock day.** The date is taken at
+  the offset the device wrote, so `2026-10-02T23:30:00-0600` stores 2 Oct
+  although its UTC instant is 3 Oct. A `Z` suffix, a missing offset and an
+  offset outside hours 00 to 23 or minutes 00 to 59 give no date, the same
+  as the UTC-only `creation_time`. Hour-only offsets and fractions past six
+  digits are refused too (conservative by design).
+- **First write wins** through a conditional `UPDATE ... WHERE recorded_on IS
+  NULL`. The probe is bounded at 10 s, and a missing or malformed tag never
+  fails or defers PREPARE.
+- **Sidecar `recorded:` is now an applied key**, validated strictly like the
+  others: an invalid value holds the file, where it used to be ignored. An
+  empty value is invalid, matching the empty-title rule. The snapshot reader
+  strips whitespace the same way the parser does, so an earlier run whose
+  stored sidecar already holds a valid date shows it in the heading.
+- **The heading is escaped as a whole**, so the separator renders as `\|`,
+  as the goal layout shows. Month names are fixed English abbreviations.
+  `blocks`, `txt`, `srt`, `vtt`, `json` and `rttm` are asserted
+  byte-identical.
+- **Backfill**: unpurged rows with a NULL date and a readable file, one
+  commit per row, the same conditional write; it reports only rows it
+  actually wrote. It loads rows the way `backfill_sha256` does rather than
+  streaming one column (single-operator scale).
+
+Review: High panel (codex, deepseek, kimi; qwen on the combined result), no
+Critical or High findings. Applied: whitespace handling in the snapshot
+reader (3 of 3), offset range checks (codex), a behavioural contract pin in
+place of a source grep (deepseek, kimi), never-written-to-column assertions
+in memory and after flush (kimi, codex), copy fixes (qwen, kimi).

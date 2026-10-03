@@ -438,3 +438,36 @@ def test_initial_prompt_truncates_whole_terms_within_cap() -> None:
     kept = prompt.split(", ")
     assert 0 < len(kept) < len(vocab)  # some terms dropped at the boundary
     assert all(term in vocab for term in kept)  # never a partial term
+
+
+@pytest.mark.parametrize("version, expected", [(1, ()), (2, ("beta",)), (3, ())])
+def test_sidecar_preferences(version: int, expected: tuple[str, ...]) -> None:
+    base = make_base_ctx(vocabulary=("alpha", "beta"))
+    settings = make_settings()
+    ctx = apply_run_preferences(
+        base, settings, resolve_run_preferences(None, settings), base.domain_pack,
+        llm_api_key="", config_resolution_version=version,
+        sidecar_vocabulary=("missing", "beta"),
+    )
+    assert ctx.sidecar_vocabulary == expected
+    assert ctx.vocabulary == ("alpha", "beta")
+    assert ctx.enhancement_context.endswith("alpha, beta")
+
+
+@pytest.mark.parametrize("vocabulary, reserved, expected", [
+    (("a", "b", "c"), ("b", "a"), "c, b, a"),
+    (("a" * 1998, "b"), ("b",), "b"),
+    (("a" * 1997, "b"), ("b",), "a" * 1997 + ", b"),
+    (("a" * 1996, "b", "c"), ("b", "c"), "b, c"),
+    (("a" * 2001, "fit", "b"), ("b",), "fit, b"),
+    (("a",), ("r" * 2001, "b"), "a, b"),
+    ((), ("r" * 2001,), None),
+    (("pack",), ("r" * 1995, "skip", "b"), "r" * 1995 + ", b"),
+    (("a",), ("r" * 2000,), "r" * 2000),
+])
+def test_reserved_prompt(
+    vocabulary: tuple[str, ...], reserved: tuple[str, ...], expected: str | None,
+) -> None:
+    assert _initial_prompt(vocabulary, reserved) == expected
+    if expected is not None:
+        assert len(expected) <= INITIAL_PROMPT_MAX_CHARS
