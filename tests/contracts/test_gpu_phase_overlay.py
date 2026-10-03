@@ -83,6 +83,8 @@ def test_overlay_shape() -> None:
     assert gpu_phase["restart"] == "unless-stopped"
     assert gpu_phase["volumes"] == [SOCKET]
     assert gpu_phase["group_add"] == ["${DOCKER_GID:-999}"]
+    # The host broker is reachable by a stable name on Linux too.
+    assert gpu_phase["extra_hosts"] == ["host.docker.internal:host-gateway"]
     environment = gpu_phase["environment"]
     assert environment["VOXINT_SERVICE_CONTROL"] == "docker"
     # DockerController finds model containers by compose project label; the
