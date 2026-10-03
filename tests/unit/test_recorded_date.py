@@ -17,6 +17,7 @@ from voxint.media.recorded_date import CREATION_DATE_TAG, parse_creation_date, p
     "2026-10-02T23:30:00-0600", "2026-10-02T23:30:00-06:00",
     "2026-10-02T10:00:00+0000", "2026-10-02T10:00:00+0530",
     "2026-10-02T10:00:00.123456+0530", " 2026-10-02 10:00:00+0530 ",
+    "2026-10-02T10:00:00+2359", "2026-10-02T10:00:00-23:59",
 ])
 def test_parse_recorded_date(value: str) -> None:
     assert parse_creation_date(value) == date(2026, 10, 2)
@@ -26,6 +27,7 @@ def test_parse_recorded_date(value: str) -> None:
     "2026-10-02T10:00:00Z", "2026-10-02T10:00:00", "2026-10-02",
     "20261002T10:00:00+0000", "", "  ", "garbage", None, 123, b"date",
     "2026-13-02T10:00:00+0000", "2026-10-02T10:00:00+2400",
+    "2026-10-02T10:00:00+0060", "2026-10-02T10:00:00+00:60", "2026-10-02T10:00:00+1299",
     "\uff12\uff10\uff12\uff16-10-02T10:00:00+0000", "2026-10-02T10:00:00.1234567+0000",
 ])
 def test_parse_recorded_date_rejects(value: object) -> None:

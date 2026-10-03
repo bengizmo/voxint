@@ -655,6 +655,11 @@ def test_recorded_sidecar_date(value: str) -> None:
     assert "recorded" not in sc.ignored_keys
     if value == "2026-10-02":
         assert sc.raw["recorded"] == "2026-10-02"
+    # Whatever the parser accepted, the render-time reader of the frozen
+    # snapshot must agree with it.
+    from voxint.api.presentation import recorded_from_snapshot
+
+    assert recorded_from_snapshot(sc.raw) == sc.recorded
 
 
 @pytest.mark.parametrize("value", [

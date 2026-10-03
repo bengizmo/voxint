@@ -26,7 +26,7 @@ CREATION_DATE_TAG = "com.apple.quicktime.creationdate"
 _TAG_PROBE_TIMEOUT_SECONDS = 10.0
 _CREATION_DATE = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}"
-    r"(?:\.[0-9]{1,6})?[+-][0-9]{2}:?[0-9]{2}"
+    r"(?:\.[0-9]{1,6})?[+-](?:[01][0-9]|2[0-3]):?[0-5][0-9]"
 )
 
 
@@ -94,7 +94,11 @@ def backfill_recorded_dates(
     dry_run: bool = False,
     on_found: Callable[[uuid.UUID, date], None] | None = None,
 ) -> RecordedDateBackfillResult:
-    """Fill unknown source dates, committing each row to preserve sweep progress."""
+    """Fill unknown source dates, committing each row to preserve sweep progress.
+
+    Commits the supplied session after every written row, so callers pass a
+    dedicated session. ``dry_run`` never writes or commits.
+    """
     rows = session.scalars(
         select(MediaItem)
         .where(MediaItem.recorded_on.is_(None), MediaItem.purged_at.is_(None))

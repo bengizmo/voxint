@@ -1550,12 +1550,12 @@ def _media_backfill_recorded_dates(args: argparse.Namespace) -> int:
         engine.dispose()
 
     if not result.dated and not result.no_tag and not result.skipped_missing:
-        print("nothing to backfill: every media row already has a recording date")
+        print("nothing to backfill: every unpurged media row already has a recording date")
         return 0
     action = "would set" if args.dry_run else "set"
     suffix = " (dry run, nothing written)" if args.dry_run else ""
     print(f"{action} the recording date on {len(result.dated)} media row(s){suffix}")
-    print(f"{result.no_tag} row(s) have no creation date tag (left empty)")
+    print(f"{result.no_tag} row(s) have no usable creation date tag (left empty)")
     if result.skipped_missing:
         print(
             f"skipped {len(result.skipped_missing)} row(s) whose bytes could not be"

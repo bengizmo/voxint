@@ -93,6 +93,16 @@ def test_recorded_date_export(
         rttm = render_run_rttm(session, run_id)
         undated = render(TranscriptFormat.MARKDOWN)
         assert undated.startswith("# Planning \\| call\n")
+        # A sidecar date is applied at render time and never written to the column.
+        run.sidecar = {"title": "Planning | call", "recorded": "1999-12-31"}
+        session.flush()
+        assert render(TranscriptFormat.MARKDOWN).startswith(
+            "# Planning \\| call \\| 31 Dec 1999\n"
+        )
+        assert run.media_item.recorded_on is None
+        session.flush()
+        session.expire_all()
+        assert run.media_item.recorded_on is None
         run.media_item.recorded_on = _DATE
         run.sidecar = {"title": "Planning | call", **snapshot}
         session.flush()
@@ -178,7 +188,7 @@ def test_cli_backfill_recorded_dates_dry_run(
     output = capsys.readouterr().out
     assert f"{media_id}: would set 2026-10-02" in output
     assert "would set the recording date on 1 media row(s) (dry run, nothing written)" in output
-    assert "0 row(s) have no creation date tag (left empty)" in output
+    assert "0 row(s) have no usable creation date tag (left empty)" in output
     assert "tagged.m4a" not in output
     with session_factory() as session:
         media = session.get(MediaItem, media_id)
@@ -187,7 +197,7 @@ def test_cli_backfill_recorded_dates_dry_run(
     assert "set the recording date on 1 media row(s)" in capsys.readouterr().out
     assert main(["media", "backfill-recorded-dates"]) == 0
     output = capsys.readouterr().out
-    assert "nothing to backfill: every media row already has a recording date" in output
+    assert "nothing to backfill: every unpurged media row already has a recording date" in output
 
 
 def test_backfill_recorded_dates_concurrent_first_write(

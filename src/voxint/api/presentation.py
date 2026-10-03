@@ -69,6 +69,9 @@ def recorded_from_snapshot(snapshot: object) -> date | None:
     if not isinstance(snapshot, dict):
         return None
     value = snapshot.get("recorded")
+    if isinstance(value, str):
+        # The sidecar parser strips before validating; the snapshot keeps the raw text.
+        value = value.strip()
     if not isinstance(value, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
         return None
     try:

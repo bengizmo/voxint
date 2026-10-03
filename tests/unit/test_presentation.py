@@ -580,7 +580,7 @@ def test_format_recorded_date(month: int, label: str) -> None:
 
 @pytest.mark.parametrize("snapshot", [
     None, [], "date", {}, {"recorded": 123}, {"recorded": "2026-10-02T10:00"},
-    {"recorded": "2026-02-30"}, {"recorded": " 2026-10-02"},
+    {"recorded": "2026-02-30"}, {"recorded": " "},
 ])
 def test_recorded_from_snapshot_tolerates_tampering(snapshot: object) -> None:
     from voxint.api.presentation import recorded_from_snapshot
@@ -594,3 +594,4 @@ def test_recorded_from_snapshot() -> None:
     from voxint.api.presentation import recorded_from_snapshot
 
     assert recorded_from_snapshot({"recorded": "2026-10-02"}) == date(2026, 10, 2)
+    assert recorded_from_snapshot({"recorded": " 2026-10-02 "}) == date(2026, 10, 2)

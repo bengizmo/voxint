@@ -146,5 +146,6 @@ def test_single_alembic_head() -> None:
     # 0065 = processing_cycle column for restart-from-stage, issue #506.
     # 0066 = provenance-preserving restart for adjudicated runs, issue #507.
     # 0067 = synthdetect_jobs.created_at NOT NULL, issue #692.
-    # 0068 = shared-GPU phase singleton, issue #748.
-    assert list(heads) == ["0068"]
+    # 0068 = shared-GPU phase singleton, issue #748; 0069 = media_items.recorded_on
+    # source recording date, issue #741.
+    assert list(heads) == ["0069"]
