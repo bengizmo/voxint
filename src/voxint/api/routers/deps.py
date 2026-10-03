@@ -282,29 +282,30 @@ def viewer_write_guard(request: Request, identity: CurrentUserDep) -> None:
 
 def require_onboarded(
     request: Request,
-    operator: OperatorDep,
+    identity: CurrentUserDep,
     session: SessionDep,
 ) -> None:
-    """First-run gate: redirect an un-onboarded operator to the setup wizard.
+    """First-run gate: send admins to setup and other roles to the pending page.
 
     Wired as a router-level dependency on EACH per-area router (routers/*.py);
     the ``console`` aggregator carries ``viewer_write_guard`` (#363) but NOT
     this onboarding gate, because on this FastAPI an outer router's dependencies
     do not appear in a nested route's dependant tree, which is where the
-    characterization contract reads gating from. Exemption stays structural —
+    characterization contract reads gating from. Exemption stays structural:
     ``/healthz``, ``/static/htmx.min.js``, ``/static/app/*``, and the setup
-    wizard's ``setup_router`` register outside any onboarding-gated router, so
+    wizard and pending page routers register outside any onboarding-gated router, so
     there is no path allow-list to keep in sync. It depends
-    on ``OperatorDep`` so authentication runs first: an
-    unauthenticated request gets a 401 challenge, never a redirect that would leak
+    on ``CurrentUserDep`` so authentication runs first: an
+    unauthenticated request gets the usual login challenge without leaking
     onboarding state. It depends on ``SessionDep`` so FastAPI's per-request
-    dependency cache hands the gate the same ``Session`` the route handler uses —
+    dependency cache hands the gate the same ``Session`` the route handler uses:
     one connection, not two.
 
     The onboarding read is cached on ``request.state`` for the life of the request
     only. It is deliberately NOT cached on ``app.state``: the Celery worker can
     flip ``onboarding_complete`` in its own process, so a cross-request cache would
-    serve a stale answer. Not onboarded ⇒ ``303`` to ``/setup`` for an ordinary
+    serve a stale answer. Not onboarded means ``303`` to ``/setup`` for admins
+    or ``/setup/pending`` for other roles on an ordinary
     navigation, or a ``204`` carrying ``HX-Redirect`` for an htmx request (htmx
     performs the client-side redirect; a 303's body would be swapped into the page
     instead of navigating).
@@ -315,6 +316,10 @@ def require_onboarded(
         request.state.onboarded = onboarded
     if onboarded:
         return
+    if identity.role != "admin":
+        if request.headers.get("HX-Request"):
+            raise HTTPException(status_code=204, headers={"HX-Redirect": "/setup/pending"})
+        raise HTTPException(status_code=303, headers={"Location": "/setup/pending"})
     if request.headers.get("HX-Request"):
         raise HTTPException(status_code=204, headers={"HX-Redirect": "/setup"})
     raise HTTPException(status_code=303, headers={"Location": "/setup"})

@@ -1016,6 +1016,12 @@
     ]
   ],
   [
+    "/setup/pending",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/setup/scan",
     [
       "POST"

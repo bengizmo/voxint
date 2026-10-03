@@ -1,11 +1,12 @@
 """Settings area: first-run setup wizard (issue #3) and the settings surface.
 
-Moved verbatim from ``api/app.py`` in the P0b router decomposition (#151). Two
-routers: ``setup_router`` carries the wizard and is registered on the app
+Moved verbatim from ``api/app.py`` in the P0b router decomposition (#151).
+``setup_router`` carries the wizard and is registered on the app
 directly, so the onboarding gate exempts it structurally (an un-onboarded
 operator must be able to reach the page the gate redirects them to; auth still
 applies). ``router`` carries /settings and the guided-tutorial lifecycle behind
-the router-level onboarding gate.
+the router-level onboarding gate. ``setup_pending_router`` serves authenticated
+non-admins while setup is incomplete.
 """
 
 from __future__ import annotations
@@ -51,6 +52,7 @@ from voxint.api.resource_status import (
 from voxint.api.routers import deps
 from voxint.api.routers.deps import (
     AdminDep,
+    CurrentUserDep,
     OperatorDep,
     SessionDep,
     _require_admin,
@@ -93,6 +95,7 @@ from voxint.app_settings import (
     feature_flag_state,
     get_app_settings,
     get_or_create,
+    is_onboarded,
     llm_bundled_active,
     llm_endpoint_form_fields,
     mark_tutorial_complete,
@@ -158,6 +161,7 @@ from voxint.tutorial.seed import seed_tutorial_run
 
 logger = logging.getLogger(__name__)
 
+setup_pending_router = APIRouter()
 setup_router = APIRouter(dependencies=[Depends(viewer_write_guard), Depends(_require_admin)])
 router = APIRouter(dependencies=[Depends(require_onboarded), Depends(_require_admin)])
 
@@ -1689,6 +1693,15 @@ def _persist_web_research(
 # paths below are enumerated in the route-inventory test's exempt allowlist
 # (deliberately NOT a blanket /setup prefix, so an accidental ungated route
 # still fails that guard).
+
+
+@setup_pending_router.get("/setup/pending", include_in_schema=False)
+def setup_pending(request: Request, identity: CurrentUserDep, session: SessionDep) -> Response:
+    if is_onboarded(session):
+        return RedirectResponse("/", status_code=303)
+    if identity.role == "admin":
+        return RedirectResponse("/setup", status_code=303)
+    return templates.TemplateResponse(request, "settings/setup_pending.html", {})
 
 
 @setup_router.get("/setup", include_in_schema=False)

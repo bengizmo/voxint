@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Setup in progress | Voxint{% endblock %}
+{% block sidebar %}{% endblock %}
+{% block topbar %}{% endblock %}
+{% block body %}
+<div class="setup">
+  <h1>Setup in progress</h1>
+  <p>This Voxint instance is still being set up. An administrator needs to finish setup before you can use it.</p>
+  <p>You can reload this page once setup is done.</p>
+  <a href="/">Reload</a>
+  {% if shell.multi_user and shell.current_user %}
+  <form method="post" action="/logout">
+    <input type="hidden" name="csrf_token" value="{{ shell.csrf_logout_token }}">
+    <button type="submit">Sign out</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

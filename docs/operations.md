@@ -1899,7 +1899,8 @@ The review console is served by the API at `http://127.0.0.1:8080/` (or your
 `API_PORT` override). Authentication is HTTP Basic (`VOXINT_USER`/`VOXINT_PASSWORD`)
 in single-operator mode, or session-based login in multi-user mode (see
 "Multi-user authentication" below). On a **fresh install** the onboarding gate redirects every
-authenticated page to the first-run setup wizard (`/setup`) until setup is
+authenticated page to the first-run setup wizard (`/setup`) for an administrator, or to a
+"Setup in progress" page for other roles, until setup is
 finished, so the review flow below becomes reachable only after onboarding completes
 (see [onboarding.md](onboarding.md)):
 
@@ -1928,6 +1929,9 @@ finished, so the review flow below becomes reachable only after onboarding compl
 By default Voxint uses a single shared credential (`VOXINT_USER` /
 `VOXINT_PASSWORD`, HTTP Basic). Multi-user mode adds individual accounts with
 password-based sessions and per-user attribution on adjudication decisions.
+
+Until an administrator finishes setup, reviewers and viewers see a "Setup in
+progress" page. They can reload the page after setup is done or sign out.
 
 ### Enabling multi-user mode
 
