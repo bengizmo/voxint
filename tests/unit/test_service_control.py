@@ -3,6 +3,7 @@
 import json
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock, patch
 
 import httpx
@@ -77,15 +78,146 @@ def docker(monkeypatch: pytest.MonkeyPatch):
     """Keep the real client/request code; replace only its socket transport."""
     requests = []
 
-    def install(handler):
+    def install(handler, *, ping_handler=None):
         def record(request):
             requests.append(request)
+            if request.url.path == "/_ping":
+                assert request.method == "GET"
+                if ping_handler is not None:
+                    return ping_handler(request)
+                return httpx.Response(200, headers={"Api-Version": "1.52"})
             return handler(request)
 
         monkeypatch.setattr(httpx, "HTTPTransport", lambda **kwargs: httpx.MockTransport(record))
         return DockerController("/test/docker.sock", "test-project"), requests
 
     return install
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("1.52", "1.52"), ("1.41", "1.41"), ("1.99", "1.52"),
+        ("v1.44", "1.44"), ("1.44.0", "1.44"), ("  v1.44.0 ", "1.44"),
+        ("1.52\n", "1.52"), ("1.9", "1.9"),
+    ],
+)
+def test_docker_negotiates_once(docker, version: str, expected: str) -> None:
+    def handler(request):
+        if request.url.path.endswith("/containers/json"):
+            return httpx.Response(200, json=[{"Id": "abc"}])
+        if request.method == "POST":
+            return httpx.Response(204)
+        return httpx.Response(200, json={"State": {"Running": True}})
+
+    controller, requests = docker(
+        handler, ping_handler=lambda request: httpx.Response(200, headers={"Api-Version": version})
+    )
+    assert controller.start("transcription").outcome == ControlOutcome.STARTED
+    assert controller.stop("diarization").outcome == ControlOutcome.STOPPED
+    assert controller.restart("speaker_embedding").outcome == ControlOutcome.RESTARTED
+    assert controller.inspect("transcription") == ServiceState.RUNNING
+    assert [r.url.path for r in requests] == [
+        "/_ping",
+        f"/v{expected}/containers/json",
+        f"/v{expected}/containers/abc/start",
+        f"/v{expected}/containers/json",
+        f"/v{expected}/containers/abc/stop",
+        f"/v{expected}/containers/json",
+        f"/v{expected}/containers/abc/restart",
+        f"/v{expected}/containers/json",
+        f"/v{expected}/containers/abc/json",
+    ]
+
+
+@pytest.mark.parametrize("version", [None, "", "garbled", "1.52/other", "1", "1.44.bad"])
+def test_docker_invalid_version_is_not_cached(docker, version: str | None) -> None:
+    headers = {} if version is None else {"Api-Version": version}
+    controller, requests = docker(
+        lambda request: httpx.Response(200, json=[]),
+        ping_handler=lambda request: httpx.Response(200, headers=headers),
+    )
+    assert controller.inspect("transcription") == ServiceState.UNKNOWN
+    headers["Api-Version"] = "1.52"
+    assert controller.inspect("transcription") == ServiceState.UNKNOWN
+    assert [r.url.path for r in requests] == [
+        "/_ping",
+        "/containers/json",
+        "/_ping",
+        "/v1.52/containers/json",
+    ]
+
+
+@pytest.mark.parametrize("failure", ["connection", "500", "timeout"])
+@pytest.mark.parametrize("action", ["start", "stop", "restart", "inspect"])
+def test_docker_ping_failure_retries(docker, failure: str, action: str) -> None:
+    attempts = 0
+
+    def ping(request):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            if failure == "connection":
+                raise httpx.ConnectError("unreachable", request=request)
+            if failure == "timeout":
+                raise httpx.ReadTimeout("timed out", request=request)
+            return httpx.Response(500)
+        return httpx.Response(200, headers={"Api-Version": "1.52"})
+
+    def handler(request):
+        if request.url.path.endswith("/containers/json"):
+            return httpx.Response(200, json=[{"Id": "abc"}])
+        if request.method == "POST":
+            return httpx.Response(204)
+        return httpx.Response(200, json={"State": {"Running": True}})
+
+    controller, requests = docker(handler, ping_handler=ping)
+    operation = getattr(controller, action)
+    result = operation("transcription")
+    if action == "inspect":
+        assert result == ServiceState.UNKNOWN
+    else:
+        assert result.outcome == (
+            ControlOutcome.TIMEOUT if failure == "timeout" else ControlOutcome.ERROR
+        )
+        if failure != "timeout":
+            assert result.detail.startswith("Docker API error:")
+    assert [r.url.path for r in requests] == ["/_ping"]
+    result = operation("transcription")
+    if action == "inspect":
+        assert result == ServiceState.RUNNING
+    else:
+        assert (
+            result.outcome
+            == {
+                "start": ControlOutcome.STARTED,
+                "stop": ControlOutcome.STOPPED,
+                "restart": ControlOutcome.RESTARTED,
+            }[action]
+        )
+    assert attempts == 2
+    assert requests[1].url.path == "/_ping"
+    assert all(r.url.path.startswith("/v1.52/containers/") for r in requests[2:])
+
+
+def test_docker_negotiation_is_thread_safe(docker) -> None:
+    ready = threading.Barrier(3)
+
+    def ping(request):
+        assert controller._api_version_lock.acquire(blocking=False)
+        controller._api_version_lock.release()
+        # Force every caller into negotiation before any can populate the cache.
+        ready.wait(timeout=5)
+        return httpx.Response(200, headers={"Api-Version": "1.52"})
+
+    controller, requests = docker(lambda request: httpx.Response(200, json=[]), ping_handler=ping)
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [executor.submit(controller.inspect, key) for key in SERVICES]
+        assert [future.result(timeout=5) for future in futures] == [ServiceState.UNKNOWN] * 3
+    assert [r.url.path for r in requests] == ["/_ping"] * 3 + ["/v1.52/containers/json"] * 3
+    assert controller._api_version == "v1.52"
+    assert controller.inspect("transcription") == ServiceState.UNKNOWN
+    assert [r.url.path for r in requests] == ["/_ping"] * 3 + ["/v1.52/containers/json"] * 4
 
 
 @pytest.mark.parametrize("count", [0, 1, 2])
@@ -95,8 +227,8 @@ def test_find_container(docker, count: int) -> None:
     )
     with controller._client() as client:
         assert controller._find_container(client, "whisper") == ("0" if count == 1 else None)
-    request = requests[0]
-    assert request.url.path == "/v1.43/containers/json"
+    request = requests[1]
+    assert request.url.path == "/v1.52/containers/json"
     assert request.url.params["all"] == "true"
     assert json.loads(request.url.params["filters"]) == {
         "label": [
@@ -123,7 +255,7 @@ def test_docker_restart(docker, scenario: str, outcome: ControlOutcome) -> None:
         if request.url.path.endswith("/abc/json"):
             return httpx.Response(200, json={"State": {"Running": scenario != "stopped"}})
         assert request.method == "POST"
-        assert request.url.path == "/v1.43/containers/abc/restart"
+        assert request.url.path == "/v1.52/containers/abc/restart"
         assert request.url.params["t"] == "10"
         if scenario == "timeout":
             raise httpx.ReadTimeout("timed out", request=request)
@@ -152,7 +284,7 @@ def test_docker_start(docker, scenario: str, outcome: ControlOutcome) -> None:
         if request.url.path.endswith("/containers/json"):
             return httpx.Response(200, json=[] if scenario == "missing" else [{"Id": "abc"}])
         assert request.method == "POST"
-        assert request.url.path == "/v1.43/containers/abc/start"
+        assert request.url.path == "/v1.52/containers/abc/start"
         assert "t" not in request.url.params  # start has no graceful timeout
         if scenario == "timeout":
             raise httpx.ReadTimeout("timed out", request=request)
@@ -182,7 +314,7 @@ def test_docker_stop(docker, scenario: str, outcome: ControlOutcome) -> None:
         if request.url.path.endswith("/containers/json"):
             return httpx.Response(200, json=[] if scenario == "missing" else [{"Id": "abc"}])
         assert request.method == "POST"
-        assert request.url.path == "/v1.43/containers/abc/stop"
+        assert request.url.path == "/v1.52/containers/abc/stop"
         assert request.url.params["t"] == "10"
         if scenario == "timeout":
             raise httpx.ReadTimeout("timed out", request=request)

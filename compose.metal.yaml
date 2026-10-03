@@ -40,3 +40,12 @@ services:
       EMBEDDER_URL: http://host.docker.internal:8021
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  beat:
+    environment:
+      COMPUTE_TIER: metal
+      ASR_URL: http://host.docker.internal:8022
+      DIARIZER_URL: http://host.docker.internal:8024
+      EMBEDDER_URL: http://host.docker.internal:8021
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

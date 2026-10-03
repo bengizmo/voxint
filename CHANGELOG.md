@@ -77,6 +77,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `GET /media/{id}/editor/voice-sample/{speaker_id}`.
 
 ### Fixed
+- Celery beat now reads `.env` in the Compose stack, as the worker does. Before,
+  beat never saw opt-in settings, so `GPU_PHASE_ENABLED`, media retention,
+  notifications and the activity prune were never scheduled under Compose (#748).
+  Beat also shares the worker’s media path, tier settings and migration dependency,
+  so valid cookie-file and tier-scaled timeout settings do not prevent startup.
+- Service controls and GPU sharing failed on Docker Engine 29+ (API minimum
+  1.44). The Docker API version is now negotiated with the daemon, capped at 1.52,
+  without holding the cache lock during network requests (#556, #748).
 - The recovery sweep now re-dispatches speaker-research jobs left queued
   after a lost dispatch, as it already did for run assets and translations
   (#748).

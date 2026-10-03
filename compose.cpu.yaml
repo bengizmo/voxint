@@ -26,6 +26,13 @@ services:
       DIARIZER_URL: http://pyannote:8024
       EMBEDDER_URL: http://titanet:8021
 
+  beat:
+    environment:
+      COMPUTE_TIER: cpu
+      ASR_URL: http://whisper:8022
+      DIARIZER_URL: http://pyannote:8024
+      EMBEDDER_URL: http://titanet:8021
+
   whisper:
     image: ghcr.io/bengizmo/voxint-whisper:${VOXINT_IMAGE_TAG:-0.50.0}-cpu
     pull_policy: missing
