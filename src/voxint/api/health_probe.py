@@ -49,10 +49,11 @@ class ServiceHealth:
     # (tolerated exactly as ``device`` is). Captured on the degraded 503 path
     # too, since telemetry is most useful when a service is struggling.
     resources: dict[str, object] | None = None
-    # No answer at all: the connection failed or timed out, which is what a
-    # stopped service looks like. False for every answered failure (an HTTP
-    # error, a malformed body) and for a bad URL. GPU sharing (#748) only treats
-    # a not-running service as an expected stop.
+    # The connection never opened (refused, or the connect itself timed out),
+    # which is what a stopped service looks like. False once anything is
+    # listening: an HTTP error, a malformed body, a read/write/pool timeout (a
+    # wedged service), and a bad URL. GPU sharing (#748) only treats a
+    # not-running service as an expected stop.
     not_running: bool = False
 
 
@@ -131,9 +132,15 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
     start = time.monotonic()
     try:
         response = client.get(url)
-    except httpx.TimeoutException:
-        # No completed round-trip → no latency to report.
-        return outcome(up=False, detail="timeout", latency_ms=None, not_running=True)
+    except httpx.TimeoutException as exc:
+        # No completed round-trip → no latency to report. Only a connect timeout
+        # means nothing is listening; a read timeout is a wedged service.
+        return outcome(
+            up=False,
+            detail="timeout",
+            latency_ms=None,
+            not_running=isinstance(exc, httpx.ConnectTimeout),
+        )
     except httpx.InvalidURL:
         # A malformed configured URL is a config error, not a transport failure —
         # and InvalidURL is NOT an httpx.HTTPError, so it must be caught explicitly

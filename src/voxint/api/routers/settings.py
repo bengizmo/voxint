@@ -142,6 +142,8 @@ from voxint.domain_packs.registry import available_domain_packs, default_domain_
 from voxint.embeddings.onnx_embedder import minilm_artifacts_available
 from voxint.enrichment.translation_jobs import translation_gates_open
 from voxint.enrichment.triage import validate_authority_domains
+from voxint.gpu_phase.visibility import model_service_stop_detail
+from voxint.gpu_phase.visibility import read_state as read_gpu_sharing_state
 from voxint.ingest import submit_media_item_if_new
 from voxint.media.registration import (
     PACK_DEFAULT_SENTINEL,
@@ -908,6 +910,15 @@ _COMPONENT_LABELS: dict[str, str] = {
     GPU_SHARING_CHECK: "GPU sharing",
 }
 
+# Diagnostics check name -> service-control key for the three model services.
+# These, and only these, are owned by GPU sharing when it is on (#748).
+_MODEL_SERVICE_KEYS: dict[str, str] = {
+    "transcription": "transcription",
+    "diarization": "diarization",
+    "speaker embedding": "speaker_embedding",
+}
+_GPU_SHARED_SERVICE_KEYS = frozenset(_MODEL_SERVICE_KEYS.values())
+
 _COMPONENT_ORDER = (
     "__api__",
     "transcription",
@@ -1007,11 +1018,7 @@ def _build_components(
             else:
                 dot = "warn"
                 state_text = check["detail"] or state
-        service_key = {
-            "transcription": "transcription",
-            "diarization": "diarization",
-            "speaker embedding": "speaker_embedding",
-        }.get(key)
+        service_key = _MODEL_SERVICE_KEYS.get(key)
         # With GPU sharing on, the orchestrator owns the model services in every
         # phase, healthy or not: no start/stop/restart controls and no hint.
         # Starting one by hand could load models onto a GPU the language model
@@ -2568,7 +2575,7 @@ async def _service_control_action(
         raise HTTPException(status_code=404, detail="Unknown service")
     _require_csrf(request, CSRF_SERVICE_CONTROL, csrf_token)
     settings: Settings = request.app.state.settings
-    if settings.gpu_phase_enabled:
+    if settings.gpu_phase_enabled and service_key in _GPU_SHARED_SERVICE_KEYS:
         # A stale form from before GPU sharing was turned on (#748).
         logger.info(
             "service_control action=%s actor=%s service_key=%s outcome=refused_gpu_sharing",
@@ -2655,12 +2662,22 @@ def settings_service_row(service_key: str, request: Request, admin: AdminDep) ->
     # This synchronous route runs in FastAPI's thread pool, including Docker inspection.
     with httpx.Client(timeout=httpx.Timeout(settings.health_probe_timeout_seconds)) as client:
         health = _probe_one(client, service.label, getattr(settings, service.settings_url_attr))
-    if settings.gpu_phase_enabled:
+    if settings.gpu_phase_enabled and service_key in _GPU_SHARED_SERVICE_KEYS:
         # GPU sharing owns the service (#748): its state only, no controls, no
-        # hint, and no further polling (no action of ours is in progress).
-        response = HTMLResponse(
-            _service_row_html(service_key, health.detail, "ok" if health.up else "off")
+        # hint, and no further polling (no action of ours is in progress). A
+        # down service is "off" only when that is expected: the phase is fresh
+        # and keeps services stopped, and nothing answered. Otherwise "warn".
+        # A session only on this path: with sharing off the row needs no database.
+        with request.app.state.session_factory() as session:
+            gpu_state = read_gpu_sharing_state(session, settings)
+        phase = gpu_state.trusted_phase if gpu_state is not None else None
+        expected = (
+            phase is not None
+            and model_service_stop_detail(phase) is not None
+            and health.not_running
         )
+        dot = "ok" if health.up else "off" if expected else "warn"
+        response = HTMLResponse(_service_row_html(service_key, health.detail, dot))
         response.headers["Cache-Control"] = "no-store"
         return response
     state = controller.inspect(service_key) if controller.controllable else ServiceState.UNKNOWN

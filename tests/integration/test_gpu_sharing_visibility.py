@@ -579,3 +579,49 @@ def test_feature_off_issues_no_gpu_phase_sql(
         event.remove(engine, "before_cursor_execute", record)
     assert statements, "the listener saw no SQL at all"
     assert not [sql for sql in statements if "gpu_phase" in sql]
+
+
+def test_audio_now_on_a_missing_row_does_not_look_fresh(
+    cli_env: list[Settings],
+    engine: Engine,
+    session_factory: sessionmaker[Session],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with session_factory() as session:
+        session.execute(text("DELETE FROM gpu_phase"))
+        session.commit()
+    assert main(["gpu-phase", "audio-now"]) == 0
+    capsys.readouterr()
+    results = _diagnose(engine, _settings())
+    sharing = next(r for r in results if r.name == GPU_SHARING_CHECK)
+    assert sharing.detail == (
+        "the GPU sharing task has not run yet; check that the gpu-phase service "
+        "from compose.gpu-phase.yaml is running"
+    )
+    assert not any(r.expected_stop for r in results)
+    assert exit_code(results) == 1  # the dead transcriber is not excused
+    assert main(["gpu-phase", "status"]) == 0
+    out = capsys.readouterr().out
+    assert "last task run:    never (the GPU sharing task has not run yet)" in out
+    assert "1970" not in out
+
+
+@pytest.mark.parametrize(
+    ("phase", "stale", "dot"),
+    [
+        (GpuPhase.LLM, False, "off"),  # stopped on purpose
+        (GpuPhase.AUDIO, False, "warn"),  # the phase needs it up
+        (GpuPhase.DRAINING, False, "warn"),
+        (GpuPhase.LLM, True, "warn"),  # the phase task is not running
+    ],
+)
+def test_polled_row_dot_under_gpu_sharing(
+    session_factory: sessionmaker[Session], phase: GpuPhase, stale: bool, dot: str
+) -> None:
+    if stale:
+        _stale(session_factory, phase)
+    else:
+        _set(session_factory, phase)
+    row = _client(session_factory, _settings()).get("/settings/status/services/transcription/row")
+    assert f'class="cr-dot is-{dot}"' in row.text
+    assert "<form" not in row.text and "<code>" not in row.text

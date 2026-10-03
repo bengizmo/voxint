@@ -938,6 +938,7 @@ def _gpu_phase_status(args: argparse.Namespace) -> int:
     from voxint.config import get_settings
     from voxint.db.session import build_engine, build_session_factory
     from voxint.gpu_phase.state import (
+        NEVER_TICKED,
         gpu_lane_demand,
         gpu_lane_in_flight,
         post_lane_in_flight,
@@ -951,7 +952,9 @@ def _gpu_phase_status(args: argparse.Namespace) -> int:
         return 0
 
     def when(value: datetime | None) -> str:
-        return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC") if value else "-"
+        if value is None or value == NEVER_TICKED:
+            return "-"
+        return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     factory = build_session_factory(build_engine())
     with factory() as session:
@@ -963,6 +966,12 @@ def _gpu_phase_status(args: argparse.Namespace) -> int:
     print(f"phase:            {phase.value if phase else 'none'} ({phase_summary(phase)})")
     if snapshot is not None:
         print(f"since:            {when(snapshot.phase_since)}")
+        last_run = (
+            "never (the GPU sharing task has not run yet)"
+            if snapshot.updated_at == NEVER_TICKED
+            else when(snapshot.updated_at)
+        )
+        print(f"last task run:    {last_run}")
         print(f"lease expires:    {when(snapshot.lease_expires_at)}")
         last_error = display_error(snapshot.last_error) if snapshot.last_error else "-"
         print(f"last error:       {last_error}")
@@ -981,7 +990,7 @@ def _gpu_phase_request(request_value: str) -> int:
     from voxint.config import get_settings
     from voxint.db.session import build_engine, build_session_factory, session_scope
     from voxint.gpu_phase.state import GpuPhase, OperatorRequest, read_phase, set_request
-    from voxint.gpu_phase.visibility import is_fresh, utc_minute
+    from voxint.gpu_phase.visibility import is_fresh, not_run_text
 
     settings = get_settings()
     if not settings.gpu_phase_enabled:
@@ -1038,7 +1047,7 @@ def _gpu_phase_request(request_value: str) -> int:
         before, now=datetime.now(UTC), tick_seconds=settings.gpu_phase_tick_seconds
     ):
         print(
-            f"note: the GPU sharing task has not run since {utc_minute(before.updated_at)}; "
+            f"note: {not_run_text(before.updated_at)}; "
             "nothing changes until the gpu-phase service runs"
         )
     return 0

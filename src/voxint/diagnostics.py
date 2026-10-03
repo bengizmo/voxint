@@ -48,7 +48,13 @@ from voxint.app_settings import (
     resolve_effective_ytdlp_enabled,
 )
 from voxint.config import Settings
-from voxint.gpu_phase.state import GpuPhase, GpuPhaseSnapshot, OperatorRequest, read_phase
+from voxint.gpu_phase.state import (
+    NEVER_TICKED,
+    GpuPhase,
+    GpuPhaseSnapshot,
+    OperatorRequest,
+    read_phase,
+)
 from voxint.gpu_phase.visibility import (
     LLM_EXPECTED_DOWN_DETAIL,
     NO_ROW_SUMMARY,
@@ -57,6 +63,7 @@ from voxint.gpu_phase.visibility import (
     is_fresh,
     llm_expected_down,
     model_service_stop_detail,
+    not_run_text,
     stale_after_seconds,
     utc_minute,
 )
@@ -252,8 +259,8 @@ def check_gpu_phase(
             GPU_SHARING_CHECK,
             False,
             False,
-            f"the GPU sharing task has not run since {utc_minute(snapshot.updated_at)}; check "
-            "that the gpu-phase service from compose.gpu-phase.yaml is running",
+            f"{not_run_text(snapshot.updated_at)}; check that the gpu-phase service "
+            "from compose.gpu-phase.yaml is running",
         )
     phase = snapshot.phase
     if phase == GpuPhase.ERROR:
@@ -265,7 +272,12 @@ def check_gpu_phase(
             False,
             f"{detail}; language-model work is paused; run voxint gpu-phase release",
         )
-    parts = [f"{PHASE_SUMMARY[phase]} since {utc_minute(snapshot.phase_since)}"]
+    since = (
+        f" since {utc_minute(snapshot.phase_since)}"
+        if snapshot.phase_since != NEVER_TICKED
+        else ""
+    )
+    parts = [PHASE_SUMMARY[phase] + since]
     if snapshot.operator_request is not None:
         parts.append(_REQUEST_TEXT[snapshot.operator_request])
     if snapshot.failures and snapshot.retry_after is not None:
@@ -416,8 +428,10 @@ def check_llm(
         # InvalidURL is NOT an httpx.HTTPError; a malformed llm_base_url would
         # otherwise escape this advisory check and abort the whole doctor run.
         return CheckResult("llm endpoint", False, False, "invalid url")
-    except (httpx.ConnectError, httpx.TimeoutException) as exc:
-        # Nothing answered: the shape of a stopped server (GPU sharing, #748).
+    except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+        # The connection never opened: the shape of a stopped server (GPU
+        # sharing, #748). A read/write/pool timeout means something is listening
+        # but stuck, which stays an honest failure below.
         return CheckResult(
             "llm endpoint", False, False, f"unreachable ({_safe(exc)})", not_running=True
         )

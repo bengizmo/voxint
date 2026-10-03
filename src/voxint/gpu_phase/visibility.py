@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from voxint.config import Settings
-from voxint.gpu_phase.state import GpuPhase, GpuPhaseSnapshot, read_phase
+from voxint.gpu_phase.state import NEVER_TICKED, GpuPhase, GpuPhaseSnapshot, read_phase
 
 # One short phrase per phase, for status rows and the CLI.
 PHASE_SUMMARY: dict[GpuPhase, str] = {
@@ -79,6 +79,13 @@ def display_error(text: str) -> str:
     if len(flat) <= _LAST_ERROR_MAX:
         return flat
     return flat[: _LAST_ERROR_MAX - 3].rstrip() + "..."
+
+
+def not_run_text(updated_at: datetime) -> str:
+    """How long the phase task has been silent, without printing the sentinel."""
+    if updated_at == NEVER_TICKED:
+        return "the GPU sharing task has not run yet"
+    return f"the GPU sharing task has not run since {utc_minute(updated_at)}"
 
 
 def stale_after_seconds(tick_seconds: int) -> int:
@@ -166,8 +173,9 @@ def build_view(state: GpuSharingState, waiting: int) -> GpuSharingView:
     note: str | None = None
     if state.stale_since is not None:
         headline = "GPU sharing is not running."
+        silent = not_run_text(state.stale_since)
         detail = (
-            f"The GPU sharing task has not run since {utc_minute(state.stale_since)}, "
+            f"{silent[0].upper()}{silent[1:]}, "
             "so the GPU is not switching between audio and language-model work. "
             "Check that the gpu-phase service is running; see the Status page."
         )

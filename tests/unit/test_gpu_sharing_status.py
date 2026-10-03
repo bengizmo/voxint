@@ -30,7 +30,7 @@ from voxint.diagnostics import (
     gpu_phase_stale_after_seconds,
     run_diagnostics,
 )
-from voxint.gpu_phase.state import GpuPhase, GpuPhaseSnapshot, OperatorRequest
+from voxint.gpu_phase.state import NEVER_TICKED, GpuPhase, GpuPhaseSnapshot, OperatorRequest
 from voxint.gpu_phase.visibility import (
     LLM_EXPECTED_DOWN_DETAIL,
     NO_ROW_SUMMARY,
@@ -312,6 +312,24 @@ def test_check_gpu_phase_reports_a_task_that_stopped_writing(phase: GpuPhase) ->
     assert exit_code([result]) == 0
 
 
+def test_never_ticked_row_reads_as_not_run_yet() -> None:
+    # A row an operator request created before the phase task ever ran.
+    never = snap(GpuPhase.LLM, updated_at=NEVER_TICKED, phase_since=NEVER_TICKED)
+    result = gpu_check(snapshot=never, enabled=True)
+    assert result == CheckResult(
+        GPU_SHARING_CHECK,
+        False,
+        False,
+        "the GPU sharing task has not run yet; check that the gpu-phase service "
+        "from compose.gpu-phase.yaml is running",
+    )
+    banner = build_view(GpuSharingState(phase=GpuPhase.LLM, stale_since=NEVER_TICKED), 0)
+    assert banner.detail is not None and banner.detail.startswith(
+        "The GPU sharing task has not run yet, so the GPU is not switching"
+    )
+    assert "1970" not in banner.detail
+
+
 def test_check_gpu_phase_at_the_stale_boundary_is_still_fresh() -> None:
     at_limit = snap(GpuPhase.LLM, updated_at=NOW - timedelta(seconds=120))
     result = gpu_check(snapshot=at_limit, enabled=True)
@@ -373,7 +391,11 @@ def test_apply_gpu_phase_llm_endpoint(phase: GpuPhase) -> None:
     [
         (httpx.ConnectError("refused"), True),
         (httpx.ConnectTimeout("slow"), True),
-        (httpx.ReadTimeout("slow"), True),
+        # Something accepted the connection and then stalled: a wedged server,
+        # never an expected stop (#748 re-review).
+        (httpx.ReadTimeout("slow"), False),
+        (httpx.WriteTimeout("slow"), False),
+        (httpx.PoolTimeout("slow"), False),
         (httpx.RemoteProtocolError("garbled"), False),
     ],
 )
@@ -399,6 +421,10 @@ def test_check_llm_marks_only_no_answer_as_not_running(
     [
         (httpx.ConnectError("refused"), True, "unreachable"),
         (httpx.ConnectTimeout("slow"), True, "timeout"),
+        # Connected but wedged: a read/write/pool timeout stays an honest failure.
+        (httpx.ReadTimeout("slow"), False, "timeout"),
+        (httpx.WriteTimeout("slow"), False, "timeout"),
+        (httpx.PoolTimeout("slow"), False, "timeout"),
         (httpx.ReadError("reset"), False, "unreachable"),
         (httpx.Response(401), False, "HTTP 401"),
         (httpx.Response(503, json={"status": "degraded"}), False, "degraded (model not loaded)"),
@@ -418,6 +444,29 @@ def test_probe_marks_only_no_answer_as_not_running(
         health = _probe_one(client, "transcription", "http://asr.invalid")
     assert not health.up and health.detail == detail
     assert health.not_running is not_running
+
+
+class _StalledBody(httpx.SyncByteStream):
+    """Headers arrived; the body stalls until the read timeout fires."""
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        yield b'{"status": '
+        raise httpx.ReadTimeout("body stalled")
+
+
+def test_probe_response_that_starts_then_stalls_is_not_an_expected_stop() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_StalledBody())
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        health = _probe_one(client, "transcription", "http://asr.invalid")
+    assert not health.up and health.detail == "timeout"
+    assert health.not_running is False
+    (result,) = apply_gpu_phase(
+        [CheckResult("transcription", False, True, health.detail, not_running=False)],
+        GpuPhase.LLM,
+    )
+    assert not result.expected_stop and exit_code([result]) == 1
 
 
 def test_run_diagnostics_off_adds_no_gpu_row() -> None:

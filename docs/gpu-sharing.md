@@ -44,7 +44,7 @@ task, `voxint.gpu_phase_tick` on the Celery queue `gpu_phase`, runs every
 | `audio` | Voxint | runs | waits | the GPU lane is empty and min dwell has passed, or `GPU_PHASE_MAX_AUDIO_SECONDS` is reached, or the operator runs `release` |
 | `draining` | Voxint | waits | waits | GPU-lane runs already in progress finish |
 | `stopping_services` | Voxint | waits | waits | the three model services are stopped |
-| `releasing` | being handed back | waits | waits | the broker confirms the release |
+| `releasing` | being handed back | waits | waits | the broker confirms the release (`200` or `404`) and the other service is running again |
 | `error` | neither (the hand-back failed) | waits | waits | a retry of the hand-back succeeds |
 
 "Waits" means queued work stays queued. Nothing is lost; a run picks up where
@@ -99,12 +99,15 @@ is lost: the broker no longer considers Voxint the holder.
 {"lease_id": "b7c1"}
 ```
 
-| Status | Meaning |
-|---|---|
-| `200` | Released. The broker starts the other service again. |
-| `404` | No such lease; the GPU is already free. Voxint treats this as released. |
+| Status | Body | Meaning |
+|---|---|---|
+| `200` | any | Released, and the other service is running again. Voxint opens the LLM lane. |
+| `202` | `{"state": "pending"}` | The broker is still restoring the other service. Voxint stays in `releasing` and asks again on the next tick. |
+| `404` | any | No such lease; the GPU is already free. Voxint treats this as released and opens the LLM lane. |
+| `500` | any, for example `{"error": "the language model did not come back"}` | Restoring the other service failed. The phase goes to `error`. |
 
-Any other answer, or no answer, puts the phase in `error`.
+Voxint opens the LLM lane only after a `200` or `404`. Any other answer, or no
+answer, puts the phase in `error`.
 
 ### Status
 
@@ -208,12 +211,13 @@ recordings take and how long the other service takes to stop and start.
 | `voxint doctor` | A `gpu sharing` line. A model service GPU sharing stopped prints as `[off ]` and does not change the exit code. While Voxint holds the GPU, an `llm endpoint` that does not answer also prints as `[off ]`. |
 | `voxint gpu-phase status` | Phase, since when, lease expiry, last error, failure count, retry time, pending operator request, and how many runs are waiting for or running on each lane. |
 
-A stopped service is only called expected when nothing answered at all (the
-connection was refused or timed out) and the phase task is running: the
+A stopped service is only called expected when the connection could not be
+opened at all (refused, or the connect itself timed out) and the phase task is
+running: the
 stored phase is present and was written within the last
 `max(3 * GPU_PHASE_TICK_SECONDS, 120)` seconds. A service that answers with an
-error (HTTP 401, a 5xx, a malformed reply), or a bad URL, is always reported
-as a failure. So is a stopped service while the phase task is not running or no
+error (HTTP 401, a 5xx, a malformed reply), one that accepts the connection
+and then stalls, or a bad URL, is always reported as a failure. So is a stopped service while the phase task is not running or no
 phase is recorded, because then nothing stopped it on purpose. The last error
 is shown with control characters removed and cut to 300 characters.
 
@@ -298,8 +302,12 @@ service's lifecycle. It can be a few dozen lines in any language. It needs to:
    again on the next tick. If someone else holds the GPU, answer `409`. On a
    renewal with the current `lease_id`, extend the expiry and answer `200` with
    the same `lease_id`; with an unknown or expired one, answer `404`.
-2. **Release.** On the current `lease_id`, start the other service again and
-   answer `200`. On an unknown one, answer `404`.
+2. **Release.** On the current `lease_id`, start the other service again. Answer
+   `202 {"state": "pending"}` until it is healthy (for an LLM server, until it
+   answers a request), and `200` only then: Voxint opens the LLM lane on the
+   `200`, and opening it early would send work to a model that is not up yet.
+   If the other service fails to come back, answer `500`. On an unknown
+   `lease_id`, answer `404`.
 3. **Status.** Report the current lease, or `"free"`.
 4. **Expire leases Voxint stops renewing.** Voxint renews every tick, so a lease
    that passes its `expires_at` means Voxint stopped (crashed, or the host lost
