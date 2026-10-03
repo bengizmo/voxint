@@ -1,6 +1,7 @@
 """Non-admin first-run waiting page, using real users and Postgres sessions."""
 
 import re
+from html.parser import HTMLParser
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +19,24 @@ from voxint.db.models import UserRole
 from voxint.users import create_user
 
 _PASSWORD = "pending-test-password"
+
+
+class _TextNodes(HTMLParser):
+    """Collect text nodes (visible copy and inline script bodies), not attributes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+
+def _page_text(html: str) -> str:
+    parser = _TextNodes()
+    parser.feed(html)
+    parser.close()
+    return "".join(parser.parts)
 
 
 @pytest.fixture()
@@ -61,7 +80,9 @@ def test_pending_page_and_logout(pending_client: TestClient) -> None:
     ) in response.text
     assert "You can reload this page once setup is done." in response.text
     assert '<a href="/">Reload</a>' in response.text
-    assert "403" not in response.text
+    # Attribute values (the CSRF token, asset hashes) are random and may contain
+    # "403"; only the page's own text must not mention it.
+    assert "403" not in _page_text(response.text)
     assert 'class="wizard-steps"' not in response.text
     form = re.search(r'<form method="post" action="/logout">(.*?)</form>', response.text, re.S)
     assert form is not None
