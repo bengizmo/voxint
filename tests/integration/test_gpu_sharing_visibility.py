@@ -665,6 +665,6 @@ def test_waiting_for_llm_copy_across_surfaces(
     assert "llm (waiting for the language model to answer)" in capsys.readouterr().out
     body = client.get("/runs").text
     assert "Waiting for the language model to answer." in body
-    assert "2 recordings are queued for language-model work." in body
+    assert "2 language-model jobs are queued." in body
     assert "waiting for the language model to answer" in client.get("/runs/progress-strip").text
     assert "waiting for the language model to answer" in client.get("/settings/status").text

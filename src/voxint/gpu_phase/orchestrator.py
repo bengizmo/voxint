@@ -60,6 +60,8 @@ class Observed:
     started: bool = False
     ready: bool = False
     llm_ready: bool | None = None
+    # When the language-model probe answered; freshness is measured from here.
+    llm_checked_at: datetime | None = None
     control_error: str | None = None
     stopped: bool = False
     # The lease id a release call used, possibly recovered from broker status.
@@ -276,13 +278,15 @@ def tick(
             state.post_lane_in_flight(session),
             state.running_llm_jobs(session),
         )
-        o = _observe(s, settings, client, controller, probe, lambda: llm_probe(settings, session))
+        o = _observe(
+            s, settings, client, controller, probe, lambda: llm_probe(settings, session), clock
+        )
         now = clock()
         transition = decide(s, counts, o, now, settings)
         staying_llm = s.phase == transition.phase == P.LLM
         transition.fields["llm_ready"] = staying_llm and o.llm_ready is not False
         if staying_llm:
-            transition.fields["llm_checked_at"] = now
+            transition.fields["llm_checked_at"] = o.llm_checked_at or now
         idle_demand = (
             s.phase == P.AUDIO and counts.gpu_lane_demand > 0 and counts.gpu_in_flight == 0
         ) or (
@@ -324,6 +328,7 @@ def _observe(
     controller: ServiceController,
     probe: Callable[[Settings], list[ServiceHealth]],
     llm_probe: Callable[[], bool | None],
+    clock: Callable[[], datetime],
 ) -> Observed:
     renewal = None
     try:
@@ -337,18 +342,20 @@ def _observe(
     # The language model's readiness is its own fact: a Docker or broker problem
     # this tick must not close the LLM lane while the model answers.
     llm_ready: bool | None = None
+    llm_checked_at: datetime | None = None
     if s.phase == P.LLM:
         try:
             llm_ready = llm_probe()
         except Exception:
             llm_ready = False
+        llm_checked_at = clock()
     try:
         observed = _observe_services(s, settings, client, controller, probe, renewal)
     except Exception as exc:
         if s.phase == P.ACQUIRING:
             return Observed(acquire=AcquireResult("failed", reason=type(exc).__name__[:240]))
         observed = Observed(acquire=renewal, control_error=type(exc).__name__[:240])
-    return replace(observed, llm_ready=llm_ready)
+    return replace(observed, llm_ready=llm_ready, llm_checked_at=llm_checked_at)
 
 
 def _observe_services(
@@ -428,6 +435,20 @@ def _publish_lane(
     from voxint.worker import tasks
 
     attempted = False
+    # Publication runs after the phase commit; a later tick may have closed the
+    # lane since (a failed language-model probe). Recheck with a fresh read.
+    try:
+        with factory() as session:
+            snapshot = state.read_phase(session)
+    except Exception:
+        logger.exception("GPU phase lane publication failed")
+        return False
+    if not (
+        state.gpu_lane_open(snapshot, settings)
+        if phase == P.AUDIO
+        else state.post_lane_open(snapshot, settings)
+    ):
+        return False
 
     def publish(run_id: uuid.UUID, stage: Stage | None) -> bool:
         nonlocal attempted

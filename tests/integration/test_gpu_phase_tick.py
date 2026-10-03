@@ -754,7 +754,7 @@ def test_renewal_exception_is_a_failed_acquire(
     )
     monkeypatch.setattr(rig.client, "acquire", MagicMock(side_effect=RuntimeError("secret")))
     observed = orchestrator._observe(
-        rig.read(), rig.settings, rig.client, rig.controller, rig.probe, lambda: None
+        rig.read(), rig.settings, rig.client, rig.controller, rig.probe, lambda: None, rig.clock
     )
     assert observed.acquire is not None
     assert observed.acquire.kind == "failed"
@@ -832,6 +832,8 @@ def test_publish_lane_reports_whether_anything_was_sent(
     from voxint.gpu_phase import orchestrator
 
     now = rig.clock()
+    # Publication rechecks the lane, so the GPU lane must really be open.
+    rig.seed(P.AUDIO)
     assert orchestrator._publish_lane(session_factory, rig.settings, P.AUDIO, now) is False
     with session_factory.begin() as session:
         seed_run(session, None)
@@ -920,3 +922,37 @@ def test_service_control_trouble_does_not_close_a_ready_llm_lane(
     rig.llm_ready = False
     assert rig.step().phase == P.LLM
     assert rig.read().llm_ready is False
+
+
+def test_readiness_is_stamped_when_the_probe_answered(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A slow Docker inspection after the probe must not make the answer look newer.
+    rig.seed(P.LLM)
+    rig.llm_ready = True
+    answered = rig.clock()
+    original = rig.controller.inspect
+
+    def slow_inspect(service_key: str) -> ServiceState:
+        rig.clock.advance(20)
+        return original(service_key)
+
+    monkeypatch.setattr(rig.controller, "inspect", slow_inspect)
+    assert rig.step().phase == P.LLM
+    row = rig.read()
+    assert row.llm_ready is True
+    assert row.llm_checked_at == answered
+    assert rig.clock() > answered
+
+
+@pytest.mark.parametrize("phase", [P.LLM, P.AUDIO])
+def test_publication_rechecks_a_lane_closed_after_commit(rig: Rig, phase: P) -> None:
+    # Another tick can close the lane between this tick's commit and its publication.
+    with rig.session_factory.begin() as session:
+        seed_run(session, Stage.ENHANCE_MATCH if phase == P.LLM else Stage.TRANSCRIBE)
+    # Phase llm with readiness false closes both lanes for this publication.
+    rig.seed(P.LLM, llm_ready=False, llm_checked_at=rig.clock())
+    published = orchestrator._publish_lane(rig.session_factory, rig.settings, phase, rig.clock())
+    assert published is False
+    for publisher in rig.publishers.values():
+        publisher.assert_not_called()

@@ -674,3 +674,48 @@ def test_post_run_waits_for_recent_answer(
         after = session.get(PipelineRun, run.id)
         assert after is not None and after.status == "queued"
         assert after.current_stage == Stage.ENHANCE_MATCH
+
+
+@pytest.mark.parametrize("ready,age", [(False, 0), (True, 600), (False, None)])
+def test_recovery_sweep_holds_llm_work_until_ready(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    ready: bool,
+    age: int | None,
+) -> None:
+    # Phase llm alone is not enough: an unanswered or stale readiness check keeps
+    # the sweep from re-dispatching post-lane runs and language-model jobs.
+    settings = phase_settings(recovery_publish_batch_size=5)
+    with session_factory() as session:
+        set_phase(
+            session,
+            GpuPhase.LLM,
+            now=NOW,
+            llm_ready=ready,
+            llm_checked_at=None if age is None else datetime.now(UTC) - timedelta(seconds=age),
+        )
+        post = seed_run(session, Stage.ENHANCE_MATCH, age=9000)
+        jobs = seed_jobs(session)
+        session.commit()
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+    monkeypatch.setattr(tasks, "get_settings", lambda: settings)
+    monkeypatch.setattr(tasks, "recover_interrupted_runs", lambda *a, **kw: [post.id])
+    pipeline = MagicMock()
+    monkeypatch.setattr(tasks, "pipeline_task_for_stage", lambda stage: pipeline)
+    publishers = [MagicMock() for _ in jobs]
+    for task, publisher in zip(
+        [tasks.generate_run_asset, tasks.translate_run, tasks.research_speaker],
+        publishers,
+        strict=True,
+    ):
+        monkeypatch.setattr(task, "apply_async", publisher)
+    result = tasks.recovery_sweep()
+    pipeline.apply_async.assert_not_called()
+    assert result["dispatched"] == 0
+    for publisher, key in zip(
+        publishers,
+        ["stale_asset_jobs", "stale_translation_jobs", "stale_research_jobs"],
+        strict=True,
+    ):
+        publisher.assert_not_called()
+        assert result[key] == 0

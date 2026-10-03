@@ -14,6 +14,11 @@ def test_llm_readiness_migration(engine: Engine) -> None:
     try:
         command.downgrade(cfg, "0069")
         assert "llm_ready" not in {c["name"] for c in inspect(engine).get_columns("gpu_phase")}
+        # Seed the pre-upgrade singleton here: other tests may have removed it, and
+        # the property under test is that an existing row is backfilled closed.
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM gpu_phase"))
+            conn.execute(text("INSERT INTO gpu_phase (id) VALUES (1)"))
         command.upgrade(cfg, "0070")
         columns = {c["name"]: c for c in inspect(engine).get_columns("gpu_phase")}
         assert not columns["llm_ready"]["nullable"]

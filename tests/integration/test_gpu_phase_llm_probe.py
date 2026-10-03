@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.unit.test_gpu_phase import phase_settings
+from voxint.config import DEFAULT_LLM_BASE_URL
 from voxint.db.models import AppSettings
 from voxint.gpu_phase.llm_probe import probe_llm
 
@@ -23,7 +24,7 @@ def test_probe_effective_endpoints(
         llm_enabled=False,
         llm_base_url="https://env.example/v1",
         llm_model="env-model",
-        llm_api_key="env-key",
+        llm_api_key="",
         llm_bundled_enabled=False,
         llm_bundled_base_url="https://bundle.example/v1",
         llm_bundled_model="bundle-model",
@@ -47,9 +48,11 @@ def test_probe_effective_endpoints(
                 id=1,
                 llm_enabled=True,
                 llm_bundled_enabled=bundled,
-                llm_base_url="https://byo.example/v1" if byo else "https://bundle.example/v1",
+                # Without BYO: the untouched install default with no key, which
+                # never gets a client.
+                llm_base_url="https://byo.example/v1" if byo else DEFAULT_LLM_BASE_URL,
                 llm_model="row-model",
-                llm_api_key="row-key",
+                llm_api_key="row-key" if byo else None,
             )
         )
         session.flush()
@@ -121,3 +124,52 @@ def test_owned_client_timeout_and_env_configuration(
         assert probe_llm(settings, session) is True
     assert urls == ["https://env.example/v1/models"]
     assert len(clients) == 1 and clients[0].is_closed
+
+
+@pytest.mark.parametrize("bundle_on", [False, True])
+@pytest.mark.parametrize("answer", [200, 503])
+def test_byo_on_the_bundled_url_is_probed(
+    session_factory: sessionmaker[Session], bundle_on: bool, answer: int
+) -> None:
+    # Enhancement calls the BYO endpoint even when its URL is the bundled one and
+    # the bundle is off; the probe must follow the same routing. With the bundle
+    # on, that one URL is probed once.
+    settings = phase_settings(
+        llm_api_key="",
+        llm_bundled_base_url="https://bundle.example/v1",
+        llm_bundled_model="bundle-model",
+    )
+    urls: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        urls.append(str(request.url))
+        return httpx.Response(answer)
+
+    with session_factory() as session:
+        session.add(
+            AppSettings(
+                id=1,
+                llm_enabled=True,
+                llm_bundled_enabled=bundle_on,
+                llm_base_url="https://bundle.example/v1",
+                llm_model="row-model",
+                llm_api_key="row-key",
+            )
+        )
+        session.flush()
+        with httpx.Client(transport=httpx.MockTransport(respond), timeout=3.0) as client:
+            result = probe_llm(settings, session, client)
+    assert urls == ["https://bundle.example/v1/models"]
+    assert result is (answer == 200)
+
+
+def test_no_completed_check_is_closed(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An endpoint that should have been checked but produced no result is not ready.
+    monkeypatch.setattr("voxint.gpu_phase.llm_probe.check_llm", lambda **kw: None)
+    settings = phase_settings(
+        llm_enabled=True, llm_base_url="https://env.example/v1", llm_model="env-model"
+    )
+    with session_factory() as session:
+        assert probe_llm(settings, session) is False

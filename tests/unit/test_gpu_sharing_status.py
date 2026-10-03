@@ -170,12 +170,40 @@ def test_switching_to_audio_copy(phase: GpuPhase) -> None:
 )
 def test_switching_back_copy(phase: GpuPhase) -> None:
     assert make_view(phase, 0).headline == "Switching the GPU back."
-    handed_back = "Language-model work resumes once the GPU is handed back."
+    handed_back = (
+        "Language-model work resumes once the GPU is handed back "
+        "and the language model answers."
+    )
     assert make_view(phase, 0).detail == handed_back
     assert make_view(phase, 1).detail == (
-        "Language-model work resumes once the GPU is handed back. "
-        "1 recording is queued for the next audio window."
+        f"{handed_back} 1 recording is queued for the next audio window."
     )
+
+
+@pytest.mark.parametrize(
+    "waiting,post_waiting,detail",
+    [
+        (0, 0, "Language-model work starts once it answers."),
+        (0, 1, "1 language-model job is queued."),
+        (0, 3, "3 language-model jobs are queued."),
+        (
+            2,
+            3,
+            "3 language-model jobs are queued. 2 recordings are queued for the next audio window.",
+        ),
+    ],
+)
+def test_waiting_for_the_language_model_copy(
+    waiting: int, post_waiting: int, detail: str
+) -> None:
+    view = build_view(
+        GpuSharingState(phase=GpuPhase.LLM, stale_since=None, post_ready=False),
+        waiting,
+        post_waiting,
+    )
+    assert view.headline == "Waiting for the language model to answer."
+    assert view.detail == detail
+    assert view.note == "waiting for the language model to answer"
 
 
 def test_error_copy() -> None:
@@ -699,3 +727,42 @@ def test_tls_failure_is_not_an_expected_stop() -> None:
     # A connect timeout can be a TLS handshake that stalled after the TCP connect.
     assert connection_never_opened(httpx.ConnectTimeout("handshake timed out")) is False
     assert connection_never_opened(ValueError("other")) is False
+
+
+@pytest.mark.parametrize(
+    "updated_age,checked_age,summary",
+    [
+        (10, 10, "the GPU is serving the language model"),
+        (10, None, "waiting for the language model to answer"),
+        (
+            600,
+            600,
+            "language-model work is paused because the GPU sharing task stopped updating",
+        ),
+    ],
+)
+def test_readiness_summary_names_a_stopped_task(
+    updated_age: int, checked_age: int | None, summary: str
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from voxint.gpu_phase.state import GpuPhaseSnapshot
+    from voxint.gpu_phase.visibility import PHASE_SUMMARY, readiness_summary
+
+    now = datetime.now(UTC)
+    snapshot = GpuPhaseSnapshot(
+        id=1,
+        phase=GpuPhase.LLM,
+        phase_since=now - timedelta(hours=1),
+        lease_id=None,
+        lease_expires_at=None,
+        last_error=None,
+        failures=0,
+        retry_after=None,
+        operator_request=None,
+        updated_at=now - timedelta(seconds=updated_age),
+        llm_ready=checked_age is not None,
+        llm_checked_at=None if checked_age is None else now - timedelta(seconds=checked_age),
+    )
+    expected = PHASE_SUMMARY[GpuPhase.LLM] if checked_age == 10 else summary
+    assert readiness_summary(snapshot, tick_seconds=30, now=now) == expected
