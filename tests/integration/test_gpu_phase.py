@@ -21,6 +21,7 @@ from voxint.db.models import (
     RunAssetJob,
     Speaker,
     Stage,
+    TranscriptSegment,
     TranslationJob,
 )
 from voxint.gpu_phase.dispatch import open_lanes, redispatch_queued_runs
@@ -210,7 +211,7 @@ def seed_jobs(session: Session) -> tuple[RunAssetJob, TranslationJob, ResearchJo
     return jobs
 
 
-@pytest.mark.parametrize("phase", [GpuPhase.AUDIO, GpuPhase.ERROR])
+@pytest.mark.parametrize("phase", [GpuPhase.AUDIO, GpuPhase.DRAINING_POST, GpuPhase.ERROR])
 def test_post_jobs_stay_queued(
     session_factory: sessionmaker[Session],
     monkeypatch: pytest.MonkeyPatch,
@@ -499,3 +500,73 @@ def test_admission_lock_blocks_phase_change_until_commit(
         orchestrator.commit()
         assert admit_lane(orchestrator, settings, GPU_SEGMENT) is False
         assert admit_lane(orchestrator, phase_settings(gpu_phase_enabled=False), GPU_SEGMENT)
+
+
+@pytest.mark.parametrize("command", ["research", "assets"])
+def test_inline_llm_cli_reports_a_phase_flip_after_the_precheck(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+) -> None:
+    """The precheck passes, then the phase leaves llm before the claim."""
+    import argparse
+
+    from voxint import cli
+
+    with session_factory() as session:
+        set_phase(session, GpuPhase.LLM, now=NOW)
+        run = seed_run(session, Stage.FINALIZE, status="completed")
+        session.add(
+            TranscriptSegment(
+                pipeline_run_id=run.id,
+                segment_index=0,
+                start_seconds=0.0,
+                end_seconds=2.0,
+                raw_text="Hello there",
+            )
+        )
+        speaker = Speaker(display_name="Inline flip test")
+        session.add(speaker)
+        session.commit()
+        run_id, speaker_id = run.id, speaker.id
+    settings = phase_settings()
+    monkeypatch.setattr("voxint.config.get_settings", lambda: settings)
+    monkeypatch.setattr("voxint.db.session.build_engine", lambda *a, **kw: None)
+    monkeypatch.setattr("voxint.db.session.build_session_factory", lambda _: session_factory)
+    real_blocked = cli._llm_phase_blocked
+
+    def blocked_then_flip(factory: sessionmaker[Session], s: object) -> str | None:
+        result = real_blocked(factory, settings)
+        with session_factory() as session:
+            set_phase(session, GpuPhase.DRAINING_POST, now=NOW + timedelta(seconds=1))
+            session.commit()
+        return result
+
+    monkeypatch.setattr(cli, "_llm_phase_blocked", blocked_then_flip)
+    # Gates other than the phase must pass so the job row is created.
+    monkeypatch.setattr("voxint.enrichment.research_jobs.research_gates_open", lambda *a: True)
+    monkeypatch.setattr("voxint.enrichment.asset_jobs.run_asset_gates_open", lambda *a: True)
+    if command == "research":
+        code = cli._research_speaker(argparse.Namespace(speaker_id=str(speaker_id), note=None))
+        model: type[ResearchJob] | type[RunAssetJob] = ResearchJob
+    else:
+        code = cli._enrich_assets(argparse.Namespace(run_id=run_id, kind=["summary"]))
+        model = RunAssetJob
+    out = capsys.readouterr().out
+    assert code == 1, out
+    assert "deferred: GPU sharing switched the GPU" in out
+    with session_factory() as session:
+        jobs = session.query(model).all()
+        assert len(jobs) == 1 and jobs[0].status == "queued"
+
+
+def test_llm_unavailable_message_without_a_row(session_factory: sessionmaker[Session]) -> None:
+    from voxint.gpu_phase.state import llm_unavailable_message
+
+    with session_factory() as session:
+        session.execute(text("DELETE FROM gpu_phase"))
+        message = llm_unavailable_message(session, phase_settings())
+        assert message is not None and "no phase record" in message
+        assert llm_unavailable_message(session, phase_settings(gpu_phase_enabled=False)) is None
+        session.rollback()
