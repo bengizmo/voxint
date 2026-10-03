@@ -1,4 +1,10 @@
-"""The opt-in Docker socket is scoped to the API in every compute tier (#556)."""
+"""The opt-in Docker socket is scoped to the API in every compute tier (#556).
+
+This file pins ``compose.service-controls.yaml`` only. ``compose.gpu-phase.yaml``
+is a deliberate second grant: it mounts the socket into the dedicated
+``gpu-phase`` worker (#748) and is pinned by ``test_gpu_phase_overlay.py``,
+which also checks the two overlays layered together.
+"""
 
 import pytest
 import yaml
@@ -20,6 +26,8 @@ def test_socket_is_api_only_across_tiers(tier: str) -> None:
     # YAML-level contract: check all layers, including inherited YAML anchors.
     # Compose concatenates volume lists and merges environment mappings; this
     # overlay adds only API fields and cannot remove other services' mounts.
+    # "API only" covers these layers; the gpu-phase grant lives in its own
+    # overlay and contract test.
     layers = [
         yaml.safe_load((REPO_ROOT / filename).read_text())["services"]
         for filename in ("compose.yaml", f"compose.{tier}.yaml", "compose.service-controls.yaml")

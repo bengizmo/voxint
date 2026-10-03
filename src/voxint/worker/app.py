@@ -32,6 +32,7 @@ _CORE_TASK_NAMES: frozenset[str] = frozenset(
         "voxint.compute_term_stats",
         "voxint.finish_pipeline",
         "voxint.gc_sweep",
+        "voxint.gpu_phase_tick",
         "voxint.generate_run_asset",
         "voxint.media_reconcile",
         "voxint.generate_segment_embeddings",
@@ -56,6 +57,7 @@ _plugin_task_modules = [
 ]
 
 POST_QUEUE = "post"
+GPU_PHASE_QUEUE = "gpu_phase"
 
 # Fixed cadence for the activity-outbox retention prune (issue #162): hourly is
 # ample for a 500-row cap, and this earns no env knob (anti-bloat).
@@ -108,6 +110,12 @@ def build_beat_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
             "task": "voxint.activity_prune",
             "schedule": _ACTIVITY_PRUNE_SECONDS,
         }
+    if settings.gpu_phase_enabled:
+        schedule["gpu-phase-tick"] = {
+            "task": "voxint.gpu_phase_tick",
+            "schedule": settings.gpu_phase_tick_seconds,
+            "options": {"expires": settings.gpu_phase_tick_seconds},
+        }
     return schedule
 
 
@@ -123,6 +131,10 @@ app.conf.worker_prefetch_multiplier = 1
 # queue. A worker started without ``-Q`` therefore consumes BOTH queues, keeping
 # the base Compose command and native launcher unchanged; GPU deployments alone
 # split the lanes into separate workers with overlay-level ``-Q`` flags.
+# Do not declare gpu_phase: a regular worker without -Q (including the installer's
+# hardware overlay command) must never consume ticks. The dedicated gpu-phase
+# worker uses -Q gpu_phase; Celery creates that queue on demand because
+# task_create_missing_queues defaults to True.
 app.conf.task_queues = (Queue("celery"), Queue(POST_QUEUE))
 app.conf.task_default_queue = "celery"
 # Run assets and speaker research are LLM-bound too: they must not serialize
@@ -132,9 +144,9 @@ app.conf.task_default_queue = "celery"
 # so on a split deployment it must never sit queued behind a multi-hour GPU
 # segment (observed on maintainer hardware: a sweep parked behind hundreds of
 # backlogged GPU-lane messages). Sweeps are DB/broker-bound, never GPU-bound.
-# Flagless single-worker deployments are unaffected: one worker drains both
-# queues either way.
+# Flagless single-worker deployments consume all declared queues.
 app.conf.task_routes = {
+    "voxint.gpu_phase_tick": {"queue": GPU_PHASE_QUEUE},
     "voxint.finish_pipeline": {"queue": POST_QUEUE},
     "voxint.generate_run_asset": {"queue": POST_QUEUE},
     "voxint.research_speaker": {"queue": POST_QUEUE},

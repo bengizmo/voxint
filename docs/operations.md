@@ -837,15 +837,19 @@ docker compose exec -T api voxint export <run-id> --format md --style blocks > b
   `##` speaker heading per contiguous same-speaker run over a `>` blockquote
   paragraph, with a per-paragraph `[start-end]` time range gated by the
   timestamps flag. Passing `--style` with any other format is an error.
+- `--drop-fillers`: remove standalone English fillers from the Markdown turns
+  export (`--format md` only). See "Fillers" below.
 - `-o PATH`: write to a file instead of stdout (refuses to overwrite an
   existing file unless `--force`).
 
 The same exports are available over HTTP at
 `GET /review/{run_id}/export.{txt,md,srt,vtt,json,rttm}` (add `?text=raw` for the
 raw variant, `?timestamps=false` on `txt`/`md` for the reading copy, or
-`?style=blocks` on `md` for the older layout). The `/api/v1/runs/{run_id}/transcript` route takes the
-same `style` parameter with `format=md`. On either route, `style` with any
-other format is answered with 422.
+`?style=blocks` on `md` for the older layout, or `?fillers=drop` to remove
+fillers from the Markdown turns export). The `/api/v1/runs/{run_id}/transcript`
+route takes the same `style` and `fillers` parameters with `format=md`.
+`fillers=keep` is the default. On either route, `style` with any other format,
+or a non-empty `fillers` value outside the Markdown turns style, returns 422.
 RTTM uses the run's UUID as the file id and the raw diarization labels
 (`SPEAKER_00` …), so it round-trips against diarization scoring tools, and it
 deliberately does **not** substitute adjudicated speaker names.
@@ -886,6 +890,17 @@ How it is built:
 - **Minute markers.** A paragraph that runs past a minute boundary carries an
   inline `[HH:MM:00]` marker before the first word that starts in the new
   minute.
+- **Fillers.** `--drop-fillers` or `?fillers=drop` removes standalone `um`, `uh`,
+  `umm`, `uhh`, `uhm` and `erm`, ignoring case. A following comma, semicolon or
+  colon goes with the word. A following period, question mark or exclamation
+  mark moves to preceding text when needed. A comma before a filler stays:
+  `I think, um, that` becomes `I think, that`. When a filler starts a sentence,
+  the next word is re-capitalised. An utterance made only of fillers disappears.
+  A filler directly followed by a closing quotation mark is a quoted word and
+  stays. This is English only: `uh-huh`, `mm-hmm`, `hmm`, `like` and `you
+  know` stay.
+  Nothing stored changes. Filler removal is not available with a translation
+  or the `blocks` style.
 - **Translations.** With `?lang=`, each translated line stays whole under its
   line's speaker. Translated text has no word timings.
 
@@ -905,8 +920,9 @@ The transcript view route serves the same turns as an on-screen **read mode**:
 `GET /runs/{run_id}/transcript?read=1` renders the transcript as prose, one
 paragraph per speaker turn with the name in bold, server-side with no
 JavaScript, gated by `&timestamps=false` for a view without clocks or minute
-markers. Read mode and the `turns` Markdown export render the same
-`layout_turns` paragraphs, so neither can drift from the other.
+markers. Read mode and the default `turns` Markdown export use the same `layout_turns`
+paragraphs. Opt-in filler removal applies only to the export; read mode keeps
+the fillers.
 
 ### The browser console
 

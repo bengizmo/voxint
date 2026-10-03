@@ -34,6 +34,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint import app_settings
+from voxint.backoff import backoff_seconds as backoff_seconds
 from voxint.clients.errors import ServiceError
 from voxint.clients.llm import HttpLLMClient
 from voxint.config import Settings, get_settings
@@ -124,12 +125,6 @@ def is_saturation(exc: StageFailedError) -> bool:
 
 
 SATURATED_PREFIX = "saturated:"
-
-
-def backoff_seconds(attempts: int, base: float, cap: float) -> float:
-    """Exponential in completed attempts, capped; jitter is the caller's."""
-    exp = min(max(attempts - 1, 0), 30)
-    return float(min(base * 2**exp, cap))
 
 
 def stage_attempts(
@@ -959,3 +954,24 @@ def research_speaker(job_id_str: str) -> None:
     """
     factory, _ = _runtime()
     execute_job(factory, uuid.UUID(job_id_str), settings=get_settings())
+
+
+@app.task(name="voxint.gpu_phase_tick", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
+def gpu_phase_tick() -> str:
+    from voxint.api.health_probe import probe_services
+    from voxint.api.service_control import get_controller
+    from voxint.gpu_phase.client import LeaseClient
+    from voxint.gpu_phase.orchestrator import tick
+
+    settings = get_settings()
+    if not settings.gpu_phase_enabled:
+        return "disabled"
+    factory, _ = _runtime()
+    return tick(
+        factory,
+        settings,
+        client=LeaseClient(settings),
+        controller=get_controller(settings),
+        probe=probe_services,
+        clock=lambda: datetime.now(UTC),
+    ).kind

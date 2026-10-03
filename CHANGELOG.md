@@ -7,13 +7,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Leave fillers out of a Markdown export** (#741). Use `--drop-fillers` or
+  `?fillers=drop` with the turns style to remove standalone English "um", "uh",
+  "umm", "uhh", "uhm" and "erm". Sentence starts are re-capitalised and
+  filler-only utterances disappear. Saved text stays unchanged. Translations
+  and the blocks style do not support this option.
 - **Shared-GPU phase gates** (#748), off by default. A new `gpu_phase` table
   (migration `0068`) records whether the GPU is in its audio or LLM phase.
   With `GPU_PHASE_ENABLED=true`, GPU-lane runs wait in the queue until the
   phase is audio, and post-lane runs, run assets, translations and speaker
-  research wait until it is LLM. The orchestrator that moves between phases
-  is not in this change, so enabling the setting on its own leaves audio
-  work queued. Settings are documented in `.env.example`.
+  research wait until it is LLM. A periodic task borrows the GPU through
+  operator-configured HTTP broker hooks, starts and checks audio services,
+  and stops them before returning the lease. The task uses a dedicated
+  `gpu_phase` queue. See `docs/gpu-sharing.md` for the broker contract and
+  recovery behavior. Settings are documented in `.env.example`.
 - **GPU sharing status and controls** (#748). `voxint gpu-phase status`
   prints the phase, lease, last error and waiting work; `voxint gpu-phase
   audio-now` and `voxint gpu-phase release` ask for the next switch. With

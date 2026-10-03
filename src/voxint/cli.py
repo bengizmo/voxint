@@ -2193,12 +2193,18 @@ def _export(args: argparse.Namespace) -> int:
     from voxint.db.models import PipelineRun
     from voxint.db.session import build_session_factory
     from voxint.export import TranscriptFormat
-    from voxint.export.service import parse_style, render_run_rttm, render_run_transcript
+    from voxint.export.service import (
+        parse_fillers,
+        parse_style,
+        render_run_rttm,
+        render_run_transcript,
+    )
 
     try:
         variant = parse_transcript_text(args.text)
         fmt = None if args.format == "rttm" else TranscriptFormat(args.format)
         style = parse_style(args.style, fmt)
+        drop_fillers = parse_fillers("drop" if args.drop_fillers else None, fmt, style)
     except ValueError as exc:
         print(f"error: {exc}")
         return 2
@@ -2223,8 +2229,13 @@ def _export(args: argparse.Namespace) -> int:
                 output = render_run_rttm(session, args.run_id)
             else:
                 output = render_run_transcript(
-                    session, args.run_id, fmt, text=variant,
-                    timestamps=args.timestamps, style=style,
+                    session,
+                    args.run_id,
+                    fmt,
+                    text=variant,
+                    timestamps=args.timestamps,
+                    style=style,
+                    drop_fillers=drop_fillers,
                 )
     finally:
         engine.dispose()
@@ -3165,11 +3176,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--style",
         choices=["turns", "blocks"],
         help=(
-            "Markdown layout, --format md only (default: blocks, a speaker"
-            " heading over a blockquote per segment run; 'turns' assigns"
+            "Markdown layout, --format md only (default: turns; blocks uses a speaker"
+            " heading over a blockquote per segment run; turns assigns"
             " speakers word by word and writes '[HH:MM:SS] **Name:** text'"
             " paragraphs)"
         ),
+    )
+    export_p.add_argument(
+        "--drop-fillers",
+        action="store_true",
+        help="remove standalone um/uh and friends from the Markdown turns export (md turns only)",
     )
     export_p.add_argument(
         "--text",

@@ -31,6 +31,7 @@ from voxint.gpu_phase.state import (
     gpu_lane_demand,
     gpu_lane_in_flight,
     post_lane_in_flight,
+    post_lane_queued,
     read_phase,
     read_phase_if_enabled,
     set_phase,
@@ -98,8 +99,9 @@ def test_state_round_trip_and_counts(session_factory: sessionmaker[Session]) -> 
             seed_run(session, stage, status="running")
             seed_run(session, stage, status="completed")
         assert gpu_lane_demand(session) == 5
-        assert gpu_lane_in_flight(session) == 4
+        assert gpu_lane_in_flight(session) == 5
         assert post_lane_in_flight(session) == 2
+        assert post_lane_queued(session) == 2
 
 
 @pytest.mark.parametrize(
@@ -194,7 +196,7 @@ def test_disabled_has_no_phase_queries(
 
 def seed_jobs(session: Session) -> tuple[RunAssetJob, TranslationJob, ResearchJob]:
     run = seed_run(session, Stage.FINALIZE, status="completed")
-    speaker = Speaker(display_name="Phase test")
+    speaker = Speaker(display_name=f"Phase test {uuid.uuid4()}")
     session.add(speaker)
     session.flush()
     jobs = (
