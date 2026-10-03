@@ -1194,6 +1194,88 @@ That triggers the browser acceptance lane and not the pipeline lane.
   browser-verified at the landing commit `af60c45`, which is the release
   content minus version pins, changelog, docs, and screenshots.
 
+#### Verdict: v0.51.0, Gate E pipeline, LLM, and browser lanes run fresh (PASS), Gate M run fresh on the CI lane (PASS), Gates A/R carry (2026-10-03)
+
+v0.51.0 adds speaker-turn Markdown exports with per-recording vocabulary,
+recording dates and filler removal (#741), shared-GPU phase gates and their
+status controls (#748), the language-model readiness gate on the GPU-sharing
+post lane (#768, migration `0070`), voice comparison against other recordings
+in the speaker menu (#714), the "Setup in progress" page for non-admins (#764),
+and the editor fixes for undo, claims, merges and unsaved edits (#718, #722,
+#726, #728, #732, #734).
+
+`git diff v0.50.0..7c93d8a1 -- services/` is empty: no Dockerfile,
+requirements, model asset, or service code changed, and no parity fixture or
+reference payload moved. `7c93d8a1` is the release content minus version
+strings.
+
+- **Gate A (CUDA)**: **carries** from the v0.49.0 run on RTX 5090 (diarize
+  byte-identical, embed min cosine 0.999996369, transcribe drift identical to
+  v0.42.0). The service images this release builds are source-identical to
+  v0.50.0's, which were themselves source-identical to v0.49.0's.
+- **Gate R (ROCm)**: the `-rocm` whisper image is unchanged. **Carries**,
+  standing since v0.33.0. No AMD hardware available.
+- **Gate E (whole-pipeline E2E)**: `src/voxint/api/`, `src/voxint/db/`,
+  `src/voxint/pipeline/`, `src/voxint/enrichment/`, `frontend/`, and
+  `tools/e2e_browser_lifecycle.py` changed, along with three new migrations
+  (`0068` to `0070`), so every lane ran fresh on the release content.
+  - **Pipeline lane: PASS** on `VOXINT_E2E_LANE=cuda`, maintainer hardware,
+    RTX 5090, serial, disposable `voxint_e2e` database, against the published
+    v0.50.0 CUDA service images (source-identical, see above).
+    `test_real_pipeline_persists_invariants` and
+    `test_real_pipeline_repeats_cleanly`: **2 passed** in 71.48 s, zero
+    service restarts. Each service reported `device: cuda` on `/healthz`.
+  - **Real-LLM enrichment sub-lane: PASS** against a local OpenAI-compatible
+    endpoint serving Qwen3.8-27B. `test_real_llm_summary_chain` and the three
+    malformed-reply cases: **4 passed** in 63.86 s.
+  - **Browser review lane: PASS**, run with the shipped defaults (no `.env`),
+    maintainer hardware (macOS, Chromium), serial, Playwright over
+    `tools/e2e_browser_lifecycle.py`. The review fixture passed the full
+    `voxint-e2e-review` sequence: two uncertain chips (segments 1 and 3),
+    verify-and-advance with replay still firing afterwards, skip and replay
+    with no network, click-to-edit, the discard warning (alert first, then
+    exactly one verify), edit and save, keymap suppression on a focused
+    select, the shortcuts dialog (14 rows; opened by key and button; `v`
+    suppressed while open; dismissed by Escape, close control, and backdrop,
+    focus returning to the button), domain-pack provenance (present on
+    segment 0, absent on segment 2, superseded by an operator save that also
+    cleared that segment's verification), and the waveform strip (one
+    `/peaks` fetch, region click selects segment 2 and seeks without writing,
+    `n` and `p` keep the strip in sync). **RECONCILE PASS** (1 of 5 verified,
+    both corrections matched). The Media library surfaces passed: every
+    review entry point lands on the media editor with a claim, `/review`
+    lands on `/media`, the upload and fetch panels render, and trash,
+    restore, and **Empty trash permanently** (dismissed sends nothing,
+    accepted sends exactly one POST) behave. The speaker-rail fixture passed:
+    the initial partition and card copy, Hear this voice, Confirm on the
+    unresolved and auto-saved paths, Can't tell, Not a person, the honest
+    `enroll` 400 with the card and typed name kept, and "Every voice has a
+    ruling." with Change revealing Reassign. **RECONCILE PASS** (0 of 12
+    verified, 5 label rulings matched). The voices fixture (#714, new in this
+    release) passed: one lazy `voice-samples` fetch across every menu open,
+    the collapsed other-recording group beside the in-recording list, a
+    preview that pauses the main player and leaves the cursor, the unsaved
+    edit, and the menu untouched (200 `audio/wav`, `no-store`, 160,044 bytes,
+    5 s), the main player taking over, playback surviving the menu closing,
+    the expanded group on a line whose speaker has no other in-recording
+    voice, the playback rate carried to the sample, 440 Hz and 880 Hz clips
+    for Dana and Blair, and the reclaimed-recording 410 with its status line.
+    **RECONCILE PASS** on both runs before and after, with only the editor's
+    `claim` and `refresh` POSTs in the server log. No server 5xx in any
+    fixture; the only console errors are the expected `enroll` 400 and
+    voice-sample 410 plus harness artifacts (the lane's own probe requests and
+    a refresh beacon to a server stopped for re-seeding).
+- **Gate M (Metal)**: **run fresh, PASS**, on the CI lane. No metal path
+  (`scripts/metal/`, the metal parity lanes, `metal-lane.yml`) changed since
+  v0.50.0. The scheduled `metal-lane` run on `7c93d8a1` ran on GitHub's
+  `macos-15` arm64 runner with MPS available:
+  <https://github.com/bengizmo/voxint/actions/runs/37123442162>.
+  `launcher-unit` passed; `metal-parity` junit: whisper 3 collected, 0
+  skipped, 3 ran; titanet 7, 0, 7; pyannote 7, 0, 7; no failures.
+
+Gates E and M ran fresh and green on the release content; A and R carry on
+service images unchanged since v0.50.0. Clear to tag v0.51.0.
+
 #### Verdict: v0.50.0, Gate E pipeline, LLM, and browser lanes run fresh (PASS), Gate M run fresh on the CI lane (PASS), Gates A/R carry (2026-10-01)
 
 v0.50.0 adds undo for single-line and word-range speaker changes (#573), voice
