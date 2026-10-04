@@ -831,9 +831,10 @@ docker compose exec -T api voxint export <run-id> --format md --style blocks > b
   the enhanced or raw fallback; `enhanced` is the LLM-cleaned pipeline text
   before corrections; `raw` is the immutable ASR output). Ignored for `rttm`,
   which carries raw diarization labels, not attributed text.
-- `--no-timestamps`: drop the per-line time column (`txt`), or the paragraph
-  timestamps and minute markers (`md`), for a clean reading copy. Ignored for the
-  other formats, whose timing is structural.
+- `--no-timestamps`: drop the per-line time column (default `txt`), or the
+  paragraph timestamps and minute markers (`md`, and `txt` with `--style turns`),
+  for a clean reading copy. Ignored for the other formats, whose timing is
+  structural.
 - `--style turns|blocks`: the layout, for `md` and `txt`. On `md`, `turns` is
   the default and is described below. `blocks` is the layout from before 0.51: a
   `##` speaker heading per contiguous same-speaker run over a `>` blockquote
@@ -1008,7 +1009,10 @@ a download with the same options hold the same words. With a filter on:
 - The Download transcript menu's Markdown links and reading-copy `txt` links
   carry the active filters, and those `txt` links add `style=turns`. "Read on
   screen" keeps the filters too. The timed `txt`, subtitle, `json`, `rttm` and
-  translated links are unchanged.
+  translated links are unchanged. The menu's main links always download the
+  reviewed (`corrected`) text, whichever tab the page shows. To download the
+  `enhanced` or `raw` text the page shows, use "Other text variants", whose
+  reading copies carry the filters too.
 - An unknown value (`fillers=bogus`) returns 422.
 
 #### Plain text in the `turns` layout

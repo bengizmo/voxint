@@ -177,8 +177,10 @@ When either of the last two is on, a line under the menu tells you how many
 words were left out. Your saved transcript is not changed; the words are only
 hidden on this page. While they are hidden, the reading copies in the
 **Download transcript** menu (the Markdown files and the plain-text reading
-copy) leave out the same words, so the file you download matches what you see.
-The timed transcript, subtitles and data files always keep every word.
+copy) leave out the same words. The main download links always give you the
+reviewed text. If you are reading the **enhanced** or **raw** tab and want that
+version, open **Other text variants** in the menu and pick it there. The timed
+transcript, subtitles and data files always keep every word.
 
 - **Exit reading view** returns you to the audio-synced player.
 

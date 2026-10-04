@@ -11,8 +11,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   reading view has two new links, "Remove filler words" and "Remove repeated
   words" (`&fillers=drop`, `&repeats=drop`). A line on the page says how many
   words were left out. While a filter is on, the Download transcript menu's
-  Markdown links and plain-text reading copies leave out the same words, so the
-  download matches the page. Nothing stored changes.
+  Markdown links and plain-text reading copies leave out the same words. The
+  menu's main links still download the reviewed text; the enhanced and raw
+  copies are under "Other text variants". Nothing stored changes.
 - **A paragraph layout for the plain-text export** (#754). `--format txt
   --style turns` (`?style=turns` on the console and `/api/v1` export routes)
   writes the same speaker paragraphs as the Markdown turns export as plain

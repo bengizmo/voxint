@@ -71,6 +71,14 @@ def test_each_step_counts_its_own_input(
     assert result.repeats_removed == repeat_count
 
 
+def test_repeated_pair_counts_both_words() -> None:
+    result = apply_turn_filters(
+        [turn(piece("we were we were going", coarse=True))], drop_fillers=False, drop_repeats=True
+    )
+    assert join_pieces(result.turns[0].pieces) == "we were going"
+    assert result.repeats_removed == 2
+
+
 def test_repeats_do_not_cross_f5_seam() -> None:
     original = [turn(piece("the")), turn(piece("um", 1), name="Sam"), turn(piece("the cat", 2))]
     result = apply_turn_filters(original, drop_fillers=True, drop_repeats=True)
