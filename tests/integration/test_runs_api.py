@@ -1397,6 +1397,291 @@ def test_transcript_read_mode_rejects_bad_text(
     assert resp.status_code == 422
 
 
+def _read_cleanup_run(session: Session) -> uuid.UUID:
+    """Word-timed speaker changes, an F5 seam, a marker and continuations."""
+    run_id = make_run(session, segments=[
+        ("S0", "um we we go we uh we stay", None),
+        ("S0", "Next", None), ("S0", "minute", None), ("S0", "Later", None),
+    ])
+    segments = session.scalars(select(TranscriptSegment).where(
+        TranscriptSegment.pipeline_run_id == run_id,
+    ).order_by(TranscriptSegment.segment_index)).all()
+    segments[0].words = [
+        {"word": word, "start": i, "end": i + 1}
+        for i, word in enumerate(("um", " we", " we", " go", " we", " uh", " we", " stay"))
+    ]
+    for seg, start, end in zip(segments[1:], (59, 61, 70), (60, 62, 71), strict=True):
+        seg.start_seconds, seg.end_seconds = start, end
+    for i, (start, end, label) in enumerate(((0, 5, "S0"), (5, 6, "S1"), (6, 72, "S0"))):
+        session.add(DiarizationTurn(
+            pipeline_run_id=run_id, turn_index=i, start_seconds=start,
+            end_seconds=end, label=label, skip_reason="too_short",
+        ))
+    session.commit()
+    return run_id
+
+
+def _read_paragraphs(body: str) -> list[dict[str, Any]]:
+    rows = []
+    for paragraph in re.findall(r'<p class="read-para[^"]*">(.*?)</p>', body):
+        clock_match = re.match(r'<span class="t">(.*?)</span> ', paragraph)
+        clock = clock_match[1] if clock_match else None
+        if clock_match:
+            paragraph = paragraph[clock_match.end():]
+        speaker_match = re.match(r'<strong class="read-speaker">(.*?):</strong> ', paragraph)
+        speaker = html.unescape(speaker_match[1]) if speaker_match else None
+        if speaker_match:
+            paragraph = paragraph[speaker_match.end():]
+        chunks = re.split(r'<span class="t">(.*?)</span> ', paragraph)
+        runs = [{"marker": None, "text": html.unescape(chunks[0].strip())}]
+        runs.extend({"marker": chunks[i], "text": html.unescape(chunks[i + 1].strip())}
+                    for i in range(1, len(chunks), 2))
+        rows.append({"speaker": speaker, "clock": clock, "runs": runs})
+    return rows
+
+
+def _markdown_paragraphs(body: str) -> list[dict[str, Any]]:
+    rows = []
+    for paragraph in body.strip().split("\n\n")[1:]:
+        clock_match = re.match(r"(\[\d\d:\d\d:\d\d\]) ", paragraph)
+        clock = clock_match[1] if clock_match else None
+        if clock_match:
+            paragraph = paragraph[clock_match.end():]
+        speaker_match = re.match(r"\*\*(.*?):\*\* ", paragraph)
+        speaker = speaker_match[1] if speaker_match else None
+        if speaker_match:
+            paragraph = paragraph[speaker_match.end():]
+        chunks = re.split(r"(\[\d\d:\d\d:\d\d\]) ", paragraph)
+        runs = [{"marker": None, "text": chunks[0].strip()}]
+        runs.extend({"marker": chunks[i], "text": chunks[i + 1].strip()}
+                    for i in range(1, len(chunks), 2))
+        rows.append({"speaker": speaker, "clock": clock, "runs": runs})
+    return rows
+
+
+@pytest.mark.parametrize("fillers,repeats", [(True, False), (False, True), (True, True)])
+@pytest.mark.parametrize("timestamps", [True, False])
+def test_read_cleanup_response_parity(
+    client: TestClient, session_factory: sessionmaker[Session],
+    fillers: bool, repeats: bool, timestamps: bool,
+) -> None:
+    from voxint.adjudication.turns import attributed_turns
+    from voxint.export import format_clock
+    from voxint.export.reading import layout_turns
+    from voxint.export.turn_filters import apply_turn_filters
+
+    with session_factory() as session:
+        run_id = _read_cleanup_run(session)
+    params = {"text": "raw", "timestamps": str(timestamps).lower(),
+              "fillers": "drop" if fillers else "keep", "repeats": "drop" if repeats else "keep"}
+    response = client.get(f"/runs/{run_id}/transcript", params={"read": "1", **params})
+    markdown = client.get(f"/review/{run_id}/export.md", params=params)
+    assert response.status_code == markdown.status_code == 200
+    expected = []
+    initial = (
+        [("S0", "[00:00:01]", "We go we we stay" if repeats else "We we go we we stay")]
+        if fillers else [
+            ("S0", "[00:00:00]", "um we go we"),
+            ("S1", "[00:00:05]", "uh"),
+            ("S0", "[00:00:06]", "we stay"),
+        ]
+    )
+    for speaker, clock, text in initial:
+        expected.append({"speaker": speaker, "clock": clock if timestamps else None,
+                         "runs": [{"marker": None, "text": text}]})
+    expected.extend([
+        {"speaker": None, "clock": "[00:00:59]" if timestamps else None,
+         "runs": [{"marker": None, "text": "Next"},
+                  {"marker": "[00:01:00]" if timestamps else None, "text": "minute"}]},
+        {"speaker": None, "clock": "[00:01:10]" if timestamps else None,
+         "runs": [{"marker": None, "text": "Later"}]},
+    ])
+    # Without clocks, response text has no boundary at the hidden minute marker.
+    if not timestamps:
+        expected[-2]["runs"] = [{"marker": None, "text": "Next minute"}]
+    assert _read_paragraphs(response.text) == _markdown_paragraphs(markdown.text) == expected
+    with session_factory() as session:
+        paragraphs = layout_turns(apply_turn_filters(
+            attributed_turns(session, run_id, text=TranscriptText.RAW),
+            drop_fillers=fillers, drop_repeats=repeats,
+        ).turns)
+    assert response.context["read_rows"] == [
+        {"speaker": None if p.continuation else p.speaker,
+         "clock": format_clock(p.start_seconds) if timestamps else None,
+         "runs": [{"marker": format_clock(r.marker_seconds)
+                   if timestamps and r.marker_seconds is not None else None, "text": r.text}
+                  for r in p.runs]}
+        for p in paragraphs
+    ]
+
+
+@pytest.mark.parametrize("value", [None, "keep", ""])
+def test_read_cleanup_defaults(
+    client: TestClient, session_factory: sessionmaker[Session], value: str | None,
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session, segments=[("S0", "um we we go", None)])
+    params = {"read": "1", "timestamps": "false"}
+    if value is not None:
+        params.update(fillers=value, repeats=value)
+    response = client.get(f"/runs/{run_id}/transcript", params=params)
+    assert response.status_code == 200
+    assert _read_paragraphs(response.text) == [
+        {"speaker": "S0", "clock": None, "runs": [{"marker": None, "text": "um we we go"}]},
+    ]
+    assert "Left out " not in response.text
+    assert "fillers=keep" not in response.text and "repeats=keep" not in response.text
+
+
+@pytest.mark.parametrize("fillers,repeats", [(False, False), (True, False),
+                                           (False, True), (True, True)])
+@pytest.mark.parametrize("timestamps", [True, False])
+def test_read_cleanup_exact_links(
+    client: TestClient, session_factory: sessionmaker[Session],
+    fillers: bool, repeats: bool, timestamps: bool,
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session, segments=[("S0", "hello", None)])
+    base = f"/runs/{run_id}/transcript"
+    body = client.get(base, params={
+        "read": "1", "text": "raw", "timestamps": str(timestamps).lower(),
+        "fillers": "drop" if fillers else "keep", "repeats": "drop" if repeats else "",
+    }).text
+    def url(text: str, times: bool, f: bool, r: bool) -> str:
+        return (f"{base}?text={text}&read=1&timestamps={str(times).lower()}"
+                + ("&fillers=drop" if f else "") + ("&repeats=drop" if r else ""))
+    versions = re.search(r'aria-label="Transcript version">(.*?)</nav>', body, re.S)
+    options = re.search(r'aria-label="Reading view options">(.*?)</nav>', body, re.S)
+    assert versions is not None and options is not None
+    assert re.findall(r'href="([^"]+)"', versions[1]) == [
+        url(v.value, timestamps, fillers, repeats) for v in TranscriptText
+    ]
+    assert re.findall(r'href="([^"]+)"', options[1]) == [
+        f"{base}?text=raw", url("raw", not timestamps, fillers, repeats),
+        url("raw", timestamps, not fillers, repeats),
+        url("raw", timestamps, fillers, not repeats),
+    ]
+    assert (">Show filler words</a>" if fillers else ">Remove filler words</a>") in options[1]
+    assert (">Show repeated words</a>" if repeats else ">Remove repeated words</a>") in options[1]
+
+
+@pytest.mark.parametrize("text,fillers,repeats,note", [
+    ("um uh erm uhm we we go", True, True, "4 filler words and 1 repeated word"),
+    ("hello", True, False, "no filler words"),
+    ("um hello", True, False, "1 filler word"),
+    ("hello", True, True, "no filler words and no repeated words"),
+    ("we we go to to town", False, True, "2 repeated words"),
+])
+def test_read_cleanup_notes(
+    client: TestClient, session_factory: sessionmaker[Session],
+    text: str, fillers: bool, repeats: bool, note: str,
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session, segments=[("S0", text, None)])
+    response = client.get(f"/runs/{run_id}/transcript", params={
+        "read": "1", "fillers": "drop" if fillers else "keep",
+        "repeats": "drop" if repeats else "keep",
+    })
+    assert response.status_code == 200
+    assert response.text.count(
+        f'<p class="muted">Left out {note}. The saved transcript is unchanged.</p>'
+    ) == 1
+
+
+@pytest.mark.parametrize("empty", [True, False])
+def test_read_cleanup_all_filtered_or_empty(
+    client: TestClient, session_factory: sessionmaker[Session], empty: bool,
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session, segments=[] if empty else [("S0", "um , !", None)])
+    response = client.get(f"/runs/{run_id}/transcript?read=1&fillers=drop&repeats=drop")
+    assert response.status_code == 200
+    assert ("No transcript segments for this run." in response.text) is empty
+    assert ("The filters left out every word. The saved transcript is unchanged."
+            in response.text) is not empty
+    assert "Left out " not in response.text
+    assert response.context["all_filtered"] is not empty
+
+
+@pytest.mark.parametrize("name", ["fillers", "repeats"])
+def test_read_cleanup_error_precedence(
+    client: TestClient, session_factory: sessionmaker[Session], name: str,
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session)
+    base = f"/runs/{run_id}/transcript"
+    response = client.get(base, params={"read": "1", name: "bogus"})
+    assert response.status_code == 422
+    assert response.json()["detail"] == f"unknown {name} value 'bogus'; valid: keep, drop"
+    assert client.get(f"/runs/{uuid.uuid4()}/transcript?read=1&{name}=bogus").status_code == 404
+    redirect = client.get(f"{base}?{name}=bogus", follow_redirects=False)
+    assert redirect.status_code == 302
+    assert redirect.headers["location"].startswith("/media/")
+    invalid_text = client.get(base, params={"read": "1", "text": "bogus", name: "bogus"})
+    with pytest.raises(ValueError) as error:
+        parse_transcript_text("bogus")
+    assert invalid_text.status_code == 422
+    assert invalid_text.json()["detail"] == str(error.value)
+    both = client.get(f"{base}?read=1&fillers=bogus&repeats=bogus")
+    assert both.status_code == 422
+    assert both.json()["detail"] == "unknown fillers value 'bogus'; valid: keep, drop"
+
+
+def test_read_cleanup_hostile_text(
+    client: TestClient, session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session, segments=[("S0", "um we we * # <b> & _", None)])
+    response = client.get(f"/runs/{run_id}/transcript?read=1&fillers=drop&repeats=drop")
+    assert response.status_code == 200
+    assert "&lt;b&gt; &amp;" in response.text
+    assert "<b>" not in response.text
+    assert _read_paragraphs(response.text)[0]["runs"] == [
+        {"marker": None, "text": "We * # <b> & _"},
+    ]
+
+
+def test_read_cleanup_preserves_storage(
+    client: TestClient, session_factory: sessionmaker[Session],
+) -> None:
+    from voxint.db.models import SegmentReviewState
+
+    with session_factory() as session:
+        run_id = _read_cleanup_run(session)
+        segment = session.scalars(select(TranscriptSegment).where(
+            TranscriptSegment.pipeline_run_id == run_id,
+        ).order_by(TranscriptSegment.segment_index)).first()
+        assert segment is not None
+        segment.enhanced_text = "um we we go we uh we stay"
+        session.add(SegmentReviewState(
+            transcript_segment_id=segment.id, pipeline_run_id=run_id,
+            corrected_text="uh we we go we um we stay", corrected_at=datetime.now(UTC),
+            verified_at=datetime.now(UTC),
+        ))
+        session.commit()
+
+    def snapshot() -> tuple[list[tuple[object, ...]], list[tuple[object, ...]]]:
+        with session_factory() as session:
+            segments = session.scalars(select(TranscriptSegment).where(
+                TranscriptSegment.pipeline_run_id == run_id,
+            ).order_by(TranscriptSegment.segment_index)).all()
+            reviews = session.scalars(select(SegmentReviewState).where(
+                SegmentReviewState.pipeline_run_id == run_id,
+            ).order_by(SegmentReviewState.transcript_segment_id)).all()
+            return (
+                [tuple(getattr(s, c.name) for c in TranscriptSegment.__table__.columns)
+                 for s in segments],
+                [tuple(getattr(r, c.name) for c in SegmentReviewState.__table__.columns)
+                 for r in reviews],
+            )
+    before = snapshot()
+    response = client.get(f"/runs/{run_id}/transcript?read=1&fillers=drop&repeats=drop")
+    assert response.status_code == 200
+    assert response.context["fillers_removed"] > 0
+    assert response.context["repeats_removed"] > 0
+    assert snapshot() == before
+
+
 def test_export_md_route_bytes_and_media_type(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:

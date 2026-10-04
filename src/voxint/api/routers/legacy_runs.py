@@ -158,6 +158,8 @@ from voxint.enrichment.translations import (
 )
 from voxint.export import MEDIA_TYPES, format_clock, transcript_payload
 from voxint.export.reading import layout_turns
+from voxint.export.service import parse_filter_value
+from voxint.export.turn_filters import apply_turn_filters
 from voxint.gpu_phase.dispatch import open_lanes, redispatch_queued_runs
 from voxint.gpu_phase.state import gpu_lane_demand, post_lane_queued, queued_llm_jobs
 from voxint.gpu_phase.visibility import GpuSharingState, GpuSharingView, build_view
@@ -1117,6 +1119,21 @@ def run_detail(
     )
 
 
+def read_filter_note(
+    *, drop_fillers: bool, drop_repeats: bool, fillers_removed: int, repeats_removed: int,
+) -> str | None:
+    """Describe active reading filters using word counts, including zero."""
+    parts = [
+        f"{count if count else 'no'} {name} {'word' if count == 1 else 'words'}"
+        for active, count, name in (
+            (drop_fillers, fillers_removed, "filler"),
+            (drop_repeats, repeats_removed, "repeated"),
+        )
+        if active
+    ]
+    return f"Left out {' and '.join(parts)}. The saved transcript is unchanged." if parts else None
+
+
 @core_router.get("/runs/{run_id}/transcript")
 def run_transcript(
     run_id: uuid.UUID,
@@ -1127,6 +1144,8 @@ def run_transcript(
     read: bool = False,
     timestamps: bool = True,
     translation: str | None = None,
+    fillers: str | None = None,
+    repeats: str | None = None,
 ) -> Response:
     run = _run_or_404(session, run_id)
     if not read:
@@ -1145,6 +1164,8 @@ def run_transcript(
         return RedirectResponse(target, status_code=302)
     try:
         variant = parse_transcript_text(text)
+        drop_fillers = parse_filter_value("fillers", fillers)
+        drop_repeats = parse_filter_value("repeats", repeats)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     settings: Settings = request.app.state.settings
@@ -1155,6 +1176,10 @@ def run_transcript(
         # template only lays out rows, and Jinja autoescape keeps hostile
         # transcript text literal. One attribution walk: the segment-level
         # lines are not loaded here.
+        filtered = apply_turn_filters(
+            attributed_turns(session, run_id, text=variant),
+            drop_fillers=drop_fillers, drop_repeats=drop_repeats,
+        )
         read_rows = [
             {
                 "speaker": None if para.continuation else para.speaker,
@@ -1170,7 +1195,7 @@ def run_transcript(
                     for run in para.runs
                 ],
             }
-            for para in layout_turns(attributed_turns(session, run_id, text=variant))
+            for para in layout_turns(filtered.turns)
         ]
         return templates.TemplateResponse(
             request,
@@ -1182,6 +1207,18 @@ def run_transcript(
                 "read": True,
                 "read_rows": read_rows,
                 "read_timestamps": timestamps,
+                "drop_fillers": drop_fillers,
+                "drop_repeats": drop_repeats,
+                "fillers_removed": filtered.fillers_removed,
+                "repeats_removed": filtered.repeats_removed,
+                "all_filtered": (
+                    not read_rows and filtered.fillers_removed + filtered.repeats_removed > 0
+                ),
+                "filter_note": read_filter_note(
+                    drop_fillers=drop_fillers, drop_repeats=drop_repeats,
+                    fillers_removed=filtered.fillers_removed,
+                    repeats_removed=filtered.repeats_removed,
+                ),
                 "text": variant,
                 "variants": list(TranscriptText),
                 # Reading view stays original-language (no interleave), but
