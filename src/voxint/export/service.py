@@ -18,9 +18,8 @@ from voxint.api.presentation import (
 )
 from voxint.db.models import DiarizationTurn, PipelineRun
 from voxint.export import TranscriptFormat, render_transcript, to_markdown_turns, to_rttm
-from voxint.export.fillers import drop_fillers_with_seams
 from voxint.export.reading import layout_turns
-from voxint.export.repeats import drop_repeats as remove_repeats
+from voxint.export.turn_filters import apply_turn_filters
 
 
 class MarkdownStyle(enum.StrEnum):
@@ -54,6 +53,15 @@ def parse_style(raw: str | None, fmt: TranscriptFormat | None) -> MarkdownStyle 
         raise ExportOptionError(f"unknown style {raw!r}; valid: turns, blocks") from exc
 
 
+def parse_filter_value(name: str, raw: str | None) -> bool:
+    """Parse a keep/drop filter value independently of the export layout."""
+    if raw in (None, "", "keep"):
+        return False
+    if raw == "drop":
+        return True
+    raise ExportOptionError(f"unknown {name} value {raw!r}; valid: keep, drop")
+
+
 def _parse_turn_filter(
     name: str,
     raw: str | None,
@@ -64,9 +72,7 @@ def _parse_turn_filter(
         return False
     if fmt is not TranscriptFormat.MARKDOWN or style is not MarkdownStyle.TURNS:
         raise ExportOptionError(f"{name} applies to the md turns style only")
-    if raw not in ("keep", "drop"):
-        raise ExportOptionError(f"unknown {name} value {raw!r}; valid: keep, drop")
-    return raw == "drop"
+    return parse_filter_value(name, raw)
 
 
 def parse_fillers(
@@ -132,15 +138,11 @@ def render_run_transcript(
                 turns = translated_turns(session, run_id, translated_texts)
             except ValueError as exc:
                 raise TranslationMismatchError from exc
-        seams: list[frozenset[int]] | None = None
-        if drop_fillers:
-            cleaned = drop_fillers_with_seams(turns)
-            turns = [turn for turn, _ in cleaned]
-            seams = [turn_seams for _, turn_seams in cleaned]
-        if drop_repeats:
-            turns = remove_repeats(turns, seams)
+        filtered = apply_turn_filters(
+            turns, drop_fillers=drop_fillers, drop_repeats=drop_repeats
+        )
         return to_markdown_turns(
-            layout_turns(turns),
+            layout_turns(filtered.turns),
             header=export_title(session, run_id),
             timestamps=timestamps,
         )
