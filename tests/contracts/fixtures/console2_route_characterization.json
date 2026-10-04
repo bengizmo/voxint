@@ -1108,6 +1108,14 @@
     true
   ],
   [
+    "/settings/fillers",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/settings/folders",
     [
       "POST"

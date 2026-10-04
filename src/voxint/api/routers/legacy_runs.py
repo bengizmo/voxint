@@ -1218,6 +1218,9 @@ def run_transcript(
                 "read": True,
                 "read_rows": read_rows,
                 "read_timestamps": timestamps,
+                "custom_fillers": (
+                    drop_fillers and filler_list is not None and not filler_list.is_default
+                ),
                 "drop_fillers": drop_fillers,
                 "drop_repeats": drop_repeats,
                 "fillers_removed": filtered.fillers_removed,

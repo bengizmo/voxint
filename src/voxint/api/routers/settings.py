@@ -105,6 +105,7 @@ from voxint.app_settings import (
     resolve_effective_enrichment_run_assets_autogenerate,
     resolve_effective_enrichment_run_assets_enabled,
     resolve_effective_enrichment_web_research_enabled,
+    resolve_effective_filler_list,
     resolve_effective_llm_api_key,
     resolve_effective_llm_enabled,
     resolve_effective_llm_endpoint,
@@ -145,6 +146,13 @@ from voxint.domain_packs.registry import available_domain_packs, default_domain_
 from voxint.embeddings.onnx_embedder import minilm_artifacts_available
 from voxint.enrichment.translation_jobs import translation_gates_open
 from voxint.enrichment.triage import validate_authority_domains
+from voxint.export.filler_lists import (
+    PRESET_VERSION,
+    TIER_1,
+    TIER_2,
+    FillerListError,
+    normalize_entries,
+)
 from voxint.gpu_phase.visibility import model_service_stop_detail
 from voxint.gpu_phase.visibility import read_state as read_gpu_sharing_state
 from voxint.ingest import submit_media_item_if_new
@@ -2081,6 +2089,55 @@ def setup_finish(
 # never "complete" or "replay" an unseeded tutorial.
 
 
+def _fillers_context(row: AppSettings | None, settings: Settings) -> dict[str, Any]:
+    """Settings-page context for the Filler words section (#753). Never raises.
+
+    The checkboxes and textareas show only the saved row, never the environment,
+    so an untouched save keeps inheriting; the environment lists are shown
+    read-only while a list inherits. A malformed saved row becomes
+    ``fillers_error`` so every settings page still renders.
+    """
+    context: dict[str, Any] = {
+        "fillers_preset": PRESET_VERSION,
+        "fillers_tier1": TIER_1,
+        "fillers_error": None,
+        "fillers_effective": None,
+        "fillers_no_effect": (),
+    }
+    saved: dict[str, list[str]] = {}
+    for name in ("add", "keep"):
+        stored = getattr(row, f"fillers_{name}") if row is not None else None
+        entries = stored.get("en") if isinstance(stored, dict) else None
+        saved[name] = (
+            [e for e in entries if isinstance(e, str)] if isinstance(entries, list) else []
+        )
+        context[f"fillers_env_{name}"] = ()
+        if stored is None or (isinstance(stored, dict) and "en" not in stored):
+            try:
+                context[f"fillers_env_{name}"] = normalize_entries(
+                    getattr(settings, f"voxint_fillers_{name}").split(",")
+                )
+            except FillerListError as exc:
+                context["fillers_error"] = str(exc)
+    tier2 = {entry.casefold() for entry in TIER_2}
+    added = {entry.casefold() for entry in saved["add"]}
+    context["fillers_tier2"] = [
+        {"entry": entry, "checked": entry.casefold() in added} for entry in TIER_2
+    ]
+    context["fillers_add_text"] = "\n".join(
+        entry for entry in saved["add"] if entry.casefold() not in tier2
+    )
+    context["fillers_keep_text"] = "\n".join(saved["keep"])
+    try:
+        filler_list = resolve_effective_filler_list(row, settings)
+    except FillerListError as exc:
+        context["fillers_error"] = str(exc)
+    else:
+        context["fillers_effective"] = [*filler_list.words, *filler_list.phrases]
+        context["fillers_no_effect"] = filler_list.kept_without_effect
+    return context
+
+
 def _settings_context(
     request: Request,
     session: Session,
@@ -2406,6 +2463,15 @@ def _settings_context(
     # the legacy flat page retains its original section loop.
     context["plugin_settings_sections"] = request.app.state.plugins.settings_sections()
     context["plugins"] = settings_view.build_plugins_view(request.app.state.plugins, row, settings)
+    # Filler words (#753), built before the benchmark query: its rollback would
+    # expire ``row`` and turn a contained benchmark failure into a page error.
+    context.update(_fillers_context(row, settings))
+    suggested = overrides.pop("fillers_submitted_suggested", None)
+    if suggested is not None:
+        checked = {entry.casefold() for entry in suggested}
+        context["fillers_tier2"] = [
+            {"entry": entry, "checked": entry.casefold() in checked} for entry in TIER_2
+        ]
     # Benchmark section: most recent runs for the settings page.
     try:
         from voxint.db.models import BenchmarkRun
@@ -2455,6 +2521,7 @@ def _settings_page_template(request: Request) -> str:
     # remaining request rendered through this helper belongs to Plugins.
     if path != "/settings" and path not in {
         "/settings/features",
+        "/settings/fillers",
         "/settings/tutorial/seed",
         "/settings/tutorial/complete",
         "/settings/tutorial/replay",
@@ -3015,6 +3082,59 @@ def settings_corrections(
     if wants_json:
         return JSONResponse({"ok": True, "corrections": normalized})
     return RedirectResponse(_settings_redirect(request, "corrections", "ai"), status_code=303)
+
+
+@router.post("/settings/fillers")
+def settings_fillers(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    add: Annotated[str, Form()] = "",
+    keep: Annotated[str, Form()] = "",
+    suggested: Annotated[list[str] | None, Form()] = None,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Replace English filler overrides, leaving empty lists inherited.
+
+    Both lists are validated before anything is written, and a refusal names
+    every invalid list, so the operator never fixes one only to meet the other.
+    """
+    _require_csrf(request, CSRF_SETTINGS, csrf_token)
+    settings: Settings = request.app.state.settings
+    lists: dict[str, tuple[str, ...]] = {}
+    errors: list[str] = []
+    for name, label, lines in (
+        ("add", "Words to remove", [*(suggested or []), *add.splitlines()]),
+        ("keep", "Words to keep", keep.splitlines()),
+    ):
+        try:
+            lists[name] = normalize_entries(lines)
+        except FillerListError as exc:
+            errors.append(f"{label}: {exc}")
+    if errors:
+        return templates.TemplateResponse(
+            request,
+            _settings_page_template(request),
+            _settings_context(
+                request, session,
+                fillers_error=" ".join(errors),
+                fillers_submitted_suggested=suggested or [],
+                fillers_add_text=add,
+                fillers_keep_text=keep,
+            ),
+            status_code=422,
+        )
+    row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+    for name, entries in lists.items():
+        stored = getattr(row, f"fillers_{name}")
+        value = dict(stored) if isinstance(stored, dict) else {}
+        if entries:
+            value["en"] = list(entries)
+        else:
+            value.pop("en", None)
+        setattr(row, f"fillers_{name}", value or None)
+    session.commit()
+    return RedirectResponse(_settings_redirect(request, "fillers", ""), status_code=303)
 
 
 @router.post("/settings/glossary")

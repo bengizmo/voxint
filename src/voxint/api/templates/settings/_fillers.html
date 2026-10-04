@@ -1,0 +1,44 @@
+{# Settings → Filler words (issue #753): the operator's English add and keep lists.
+   Its own form and CSRF token, on the General tab in both console modes. The
+   fields show only the saved row, never the environment list, so saving an
+   untouched form keeps inheriting it. Renders from _settings_context. #}
+<section id="fillers" aria-labelledby="fillers-heading">
+<h2 id="fillers-heading">Filler words</h2>
+{% if fillers_error %}<p class="notice" role="alert">{{ fillers_error }}</p>{% endif %}
+<p class="muted">When you remove filler words from a reading view or an export, Voxint leaves out the words below. The saved transcript never changes. The list is English and applies to every recording.</p>
+<p>Removed by default (preset {{ fillers_preset }}): {{ fillers_tier1 | join(', ') }}. A word you keep below comes off this list.</p>
+<form method="post" action="/settings/fillers">
+  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+  <fieldset class="filler-suggestions">
+    <legend>Also remove</legend>
+    {% for suggestion in fillers_tier2 %}
+    <label><input type="checkbox" name="suggested" value="{{ suggestion.entry }}"{% if suggestion.checked %} checked{% endif %}> {{ suggestion.entry }}</label>
+    {% endfor %}
+  </fieldset>
+  <div class="field">
+    <label for="fillers-add">Other words or phrases to remove (one per line)</label>
+    <textarea name="add" id="fillers-add" rows="5">{{ fillers_add_text }}</textarea>
+  </div>
+  <div class="field">
+    <label for="fillers-keep">Words or phrases to keep (one per line)</label>
+    <textarea name="keep" id="fillers-keep" rows="5">{{ fillers_keep_text }}</textarea>
+    <p class="muted">Each word or phrase you keep comes off the list, even one from the preset. Keeping a single word does not protect it inside a longer phrase you remove; to keep a phrase, enter the whole phrase.</p>
+  </div>
+  <p class="muted">Voxint never removes like, so, right or well on its own: in 'turn right' they carry meaning. You can still add them.</p>
+  {% if fillers_env_add %}
+  <p class="muted">Additions from this installation's environment: {{ fillers_env_add | join(', ') }}. Leave the fields above empty to keep using them; saving any additions here replaces them.</p>
+  {% endif %}
+  {% if fillers_env_keep %}
+  <p class="muted">Words kept by this installation's environment: {{ fillers_env_keep | join(', ') }}. Leave the fields above empty to keep using them; saving any kept words here replaces them.</p>
+  {% endif %}
+  {% if fillers_effective is not none %}
+  <p>Removed now: {{ fillers_effective | join(', ') if fillers_effective else 'nothing' }}</p>
+  {% else %}
+  <p>The current list can't be shown until you save a valid one.</p>
+  {% endif %}
+  {% if fillers_no_effect %}
+  <p class="muted">These kept entries have no effect because they are not on the list: {{ fillers_no_effect | join(', ') }}.</p>
+  {% endif %}
+  <button type="submit">Save filler words</button>
+</form>
+</section>

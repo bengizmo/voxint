@@ -711,3 +711,37 @@ High tier consult, 3 of 3 voices: codex (planner, verified against the code at
 - Codex verified the fix delta. Its one Low, that no test pins the `flush=True`
   ordering, is skipped: pytest's capture cannot observe stdout/stderr
   interleaving, and a buffered-stream spy would outweigh a one-argument fix.
+
+### Slice 4 code review (High tier, 3 of 3: codex, deepseek-v4-pro, qwen/qwen3.8-max-prime)
+
+- All three seats reported the slice-4 acceptance criteria (tier 2 opt-in,
+  cleared field inherits, invalid lists refused on the console, the read-mode
+  note) as satisfied with tests. No Critical or High findings.
+- Before the panel, Claude's review of codex's draft caught the filler context
+  being merged into the setup wizard's context instead of the settings page's
+  (codex had moved it by the time its tests ran), and the browser lane found the
+  tier 2 checkboxes running together; a scoped `fieldset.filler-suggestions` rule
+  fixes that. The textarea labels keep the existing inline look the Glossary
+  section already has.
+- **"Always removed (preset en-1)" contradicted a saved keep (3 of 3).** Fixed:
+  "Removed by default (preset en-1): ... A word you keep below comes off this
+  list."
+- **"A kept word is never removed" overclaimed (codex).** Reproduced: keeping
+  `you` does not protect it inside an added `you know`, because keeps match
+  whole entries. Fixed: the help says keeps take an exact word or phrase off the
+  list and that a single kept word is not protected inside a longer phrase.
+- **Fixed, one reviewer each (qwen unless noted):** both invalid lists are now
+  reported together; the fillers context is built before the benchmark query,
+  whose rollback would expire the row; the read-mode "your filler list" link is
+  plain text for non-admins in a multi-user install, matching the admin-only
+  Settings route (red-checked); keep copy says "words or phrases"; the
+  operations doc says the server validates submitted suggestions; tests cover
+  `/settings/media` with a malformed row and assert the full read-mode sentence
+  (deepseek).
+- **Skipped (qwen Medium):** gating the all-filtered "using your filler list"
+  clause on `fillers_removed > 0`. Unreachable: repeat removal keeps the first
+  copy, so repeats alone can never remove every word.
+- **Skipped (qwen Low):** qualifying "General tab" in the lay-reader how-to.
+  Tabs are the default, and `docs/operations.md` names the single-page legacy
+  mode.
+- Codex verified the fix delta with no findings.

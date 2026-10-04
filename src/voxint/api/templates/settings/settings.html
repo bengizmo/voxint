@@ -37,6 +37,8 @@
   <div class="switch-save"><button type="submit">Save feature settings</button></div>
 </form>
 
+{% include "settings/_fillers.html" %}
+
 <form method="post" action="/settings/ai" autocomplete="off">
   <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
   <button type="submit" hidden aria-hidden="true" tabindex="-1"></button>

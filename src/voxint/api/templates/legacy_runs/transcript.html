@@ -65,12 +65,21 @@
 
 {{ export_menu(run, text, translation_ctx.fresh, {"fillers": drop_fillers, "repeats": drop_repeats} if read else none) }}
 
+{# "your filler list" links to its settings section only for someone who can open
+   Settings (admin-only); a reviewer in a multi-user install sees plain text. #}
+{% macro filler_list_link() -%}
+{%- if not shell.multi_user or (shell.current_user and shell.current_user.role == "admin") -%}
+<a href="/settings#fillers">your filler list</a>
+{%- else -%}
+your filler list
+{%- endif -%}
+{%- endmacro %}
 {% if read and read_rows and filter_note %}
-<p class="muted">{{ filter_note }}</p>
+<p class="muted">{{ filter_note }}{% if custom_fillers %} Filler words are matched using {{ filler_list_link() }}.{% endif %}</p>
 {% endif %}
 
 {% if read and all_filtered %}
-<p>The filters left out every word. The saved transcript is unchanged.</p>
+<p>The filters left out every word{% if custom_fillers %}, using {{ filler_list_link() }}{% endif %}. The saved transcript is unchanged.</p>
 {% elif (read and not read_rows) or (not read and not lines) %}
 <p>No transcript segments for this run.</p>
 {% elif read %}

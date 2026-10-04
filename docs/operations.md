@@ -951,6 +951,22 @@ How it is built:
   A list saved on the settings page wins over the corresponding environment list;
   an unset list inherits it. The API reads these variables at start-up, so restart
   the API process after editing them.
+  The **Filler words** section on the Settings General tab (`POST
+  /settings/fillers`, `CSRF_SETTINGS`) edits the saved lists. The twelve tier 2
+  suggestions are checkboxes that write into the add list: a ticked box is an
+  add entry, there is no separate tier 2 state, and the server validates each
+  submitted suggestion like any other add entry. The add textarea holds the other add
+  entries and the keep textarea the keep entries, one per line. The fields show
+  only what is saved in the database: when a list inherits the environment, the
+  fields are empty and the section shows the environment entries read-only, so
+  saving an untouched form keeps inheriting. An empty field saves SQL NULL (the
+  `en` key is removed and any other language keys are kept). The section also
+  shows the effective list and any keep entries with no effect. An invalid entry
+  returns 422 with the submitted text kept, and nothing is written. When both
+  lists are invalid, the message names both. The error
+  renders on the General tab (or on the single settings page when
+  `CONSOLE_SETTINGS_ENABLED` is off). If the saved row is not valid, the section says so and a valid save
+  replaces it.
   When the list in effect differs from the preset, an md turns export with
   fillers dropped ends with one HTML comment line, after a blank line, on every
   surface:
@@ -1033,9 +1049,15 @@ a download with the same options hold the same words. With a filter on:
 - One line under the menu says how many words were left out, for example "Left
   out 4 filler words and 1 repeated word. The saved transcript is unchanged."
   The count is of words: punctuation that went with a filler is not counted.
-  Repeats are counted after fillers are removed.
+  Repeats are counted after fillers are removed. When the filler list in effect
+  differs from the preset, the line adds "Filler words are matched using your
+  filler list." with a link to the settings section (`/settings#fillers`). In a
+  multi-user install, only an admin sees the link; others see plain text,
+  because Settings is admin-only.
 - If the filters remove every word, the page says "The filters left out every
-  word. The saved transcript is unchanged."
+  word. The saved transcript is unchanged." With a changed filler list it reads
+  "The filters left out every word, using your filler list." and links the same
+  way.
 - The Download transcript menu's Markdown links and reading-copy `txt` links
   carry the active filters, and those `txt` links add `style=turns`. "Read on
   screen" keeps the filters too. The timed `txt`, subtitle, `json`, `rttm` and

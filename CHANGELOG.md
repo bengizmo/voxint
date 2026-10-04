@@ -13,7 +13,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   English words or short phrases to also remove, or to keep. A phrase such as
   `you know` is removed only where punctuation sets it off (`We left, you know,
   early`); a tag question (`He lied, you know?`) or a one-phrase reply keeps
-  it. A list saved in the database wins over the environment. A
+  it. The new **Filler words** section on the Settings page (General tab)
+  edits the same two lists: tick a suggestion such as `I mean` or `you see`,
+  type your own words, or keep a word the preset would remove. A list saved
+  there wins over the environment, and an empty field goes back to the
+  environment list, which the page shows. The reading view says when your own
+  list is in use and links to that section. A
   Markdown export made with a changed list ends with an HTML comment that says
   how many filler words were left out and which list was used, and
   `voxint export --drop-fillers` prints that count on stderr. `voxint fillers
