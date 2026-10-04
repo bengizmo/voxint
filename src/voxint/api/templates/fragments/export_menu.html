@@ -7,7 +7,8 @@
    labels only, so it takes no variant. `timestamps=false` is honored by txt and
    md only (subtitle timing is structural; JSON keys are a frozen contract).
    `download` gives the saved file a run-named stem instead of "export.txt". #}
-{% macro export_menu(run, text_variant=none, translations=none) %}
+{% macro export_menu(run, text_variant=none, translations=none, filters=none) %}
+{%- set filter_suffix %}{% if filters and filters.fillers %}&amp;fillers=drop{% endif %}{% if filters and filters.repeats %}&amp;repeats=drop{% endif %}{% endset %}
 {% set stem = "voxint-" ~ run.id.hex[:8] %}
 {% set read_variant = "&text=" ~ text_variant.value if text_variant else "" %}
 <div class="export-menu" id="export-menu" tabindex="-1">
@@ -18,12 +19,13 @@
         Downloads the reviewed text. For enhanced or raw variants, expand
         "Other text variants" below.
       </p>
-      <p class="my-1">
-        <a href="/runs/{{ run.id }}/transcript?read=1&amp;timestamps=false{{ read_variant }}">Read on screen</a>
+      {% if filter_suffix %}<p class="muted text-sm">Reading copies leave out the same words as this page.</p>
+      {% endif %}<p class="my-1">
+        <a href="/runs/{{ run.id }}/transcript?read=1&amp;timestamps=false{{ read_variant }}{{ filter_suffix }}">Read on screen</a>
       </p>
       <ul class="export-format-list" aria-label="Export formats">
         <li>
-          <a href="/review/{{ run.id }}/export.txt?text=corrected&amp;timestamps=false" download="{{ stem }}.txt">
+          <a href="/review/{{ run.id }}/export.txt?text=corrected&amp;timestamps=false{% if filter_suffix %}&amp;style=turns{{ filter_suffix }}{% endif %}" download="{{ stem }}.txt">
             Reading copy <code>.txt</code>
           </a>
           <span class="muted text-sm">Clean prose, no timestamps</span>
@@ -35,13 +37,13 @@
           <span class="muted text-sm">Every line stamped with start and end time</span>
         </li>
         <li>
-          <a href="/review/{{ run.id }}/export.md?text=corrected&amp;timestamps=false" download="{{ stem }}.md">
+          <a href="/review/{{ run.id }}/export.md?text=corrected&amp;timestamps=false{{ filter_suffix }}" download="{{ stem }}.md">
             Markdown reading copy <code>.md</code>
           </a>
           <span class="muted text-sm">Speaker turns in readable paragraphs</span>
         </li>
         <li>
-          <a href="/review/{{ run.id }}/export.md?text=corrected" download="{{ stem }}.md">
+          <a href="/review/{{ run.id }}/export.md?text=corrected{{ filter_suffix }}" download="{{ stem }}.md">
             Markdown with times <code>.md</code>
           </a>
           <span class="muted text-sm">Turn timestamps and minute markers</span>
@@ -113,9 +115,9 @@
         <ul class="export-format-list text-sm">
           <li>
             Reading copy <code>.txt</code>:
-            <a href="/review/{{ run.id }}/export.txt?text=enhanced&amp;timestamps=false" download="{{ stem }}.txt">enhanced</a>
+            <a href="/review/{{ run.id }}/export.txt?text=enhanced&amp;timestamps=false{% if filter_suffix %}&amp;style=turns{{ filter_suffix }}{% endif %}" download="{{ stem }}.txt">enhanced</a>
             /
-            <a href="/review/{{ run.id }}/export.txt?text=raw&amp;timestamps=false" download="{{ stem }}.txt">raw</a>
+            <a href="/review/{{ run.id }}/export.txt?text=raw&amp;timestamps=false{% if filter_suffix %}&amp;style=turns{{ filter_suffix }}{% endif %}" download="{{ stem }}.txt">raw</a>
           </li>
           <li>
             Timed <code>.txt</code>:
@@ -125,15 +127,15 @@
           </li>
           <li>
             Markdown <code>.md</code> (reading copy):
-            <a href="/review/{{ run.id }}/export.md?text=enhanced&amp;timestamps=false" download="{{ stem }}.md">enhanced</a>
+            <a href="/review/{{ run.id }}/export.md?text=enhanced&amp;timestamps=false{{ filter_suffix }}" download="{{ stem }}.md">enhanced</a>
             /
-            <a href="/review/{{ run.id }}/export.md?text=raw&amp;timestamps=false" download="{{ stem }}.md">raw</a>
+            <a href="/review/{{ run.id }}/export.md?text=raw&amp;timestamps=false{{ filter_suffix }}" download="{{ stem }}.md">raw</a>
           </li>
           <li>
             Markdown <code>.md</code> (with times):
-            <a href="/review/{{ run.id }}/export.md?text=enhanced" download="{{ stem }}.md">enhanced</a>
+            <a href="/review/{{ run.id }}/export.md?text=enhanced{{ filter_suffix }}" download="{{ stem }}.md">enhanced</a>
             /
-            <a href="/review/{{ run.id }}/export.md?text=raw" download="{{ stem }}.md">raw</a>
+            <a href="/review/{{ run.id }}/export.md?text=raw{{ filter_suffix }}" download="{{ stem }}.md">raw</a>
           </li>
           <li>
             Subtitles <code>.srt</code>:

@@ -785,7 +785,11 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   `[HH:MM:SS] **Name:** text` lines under a title heading, and read mode lays
   out the same paragraphs via Jinja autoescape. Every export surface (CLI,
   console download, `/api/v1`) goes through one entry point,
-  `src/voxint/export/service.py`, so bytes agree by construction. The pre-0.51
+  `src/voxint/export/service.py`, so bytes agree by construction. The opt-in
+  filler and repeated-word filters (#754) run in one place,
+  `apply_turn_filters` (`src/voxint/export/turn_filters.py`), which the `md`
+  turns export, the `txt` turns export (`to_txt_turns`) and read mode all call,
+  so no two surfaces can disagree about which words were left out. The pre-0.51
   layout (`##` headings over `>` blockquotes from `paragraphize_transcript`)
   stays as `--style blocks` and remains the body of annotation pull-quotes. Deliberately not built: a speaker-name
   omission toggle (caption guidance keeps speaker IDs; anonymization belongs in

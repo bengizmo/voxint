@@ -63,7 +63,7 @@
   a working rendition, not a certified translation.</p>
 {% endif %}
 
-{{ export_menu(run, text, translation_ctx.fresh) }}
+{{ export_menu(run, text, translation_ctx.fresh, {"fillers": drop_fillers, "repeats": drop_repeats} if read else none) }}
 
 {% if read and read_rows and filter_note %}
 <p class="muted">{{ filter_note }}</p>

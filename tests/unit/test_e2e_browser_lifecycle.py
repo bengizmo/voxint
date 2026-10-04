@@ -288,7 +288,7 @@ def test_benchmark_segments_custom_count() -> None:
 
 
 def test_fixture_choices_tuple() -> None:
-    assert FIXTURE_CHOICES == ("review", "editor", "benchmark", "rail", "voices")
+    assert FIXTURE_CHOICES == ("review", "editor", "benchmark", "rail", "voices", "cleanup")
 
 
 def test_parser_seed_fixture_flag() -> None:
@@ -484,3 +484,18 @@ def test_cmd_reclaim_source_exits_on_non_disposable_url() -> None:
     with pytest.raises(SystemExit) as exc:
         cmd_reclaim_source(args)
     assert exc.value.code == 1
+
+
+def test_cleanup_fixture_shape_and_correction_rule() -> None:
+    from tools.e2e_browser_lifecycle import _CLEANUP_SEGMENTS, _FIXTURE_SEGMENTS
+
+    assert _FIXTURE_SEGMENTS["cleanup"] is _CLEANUP_SEGMENTS
+    assert len(_CLEANUP_SEGMENTS) == 4
+    assert {label for label, _, _ in _CLEANUP_SEGMENTS} == {"S0", "S1"}
+    assert "everyone" in _CLEANUP_SEGMENTS[_CORRECTED_SEGMENT_INDEX][1]
+    assert _CLEANUP_SEGMENTS[0][1].endswith("we we go we")
+    assert _CLEANUP_SEGMENTS[1][:2] == ("S1", "uh")
+    assert _CLEANUP_SEGMENTS[2][:2] == ("S0", "we stay.")
+    for index, (_, text, _) in enumerate(_CLEANUP_SEGMENTS):
+        words = _faithful_word_timings(text, index * 5.0, (index + 1) * 5.0)
+        assert "".join(str(word["word"]) for word in words) == text

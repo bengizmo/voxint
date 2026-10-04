@@ -1801,3 +1801,139 @@ def test_list_runs_explicit_ids(session_factory: sessionmaker[Session]) -> None:
             gates=_GATES,
         )
         assert [item.run_id for item in page.items] == [second]
+
+
+def _export_menu_html(body: str) -> str:
+    menu = re.search(r'(<div class="export-menu".*?\n</div>)', body, re.S)
+    assert menu is not None
+    return menu[1]
+
+
+@pytest.mark.parametrize("editor", [False, True])
+def test_export_menu_unfiltered_unchanged(
+    client: TestClient, session_factory: sessionmaker[Session], editor: bool,
+) -> None:
+    with session_factory() as session:
+        run_id = _read_cleanup_run(session)
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        media_id = run.media_item_id
+    response = client.get(
+        f"/media/{media_id}/editor" if editor else
+        f"/runs/{run_id}/transcript?read=1&text=corrected&timestamps=false"
+    )
+    assert response.status_code == 200
+    menu = _export_menu_html(response.text).replace(str(run_id), "RUN_ID")
+    menu = menu.replace(run_id.hex[:8], "RUN_STEM")
+    fixture = "export_menu_editor.html" if editor else "export_menu_read.html"
+    expected = (Path(__file__).parent / "fixtures" / fixture).read_text()
+    assert menu == expected
+    assert "Reading copies leave out" not in menu
+
+
+@pytest.mark.parametrize("fillers,repeats", [(True, False), (False, True), (True, True)])
+def test_export_menu_filtered_links_and_downloads(
+    client: TestClient, session_factory: sessionmaker[Session], fillers: bool, repeats: bool,
+) -> None:
+    from tests.integration.test_translation_jobs import record_spanish
+
+    with session_factory() as session:
+        run_id = _read_cleanup_run(session)
+        record_spanish(session, run_id)
+        session.commit()
+    suffix = ("&amp;fillers=drop" if fillers else "") + (
+        "&amp;repeats=drop" if repeats else ""
+    )
+    response = client.get(
+        f"/runs/{run_id}/transcript?read=1&text=corrected&timestamps=false"
+        + html.unescape(suffix)
+    )
+    assert response.status_code == 200
+    menu = _export_menu_html(response.text)
+    base = f"/review/{run_id}/export"
+    links = re.findall(r'href="([^"]+)"', menu)
+    assert links == [
+        f"/runs/{run_id}/transcript?read=1&amp;timestamps=false&amp;text=corrected{suffix}",
+        f"{base}.txt?text=corrected&amp;timestamps=false&amp;style=turns{suffix}",
+        f"{base}.txt?text=corrected",
+        f"{base}.md?text=corrected&amp;timestamps=false{suffix}",
+        f"{base}.md?text=corrected{suffix}",
+        f"{base}.srt?text=corrected",
+        f"{base}.vtt?text=corrected",
+        f"{base}.json?text=corrected",
+        f"{base}.rttm",
+        f"{base}.txt?lang=es&amp;timestamps=false",
+        f"{base}.md?lang=es&amp;timestamps=false",
+        f"{base}.srt?lang=es",
+        f"{base}.vtt?lang=es",
+        f"{base}.json?lang=es",
+        f"{base}.txt?text=enhanced&amp;timestamps=false&amp;style=turns{suffix}",
+        f"{base}.txt?text=raw&amp;timestamps=false&amp;style=turns{suffix}",
+        f"{base}.txt?text=enhanced",
+        f"{base}.txt?text=raw",
+        f"{base}.md?text=enhanced&amp;timestamps=false{suffix}",
+        f"{base}.md?text=raw&amp;timestamps=false{suffix}",
+        f"{base}.md?text=enhanced{suffix}",
+        f"{base}.md?text=raw{suffix}",
+        f"{base}.srt?text=enhanced",
+        f"{base}.srt?text=raw",
+        f"{base}.vtt?text=enhanced",
+        f"{base}.vtt?text=raw",
+        f"{base}.json?text=enhanced",
+        f"{base}.json?text=raw",
+    ]
+    assert menu.count(
+        '<p class="muted text-sm">Reading copies leave out the same words as this page.</p>'
+    ) == 1
+    markdown = client.get(html.unescape(links[3]))
+    plain = client.get(html.unescape(links[1]))
+    assert markdown.status_code == plain.status_code == 200
+    rows = _read_paragraphs(response.text)
+    assert _markdown_paragraphs(markdown.text) == rows
+    expected_lines = [
+        (f"{row['speaker']}: " if row["speaker"] is not None else "")
+        + " ".join(run["text"] for run in row["runs"])
+        for row in rows
+    ]
+    assert plain.text == "\n\n".join(expected_lines) + "\n"
+
+
+@pytest.mark.parametrize("fillers,repeats", [(False, False), (True, False),
+                                           (False, True), (True, True)])
+def test_cleanup_browser_fixture_read_output(
+    client: TestClient, session_factory: sessionmaker[Session], tmp_path: Path,
+    fillers: bool, repeats: bool,
+) -> None:
+    from tools.e2e_browser_lifecycle import seed_browser_run
+
+    with session_factory() as session:
+        run_id, _ = seed_browser_run(session, tmp_path, fixture="cleanup")
+        segments = session.scalars(select(TranscriptSegment).where(
+            TranscriptSegment.pipeline_run_id == run_id,
+        ).order_by(TranscriptSegment.segment_index)).all()
+        assert len(segments) == 4
+        assert segments[0].enhanced_text == "Hello everybody, um we we go we"
+        assert segments[0].correction_trace["entries"]
+        for segment in segments:
+            assert "".join(word["word"] for word in segment.words) == segment.raw_text
+            assert all(segment.start_seconds <= word["start"] < word["end"]
+                       <= segment.end_seconds for word in segment.words)
+    response = client.get(f"/runs/{run_id}/transcript", params={
+        "read": "1", "text": "corrected", "timestamps": "false",
+        "fillers": "drop" if fillers else "keep",
+        "repeats": "drop" if repeats else "keep",
+    })
+    assert response.status_code == 200
+    initial = "Hello everybody, " + ("" if fillers else "um ")
+    initial += "we go we" if repeats else "we we go we"
+    expected = [("S0", initial)]
+    if not fillers:
+        expected.append(("S1", "uh"))
+    expected.append((None if fillers else "S0", "we stay."))
+    expected.append(("S1", ("You" if repeats else "You you") + " know." if fillers
+                     else ("erm you know." if repeats else "erm you you know.")))
+    assert [(row["speaker"], " ".join(run["text"] for run in row["runs"]))
+            for row in _read_paragraphs(response.text)] == expected
+    assert response.context["fillers_removed"] == (3 if fillers else 0)
+    assert response.context["repeats_removed"] == (2 if repeats else 0)
+    assert response.context["all_filtered"] is False

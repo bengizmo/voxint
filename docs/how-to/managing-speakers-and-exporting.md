@@ -163,11 +163,23 @@ trading short remarks are kept apart even when the transcriber put them in one
 line. Any speaker you assigned or split yourself in the editor stays exactly as
 you set it.
 
-Two links let you adjust the view:
+A few links let you adjust the view:
 
 - **Show timestamps** / **Hide timestamps** turns the paragraph times and the
   minute markers on and off. The reading view opens without times, which reads
   best for sharing.
+- **Remove filler words** leaves out standalone "um" and "uh" sounds. **Show
+  filler words** brings them back.
+- **Remove repeated words** leaves out the second copy of a small word said
+  twice in a row, such as "the the". **Show repeated words** brings it back.
+
+When either of the last two is on, a line under the menu tells you how many
+words were left out. Your saved transcript is not changed; the words are only
+hidden on this page. While they are hidden, the reading copies in the
+**Download transcript** menu (the Markdown files and the plain-text reading
+copy) leave out the same words, so the file you download matches what you see.
+The timed transcript, subtitles and data files always keep every word.
+
 - **Exit reading view** returns you to the audio-synced player.
 
 ### Download a file
@@ -236,10 +248,13 @@ the transcript are written literally, so a stray symbol at the start of a line
 cannot turn into an accidental heading, list, or other formatting. A web address
 in the text stays as text, though some viewers will still make it clickable.
 
-To leave out standalone English fillers such as "um" and "uh" from the Markdown
-turns export, add `--drop-fillers` on the command line or `&fillers=drop` to the
-download link. Your saved transcript stays unchanged; this option is not
-available for translations or `--style blocks`.
+The easiest way to download a copy without fillers such as "um" and "uh", or
+without doubled words such as "the the", is to turn them off in the reading view
+first (see "Read it on screen" above) and then download a reading copy from
+that page. From the command line, add `--drop-fillers` or `--drop-repeats` to a
+Markdown export, or to a plain-text export together with `--style turns`. Your
+saved transcript stays unchanged; these options are not available for
+translations, subtitles or `--style blocks`.
 
 ### Speaker names always appear
 

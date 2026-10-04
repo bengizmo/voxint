@@ -237,9 +237,19 @@ VOICE_BLAIR_NAME = "Blair Roster"
 VOICE_DANA_HZ = 440.0
 VOICE_BLAIR_HZ = 880.0
 
-FIXTURE_CHOICES = ("review", "editor", "benchmark", "rail", "voices")
+# Cleanup fixture: segment 0 still fires the everyone correction. The S1 filler
+# separates S0's trailing and leading "we"; F5 must preserve that repeat seam.
+_CLEANUP_SEGMENTS: tuple[tuple[str, str, float | None], ...] = (
+    ("S0", "Hello everyone, um we we go we", 0.95),
+    ("S1", "uh", 0.42),
+    ("S0", "we stay.", 0.88),
+    ("S1", "erm you you know.", 0.31),
+)
+
+FIXTURE_CHOICES = ("review", "editor", "benchmark", "rail", "voices", "cleanup")
 
 _FIXTURE_SEGMENTS: dict[str, tuple[tuple[str, str, float | None], ...]] = {
+    "cleanup": _CLEANUP_SEGMENTS,
     "review": _SEED_SEGMENTS,
     "voices": _SEED_SEGMENTS,
     "editor": _EDITOR_SEGMENTS,
@@ -659,7 +669,8 @@ def seed_browser_run(
     4 speakers, split-eligible text), ``"benchmark"`` (2000 segments),
     ``"rail"`` (12 segments covering every speaker-rail state), or
     ``"voices"`` (the review run plus a second, aged recording that is the
-    source of cross-recording voice samples, issue #714).
+    source of cross-recording voice samples, issue #714), or ``"cleanup"``
+    (4 word-timed segments, 2 speakers, fillers, repeats and an F5 seam).
     """
     if fixture not in FIXTURE_CHOICES:
         raise ValueError(f"unknown fixture {fixture!r}; must be one of {FIXTURE_CHOICES}")
@@ -773,7 +784,7 @@ def seed_browser_run(
                 "entries": [entry.to_mapping() for entry in corrected.trace],
             }
             segment.corrector_version = CORRECTOR_VERSION
-        if fixture == "editor" and index in _EDITOR_SPLIT_ELIGIBLE:
+        if fixture == "cleanup" or (fixture == "editor" and index in _EDITOR_SPLIT_ELIGIBLE):
             segment.words = _faithful_word_timings(
                 seg_text, segment.start_seconds, segment.end_seconds
             )
