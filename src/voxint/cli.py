@@ -2238,10 +2238,12 @@ def _export(args: argparse.Namespace) -> int:
     labels); every other format reads the attributed transcript.
     """
     from voxint.adjudication.transcript import parse_transcript_text
+    from voxint.app_settings import get_app_settings, resolve_effective_filler_list
+    from voxint.config import SettingsError, get_settings
     from voxint.db.models import PipelineRun
     from voxint.db.session import build_session_factory
     from voxint.export import TranscriptFormat
-    from voxint.export.filler_lists import DEFAULT_FILLER_LIST
+    from voxint.export.filler_lists import FillerListError
     from voxint.export.service import (
         parse_fillers,
         parse_repeats,
@@ -2286,9 +2288,14 @@ def _export(args: argparse.Namespace) -> int:
                     text=variant,
                     timestamps=args.timestamps,
                     style=style,
-                    fillers=DEFAULT_FILLER_LIST if drop_fillers else None,
+                    fillers=resolve_effective_filler_list(get_app_settings(session), get_settings())
+                    if drop_fillers
+                    else None,
                     drop_repeats=drop_repeats,
                 )
+    except (SettingsError, FillerListError) as exc:
+        print(f"error: {exc}")
+        return 2
     finally:
         engine.dispose()
 

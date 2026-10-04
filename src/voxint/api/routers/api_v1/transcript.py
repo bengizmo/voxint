@@ -2,16 +2,17 @@
 
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from voxint.adjudication.transcript import (
     parse_transcript_text,
 )
 from voxint.api.api_app import ApiKeyDep, ApiSessionDep
+from voxint.app_settings import get_app_settings, resolve_effective_filler_list
 from voxint.db.models import PipelineRun
 from voxint.export import MEDIA_TYPES, TranscriptFormat
-from voxint.export.filler_lists import DEFAULT_FILLER_LIST
+from voxint.export.filler_lists import FillerListError
 from voxint.export.service import (
     ExportOptionError,
     parse_fillers,
@@ -28,6 +29,7 @@ _VALID_FORMATS = {"txt", "srt", "vtt", "json", "md", "rttm"}
 
 @router.get("/{run_id}/transcript")
 def export_transcript(
+    request: Request,
     run_id: uuid.UUID,
     identity: ApiKeyDep,
     session: ApiSessionDep,
@@ -63,6 +65,14 @@ def export_transcript(
         variant = parse_transcript_text(text)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        filler_list = (
+            resolve_effective_filler_list(get_app_settings(session), request.app.state.settings)
+            if drop_fillers
+            else None
+        )
+    except FillerListError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     content = render_run_transcript(
         session,
@@ -71,7 +81,7 @@ def export_transcript(
         text=variant,
         timestamps=timestamps,
         style=selected_style,
-        fillers=DEFAULT_FILLER_LIST if drop_fillers else None,
+        fillers=filler_list,
         drop_repeats=drop_repeats,
     )
     return Response(content=content, media_type=MEDIA_TYPES[format])

@@ -655,3 +655,25 @@ High tier consult, 3 of 3 voices: codex (planner, verified against the code at
 - In review, Claude found and fixed two bugs in codex's first draft: a rejected
   phrase skipped a pending capital, and trailing seam whitespace counted as a
   second source.
+
+### Slice 2 code review (High tier, 3 of 3: codex, deepseek-v4-pro, qwen/qwen3.8-max-prime)
+
+- **The resolver trusted the saved JSON shape (all three; codex Low, deepseek
+  and qwen High).** Codex showed that `{"en": "um"}` iterated as the entries `u`
+  and `m`, so a hand-edited row silently removed single letters. Fixed: a saved
+  value must be a mapping, and when `en` is present it must hold a list of
+  strings that passes `normalize_entries`. SQL NULL and a missing `en` still
+  inherit the environment. Anything else raises a value-free `FillerListError`
+  that starts "The saved filler word list is not valid. Save it again in
+  settings." and, for a bad entry, appends the rule it broke. The
+  console download, `/api/v1` and read mode answer 409, like the stale
+  translation refusal, because the caller cannot repair server state by
+  changing the request (codex follow-up; 422 was the first draft). The CLI
+  exits 2. Exports without `fillers=drop` never read the list.
+- **A separator-only environment value (`,,`) counted as an environment source
+  (all three).** Fixed: the source and `env_overridden` come from the normalized
+  entries, so it resolves as unset.
+- **The CLI calls `get_settings()` a second time (all three, Low or
+  acceptable).** Not changed: `_engine_or_report` does not return its
+  `Settings`, `get_settings()` is the sanctioned constructor, and the call is
+  guarded by the same exit-2 handler.

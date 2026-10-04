@@ -2009,6 +2009,14 @@ class AppSettings(Base):
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
     onboarding_complete: Mapped[bool] = mapped_column(Boolean, default=False)
     vocabulary: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    # NULL inherits VOXINT_FILLERS_ADD/KEEP. Resolve only via
+    # app_settings.resolve_effective_filler_list; assign whole, never mutate in place.
+    fillers_add: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
+    )
+    fillers_keep: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
+    )
     # Operator-authored correction rules (issue #84): a list of rule mappings
     # {id, match, replace, case_sensitive, whole_word}, each already validated
     # through the #80 gate at author time. This is the global glossary layer:

@@ -149,6 +149,7 @@ from voxint.app_settings import (
     get_app_settings,
     ready_tutorial_run_id,
     resolve_effective_enrichment_names_enabled,
+    resolve_effective_filler_list,
 )
 from voxint.config import Settings
 from voxint.db.models import (
@@ -191,7 +192,7 @@ from voxint.export import (
     TranscriptFormat,
     annotation_pull_quote,
 )
-from voxint.export.filler_lists import DEFAULT_FILLER_LIST
+from voxint.export.filler_lists import FillerListError
 from voxint.export.manifest import (
     ClipRef,
     QuoteLine,
@@ -1288,6 +1289,7 @@ def _export_translated_texts(
 
 
 def _export_transcript(
+    request: Request,
     run_id: uuid.UUID,
     session: Session,
     fmt: TranscriptFormat,
@@ -1311,6 +1313,16 @@ def _export_transcript(
             raise ExportOptionError("repeats cannot be combined with a translation")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        filler_list = (
+            resolve_effective_filler_list(get_app_settings(session), request.app.state.settings)
+            if drop_fillers
+            else None
+        )
+    except FillerListError as exc:
+        # A broken saved list is server state the operator repairs in settings,
+        # not a bad request: 409, like the stale-translation refusal.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     texts = _export_translated_texts(session, run_id, lang, variant) if lang is not None else None
     try:
         content = render_run_transcript(
@@ -1321,7 +1333,7 @@ def _export_transcript(
             timestamps=timestamps,
             style=selected_style,
             translated_texts=texts,
-            fillers=DEFAULT_FILLER_LIST if drop_fillers else None,
+            fillers=filler_list,
             drop_repeats=drop_repeats,
         )
     except TranslationMismatchError as exc:
@@ -1341,6 +1353,7 @@ def _translation_stale_detail(lang: str) -> str:
 
 @router.get("/review/{run_id}/export.txt")
 def export_transcript_txt(
+    request: Request,
     run_id: uuid.UUID,
     operator: OperatorDep,
     session: SessionDep,
@@ -1356,6 +1369,7 @@ def export_transcript_txt(
     # ?lang=<code> substitutes the current fresh translation (issue #133) —
     # fail closed, see _export_translated_texts. All five formats take it.
     return _export_transcript(
+        request,
         run_id,
         session,
         TranscriptFormat.TXT,
@@ -1370,6 +1384,7 @@ def export_transcript_txt(
 
 @router.get("/review/{run_id}/export.md")
 def export_transcript_md(
+    request: Request,
     run_id: uuid.UUID,
     operator: OperatorDep,
     session: SessionDep,
@@ -1383,6 +1398,7 @@ def export_transcript_md(
     # Readable Markdown (issue #65): ## speaker headings + merged blockquotes.
     # ?timestamps=false drops the per-paragraph time range for a clean copy.
     return _export_transcript(
+        request,
         run_id,
         session,
         TranscriptFormat.MARKDOWN,
@@ -1397,6 +1413,7 @@ def export_transcript_md(
 
 @router.get("/review/{run_id}/export.srt")
 def export_transcript_srt(
+    request: Request,
     run_id: uuid.UUID,
     operator: OperatorDep,
     session: SessionDep,
@@ -1407,6 +1424,7 @@ def export_transcript_srt(
     repeats: str | None = None,
 ) -> Response:
     return _export_transcript(
+        request,
         run_id,
         session,
         TranscriptFormat.SRT,
@@ -1420,6 +1438,7 @@ def export_transcript_srt(
 
 @router.get("/review/{run_id}/export.vtt")
 def export_transcript_vtt(
+    request: Request,
     run_id: uuid.UUID,
     operator: OperatorDep,
     session: SessionDep,
@@ -1430,6 +1449,7 @@ def export_transcript_vtt(
     repeats: str | None = None,
 ) -> Response:
     return _export_transcript(
+        request,
         run_id,
         session,
         TranscriptFormat.VTT,
@@ -1443,6 +1463,7 @@ def export_transcript_vtt(
 
 @router.get("/review/{run_id}/export.json")
 def export_transcript_json(
+    request: Request,
     run_id: uuid.UUID,
     operator: OperatorDep,
     session: SessionDep,
@@ -1453,6 +1474,7 @@ def export_transcript_json(
     repeats: str | None = None,
 ) -> Response:
     return _export_transcript(
+        request,
         run_id,
         session,
         TranscriptFormat.JSON,

@@ -916,3 +916,143 @@ def test_turn_style_error_contract(
         )
         assert public.status_code == 422
         assert public.json()["error"]["message"] == detail
+
+
+@pytest.mark.parametrize("fmt", ["md", "txt"])
+def test_custom_filler_list_all_surfaces_and_storage(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fmt: str,
+) -> None:
+    from tests.integration.test_runs_api import _markdown_paragraphs, _read_paragraphs
+    from voxint.db.models import AppSettings
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VOXINT_FILLERS_ADD", "I mean")
+    monkeypatch.setenv("VOXINT_FILLERS_KEEP", "uh")
+    with session_factory() as session:
+        run_id = seed_words(session)
+        segment = session.scalars(
+            select(TranscriptSegment).where(
+                TranscriptSegment.pipeline_run_id == run_id,
+            )
+        ).one()
+        original = "It was, you know, big. um I mean, we left. uh"
+        segment.raw_text = original
+        segment.words = None  # Coarse attribution keeps one paragraph under Alex.
+        segment_id = segment.id
+        session.commit()
+    client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
+    with session_factory() as session:
+        row = session.get(AppSettings, 1)
+        assert row is not None
+        row.fillers_add = {"en": ["you know"]}
+        row.fillers_keep = {"en": ["um"]}
+        session.commit()
+    monkeypatch.setattr(
+        "voxint.cli._engine_or_report",
+        lambda: (
+            create_engine(session_factory.kw["bind"].url),
+            0,
+        ),
+    )
+    path = tmp_path / f"custom.{fmt}"
+    assert (
+        main(
+            [
+                "export",
+                str(run_id),
+                "--format",
+                fmt,
+                "--style",
+                "turns",
+                "--text",
+                "raw",
+                "--drop-fillers",
+                "--no-timestamps",
+                "-o",
+                str(path),
+            ]
+        )
+        == 0
+    )
+    params = {"style": "turns", "text": "raw", "fillers": "drop", "timestamps": "false"}
+    console = client.get(f"/review/{run_id}/export.{fmt}", params=params)
+    public = client.get(
+        f"/api/v1/runs/{run_id}/transcript",
+        params={"format": fmt, **params},
+        auth=None,
+        headers={"Authorization": "Bearer synthetic-api-key"},
+    )
+    assert console.status_code == public.status_code == 200
+    assert path.read_bytes() == console.content == public.content
+    cleaned = "It was, big. um I mean, we left."
+    assert cleaned in console.text
+    assert "you know" not in console.text
+    markdown = client.get(f"/review/{run_id}/export.md", params=params)
+    read = client.get(f"/runs/{run_id}/transcript", params={"read": "1", **params})
+    assert markdown.status_code == read.status_code == 200
+    assert (
+        _read_paragraphs(read.text)
+        == _markdown_paragraphs(markdown.text)
+        == [
+            {"speaker": "Alex", "clock": None, "runs": [{"marker": None, "text": cleaned}]},
+        ]
+    )
+    with session_factory() as session:
+        stored = session.get(TranscriptSegment, segment_id)
+        assert stored is not None
+        assert stored.raw_text == original
+        assert stored.words is None
+        assert stored.enhanced_text is None
+        assert (
+            session.scalars(
+                select(SegmentReviewState).where(
+                    SegmentReviewState.pipeline_run_id == run_id,
+                )
+            ).all()
+            == []
+        )
+
+
+def test_malformed_saved_filler_list_is_refused_on_every_surface(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from voxint.db.models import AppSettings
+
+    monkeypatch.chdir(tmp_path)
+    detail = "The saved filler word list is not valid. Save it again in settings."
+    with session_factory() as session:
+        run_id = seed_words(session)
+    client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
+    with session_factory() as session:
+        row = session.get(AppSettings, 1)
+        assert row is not None
+        row.fillers_add = {"en": "um"}  # A bare string would otherwise drop "u" and "m".
+        session.commit()
+    params = {"style": "turns", "fillers": "drop"}
+    console = client.get(f"/review/{run_id}/export.md", params=params)
+    public = client.get(
+        f"/api/v1/runs/{run_id}/transcript",
+        params={"format": "md", **params},
+        auth=None,
+        headers={"Authorization": "Bearer synthetic-api-key"},
+    )
+    read = client.get(f"/runs/{run_id}/transcript", params={"read": "1", "fillers": "drop"})
+    assert console.status_code == public.status_code == read.status_code == 409
+    assert console.json()["detail"] == detail
+    assert public.json()["error"]["message"] == detail
+    # Without fillers=drop the saved list is never read, so exports still work.
+    assert client.get(f"/review/{run_id}/export.md", params={"style": "turns"}).status_code == 200
+    monkeypatch.setattr(
+        "voxint.cli._engine_or_report",
+        lambda: (create_engine(session_factory.kw["bind"].url), 0),
+    )
+    capsys.readouterr()
+    code = main(["export", str(run_id), "--format", "md", "--style", "turns", "--drop-fillers"])
+    assert code == 2
+    assert capsys.readouterr().out.strip() == f"error: {detail}"

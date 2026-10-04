@@ -937,7 +937,13 @@ How it is built:
   the next word is re-capitalised. An utterance made only of fillers disappears.
   A filler directly followed by a closing quotation mark is a quoted word and
   stays. This is English only: `uh-huh`, `mm-hmm`, `hmm`, `like` and `you
-  know` stay.
+  know` stay with the default list.
+  `VOXINT_FILLERS_ADD` and `VOXINT_FILLERS_KEEP` accept comma-separated English
+  entries and default to blank. Use letters, apostrophes and single inner hyphens,
+  with at most 5 words and 40 characters per entry and 100 entries per list.
+  A list saved on the settings page wins over the corresponding environment list;
+  an unset list inherits it. The API reads these variables at start-up, so restart
+  the API process after editing them.
   Nothing stored changes. Filler removal is not available with a translation
   or the `blocks` style. It works on `md` turns, `txt` with `style=turns`, and
   read mode.
