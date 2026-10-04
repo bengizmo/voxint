@@ -1,0 +1,117 @@
+<div class="export-menu" id="export-menu" tabindex="-1">
+  <details aria-label="Download transcript">
+    <summary class="btn-download">Download transcript <kbd>d</kbd></summary>
+    <div class="export-dropdown">
+      <p class="muted text-sm">
+        Downloads the reviewed text. For enhanced or raw variants, expand
+        "Other text variants" below.
+      </p>
+      <p class="my-1">
+        <a href="/runs/RUN_ID/transcript?read=1&amp;timestamps=false">Read on screen</a>
+      </p>
+      <ul class="export-format-list" aria-label="Export formats">
+        <li>
+          <a href="/review/RUN_ID/export.txt?text=corrected&amp;timestamps=false" download="voxint-RUN_STEM.txt">
+            Reading copy <code>.txt</code>
+          </a>
+          <span class="muted text-sm">Clean prose, no timestamps</span>
+        </li>
+        <li>
+          <a href="/review/RUN_ID/export.txt?text=corrected" download="voxint-RUN_STEM.txt">
+            Timed transcript <code>.txt</code>
+          </a>
+          <span class="muted text-sm">Every line stamped with start and end time</span>
+        </li>
+        <li>
+          <a href="/review/RUN_ID/export.md?text=corrected&amp;timestamps=false" download="voxint-RUN_STEM.md">
+            Markdown reading copy <code>.md</code>
+          </a>
+          <span class="muted text-sm">Speaker turns in readable paragraphs</span>
+        </li>
+        <li>
+          <a href="/review/RUN_ID/export.md?text=corrected" download="voxint-RUN_STEM.md">
+            Markdown with times <code>.md</code>
+          </a>
+          <span class="muted text-sm">Turn timestamps and minute markers</span>
+        </li>
+        <li>
+          <a href="/review/RUN_ID/export.srt?text=corrected" download="voxint-RUN_STEM.srt">
+            Subtitles <code>.srt</code>
+          </a>
+          <span class="muted text-sm">SubRip captions for video players</span>
+        </li>
+        <li>
+          <a href="/review/RUN_ID/export.vtt?text=corrected" download="voxint-RUN_STEM.vtt">
+            Subtitles <code>.vtt</code>
+          </a>
+          <span class="muted text-sm">WebVTT captions for web video</span>
+        </li>
+        <li>
+          <a href="/review/RUN_ID/export.json?text=corrected" download="voxint-RUN_STEM.json">
+            Data <code>.json</code>
+          </a>
+          <span class="muted text-sm">Structured segments for other tools</span>
+        </li>
+        <li>
+          <a href="/review/RUN_ID/export.rttm" download="voxint-RUN_STEM.rttm">
+            Speaker turns <code>.rttm</code>
+          </a>
+          <span class="muted text-sm">Raw voice-separation labels for research</span>
+        </li>
+      </ul>
+      
+      <details class="export-variants" aria-label="Other text variants">
+        <summary class="text-sm">Other text variants</summary>
+        <p class="muted text-sm">
+          <strong>Reviewed</strong> is the text as you approved it.
+          <strong>Enhanced</strong> is the cleaned-up version before review.
+          <strong>Raw</strong> is the exact words the transcriber produced.
+        </p>
+        <ul class="export-format-list text-sm">
+          <li>
+            Reading copy <code>.txt</code>:
+            <a href="/review/RUN_ID/export.txt?text=enhanced&amp;timestamps=false" download="voxint-RUN_STEM.txt">enhanced</a>
+            /
+            <a href="/review/RUN_ID/export.txt?text=raw&amp;timestamps=false" download="voxint-RUN_STEM.txt">raw</a>
+          </li>
+          <li>
+            Timed <code>.txt</code>:
+            <a href="/review/RUN_ID/export.txt?text=enhanced" download="voxint-RUN_STEM.txt">enhanced</a>
+            /
+            <a href="/review/RUN_ID/export.txt?text=raw" download="voxint-RUN_STEM.txt">raw</a>
+          </li>
+          <li>
+            Markdown <code>.md</code> (reading copy):
+            <a href="/review/RUN_ID/export.md?text=enhanced&amp;timestamps=false" download="voxint-RUN_STEM.md">enhanced</a>
+            /
+            <a href="/review/RUN_ID/export.md?text=raw&amp;timestamps=false" download="voxint-RUN_STEM.md">raw</a>
+          </li>
+          <li>
+            Markdown <code>.md</code> (with times):
+            <a href="/review/RUN_ID/export.md?text=enhanced" download="voxint-RUN_STEM.md">enhanced</a>
+            /
+            <a href="/review/RUN_ID/export.md?text=raw" download="voxint-RUN_STEM.md">raw</a>
+          </li>
+          <li>
+            Subtitles <code>.srt</code>:
+            <a href="/review/RUN_ID/export.srt?text=enhanced" download="voxint-RUN_STEM.srt">enhanced</a>
+            /
+            <a href="/review/RUN_ID/export.srt?text=raw" download="voxint-RUN_STEM.srt">raw</a>
+          </li>
+          <li>
+            Subtitles <code>.vtt</code>:
+            <a href="/review/RUN_ID/export.vtt?text=enhanced" download="voxint-RUN_STEM.vtt">enhanced</a>
+            /
+            <a href="/review/RUN_ID/export.vtt?text=raw" download="voxint-RUN_STEM.vtt">raw</a>
+          </li>
+          <li>
+            Data <code>.json</code>:
+            <a href="/review/RUN_ID/export.json?text=enhanced" download="voxint-RUN_STEM.json">enhanced</a>
+            /
+            <a href="/review/RUN_ID/export.json?text=raw" download="voxint-RUN_STEM.json">raw</a>
+          </li>
+        </ul>
+      </details>
+    </div>
+  </details>
+</div>

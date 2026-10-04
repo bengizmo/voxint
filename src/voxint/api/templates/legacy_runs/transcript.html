@@ -11,7 +11,7 @@
 
 <nav class="top tab-strip" aria-label="Transcript version">
   {% for v in variants %}
-  <a href="/runs/{{ run.id }}/transcript?text={{ v.value }}{% if read %}&read=1&timestamps={{ 'true' if read_timestamps else 'false' }}{% endif %}"
+  <a href="/runs/{{ run.id }}/transcript?text={{ v.value }}{% if read %}&read=1&timestamps={{ 'true' if read_timestamps else 'false' }}{% if drop_fillers %}&fillers=drop{% endif %}{% if drop_repeats %}&repeats=drop{% endif %}{% endif %}"
      {% if text == v %}aria-current="page"{% endif %}>{{ v.value }}</a>
   {% endfor %}
 </nav>
@@ -23,7 +23,9 @@
 <nav class="top tab-strip" aria-label="Reading view options">
   {% if read %}
   <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}">Exit reading view</a>
-  <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}&read=1&timestamps={{ 'false' if read_timestamps else 'true' }}">{% if read_timestamps %}Hide timestamps{% else %}Show timestamps{% endif %}</a>
+  <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}&read=1&timestamps={{ 'false' if read_timestamps else 'true' }}{% if drop_fillers %}&fillers=drop{% endif %}{% if drop_repeats %}&repeats=drop{% endif %}">{% if read_timestamps %}Hide timestamps{% else %}Show timestamps{% endif %}</a>
+  <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}&read=1&timestamps={{ 'true' if read_timestamps else 'false' }}{% if not drop_fillers %}&fillers=drop{% endif %}{% if drop_repeats %}&repeats=drop{% endif %}">{% if drop_fillers %}Show filler words{% else %}Remove filler words{% endif %}</a>
+  <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}&read=1&timestamps={{ 'true' if read_timestamps else 'false' }}{% if drop_fillers %}&fillers=drop{% endif %}{% if not drop_repeats %}&repeats=drop{% endif %}">{% if drop_repeats %}Show repeated words{% else %}Remove repeated words{% endif %}</a>
   {% else %}
   <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}&read=1&timestamps=false">Reading view</a>
   {% endif %}
@@ -61,9 +63,15 @@
   a working rendition, not a certified translation.</p>
 {% endif %}
 
-{{ export_menu(run, text, translation_ctx.fresh) }}
+{{ export_menu(run, text, translation_ctx.fresh, {"fillers": drop_fillers, "repeats": drop_repeats} if read else none) }}
 
-{% if (read and not read_rows) or (not read and not lines) %}
+{% if read and read_rows and filter_note %}
+<p class="muted">{{ filter_note }}</p>
+{% endif %}
+
+{% if read and all_filtered %}
+<p>The filters left out every word. The saved transcript is unchanged.</p>
+{% elif (read and not read_rows) or (not read and not lines) %}
 <p>No transcript segments for this run.</p>
 {% elif read %}
 {# Shared reading paragraphs: Python decides grouping, clocks and markers;

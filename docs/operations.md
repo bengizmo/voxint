@@ -831,32 +831,46 @@ docker compose exec -T api voxint export <run-id> --format md --style blocks > b
   the enhanced or raw fallback; `enhanced` is the LLM-cleaned pipeline text
   before corrections; `raw` is the immutable ASR output). Ignored for `rttm`,
   which carries raw diarization labels, not attributed text.
-- `--no-timestamps`: drop the per-line time column (`txt`), or the paragraph
-  timestamps and minute markers (`md`), for a clean reading copy. Ignored for the
-  other formats, whose timing is structural.
-- `--style turns|blocks`: the Markdown layout, for `md` only. `turns` is the
-  default and is described below. `blocks` is the layout from before 0.51: a
+- `--no-timestamps`: drop the per-line time column (default `txt`), or the
+  paragraph timestamps and minute markers (`md`, and `txt` with `--style turns`),
+  for a clean reading copy. Ignored for the other formats, whose timing is
+  structural.
+- `--style turns|blocks`: the layout, for `md` and `txt`. On `md`, `turns` is
+  the default and is described below. `blocks` is the layout from before 0.51: a
   `##` speaker heading per contiguous same-speaker run over a `>` blockquote
   paragraph, with a per-paragraph `[start-end]` time range gated by the
-  timestamps flag. Passing `--style` with any other format is an error.
-- `--drop-fillers`: remove standalone English fillers from the Markdown turns
-  export (`--format md` only). See "Fillers" below.
+  timestamps flag. On `txt`, the only style is `turns`, and it is never the
+  default: without `--style`, `txt` keeps its one line per segment. See "Plain
+  text in the `turns` layout" below. Passing `--style` with any other format is
+  an error (`style applies to the md and txt formats only`), and so is
+  `--style blocks` with `txt` (`unknown style 'blocks' for txt; valid: turns`).
+- `--drop-fillers`: remove standalone English fillers from a `turns` export
+  (`--format md`, or `--format txt --style turns`). See "Fillers" below.
 - `--drop-repeats`: remove an immediately repeated English function word or word
-  pair, such as `the the`, from the Markdown turns export (`--format md` only).
-  See "Repeats" below.
+  pair, such as `the the`, from a `turns` export (`--format md`, or
+  `--format txt --style turns`). See "Repeats" below.
 - `-o PATH`: write to a file instead of stdout (refuses to overwrite an
   existing file unless `--force`).
 
 The same exports are available over HTTP at
 `GET /review/{run_id}/export.{txt,md,srt,vtt,json,rttm}` (add `?text=raw` for the
 raw variant, `?timestamps=false` on `txt`/`md` for the reading copy, or
-`?style=blocks` on `md` for the older layout, or `?fillers=drop` and
-`?repeats=drop` to remove fillers and repeated words from the Markdown turns
-export). The `/api/v1/runs/{run_id}/transcript` route takes the same `style`,
-`fillers` and `repeats` parameters with `format=md`. `keep` is the default for
-both filters. For an existing run, on either route, `style` with any other
-format, or a non-empty `fillers` or `repeats` value outside the Markdown turns
-style, returns 422.
+`?style=blocks` on `md` for the older layout, `?style=turns` on `txt` for
+plain-text paragraphs, or `?fillers=drop` and `?repeats=drop` to remove fillers
+and repeated words from a `turns` export). The
+`/api/v1/runs/{run_id}/transcript` route takes the same `style`, `fillers` and
+`repeats` parameters with `format=md` or `format=txt`. `keep` is the default
+for both filters. For an existing run, on either route, these return 422:
+
+| Request | Message |
+|---|---|
+| `style` with `srt`, `vtt`, `json` or `rttm` | `style applies to the md and txt formats only` |
+| a `txt` style other than `turns` | `unknown style 'blocks' for txt; valid: turns` |
+| a non-empty `fillers` or `repeats` outside a `turns` layout (including `txt` without `style=turns`) | `fillers applies to md turns and txt turns only` (or `repeats ...`) |
+| `fillers=drop` or `repeats=drop` with `lang` | `fillers cannot be combined with a translation` (or `repeats ...`) |
+
+Releases up to 0.51 worded the first and third messages as `style applies to
+the md format only` and `fillers applies to the md turns style only`.
 RTTM uses the run's UUID as the file id and the raw diarization labels
 (`SPEAKER_00` …), so it round-trips against diarization scoring tools, and it
 deliberately does **not** substitute adjudicated speaker names.
@@ -925,7 +939,8 @@ How it is built:
   stays. This is English only: `uh-huh`, `mm-hmm`, `hmm`, `like` and `you
   know` stay.
   Nothing stored changes. Filler removal is not available with a translation
-  or the `blocks` style.
+  or the `blocks` style. It works on `md` turns, `txt` with `style=turns`, and
+  read mode.
 - **Repeats.** `--drop-repeats` or `?repeats=drop` removes the second copy of a
   word or word pair said twice in a row: `go to the the store` becomes `go to
   the store`, and `we were we were going` becomes `we were going`. It is a
@@ -955,7 +970,8 @@ How it is built:
   whatever the transcript's language, so a word in another language that is
   spelled like one on the list (French `on on`) can be shortened too.
   Nothing stored changes. Repeat removal is
-  not available with a translation or the `blocks` style.
+  not available with a translation or the `blocks` style. It works on `md`
+  turns, `txt` with `style=turns`, and read mode.
 - **Translations.** With `?lang=`, each translated line stays whole under its
   line's speaker. Translated text has no word timings.
 
@@ -976,8 +992,44 @@ The transcript view route serves the same turns as an on-screen **read mode**:
 paragraph per speaker turn with the name in bold, server-side with no
 JavaScript, gated by `&timestamps=false` for a view without clocks or minute
 markers. Read mode and the default `turns` Markdown export use the same `layout_turns`
-paragraphs. Opt-in filler and repeat removal apply only to the export; read
-mode keeps the fillers and repeats.
+paragraphs.
+
+Read mode takes the same two filters as query parameters, `&fillers=drop` and
+`&repeats=drop`, and shows a link for each ("Remove filler words" / "Show
+filler words", "Remove repeated words" / "Show repeated words"). The filtered
+paragraphs come from the same code path as the `turns` exports, so the page and
+a download with the same options hold the same words. With a filter on:
+
+- One line under the menu says how many words were left out, for example "Left
+  out 4 filler words and 1 repeated word. The saved transcript is unchanged."
+  The count is of words: punctuation that went with a filler is not counted.
+  Repeats are counted after fillers are removed.
+- If the filters remove every word, the page says "The filters left out every
+  word. The saved transcript is unchanged."
+- The Download transcript menu's Markdown links and reading-copy `txt` links
+  carry the active filters, and those `txt` links add `style=turns`. "Read on
+  screen" keeps the filters too. The timed `txt`, subtitle, `json`, `rttm` and
+  translated links are unchanged. The menu's main links always download the
+  reviewed (`corrected`) text, whichever tab the page shows. To download the
+  `enhanced` or `raw` text the page shows, use "Other text variants", whose
+  reading copies carry the filters too.
+- An unknown value (`fillers=bogus`) returns 422.
+
+#### Plain text in the `turns` layout
+
+`--format txt --style turns` (`?style=turns`) writes the same paragraphs as the
+Markdown `turns` style as plain text: `[HH:MM:SS] Name: text`, one paragraph per
+line with a blank line between paragraphs, no title line and no Markdown
+escaping. `--no-timestamps` removes the clocks and minute markers. With a
+console translation (`?lang=`), the translated turns are written the same way.
+
+This layout differs from the default `txt` in more than line breaks. The default
+gives each transcript segment to one speaker and prints its start and end time.
+The `turns` layout assigns speakers word by word and prints each paragraph's
+start clock. A diff between the two shows layout and attribution changes on top
+of any words a filter removed. That is why a filter on `txt` needs an explicit
+`style=turns`: a filter never changes the layout on its own. If every word is
+filtered out, the file is empty.
 
 ### The browser console
 
@@ -2084,7 +2136,7 @@ by their per-run claim token.
 | `GET /runs` | Canonical lifecycle browser: `view=needs_attention\|active\|failed\|all` tabs, collapsible filters, and a pipeline health summary |
 | `GET /jobs`, `GET /jobs/{run_id}` | Compatibility routes; 303 redirects to `/runs` or `/runs/{run_id}` |
 | `GET /runs/{run_id}` | Run detail; the per-stage attempt ledger is in the collapsed Technical details section |
-| `GET /runs/{run_id}/transcript?read=1&text=raw\|enhanced` | Read-mode transcript (HTML); add `&timestamps=false` for the prose view. Without `read=1` it redirects (302) into the run's media editor |
+| `GET /runs/{run_id}/transcript?read=1&text=raw\|enhanced` | Read-mode transcript (HTML); add `&timestamps=false` for the prose view, `&fillers=drop` or `&repeats=drop` to leave those words out. Without `read=1` it redirects (302) into the run's media editor |
 | `POST /runs/{run_id}/requeue` | Exact-revision (CAS) requeue of a FAILED run |
 | `POST /runs/bulk-retry` | Bulk retry for a grouped failure on the Failed tab; each item carries its expected revision |
 | `GET /review` | 303 redirect to `/media` |

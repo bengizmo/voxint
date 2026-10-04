@@ -3227,23 +3227,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--style",
         choices=["turns", "blocks"],
         help=(
-            "Markdown layout, --format md only (default: turns; blocks uses a speaker"
+            "Layout for md, or explicit turns for txt (md default: turns; blocks uses a speaker"
             " heading over a blockquote per segment run; turns assigns"
-            " speakers word by word and writes '[HH:MM:SS] **Name:** text'"
-            " paragraphs)"
+            " speakers word by word and writes paragraphs with start clocks;"
+            " txt has no header or Markdown emphasis)"
         ),
     )
     export_p.add_argument(
         "--drop-fillers",
         action="store_true",
-        help="remove standalone um/uh and friends from the Markdown turns export (md turns only)",
+        help="remove standalone um/uh and friends from md turns or txt --style turns",
     )
     export_p.add_argument(
         "--drop-repeats",
         action="store_true",
         help=(
             "remove an immediately repeated word or word pair such as 'the the' from the"
-            " Markdown turns export (md turns only)"
+            " md turns or txt --style turns export"
         ),
     )
     export_p.add_argument(

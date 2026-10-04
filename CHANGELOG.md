@@ -7,6 +7,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Filler and repeated-word removal in the reading view** (#754). The on-screen
+  reading view has two new links, "Remove filler words" and "Remove repeated
+  words" (`&fillers=drop`, `&repeats=drop`). A line on the page says how many
+  words were left out. While a filter is on, the Download transcript menu's
+  Markdown links and plain-text reading copies leave out the same words. The
+  menu's main links still download the reviewed text; the enhanced and raw
+  copies are under "Other text variants". Nothing stored changes.
+- **A paragraph layout for the plain-text export** (#754). `--format txt
+  --style turns` (`?style=turns` on the console and `/api/v1` export routes)
+  writes the same speaker paragraphs as the Markdown turns export as plain
+  text, with no title line. It accepts `--drop-fillers` and `--drop-repeats`,
+  and a console translation (`?lang=`). Speakers are assigned word by word and
+  each paragraph carries its start clock, so it differs from the default `txt`
+  in attribution and timing as well as layout. The default `txt` output is
+  unchanged.
 - **Repeated-word removal in the Markdown turns export** (#755). The new
   `--drop-repeats` flag (`?repeats=drop` on the console and `/api/v1` export
   routes) removes the second copy of an English function word or word pair
@@ -16,6 +31,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `had had` and `her her` are left alone. It is separate from `--drop-fillers`
   and can be combined with it. Nothing stored changes, and an export without
   the option is unchanged.
+
+### Changed
+- **Export option error messages name the plain-text turns layout** (#754).
+  A filter outside a turns layout now returns `fillers applies to md turns and
+  txt turns only` (the same for `repeats`), in place of `fillers applies to the
+  md turns style only`. A style on a subtitle, JSON or RTTM export returns
+  `style applies to the md and txt formats only`, in place of `style applies to
+  the md format only`. Scripts that match the old text need updating.
 
 ### Fixed
 - **Large browser uploads no longer time out after 5 minutes.** The upload

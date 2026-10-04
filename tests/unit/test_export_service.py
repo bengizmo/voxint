@@ -12,10 +12,35 @@ from voxint.export.service import (
     ExportOptionError,
     MarkdownStyle,
     parse_fillers,
+    parse_filter_value,
     parse_repeats,
     parse_style,
     render_run_transcript,
 )
+
+
+@pytest.mark.parametrize("name", ["fillers", "repeats"])
+@pytest.mark.parametrize(
+    "raw, expected", [(None, False), ("", False), ("keep", False), ("drop", True)]
+)
+def test_filter_value(name: str, raw: str | None, expected: bool) -> None:
+    assert parse_filter_value(name, raw) is expected
+
+
+@pytest.mark.parametrize("name", ["fillers", "repeats"])
+@pytest.mark.parametrize("raw", ["bogus", "DROP", " keep"])
+def test_filter_value_unknown(name: str, raw: str) -> None:
+    with pytest.raises(ExportOptionError) as exc:
+        parse_filter_value(name, raw)
+    assert str(exc.value) == f"unknown {name} value {raw!r}; valid: keep, drop"
+
+
+@pytest.mark.parametrize("name", ["fillers", "repeats"])
+def test_filter_layout_error_precedes_value_error(name: str) -> None:
+    parser = parse_fillers if name == "fillers" else parse_repeats
+    with pytest.raises(ExportOptionError) as exc:
+        parser("bogus", TranscriptFormat.TXT, None)
+    assert str(exc.value) == f"{name} applies to md turns and txt turns only"
 
 
 @pytest.mark.parametrize("raw", [None, ""])
@@ -29,9 +54,9 @@ def test_style_defaults_to_turns(raw: str | None) -> None:
 @pytest.mark.parametrize("style", ["blocks", "turns"])
 def test_style_values(style: str) -> None:
     assert parse_style(style, TranscriptFormat.MARKDOWN) == style
-    for fmt in (None, TranscriptFormat.TXT, TranscriptFormat.JSON,
+    for fmt in (None, TranscriptFormat.JSON,
                 TranscriptFormat.SRT, TranscriptFormat.VTT):
-        with pytest.raises(ExportOptionError, match="style applies to the md format only"):
+        with pytest.raises(ExportOptionError, match="style applies to the md and txt formats only"):
             parse_style(style, fmt)
 
 
@@ -68,7 +93,7 @@ def test_fillers_absent_for_other_formats(raw: str | None) -> None:
 def test_fillers_wrong_layout(
     raw: str, fmt: TranscriptFormat | None, style: MarkdownStyle | None
 ) -> None:
-    with pytest.raises(ExportOptionError, match="fillers applies to the md turns style only"):
+    with pytest.raises(ExportOptionError, match="fillers applies to md turns and txt turns only"):
         parse_fillers(raw, fmt, style)
 
 
@@ -118,7 +143,7 @@ def test_repeats_values(raw: str | None, expected: bool) -> None:
 def test_repeats_wrong_layout(
     raw: str, fmt: TranscriptFormat | None, style: MarkdownStyle | None
 ) -> None:
-    with pytest.raises(ExportOptionError, match="repeats applies to the md turns style only"):
+    with pytest.raises(ExportOptionError, match="repeats applies to md turns and txt turns only"):
         parse_repeats(raw, fmt, style)
 
 
@@ -153,8 +178,36 @@ def test_renderer_rejects_repeats_with_translation_before_loading(
 
 def test_renderer_rejects_repeats_outside_md_turns_before_loading() -> None:
     session = Mock()
-    with pytest.raises(ExportOptionError, match="repeats applies to the md turns style only"):
+    with pytest.raises(ExportOptionError, match="repeats applies to md turns and txt turns only"):
         render_run_transcript(
             session, uuid.uuid4(), TranscriptFormat.TXT, text=TranscriptText.RAW, drop_repeats=True
         )
     assert not session.mock_calls
+
+
+def test_txt_turns_style() -> None:
+    assert parse_style("turns", TranscriptFormat.TXT) is MarkdownStyle.TURNS
+
+
+@pytest.mark.parametrize("raw", ["blocks", "bogus", "TURNS"])
+def test_txt_rejects_other_styles(raw: str) -> None:
+    with pytest.raises(ExportOptionError) as exc:
+        parse_style(raw, TranscriptFormat.TXT)
+    assert str(exc.value) == f"unknown style {raw!r} for txt; valid: turns"
+
+
+@pytest.mark.parametrize("name", ["fillers", "repeats"])
+@pytest.mark.parametrize(
+    "raw, expected", [(None, False), ("", False), ("keep", False), ("drop", True)]
+)
+def test_txt_turn_filters(name: str, raw: str | None, expected: bool) -> None:
+    parser = parse_fillers if name == "fillers" else parse_repeats
+    assert parser(raw, TranscriptFormat.TXT, MarkdownStyle.TURNS) is expected
+
+
+@pytest.mark.parametrize("name", ["fillers", "repeats"])
+def test_txt_turn_filter_unknown(name: str) -> None:
+    parser = parse_fillers if name == "fillers" else parse_repeats
+    with pytest.raises(ExportOptionError) as exc:
+        parser("bogus", TranscriptFormat.TXT, MarkdownStyle.TURNS)
+    assert str(exc.value) == f"unknown {name} value 'bogus'; valid: keep, drop"

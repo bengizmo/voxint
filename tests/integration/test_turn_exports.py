@@ -107,12 +107,12 @@ def test_invalid_style_options(
         pytest.fail("invalid CLI options must not touch the database")
 
     monkeypatch.setattr("voxint.cli._engine_or_report", no_db)
-    assert main(["export", str(uuid.uuid4()), "--format", "txt", "--style", "turns"]) == 2
-    assert "style applies to the md format only" in capsys.readouterr().out
+    assert main(["export", str(uuid.uuid4()), "--format", "srt", "--style", "turns"]) == 2
+    assert "style applies to the md and txt formats only" in capsys.readouterr().out
     with session_factory() as session:
         run_id = seed_words(session)
     client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
-    for fmt, style in (("txt", "turns"), ("rttm", "blocks"), ("md", "bogus")):
+    for fmt, style in (("txt", "blocks"), ("rttm", "blocks"), ("md", "bogus")):
         response = client.get(f"/api/v1/runs/{run_id}/transcript",
                               params={"format": fmt, "style": style}, auth=None,
                               headers={"Authorization": "Bearer synthetic-api-key"})
@@ -297,20 +297,20 @@ def test_fillers_refusal_matrix(
         ["--format", "md", "--style", "blocks"],
     ):
         assert main(["export", str(uuid.uuid4()), "--drop-fillers", *args]) == 2
-        assert capsys.readouterr().out == "error: fillers applies to the md turns style only\n"
+        assert capsys.readouterr().out == "error: fillers applies to md turns and txt turns only\n"
     with session_factory() as session:
         run_id = seed_words(session)
         record_spanish(session, run_id)
         session.commit()
     client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
     cases = [
-        (fmt, {"fillers": "drop"}, "fillers applies to the md turns style only")
+        (fmt, {"fillers": "drop"}, "fillers applies to md turns and txt turns only")
         for fmt in ("txt", "rttm", "srt", "vtt", "json")
     ] + [
         (
             "md",
             {"fillers": "drop", "style": "blocks"},
-            "fillers applies to the md turns style only",
+            "fillers applies to md turns and txt turns only",
         ),
         ("md", {"fillers": "bogus"}, "unknown fillers value 'bogus'; valid: keep, drop"),
     ]
@@ -435,17 +435,17 @@ def test_repeats_refusal_matrix(
         ["--format", "md", "--style", "blocks"],
     ):
         assert main(["export", str(uuid.uuid4()), "--drop-repeats", *args]) == 2
-        assert capsys.readouterr().out == "error: repeats applies to the md turns style only\n"
+        assert capsys.readouterr().out == "error: repeats applies to md turns and txt turns only\n"
     assert main(
         ["export", str(uuid.uuid4()), "--drop-fillers", "--drop-repeats", "--format", "txt"]
     ) == 2
-    assert capsys.readouterr().out == "error: fillers applies to the md turns style only\n"
+    assert capsys.readouterr().out == "error: fillers applies to md turns and txt turns only\n"
     with session_factory() as session:
         run_id = seed_words(session)
         record_spanish(session, run_id)
         session.commit()
     client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
-    only = "repeats applies to the md turns style only"
+    only = "repeats applies to md turns and txt turns only"
     cases = [(fmt, {"repeats": value}, only) for fmt in ("txt", "rttm", "srt", "vtt", "json")
              for value in ("drop", "keep")] + [
         ("md", {"repeats": "drop", "style": "blocks"}, only),
@@ -454,7 +454,7 @@ def test_repeats_refusal_matrix(
         (
             "txt",
             {"fillers": "drop", "repeats": "drop"},
-            "fillers applies to the md turns style only",
+            "fillers applies to md turns and txt turns only",
         ),
     ]
     for lang_params, detail in (
@@ -646,3 +646,273 @@ def test_repeats_declined_only_is_byte_identical_and_seams_hold(
         # "the the" apart, so repeats change nothing after fillers.
         assert both == fillers
         assert b"we were we were we the the end." in both
+
+
+@pytest.mark.parametrize(
+    "timestamps, golden",
+    [(True, b"[     0.00      5.00] Alex: Hello there.\n"),
+     (False, b"Alex: Hello there.\n")],
+)
+def test_default_txt_fixed_golden(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, timestamps: bool, golden: bytes,
+) -> None:
+    with session_factory() as session:
+        run_id = seed_words(session)
+    client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
+    monkeypatch.setattr("voxint.cli._engine_or_report", lambda: (
+        create_engine(session_factory.kw["bind"].url), 0,
+    ))
+    path = tmp_path / "default.txt"
+    args = ["export", str(run_id), "--format", "txt", "-o", str(path)]
+    if not timestamps:
+        args.append("--no-timestamps")
+    assert main(args) == 0
+    params = {"timestamps": str(timestamps).lower()}
+    console = client.get(f"/review/{run_id}/export.txt", params=params)
+    public = client.get(
+        f"/api/v1/runs/{run_id}/transcript", params={"format": "txt", **params},
+        auth=None, headers={"Authorization": "Bearer synthetic-api-key"},
+    )
+    assert console.status_code == public.status_code == 200
+    assert path.read_bytes() == console.content == public.content == golden
+
+
+_TXT_TURNS_GOLDENS = {
+    ("raw", True, False): (
+        "[00:00:00] Alex: Go to the the store. We we left.\n\n[00:00:01] Sam: There.\n",
+        "Alex: Go to the the store. We we left.\n\nSam: There.\n",
+    ),
+    ("raw", False, True): (
+        "[00:00:00] Alex: Go to the store. We um we left.\n\n[00:00:01] Sam: There.\n",
+        "Alex: Go to the store. We um we left.\n\nSam: There.\n",
+    ),
+    ("raw", True, True): (
+        "[00:00:00] Alex: Go to the store. We left.\n\n[00:00:01] Sam: There.\n",
+        "Alex: Go to the store. We left.\n\nSam: There.\n",
+    ),
+    ("enhanced", True, False): (
+        "[00:00:00] Alex: Go to to the shop. We we left. There.\n",
+        "Alex: Go to to the shop. We we left. There.\n",
+    ),
+    ("enhanced", False, True): (
+        "[00:00:00] Alex: Go to the shop. We uh we left. There.\n",
+        "Alex: Go to the shop. We uh we left. There.\n",
+    ),
+    ("enhanced", True, True): (
+        "[00:00:00] Alex: Go to the shop. We left. There.\n",
+        "Alex: Go to the shop. We left. There.\n",
+    ),
+    ("corrected", True, False): (
+        "[00:00:00] Alex: Go to the the market. We we left. There.\n",
+        "Alex: Go to the the market. We we left. There.\n",
+    ),
+    ("corrected", False, True): (
+        "[00:00:00] Alex: Go to the market. We erm we left. There.\n",
+        "Alex: Go to the market. We erm we left. There.\n",
+    ),
+    ("corrected", True, True): (
+        "[00:00:00] Alex: Go to the market. We left. There.\n",
+        "Alex: Go to the market. We left. There.\n",
+    ),
+}
+
+
+@pytest.mark.parametrize("timestamps", [True, False])
+@pytest.mark.parametrize("variant, fillers, repeats", _TXT_TURNS_GOLDENS)
+def test_txt_turns_three_surface_goldens_and_storage(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, timestamps: bool, variant: str, fillers: bool, repeats: bool,
+) -> None:
+    with session_factory() as session:
+        run_id = seed_words(session)
+        segment = session.scalars(select(TranscriptSegment).where(
+            TranscriptSegment.pipeline_run_id == run_id,
+        )).one()
+        segment.raw_text = "".join(word for word, _ in _REPEAT_WORDS)
+        segment.words = [
+            {"word": word, "start": start, "end": start + 0.1}
+            for word, start in _REPEAT_WORDS
+        ]
+        segment.enhanced_text = "Go to to the shop. We uh we left. There."
+        segment_id = segment.id
+        session.add(SegmentReviewState(
+            transcript_segment_id=segment_id, pipeline_run_id=run_id,
+            corrected_text="Go to the the market. We erm we left. There.",
+            corrected_at=datetime.now(UTC),
+        ))
+        session.commit()
+
+    def snapshot() -> tuple[object, ...]:
+        with session_factory() as session:
+            stored = session.get(TranscriptSegment, segment_id)
+            assert stored is not None
+            review = session.scalars(select(SegmentReviewState).where(
+                SegmentReviewState.pipeline_run_id == run_id,
+            )).one()
+            return (stored.raw_text, stored.enhanced_text, stored.words,
+                    review.corrected_text, review.corrected_at, review.verified_at)
+
+    before = snapshot()
+    client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
+    monkeypatch.setattr("voxint.cli._engine_or_report", lambda: (
+        create_engine(session_factory.kw["bind"].url), 0,
+    ))
+    path = tmp_path / "turns.txt"
+    args = ["export", str(run_id), "--format", "txt", "--style", "turns",
+            "--text", variant, "-o", str(path)]
+    params = {"style": "turns", "text": variant, "timestamps": str(timestamps).lower()}
+    for name, active in (("fillers", fillers), ("repeats", repeats)):
+        if active:
+            args.append(f"--drop-{name}")
+            params[name] = "drop"
+    if not timestamps:
+        args.append("--no-timestamps")
+    assert main(args) == 0
+    console = client.get(f"/review/{run_id}/export.txt", params=params)
+    public = client.get(
+        f"/api/v1/runs/{run_id}/transcript", params={"format": "txt", **params},
+        auth=None, headers={"Authorization": "Bearer synthetic-api-key"},
+    )
+    assert console.status_code == public.status_code == 200
+    golden = _TXT_TURNS_GOLDENS[variant, fillers, repeats][0 if timestamps else 1].encode()
+    assert path.read_bytes() == console.content == public.content == golden
+    markdown = client.get(f"/review/{run_id}/export.md", params=params)
+    assert markdown.status_code == 200
+    assert markdown.text.split("\n\n", 1)[1].replace("**", "") == console.text
+    assert snapshot() == before
+
+
+@pytest.mark.parametrize("timestamps", [True, False])
+@pytest.mark.parametrize("split", [True, False])
+def test_txt_translated_turns(
+    session_factory: sessionmaker[Session], timestamps: bool, split: bool,
+) -> None:
+    with session_factory() as session:
+        run_id = seed_words(session, split=split)
+        record_spanish(session, run_id)
+        session.commit()
+    client = _build_client(session_factory)
+    golden = {
+        (True, True): "[00:00:00] Alex: ES:Hello\n\n[00:00:01] Sam: ES:there.\n",
+        (True, False): "[00:00:00] Alex: ES:Hello there.\n",
+        (False, True): "Alex: ES:Hello\n\nSam: ES:there.\n",
+        (False, False): "Alex: ES:Hello there.\n",
+    }[timestamps, split]
+    params = {"style": "turns", "lang": "es", "timestamps": str(timestamps).lower()}
+    for filters in ({}, {"fillers": "keep"}, {"repeats": "keep"},
+                    {"fillers": "keep", "repeats": "keep"}):
+        response = client.get(f"/review/{run_id}/export.txt", params={**params, **filters})
+        assert response.status_code == 200
+        assert response.content == golden.encode()
+    for name in ("fillers", "repeats"):
+        response = client.get(f"/review/{run_id}/export.txt", params={**params, name: "drop"})
+        assert response.status_code == 422
+        assert response.json()["detail"] == f"{name} cannot be combined with a translation"
+
+
+def test_txt_turns_all_filtered_is_empty(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    with session_factory() as session:
+        run_id = seed_words(session)
+        segment = session.scalars(select(TranscriptSegment).where(
+            TranscriptSegment.pipeline_run_id == run_id,
+        )).one()
+        segment.raw_text = "um uh"
+        segment.words = [
+            {"word": "um", "start": 0, "end": 1},
+            {"word": " uh", "start": 1, "end": 2},
+        ]
+        session.commit()
+    client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
+    monkeypatch.setattr("voxint.cli._engine_or_report", lambda: (
+        create_engine(session_factory.kw["bind"].url), 0,
+    ))
+    path = tmp_path / "empty.txt"
+    assert main(["export", str(run_id), "--format", "txt", "--style", "turns",
+                 "--drop-fillers", "-o", str(path)]) == 0
+    params = {"style": "turns", "fillers": "drop"}
+    console = client.get(f"/review/{run_id}/export.txt", params=params)
+    public = client.get(
+        f"/api/v1/runs/{run_id}/transcript", params={"format": "txt", **params},
+        auth=None, headers={"Authorization": "Bearer synthetic-api-key"},
+    )
+    assert console.status_code == public.status_code == 200
+    assert path.read_bytes() == console.content == public.content == b""
+
+
+@pytest.mark.parametrize("name", ["fillers", "repeats"])
+@pytest.mark.parametrize("value", ["keep", "drop"])
+@pytest.mark.parametrize("fmt, style", [
+    ("txt", None), ("srt", None), ("vtt", None), ("json", None),
+    ("rttm", None), ("md", "blocks"),
+])
+def test_turn_filter_complete_refusal_matrix(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], name: str, value: str, fmt: str, style: str | None,
+) -> None:
+    def no_db() -> None:
+        pytest.fail("invalid CLI filter options must not touch the database")
+
+    monkeypatch.setattr("voxint.cli._engine_or_report", no_db)
+    detail = f"{name} applies to md turns and txt turns only"
+    # CLI has only the drop flag; keep is an HTTP option.
+    if value == "drop":
+        args = ["export", str(uuid.uuid4()), "--format", fmt, f"--drop-{name}"]
+        if style:
+            args += ["--style", style]
+        assert main(args) == 2
+        assert capsys.readouterr().out == f"error: {detail}\n"
+    with session_factory() as session:
+        run_id = seed_words(session)
+    client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
+    params = {name: value}
+    if style:
+        params["style"] = style
+    for requested_id, status in ((run_id, 422), (uuid.uuid4(), 404)):
+        console = client.get(f"/review/{requested_id}/export.{fmt}", params=params)
+        assert console.status_code == status
+        if status == 422:
+            assert console.json()["detail"] == detail
+        public = client.get(
+            f"/api/v1/runs/{requested_id}/transcript", params={"format": fmt, **params},
+            auth=None, headers={"Authorization": "Bearer synthetic-api-key"},
+        )
+        assert public.status_code == 422
+        assert public.json()["error"]["message"] == detail
+
+
+@pytest.mark.parametrize("fmt, style, detail", [
+    ("txt", "blocks", "unknown style 'blocks' for txt; valid: turns"),
+    ("txt", "bogus", "unknown style 'bogus' for txt; valid: turns"),
+    ("md", "bogus", "unknown style 'bogus'; valid: turns, blocks"),
+    *[(fmt, style, "style applies to the md and txt formats only")
+      for fmt in ("srt", "vtt", "json", "rttm") for style in ("turns", "blocks")],
+])
+def test_turn_style_error_contract(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], fmt: str, style: str, detail: str,
+) -> None:
+    def no_db() -> None:
+        pytest.fail("invalid CLI style must not touch the database")
+
+    monkeypatch.setattr("voxint.cli._engine_or_report", no_db)
+    if style != "bogus":  # argparse restricts CLI choices to turns|blocks.
+        assert main(["export", str(uuid.uuid4()), "--format", fmt, "--style", style]) == 2
+        assert capsys.readouterr().out == f"error: {detail}\n"
+    with session_factory() as session:
+        run_id = seed_words(session)
+    client = _build_client(session_factory, voxint_api_key="synthetic-api-key")
+    for requested_id, status in ((run_id, 422), (uuid.uuid4(), 404)):
+        console = client.get(f"/review/{requested_id}/export.{fmt}", params={"style": style})
+        assert console.status_code == status
+        if status == 422:
+            assert console.json()["detail"] == detail
+        public = client.get(
+            f"/api/v1/runs/{requested_id}/transcript",
+            params={"format": fmt, "style": style}, auth=None,
+            headers={"Authorization": "Bearer synthetic-api-key"},
+        )
+        assert public.status_code == 422
+        assert public.json()["error"]["message"] == detail

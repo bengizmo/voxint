@@ -314,6 +314,38 @@ the editor's `claim` and `refresh`):
   "S1":{"decision":"assign","speaker":"Blair Roster"}}}'
 ```
 
+### Cleanup fixture (#754)
+
+Seed with `--fixture cleanup` and open
+`/runs/<RUN_ID>/transcript?text=corrected&read=1&timestamps=false`.
+The four segments have faithful word timings and two speakers. Segment 0 keeps
+its `everyone` to `everybody` correction. This lane only reads data.
+
+- Drive all four filter states using **Remove/Show filler words** and
+  **Remove/Show repeated words**. With both on, expect `S0: Hello everybody,
+  we go we`, an unnamed continuation `we stay.`, and `S1: You know.`. The two
+  occurrences of `we` across the removed S1 filler turn must both survive.
+- Check counts: fillers only leaves out 3 filler words; repeats only leaves
+  out 2 repeated words; both leaves out 3 filler words and 2 repeated words.
+  Each note starts with `Left out` and ends with `The saved transcript is
+  unchanged.` Neither filter on shows no note.
+- Switch raw, enhanced and corrected tabs, then toggle timestamps. Each link
+  keeps both active filter states. Raw uses `everyone`; enhanced and corrected
+  use `everybody`.
+- Check every menu href: Markdown copies carry the active filters, reading-copy
+  txt links also carry `style=turns`, and **Read on screen** keeps the filters.
+  Timed txt, subtitle, data and translated links keep their original options.
+  The filtered menu says `Reading copies leave out the same words as this page.`
+- On corrected text with timestamps hidden, fetch the menu's Markdown reading
+  copy and compare its speaker and continuation paragraphs with the page.
+  The primary menu links always use corrected text, including from other tabs.
+- This fixture retains ordinary words in every state, so it cannot exercise
+  `The filters left out every word. The saved transcript is unchanged.`
+  That case remains covered by the integration test's filler-only run.
+
+Reconcile with no edits: `verified_segment_indexes: []`, `corrections: {}`,
+`progress: {verified: 0, total: 4}`, and `expected_annotations: 0`.
+
 ### Media library (#646, #682)
 
 The Media library is always on (#682 removed its flag), so every review entry
