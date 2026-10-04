@@ -2241,6 +2241,7 @@ def _export(args: argparse.Namespace) -> int:
     from voxint.db.models import PipelineRun
     from voxint.db.session import build_session_factory
     from voxint.export import TranscriptFormat
+    from voxint.export.filler_lists import DEFAULT_FILLER_LIST
     from voxint.export.service import (
         parse_fillers,
         parse_repeats,
@@ -2285,7 +2286,7 @@ def _export(args: argparse.Namespace) -> int:
                     text=variant,
                     timestamps=args.timestamps,
                     style=style,
-                    drop_fillers=drop_fillers,
+                    fillers=DEFAULT_FILLER_LIST if drop_fillers else None,
                     drop_repeats=drop_repeats,
                 )
     finally:

@@ -1,5 +1,7 @@
 """Synthetic F1-F6 cases for word-level, coarse and mixed turns."""
 
+import random
+import re
 from collections.abc import Callable
 from dataclasses import replace
 
@@ -7,8 +9,15 @@ import pytest
 
 from voxint.adjudication.turns import PieceRule, SpeakerTurn, TextMapping, TurnPiece, join_pieces
 from voxint.export import to_markdown_turns
-from voxint.export.fillers import drop_fillers, drop_fillers_with_seams
+from voxint.export.filler_lists import DEFAULT_FILLER_LIST, TIER_1, effective_filler_list
+from voxint.export.fillers import (
+    _clean_indexed,
+    _word_pattern,
+    drop_fillers,
+    drop_fillers_with_seams,
+)
 from voxint.export.reading import layout_turns
+from voxint.export.turn_filters import apply_turn_filters
 
 
 def piece(text: str, index: int = 0, *, coarse: bool = False, boundary: bool = False) -> TurnPiece:
@@ -28,7 +37,10 @@ def turn(*pieces: TurnPiece, name: str = "Alex") -> SpeakerTurn:
 
 
 def cleaned(text: str) -> str:
-    return "".join(join_pieces(t.pieces) for t in drop_fillers([turn(piece(text, coarse=True))]))
+    return "".join(
+        join_pieces(t.pieces)
+        for t in drop_fillers([turn(piece(text, coarse=True))], fillers=DEFAULT_FILLER_LIST)
+    )
 
 
 @pytest.mark.parametrize("word", ["um", "uh", "umm", "uhh", "uhm", "erm"])
@@ -157,7 +169,7 @@ def test_f3_word_units(texts: tuple[str, ...], boundaries: tuple[bool, ...], exp
     original = turn(
         *(piece(t, i, boundary=b) for i, (t, b) in enumerate(zip(texts, boundaries, strict=True)))
     )
-    result = drop_fillers([original])
+    result = drop_fillers([original], fillers=DEFAULT_FILLER_LIST)
     assert join_pieces(result[0].pieces) == expected
     for survivor in result[0].pieces:
         assert (
@@ -177,38 +189,56 @@ def test_f5_empty_turns_merge_by_identity_in_order() -> None:
             turn(piece(" um, uh.", 1), name="Sam"),
             turn(last),
             turn(piece(" erm", 3), name="Jo"),
-        ]
+        ],
+        fillers=DEFAULT_FILLER_LIST,
     )
     assert result == [turn(first, last)]
-    assert drop_fillers([turn(piece(" \n")), turn(piece("")), turn(piece("um"))]) == []
+    assert (
+        drop_fillers(
+            [turn(piece(" \n")), turn(piece("")), turn(piece("um"))], fillers=DEFAULT_FILLER_LIST
+        )
+        == []
+    )
     # Punctuation around a removed filler does not keep a turn alive.
     for text in ('"um,', "(uh", "um, ...", "Um. Uh?", "\u201cerm, uh!"):
-        assert drop_fillers([turn(piece(text, coarse=True))]) == [], text
+        assert drop_fillers([turn(piece(text, coarse=True))], fillers=DEFAULT_FILLER_LIST) == [], (
+            text
+        )
 
 
 def test_f5_merged_turns_keep_a_separator_and_are_cleaned_as_one() -> None:
     # The dropped middle turn owned the only whitespace at the seam.
     glued = drop_fillers(
-        [turn(piece("yes")), turn(piece("um ", 1), name="Sam"), turn(piece("right", 2))]
+        [turn(piece("yes")), turn(piece("um ", 1), name="Sam"), turn(piece("right", 2))],
+        fillers=DEFAULT_FILLER_LIST,
     )
     assert join_pieces(glued[0].pieces) == "yes right"
     assert glued[0].pieces[1] == replace(piece("right", 2), text=" right")
     # Whatever whitespace either side carries, the seam holds one space, on the right.
     for left, right in (("Hello ", " world"), ("Hello ", "world"), ("Hello  ", "\n\nworld")):
         merged = drop_fillers(
-            [turn(piece(left)), turn(piece(" um,", 1), name="Sam"), turn(piece(right, 2))]
+            [turn(piece(left)), turn(piece(" um,", 1), name="Sam"), turn(piece(right, 2))],
+            fillers=DEFAULT_FILLER_LIST,
         )
         assert merged[0].pieces == (piece("Hello"), replace(piece(right, 2), text=" world"))
     # A filler at the seam is judged against the merged text, not a turn start.
-    mid = drop_fillers([
-        turn(piece(" yes")), turn(piece(" uh,", 1), name="Sam"),
-        turn(piece(" um", 2), piece(" right", 3)),
-    ])
+    mid = drop_fillers(
+        [
+            turn(piece(" yes")),
+            turn(piece(" uh,", 1), name="Sam"),
+            turn(piece(" um", 2), piece(" right", 3)),
+        ],
+        fillers=DEFAULT_FILLER_LIST,
+    )
     assert [join_pieces(t.pieces) for t in mid] == [" yes right"]
-    start = drop_fillers([
-        turn(piece("Yes.")), turn(piece(" uh", 1), name="Sam"),
-        turn(piece(" um", 2), piece(" right", 3)),
-    ])
+    start = drop_fillers(
+        [
+            turn(piece("Yes.")),
+            turn(piece(" uh", 1), name="Sam"),
+            turn(piece(" um", 2), piece(" right", 3)),
+        ],
+        fillers=DEFAULT_FILLER_LIST,
+    )
     assert [join_pieces(t.pieces) for t in start] == ["Yes. Right"]
     assert start[0].pieces == (piece("Yes."), replace(piece(" right", 3), text=" Right"))
 
@@ -217,9 +247,11 @@ def test_f5_three_speakers_and_same_display_name() -> None:
     alex = turn(piece("Hello"))
     sam = turn(piece(" there", 2), name="Sam")
     jo = turn(piece(" Next", 3), name="Jo")
-    assert drop_fillers([alex, turn(piece("um"), name="Jo"), sam, jo]) == [alex, sam, jo]
+    assert drop_fillers(
+        [alex, turn(piece("um"), name="Jo"), sam, jo], fillers=DEFAULT_FILLER_LIST
+    ) == [alex, sam, jo]
     same_name = replace(sam, speaker="Alex")
-    assert drop_fillers([alex, same_name]) == [alex, same_name]
+    assert drop_fillers([alex, same_name], fillers=DEFAULT_FILLER_LIST) == [alex, same_name]
 
 
 def test_f6_no_filler_bytes_and_metadata_unchanged() -> None:
@@ -230,13 +262,13 @@ def test_f6_no_filler_bytes_and_metadata_unchanged() -> None:
             piece("Coarse  text", 2, coarse=True, boundary=True),
         )
     ]
-    result = drop_fillers(original)
+    result = drop_fillers(original, fillers=DEFAULT_FILLER_LIST)
     assert result == original
     assert join_pieces(result[0].pieces) == join_pieces(original[0].pieces)
     assert to_markdown_turns(layout_turns(result), header="Synthetic") == (
         to_markdown_turns(layout_turns(original), header="Synthetic")
     )
-    assert drop_fillers([]) == []
+    assert drop_fillers([], fillers=DEFAULT_FILLER_LIST) == []
 
 
 def test_mixed_grain_and_punctuation_move_preserve_metadata() -> None:
@@ -246,7 +278,7 @@ def test_mixed_grain_and_punctuation_move_preserve_metadata() -> None:
         piece(" um, so we start", 2, coarse=True, boundary=True),
         piece(" now", 3),
     )
-    result = drop_fillers([original])[0]
+    result = drop_fillers([original], fillers=DEFAULT_FILLER_LIST)[0]
     assert join_pieces(result.pieces) == "Yes. So we start now"
     assert result.pieces == (
         replace(original.pieces[0], text="Yes."),
@@ -257,7 +289,8 @@ def test_mixed_grain_and_punctuation_move_preserve_metadata() -> None:
 
 def test_seams_mark_where_a_dropped_turn_joined_two_turns() -> None:
     result = drop_fillers_with_seams(
-        [turn(piece("Hello", 0)), turn(piece(" um", 1), name="Sam"), turn(piece(" there", 2))]
+        [turn(piece("Hello", 0)), turn(piece(" um", 1), name="Sam"), turn(piece(" there", 2))],
+        fillers=DEFAULT_FILLER_LIST,
     )
 
     assert [(join_pieces(t.pieces), seams) for t, seams in result] == [
@@ -271,7 +304,8 @@ def test_seam_moves_to_first_survivor_when_the_joined_head_is_a_filler() -> None
             turn(piece("so", 0), piece(" yes", 1)),
             turn(piece(" um", 2), name="Sam"),
             turn(piece(" um", 3), piece(" right", 4)),
-        ]
+        ],
+        fillers=DEFAULT_FILLER_LIST,
     )
 
     assert [(join_pieces(t.pieces), seams) for t, seams in result] == [
@@ -280,9 +314,212 @@ def test_seam_moves_to_first_survivor_when_the_joined_head_is_a_filler() -> None
 
 
 def test_no_seams_without_a_merge() -> None:
-    result = drop_fillers_with_seams([turn(piece("um so")), turn(piece(" yes", 1), name="Sam")])
+    result = drop_fillers_with_seams(
+        [turn(piece("um so")), turn(piece(" yes", 1), name="Sam")], fillers=DEFAULT_FILLER_LIST
+    )
 
     assert [seams for _, seams in result] == [frozenset(), frozenset()]
     assert [t for t, _ in result] == drop_fillers(
-        [turn(piece("um so")), turn(piece(" yes", 1), name="Sam")]
+        [turn(piece("um so")), turn(piece(" yes", 1), name="Sam")], fillers=DEFAULT_FILLER_LIST
     )
+
+
+# The original production literal is retained only as a regression oracle.
+_OLD_FILLER = re.compile(
+    r"""(?<!\S)(["'(\[\u201c\u2018]*)(?:umm|uhh|uhm|erm|um|uh)"""
+    r"""(?:(?P<mark>[,.?!;:])(?=$|\s)|(?=$|\s))\s*""",
+    re.IGNORECASE,
+)
+
+
+def test_default_pattern_equality_and_seeded_soups() -> None:
+    generated = _word_pattern(DEFAULT_FILLER_LIST.words)
+    assert generated.pattern == _OLD_FILLER.pattern
+    assert generated.flags == _OLD_FILLER.flags
+    rng = random.Random(753)
+    tokens = ["um", "uh", "umm", "uhh", "uhm", "erm", "UM", "word", "hmm", "you know"]
+    for _ in range(500):
+        pieces = tuple(
+            piece(
+                rng.choice(["", " ", "\t", "\n"])
+                + rng.choice(['"', "(", "", "["])
+                + rng.choice(tokens)
+                + rng.choice(["", ",", ".", "?", "!", "...", '"', "?!"]),
+                i,
+                boundary=rng.choice([True, False]),
+            )
+            for i in range(rng.randrange(1, 30))
+        )
+        body = join_pieces(pieces)
+        assert [(m.span(), m.groups()) for m in generated.finditer(body)] == [
+            (m.span(), m.groups()) for m in _OLD_FILLER.finditer(body)
+        ]
+
+
+@pytest.mark.parametrize(
+    "text, expected, count",
+    [
+        ("It was, you know, big. You know the rules.", "It was, big. You know the rules.", 2),
+        ("Do you know, sir?", "Do you know, sir?", 0),
+        ("And you know, we left.", "And you know, we left.", 0),
+        (
+            "He lied, you know? Will you come? I guess.",
+            "He lied, you know? Will you come? I guess.",
+            0,
+        ),
+        ("I guess.", "I guess.", 0),
+        ("Fine, you know what I mean, we left.", "Fine, we left.", 5),
+        ('It was, you know" big.', 'It was, you know" big.', 0),
+        ('It was, you know," big.', 'It was, you know," big.', 0),
+        ("It was... you know, big.", "It was... you know, big.", 0),
+        ("It was\u2026 you know, big.", "It was\u2026 you know, big.", 0),
+        ("It was - you know, big.", "It was - you know, big.", 0),
+        ("It was \u2014 you know, big.", "It was \u2014 you know, big.", 0),
+        ("It was \u2013 you know, big.", "It was \u2013 you know, big.", 0),
+        ("It was, you know,, big.", "It was, you know,, big.", 0),
+        ("It was,, you know, big.", "It was,, big.", 2),
+        ("It was, you know, I mean, big.", "It was, big.", 4),
+        ("And you know, I mean, big.", "And you know, big.", 2),
+        ("It was, you\t\nknow, big.", "It was, big.", 2),
+        ("It was, you know.", "It was.", 2),
+        ("You know, it works.", "It works.", 2),
+        ("It was, You Know, big.", "It was, big.", 2),
+        ("It was, you know", "It was,", 2),
+        ("You know", "You know", 0),
+        ("It was, you know; big.", "It was, big.", 2),
+        ("It was, you know: big.", "It was, big.", 2),
+    ],
+)
+def test_phrase_boundaries_and_counts(text: str, expected: str, count: int) -> None:
+    fillers = effective_filler_list(["you know", "I mean", "I guess", "you know what I mean"])
+    result = apply_turn_filters([turn(piece(text))], fillers=fillers, drop_repeats=False)
+    assert [join_pieces(t.pieces) for t in result.turns] == [expected]
+    assert result.fillers_removed == count
+
+
+@pytest.mark.parametrize("boundary", [False, True])
+def test_phrase_piece_ownership_and_pass_composition(boundary: bool) -> None:
+    original = turn(
+        piece("It was,", 0),
+        piece(" you", 1),
+        piece("know," if boundary else " know,", 2, boundary=boundary),
+        piece(" um,", 3),
+        piece(" big.", 4, coarse=True, boundary=True),
+    )
+    fillers = effective_filler_list(["you know"])
+    indexed = _clean_indexed(original.pieces, fillers=fillers)
+    assert indexed == ((0, original.pieces[0]), (4, original.pieces[4]))
+    result = apply_turn_filters([original], fillers=fillers, drop_repeats=False)
+    assert result.turns == [turn(original.pieces[0], original.pieces[4])]
+    assert join_pieces(result.turns[0].pieces) == "It was, big."
+    assert result.fillers_removed == 3
+
+
+def test_phrase_never_crosses_f5_source_seam() -> None:
+    original = [turn(piece("So, you")), turn(piece("um"), name="Sam"), turn(piece("know, yes."))]
+    result = apply_turn_filters(
+        original,
+        fillers=effective_filler_list(["you know"]),
+        drop_repeats=False,
+    )
+    assert [join_pieces(t.pieces) for t in result.turns] == ["So, you know, yes."]
+    assert result.fillers_removed == 1
+
+
+def test_phrase_removal_preserves_repeat_seam_and_counts() -> None:
+    original = [
+        turn(piece("the")),
+        turn(piece("you know,"), name="Sam"),
+        turn(piece("you know,", 2), piece(" the cat", 3)),
+    ]
+    result = apply_turn_filters(
+        original,
+        fillers=effective_filler_list(["you know"]),
+        drop_repeats=True,
+    )
+    # The merged left context conservatively keeps the second phrase.
+    assert [join_pieces(t.pieces) for t in result.turns] == ["the you know, the cat"]
+    assert result.fillers_removed == 2
+    assert result.repeats_removed == 0
+    original = [
+        turn(piece("the")),
+        turn(piece("you know,"), name="Sam"),
+        turn(piece("the cat", 3)),
+    ]
+    result = apply_turn_filters(
+        original,
+        fillers=effective_filler_list(["you know"]),
+        drop_repeats=True,
+    )
+    assert [join_pieces(t.pieces) for t in result.turns] == ["the the cat"]
+    assert result.fillers_removed == 2
+    assert result.repeats_removed == 0
+
+
+def test_keep_um_and_empty_list() -> None:
+    result = apply_turn_filters(
+        [turn(piece("um, uh, yes"))],
+        fillers=effective_filler_list(keep=["um"]),
+        drop_repeats=False,
+    )
+    assert join_pieces(result.turns[0].pieces) == "um, yes"
+    assert result.fillers_removed == 1
+    original = [turn(piece("um, uh, umm uhh uhm erm. you know,"))]
+    result = apply_turn_filters(
+        original, fillers=effective_filler_list(keep=TIER_1), drop_repeats=False
+    )
+    assert result.turns == original
+    assert result.fillers_removed == 0
+
+
+@pytest.mark.parametrize("text", ['"um,', "(uh", "um, ...", "Um. Uh?", "\u201cerm, uh!"])
+def test_single_word_filler_only_turns_drop_before_backstop(text: str) -> None:
+    assert _clean_indexed((piece(text),), fillers=DEFAULT_FILLER_LIST) == ()
+
+
+def test_phrases_only_skip_empty_word_alternation() -> None:
+    result = apply_turn_filters(
+        [turn(piece("It was, you know, big."))],
+        fillers=effective_filler_list(["you know"], TIER_1),
+        drop_repeats=False,
+    )
+    assert join_pieces(result.turns[0].pieces) == "It was, big."
+    assert result.fillers_removed == 2
+
+
+def test_kept_phrase_takes_pending_capital() -> None:
+    result = apply_turn_filters(
+        [turn(piece("I mean, you know? Fine."))],
+        fillers=effective_filler_list(["you know", "I mean"]),
+        drop_repeats=False,
+    )
+    assert join_pieces(result.turns[0].pieces) == "You know? Fine."
+
+
+def test_seam_space_does_not_block_a_phrase_inside_one_turn() -> None:
+    original = [turn(piece("Fine, you know,")), turn(piece("um"), name="Sam"), turn(piece("yes."))]
+    result = apply_turn_filters(
+        original, fillers=effective_filler_list(["you know"]), drop_repeats=False
+    )
+    assert [join_pieces(t.pieces) for t in result.turns] == ["Fine, yes."]
+    assert result.fillers_removed == 3
+
+
+def test_punctuation_only_turns_without_fillers_survive() -> None:
+    original = [turn(piece("...")), turn(piece("—"), name="Sam")]
+    assert drop_fillers(original, fillers=DEFAULT_FILLER_LIST) == original
+
+
+def test_phrase_alternation_is_longest_first_for_any_list() -> None:
+    fillers = replace(DEFAULT_FILLER_LIST, phrases=("you know", "you know what"))
+    result = drop_fillers([turn(piece("Hello, you know what, yes."))], fillers=fillers)
+    assert [join_pieces(t.pieces) for t in result] == ["Hello, yes."]
+
+
+@pytest.mark.parametrize(
+    "entry, text",
+    [("Weiß", "Well, wEIß, yes."), ("İ", "Well, İ, yes."), ("İ mean", "Well, İ mean, yes.")],
+)
+def test_entry_with_expanding_case_mapping_matches_its_spelling(entry: str, text: str) -> None:
+    result = drop_fillers([turn(piece(text))], fillers=effective_filler_list([entry]))
+    assert [join_pieces(t.pieces) for t in result] == ["Well, yes."]

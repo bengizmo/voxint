@@ -191,6 +191,7 @@ from voxint.export import (
     TranscriptFormat,
     annotation_pull_quote,
 )
+from voxint.export.filler_lists import DEFAULT_FILLER_LIST
 from voxint.export.manifest import (
     ClipRef,
     QuoteLine,
@@ -1320,7 +1321,7 @@ def _export_transcript(
             timestamps=timestamps,
             style=selected_style,
             translated_texts=texts,
-            drop_fillers=drop_fillers,
+            fillers=DEFAULT_FILLER_LIST if drop_fillers else None,
             drop_repeats=drop_repeats,
         )
     except TranslationMismatchError as exc:

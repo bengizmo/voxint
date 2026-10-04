@@ -157,6 +157,7 @@ from voxint.enrichment.translations import (
     translation_texts,
 )
 from voxint.export import MEDIA_TYPES, format_clock, transcript_payload
+from voxint.export.filler_lists import DEFAULT_FILLER_LIST
 from voxint.export.reading import layout_turns
 from voxint.export.service import parse_filter_value
 from voxint.export.turn_filters import apply_turn_filters
@@ -1178,7 +1179,7 @@ def run_transcript(
         # lines are not loaded here.
         filtered = apply_turn_filters(
             attributed_turns(session, run_id, text=variant),
-            drop_fillers=drop_fillers, drop_repeats=drop_repeats,
+            fillers=DEFAULT_FILLER_LIST if drop_fillers else None, drop_repeats=drop_repeats,
         )
         read_rows = [
             {

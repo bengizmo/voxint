@@ -124,8 +124,8 @@ makes the list:
 - **`FillerList`** is frozen and holds:
   - `language`;
   - `preset_version`;
-  - `words`: single-word entries, casefolded and sorted;
-  - `phrases`: multi-word entries, casefolded and sorted longest first;
+  - `words`: single-word entries in their first spelling, sorted by casefold;
+  - `phrases`: multi-word entries in their first spelling, sorted longest first;
   - `added` and `kept`: the configured entries, each carrying its source;
   - `kept_without_effect`;
   - `add_source` and `keep_source`, each one of `settings`, `environment` or
@@ -635,3 +635,23 @@ High tier consult, 3 of 3 voices: codex (planner, verified against the code at
   Docs now land with each slice (codex).
 - **Word-count inflation if phrase removal glues tokens (qwen).** Covered by the
   count tests.
+
+### Slice 1 code review (High tier, 3 of 3: codex, deepseek-v4-pro, qwen/qwen3.8-max-prime)
+
+- **Backstop dropped punctuation-only turns that had no filler (codex, confirmed).**
+  Fixed: a merged turn is dropped only when cleaning returned nothing.
+- **Phrase alternation trusted the caller's order (deepseek, qwen).** Fixed:
+  the pattern builder sorts longest first itself.
+- **An expanding case mapping never matched (codex: `weiß`, then `İ`).** Fixed:
+  casefold decides identity only. `words` and `phrases` keep the first spelling
+  for matching, because `IGNORECASE` handles case but not an expanded fold.
+- **A phrase before a same-speaker `.`-only turn stays after the merge
+  (deepseek, High).** Not changed: merging may make a phrase ineligible, never
+  newly eligible, and the seam space comes from `_join_at_seam`, which default
+  output depends on.
+- **A kept opening quote at turn end loses its space (`Hello, "you know` gives
+  `Hello,"`) (qwen, Low).** Not changed: the single-word path already does this
+  (`Hello, "um`), and a fix would change default bytes.
+- In review, Claude found and fixed two bugs in codex's first draft: a rejected
+  phrase skipped a pending capital, and trailing seam whitespace counted as a
+  second source.

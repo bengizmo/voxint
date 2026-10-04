@@ -11,6 +11,7 @@ from voxint.adjudication.transcript import (
 from voxint.api.api_app import ApiKeyDep, ApiSessionDep
 from voxint.db.models import PipelineRun
 from voxint.export import MEDIA_TYPES, TranscriptFormat
+from voxint.export.filler_lists import DEFAULT_FILLER_LIST
 from voxint.export.service import (
     ExportOptionError,
     parse_fillers,
@@ -70,7 +71,7 @@ def export_transcript(
         text=variant,
         timestamps=timestamps,
         style=selected_style,
-        drop_fillers=drop_fillers,
+        fillers=DEFAULT_FILLER_LIST if drop_fillers else None,
         drop_repeats=drop_repeats,
     )
     return Response(content=content, media_type=MEDIA_TYPES[format])

@@ -24,6 +24,7 @@ from voxint.export import (
     to_rttm,
     to_txt_turns,
 )
+from voxint.export.filler_lists import FillerList
 from voxint.export.reading import layout_turns
 from voxint.export.turn_filters import apply_turn_filters
 
@@ -130,12 +131,12 @@ def render_run_transcript(
     timestamps: bool = True,
     style: MarkdownStyle | None = None,
     translated_texts: Sequence[str] | None = None,
-    drop_fillers: bool = False,
+    fillers: FillerList | None = None,
     drop_repeats: bool = False,
 ) -> str:
     """Load one attributed view and render it without transport-specific behavior."""
     resolved = parse_style(style, fmt)
-    if drop_fillers:
+    if fillers is not None:
         if translated_texts is not None:
             raise ExportOptionError("fillers cannot be combined with a translation")
         parse_fillers("drop", fmt, resolved)
@@ -152,7 +153,7 @@ def render_run_transcript(
             except ValueError as exc:
                 raise TranslationMismatchError from exc
         filtered = apply_turn_filters(
-            turns, drop_fillers=drop_fillers, drop_repeats=drop_repeats
+            turns, fillers=fillers, drop_repeats=drop_repeats
         )
         paragraphs = layout_turns(filtered.turns)
         if fmt is TranscriptFormat.TXT:

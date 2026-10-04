@@ -7,6 +7,7 @@ import pytest
 
 from voxint.adjudication.transcript import TranscriptText
 from voxint.export import TranscriptFormat
+from voxint.export.filler_lists import DEFAULT_FILLER_LIST
 from voxint.export.service import (
     DEFAULT_MARKDOWN_STYLE,
     ExportOptionError,
@@ -114,7 +115,7 @@ def test_renderer_rejects_translation_before_loading() -> None:
             TranscriptFormat.MARKDOWN,
             text=TranscriptText.RAW,
             translated_texts=[],
-            drop_fillers=True,
+            fillers=DEFAULT_FILLER_LIST,
         )
     assert not session.mock_calls
 
@@ -170,7 +171,7 @@ def test_renderer_rejects_repeats_with_translation_before_loading(
             TranscriptFormat.MARKDOWN,
             text=TranscriptText.RAW,
             translated_texts=[],
-            drop_fillers=fillers,
+            fillers=DEFAULT_FILLER_LIST if fillers else None,
             drop_repeats=True,
         )
     assert not session.mock_calls
