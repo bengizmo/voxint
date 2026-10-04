@@ -1,6 +1,6 @@
 # Plan: filler presets in tiers plus an operator list (#753)
 
-Status: draft
+Status: in-progress
 
 Spec deltas: none (this project declares no living spec). Q1 below reconciles
 two acceptance lines on #753. The reconciliation is recorded on the issue, not
