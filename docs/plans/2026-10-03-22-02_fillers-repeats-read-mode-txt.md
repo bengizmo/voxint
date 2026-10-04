@@ -1,6 +1,6 @@
 # Plan: fillers and repeats in read mode and the plain-text export (#754)
 
-Status: in-progress
+Status: done
 
 Spec deltas: none (this project declares no living spec).
 
@@ -519,3 +519,42 @@ after the panel.
 | Toggle and note copy | glm: Remove/Keep and the same verb at zero; qwen: Include instead of Keep, plurals | "Remove / Show" (mirrors Hide/Show timestamps), "Left out no …" at zero, singular and plural forms |
 | "Non-read requests redirect to the editor" claim questioned | glm; 1 | Rejected: verified in `run_transcript`, which returns a 302 to `/media/{id}/editor` before any read-mode work |
 | Docs must state the attribution and timing model of txt turns | glm, qwen; 2 | Accepted |
+
+## Completion notes
+
+Closed 2026-10-04 against `main` at `c9cf7651` (PR #782).
+
+- **Slices:** all four landed. Slice 1 in `136128c4`, slice 2 in `17b8a5f0`,
+  slice 3 in `94b3c25f`, slice 4 with the docs in `7364ba6f`, review fixes in
+  `f9936701`.
+- **Scenarios:** every acceptance scenario has a test.
+  - Counts, composition, seams and the no-op: `tests/unit/test_turn_filters.py`.
+  - `to_txt_turns` goldens: `tests/unit/test_export_formatters.py`. Parser and
+    error copy: `tests/unit/test_export_service.py`.
+  - The fixed default txt golden, txt turns goldens on three surfaces and three
+    variants, md equivalence, translated txt turns, the empty all-filtered
+    file, the refusal and style-error matrices with each surface's precedence,
+    and the stored-data reread: `tests/integration/test_turn_exports.py`.
+  - Read-mode parity with the md export, defaults, exact toggle hrefs, the
+    note, everything-filtered versus empty, the 422 and its precedence, hostile
+    text, the stored-data reread, the menu hrefs, download-what-you-see, and the
+    unchanged editor and unfiltered menus (against HTML captured from the
+    pre-change template): `tests/integration/test_runs_api.py`.
+- **Checks run at close:** CI green on PR #782 (`lint-test`, `coverage`,
+  `frontend`, `secrets-scan`); ruff and mypy clean locally; `gitleaks git` clean
+  on the branch commits.
+- **Review:** High tier, codex, deepseek-v4-pro and qwen/qwen3.8-max-prime, 3 of
+  3. Applied fixes and deliberate skips are listed in the PR body.
+- **Browser lane:** run on the `cleanup` fixture. All four filter states, state
+  across the variant tabs and the timestamps link, the note copy, every menu
+  href, and the fetched md and txt reading copies equal to the page. Reconcile
+  passed.
+- **Deviation:** slice 4 listed the everything-filtered copy for the browser
+  lane. The `cleanup` fixture keeps ordinary words in every state, so that
+  message was not driven in a browser. It is server-rendered with no script and
+  is pinned at response level by `test_read_cleanup_all_filtered_or_empty`.
+- **Design decisions:** the three maintainer decisions are in the code
+  (explicit `style=turns` on txt, the menu carries the filters, the reworded
+  422 copy). Rejected alternatives 1 to 5 were not reintroduced.
+- **Left open:** the menu's main links download reviewed text from a raw or
+  enhanced read view (the follow-up named above). The docs now say so.
