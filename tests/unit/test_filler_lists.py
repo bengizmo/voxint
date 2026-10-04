@@ -96,3 +96,23 @@ def test_ordering_and_exact_keep() -> None:
     )
     assert result.words == ("erm", "HM", "uh", "uhh", "uhm", "um", "umm")
     assert result.phrases == ("You know what I mean", "I mean", "aa bb", "cc dd")
+
+
+@pytest.mark.parametrize("add", [(), ("UM",), ("You Know", "HM", "I mean", "um")])
+@pytest.mark.parametrize("keep", [(), ("hmm",), ("UM", "you know", "hmm"), TIER_1])
+def test_reporting_entries(add: tuple[str, ...], keep: tuple[str, ...]) -> None:
+    result = effective_filler_list(add, keep)
+    effective = {entry.casefold() for entry in (*result.words, *result.phrases)}
+    assert result.extra_entries == tuple(
+        entry for entry in add if entry.casefold() in effective and entry.casefold() not in TIER_1
+    )
+    assert result.effective_keeps == tuple(
+        entry for entry in keep if entry.casefold() in {e.casefold() for e in (*TIER_1, *add)}
+    )
+    assert result.is_default or result.extra_entries or result.effective_keeps
+
+
+def test_reporting_order_and_cancelled_addition() -> None:
+    result = effective_filler_list(["I mean", "HM", "You Know", "UM"], ["hm", "hmm", "Um"])
+    assert result.extra_entries == ("I mean", "You Know")
+    assert result.effective_keeps == ("hm", "Um")

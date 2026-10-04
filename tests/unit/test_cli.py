@@ -286,6 +286,7 @@ def test_doctor_prints_both_llm_lanes_without_changing_exit_code(
     out = capsys.readouterr().out
     assert "[ok  ] llm bundled: reachable (HTTP 200)" in out
     assert "[ok  ] llm endpoint: not configured" in out
+    assert "[warn] filler list: settings unavailable; environment only (provisional)" in out
 
 
 def test_doctor_fails_verdict_when_a_plugin_cannot_load(
@@ -829,3 +830,46 @@ def test_media_backfill_hashes_engine_error_exits_2(
     monkeypatch.setattr(config, "get_settings", lambda: Settings(media_root=tmp_path))  # type: ignore[arg-type]
     monkeypatch.setattr(cli, "_engine_or_report", lambda **_k: (None, 2))
     assert main(["media", "backfill-hashes"]) == 2
+
+
+def test_fillers_show_requires_subcommand() -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["fillers"])
+    assert exc.value.code == 2
+
+
+def test_fillers_show_db_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from unittest.mock import Mock
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import OperationalError
+
+    engine = create_engine("sqlite://")
+    monkeypatch.setattr(
+        engine, "connect", Mock(side_effect=OperationalError("connect", {}, Exception("offline"))),
+    )
+    dispose = Mock(wraps=engine.dispose)
+    monkeypatch.setattr(engine, "dispose", dispose)
+    monkeypatch.setattr("voxint.cli._engine_or_report", lambda: (engine, 0))
+    monkeypatch.setenv("VOXINT_FILLERS_ADD", "I mean")
+    # A DSN-free refusal, with no environment-only fallback.
+    assert main(["fillers", "show"]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == "error: database unavailable, cannot read the saved filler list\n"
+    assert captured.err == ""
+    dispose.assert_called_once()
+
+
+def test_fillers_show_config_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from voxint.config import SettingsError
+
+    def invalid() -> None:
+        raise SettingsError("bad config")
+
+    monkeypatch.setattr("voxint.config.get_settings", invalid)
+    assert main(["fillers", "show"]) == 2
+    assert capsys.readouterr().out == "error: bad config\n"

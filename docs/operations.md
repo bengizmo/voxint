@@ -579,6 +579,7 @@ docker compose exec api voxint restart <run-id> [--from-stage STAGE] [--yes] [--
 docker compose exec api voxint list                      # recent runs, newest first (--status, --limit, --json)
 docker compose exec api voxint export <run-id> --format srt   # export a transcript (see below)
 docker compose exec api voxint doctor                    # read-only preflight for every dependency
+docker compose exec api voxint fillers show              # filler presets, your add/keep lists and their sources
 docker compose exec api voxint gpu-phase status          # GPU sharing phase and waiting work (docs/gpu-sharing.md)
 docker compose exec api voxint stats                     # aggregate health/throughput (--since, --json)
 docker compose exec api voxint watch <run-id>            # follow a run until it stops (--interval, --timeout)
@@ -617,6 +618,12 @@ true (the default), doctor also checks for Deno on `PATH`: yt-dlp's JS
 challenge solver (`yt-dlp-ejs`) requires a Deno runtime, and sites like YouTube
 will reject downloads without it. Docker images bundle Deno; native installs
 should install it separately (`curl -fsSL https://deno.land/install.sh | sh`).
+The advisory `filler list` line says where the add and keep lists come from,
+for example `preset en-1; additions from settings (2), overriding the
+environment; keeps: none`. It warns `settings unavailable; environment only
+(provisional)` when the saved settings cannot be read, and warns when the saved
+list is not valid, because filler-dropping exports are refused until it is
+saved again.
 After the checks it prints an advisory hardware-telemetry section (aggregated GPU utilization, VRAM,
 temperature and throttle state, plus each service's admission depth) read from
 the same `/healthz` `resources` block described under "Metrics & monitoring". A
@@ -944,6 +951,23 @@ How it is built:
   A list saved on the settings page wins over the corresponding environment list;
   an unset list inherits it. The API reads these variables at start-up, so restart
   the API process after editing them.
+  When the list in effect differs from the preset, an md turns export with
+  fillers dropped ends with one HTML comment line, after a blank line, on every
+  surface:
+  `<!-- Filler words left out: 12. Preset en-1; also removed: you know, I mean; kept: um. The saved transcript is unchanged. -->`.
+  "Also removed" names the added entries in effect for the export, whether or not
+  this recording contains them, and "kept" names the keep entries that took a
+  word off the list. Either clause is left out when it
+  is empty. The default list adds no comment, and `txt` never gets one.
+  With `--drop-fillers`, `voxint export` prints the count to stderr, for example
+  `Left out 12 filler words (preset en-1, 2 added, 1 kept).` The added and kept
+  numbers count the same entries the comment names. Stdout carries only
+  the document (or the `wrote PATH` line with `-o`).
+  `voxint fillers show` prints the preset version, tier 1, the tier 2
+  suggestions (`*` marks the added ones), the add and keep lists with their
+  sources, any keep entries with no effect, and the effective list. It reads the
+  saved lists from the database and exits 2 if the database is unreachable or
+  the saved list is not valid.
   Nothing stored changes. Filler removal is not available with a translation
   or the `blocks` style. It works on `md` turns, `txt` with `style=turns`, and
   read mode.

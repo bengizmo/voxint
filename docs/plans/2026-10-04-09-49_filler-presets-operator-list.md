@@ -677,3 +677,37 @@ High tier consult, 3 of 3 voices: codex (planner, verified against the code at
   acceptable).** Not changed: `_engine_or_report` does not return its
   `Settings`, `get_settings()` is the sanctioned constructor, and the call is
   guarded by the same exit-2 handler.
+
+### Slice 3 code review (High tier, 3 of 3: codex, deepseek-v4-pro, qwen/qwen3.8-max-prime)
+
+- Before the panel, Claude's review of codex's draft found three issues and fixed
+  them with tests. `doctor` and `fillers show` printed a settings-sourced empty
+  list (`{"en": []}`) as "none", hiding that it overrides the environment; they
+  now show a 0 count or "(empty)" with "overriding the environment".
+  `fillers show` let a database failure escape as a traceback that can carry the
+  DSN; it now prints a DSN-free error and exits 2. `_export` now binds `fillers`
+  before the session block.
+- **`fillers show` labelled tier 1 "always removed" (codex Low, deepseek
+  High).** With `keep = um` the line contradicted the effective list. Fixed: the
+  label is "tier 1 (preset)".
+- **`check_filler_list` could raise into `doctor` (qwen High).** Claude had
+  narrowed codex's `except Exception` to `SQLAlchemyError`, which broke the
+  module's "return a result, never raise" contract that every other check keeps.
+  Fixed: the specific handlers stay and a final handler reports `check failed
+  (TypeName)`, never the message.
+- **Fixed, cheap (one reviewer each):** an empty effective list prints
+  "(empty)" (deepseek); the `-o` branch flushes `wrote PATH` before the stderr
+  count (qwen); tests now pin that `run_diagnostics` omits the filler line, so
+  the setup wizard stays unchanged (qwen), that the DB-failure path leaves
+  stderr empty (deepseek), and that an environment-sourced tier 2 addition is
+  starred (qwen); the docs say the comment's "also removed" names the entries
+  in effect, whether or not the recording contains them, and that the stderr
+  counts match the comment (qwen).
+- **Skipped (deepseek Medium):** making the comment's blank line independent of
+  `to_markdown_turns` ending in LF. The renderer always ends a non-empty
+  document with one LF, and the integration goldens assert the exact `"\n\n" +
+  comment` suffix, so a change in that invariant fails a test instead of being
+  papered over.
+- Codex verified the fix delta. Its one Low, that no test pins the `flush=True`
+  ordering, is skipped: pytest's capture cannot observe stdout/stderr
+  interleaving, and a buffered-stream spy would outweigh a one-argument fix.

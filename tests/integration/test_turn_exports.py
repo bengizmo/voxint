@@ -221,6 +221,7 @@ def test_fillers_three_surface_golden_and_default(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     timestamps: bool,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     with session_factory() as session:
         run_id = seed_words(session)
@@ -258,6 +259,11 @@ def test_fillers_three_surface_golden_and_default(
         if not timestamps:
             args.append("--no-timestamps")
         assert main(args) == 0
+        captured = capsys.readouterr()
+        assert captured.out == f"wrote {path}\n"
+        assert captured.err == (
+            "Left out 1 filler word (preset en-1).\n" if fillers == "drop" else ""
+        )
         console = client.get(f"/review/{run_id}/export.md", params=params)
         public = client.get(
             f"/api/v1/runs/{run_id}/transcript",
@@ -924,6 +930,7 @@ def test_custom_filler_list_all_surfaces_and_storage(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     fmt: str,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     from tests.integration.test_runs_api import _markdown_paragraphs, _read_paragraphs
     from voxint.db.models import AppSettings
@@ -977,6 +984,15 @@ def test_custom_filler_list_all_surfaces_and_storage(
         )
         == 0
     )
+    written = capsys.readouterr()
+    assert written.out == f"wrote {path}\n"
+    assert written.err == "Left out 3 filler words (preset en-1, 1 added, 1 kept).\n"
+    assert main([
+        "export", str(run_id), "--format", fmt, "--style", "turns", "--text", "raw",
+        "--drop-fillers", "--no-timestamps",
+    ]) == 0
+    streamed = capsys.readouterr()
+    assert streamed.err == written.err
     params = {"style": "turns", "text": "raw", "fillers": "drop", "timestamps": "false"}
     console = client.get(f"/review/{run_id}/export.{fmt}", params=params)
     public = client.get(
@@ -986,16 +1002,29 @@ def test_custom_filler_list_all_surfaces_and_storage(
         headers={"Authorization": "Bearer synthetic-api-key"},
     )
     assert console.status_code == public.status_code == 200
-    assert path.read_bytes() == console.content == public.content
+    assert streamed.out.encode() == path.read_bytes() == console.content == public.content
     cleaned = "It was, big. um I mean, we left."
     assert cleaned in console.text
-    assert "you know" not in console.text
+    comment = (
+        "<!-- Filler words left out: 3. Preset en-1; also removed: you know; kept: um. "
+        "The saved transcript is unchanged. -->\n"
+    )
+    if fmt == "md":
+        body, separator, report = console.text.partition("\n\n<!--")
+        assert separator == "\n\n<!--"
+        assert "<!--" + report == comment
+        assert "you know" not in body
+        assert console.text.endswith("\n\n" + comment)
+    else:
+        assert "you know" not in console.text
+        assert "<!--" not in console.text
     markdown = client.get(f"/review/{run_id}/export.md", params=params)
     read = client.get(f"/runs/{run_id}/transcript", params={"read": "1", **params})
     assert markdown.status_code == read.status_code == 200
+    assert markdown.text.endswith("\n\n" + comment)
     assert (
         _read_paragraphs(read.text)
-        == _markdown_paragraphs(markdown.text)
+        == _markdown_paragraphs(markdown.text.removesuffix("\n" + comment))
         == [
             {"speaker": "Alex", "clock": None, "runs": [{"marker": None, "text": cleaned}]},
         ]

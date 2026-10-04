@@ -42,12 +42,14 @@ from voxint.app_settings import (
     byo_llm_configured,
     get_app_settings,
     llm_bundled_active,
+    resolve_effective_filler_list,
     resolve_effective_llm_api_key,
     resolve_effective_llm_enabled,
     resolve_effective_llm_endpoint,
     resolve_effective_ytdlp_enabled,
 )
 from voxint.config import Settings
+from voxint.export.filler_lists import FillerListError
 from voxint.gpu_phase.state import (
     NEVER_TICKED,
     GpuPhase,
@@ -96,6 +98,38 @@ class CheckResult:
 def _safe(exc: Exception) -> str:
     """The exception's type name only — ``str(exc)`` can embed a DSN/password."""
     return type(exc).__name__
+
+
+def check_filler_list(settings: Settings, engine: Engine) -> CheckResult:
+    """Advisory: report configured sources only when the saved row is readable."""
+    try:
+        with Session(engine) as session:
+            fillers = resolve_effective_filler_list(get_app_settings(session), settings)
+        parts = [f"preset {fillers.preset_version}"]
+        for name, label, entries, source in (
+            ("add", "additions", fillers.added, fillers.add_source),
+            ("keep", "keeps", fillers.kept, fillers.keep_source),
+        ):
+            if source == "none":
+                detail = f"{label}: none"
+            else:
+                origin = "settings" if source == "settings" else "the environment"
+                detail = f"{label} from {origin} ({len(entries)})"
+                if name in fillers.env_overridden:
+                    detail += ", overriding the environment"
+            parts.append(detail)
+        return CheckResult("filler list", True, False, "; ".join(parts))
+    except FillerListError:
+        detail = (
+            "the saved list is not valid; exports that leave out filler words are refused "
+            "until it is saved again in settings"
+        )
+    except SQLAlchemyError:
+        # DB down (check_database reports it) or unmigrated: no effective list to claim.
+        detail = "settings unavailable; environment only (provisional)"
+    except Exception as exc:  # a check reports, never raises (module contract)
+        detail = f"check failed ({_safe(exc)})"
+    return CheckResult("filler list", False, False, detail)
 
 
 def check_database(engine: Engine) -> CheckResult:

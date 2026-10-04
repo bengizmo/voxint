@@ -2243,13 +2243,13 @@ def _export(args: argparse.Namespace) -> int:
     from voxint.db.models import PipelineRun
     from voxint.db.session import build_session_factory
     from voxint.export import TranscriptFormat
-    from voxint.export.filler_lists import FillerListError
+    from voxint.export.filler_lists import FillerList, FillerListError
     from voxint.export.service import (
         parse_fillers,
         parse_repeats,
         parse_style,
         render_run_rttm,
-        render_run_transcript,
+        render_run_transcript_report,
     )
 
     try:
@@ -2272,6 +2272,8 @@ def _export(args: argparse.Namespace) -> int:
     engine, code = _engine_or_report()
     if engine is None:
         return code
+    fillers: FillerList | None = None
+    fillers_removed = 0
     try:
         factory = build_session_factory(engine)
         with factory() as session:
@@ -2281,18 +2283,22 @@ def _export(args: argparse.Namespace) -> int:
             if fmt is None:
                 output = render_run_rttm(session, args.run_id)
             else:
-                output = render_run_transcript(
+                fillers = (
+                    resolve_effective_filler_list(get_app_settings(session), get_settings())
+                    if drop_fillers else None
+                )
+                report = render_run_transcript_report(
                     session,
                     args.run_id,
                     fmt,
                     text=variant,
                     timestamps=args.timestamps,
                     style=style,
-                    fillers=resolve_effective_filler_list(get_app_settings(session), get_settings())
-                    if drop_fillers
-                    else None,
+                    fillers=fillers,
                     drop_repeats=drop_repeats,
                 )
+                output = report.content
+                fillers_removed = report.fillers_removed
     except (SettingsError, FillerListError) as exc:
         print(f"error: {exc}")
         return 2
@@ -2305,17 +2311,28 @@ def _export(args: argparse.Namespace) -> int:
     # emit LF). Both transports must produce the same file on every OS.
     if out_path is None:
         sys.stdout.buffer.write(output.encode("utf-8"))
-        return 0
-    # Exclusive create unless --force, so a file that appeared after the pre-DB
-    # check is not silently overwritten (nor a symlink followed). newline="" keeps
-    # text mode (utf-8 + x/w semantics) while disabling newline translation.
-    try:
-        with open(out_path, "w" if args.force else "x", encoding="utf-8", newline="") as fh:
-            fh.write(output)
-    except FileExistsError:
-        print(f"error: {out_path} exists (use --force to overwrite)")
-        return 2
-    print(f"wrote {out_path}")
+        sys.stdout.buffer.flush()
+    else:
+        # Exclusive create rechecks the pre-DB clobber guard atomically.
+        try:
+            with open(out_path, "w" if args.force else "x", encoding="utf-8", newline="") as fh:
+                fh.write(output)
+        except FileExistsError:
+            print(f"error: {out_path} exists (use --force to overwrite)")
+            return 2
+        print(f"wrote {out_path}", flush=True)
+    if fillers is not None:
+        extras = ""
+        if fillers.extra_entries:
+            extras += f", {len(fillers.extra_entries)} added"
+        if fillers.effective_keeps:
+            extras += f", {len(fillers.effective_keeps)} kept"
+        count = fillers_removed
+        print(
+            f"Left out {count} filler word{'' if count == 1 else 's'} "
+            f"(preset {fillers.preset_version}{extras}).",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -2395,6 +2412,59 @@ def _list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fillers_show(args: argparse.Namespace) -> int:
+    """Print the saved and effective filler lists and their sources."""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from voxint.app_settings import get_app_settings, resolve_effective_filler_list
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.session import build_session_factory
+    from voxint.export.filler_lists import TIER_1, TIER_2, FillerListError
+
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    try:
+        factory = build_session_factory(engine)
+        with factory() as session:
+            fillers = resolve_effective_filler_list(get_app_settings(session), settings)
+    except FillerListError as exc:
+        print(f"error: {exc}")
+        return 2
+    except SQLAlchemyError:
+        # DSN-free: a SQLAlchemy error can embed the connection string.
+        print("error: database unavailable, cannot read the saved filler list")
+        return 2
+    finally:
+        engine.dispose()
+
+    print(f"preset: {fillers.preset_version}")
+    print(f"tier 1 (preset): {', '.join(TIER_1)}")
+    added = {entry.casefold() for entry in fillers.added}
+    suggestions = ", ".join(entry + ("*" if entry.casefold() in added else "") for entry in TIER_2)
+    print(f"tier 2 (suggestions, * = added): {suggestions}")
+    for name, label, entries, source in (
+        ("add", "added", fillers.added, fillers.add_source),
+        ("keep", "kept", fillers.kept, fillers.keep_source),
+    ):
+        if source == "none":
+            print(f"{label}: none")
+        else:
+            origin = "from settings" if source == "settings" else "from the environment"
+            if name in fillers.env_overridden:
+                origin += ", overriding the environment"
+            print(f"{label} ({origin}): {', '.join(entries) or '(empty)'}")
+    if fillers.kept_without_effect:
+        print(f"kept with no effect: {', '.join(fillers.kept_without_effect)}")
+    print(f"effective list: {', '.join((*fillers.words, *fillers.phrases)) or '(empty)'}")
+    return 0
+
+
 def _doctor(args: argparse.Namespace) -> int:
     """Preflight: check every dependency and report a single pass/fail verdict."""
     del args
@@ -2417,6 +2487,7 @@ def _doctor(args: argparse.Namespace) -> int:
     try:
         with httpx.Client(timeout=httpx.Timeout(settings.health_probe_timeout_seconds)) as client:
             results = diagnostics.run_diagnostics(settings, engine, http_client=client)
+        results.append(diagnostics.check_filler_list(settings, engine))
     finally:
         engine.dispose()
 
@@ -3282,6 +3353,11 @@ def build_parser() -> argparse.ArgumentParser:
     list_p.add_argument("--limit", type=int, help="max rows (1..500, default runs_page_size)")
     list_p.add_argument("--json", action="store_true", help="emit a JSON array instead of a table")
     list_p.set_defaults(fn=_list)
+
+    fillers_p = sub.add_parser("fillers", help="inspect filler word lists")
+    fillers_sub = fillers_p.add_subparsers(dest="fillers_command", required=True)
+    fillers_show_p = fillers_sub.add_parser("show", help="show the effective filler list")
+    fillers_show_p.set_defaults(fn=_fillers_show)
 
     doctor_p = sub.add_parser("doctor", help="preflight diagnostics for every dependency")
     doctor_p.set_defaults(fn=_doctor)

@@ -75,6 +75,20 @@ class FillerList:
     env_overridden: tuple[str, ...]
 
     @property
+    def extra_entries(self) -> tuple[str, ...]:
+        effective = {entry.casefold() for entry in (*self.words, *self.phrases)}
+        preset = {entry.casefold() for entry in TIER_1}
+        return tuple(
+            entry for entry in self.added
+            if entry.casefold() in effective and entry.casefold() not in preset
+        )
+
+    @property
+    def effective_keeps(self) -> tuple[str, ...]:
+        ineffective = {entry.casefold() for entry in self.kept_without_effect}
+        return tuple(entry for entry in self.kept if entry.casefold() not in ineffective)
+
+    @property
     def is_default(self) -> bool:
         return {entry.casefold() for entry in (*self.words, *self.phrases)} == {
             entry.casefold() for entry in TIER_1
