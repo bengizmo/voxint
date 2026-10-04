@@ -1,9 +1,8 @@
 """Pure transcript/diarization formatters — the one place output bytes are shaped.
 
-Both transports (the API export routes and the ``voxint export`` CLI) render
-through :func:`render_transcript` (and :func:`to_rttm`), so a downloaded ``.srt``
-and a piped ``voxint export … --format srt`` are byte-identical by construction —
-there is no second formatting path to drift.
+Both HTTP and CLI transports render line formats through :func:`render_transcript`
+and turn layouts through the service's shared turn branch. RTTM uses :func:`to_rttm`.
+Each layout has one formatter, so output bytes agree across transports.
 
 Everything here is pure: ``Sequence[TranscriptLine] -> str`` (or turns -> str for
 RTTM), no DB, no HTTP, no I/O — so the formats unit-test directly against golden
@@ -444,6 +443,34 @@ def format_clock(seconds: float) -> str:
     return f"[{total // 3600:02d}:{total // 60 % 60:02d}:{total % 60:02d}]"
 
 
+def _turn_body(text: str) -> str:
+    """Join non-empty normalized lines with one space for either turn renderer."""
+    return " ".join(
+        line.strip(" \t") for line in _normalize_line_breaks(text).split("\n")
+        if line.strip(" \t")
+    )
+
+
+def to_txt_turns(
+    paragraphs: Sequence[ReadingParagraph], *, timestamps: bool = True,
+) -> str:
+    """Render plain speaker paragraphs with optional clocks and no header."""
+    blocks: list[str] = []
+    for paragraph in paragraphs:
+        parts: list[str] = []
+        if timestamps:
+            parts.append(format_clock(paragraph.start_seconds))
+        if not paragraph.continuation:
+            speaker = _normalize_line_breaks(paragraph.speaker).replace("\n", " ")
+            parts.append(f"{speaker}:")
+        for run in paragraph.runs:
+            if timestamps and run.marker_seconds is not None:
+                parts.append(format_clock(run.marker_seconds))
+            parts.append(_turn_body(run.text))
+        blocks.append(" ".join(parts))
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
 def to_markdown_turns(
     paragraphs: Sequence[ReadingParagraph], header: str | None = None, *, timestamps: bool = True,
 ) -> str:
@@ -465,10 +492,7 @@ def to_markdown_turns(
         for run in paragraph.runs:
             if timestamps and run.marker_seconds is not None:
                 parts.append(format_clock(run.marker_seconds))
-            body = " ".join(
-                line.strip(" \t") for line in _normalize_line_breaks(run.text).split("\n")
-                if line.strip(" \t")
-            )
+            body = _turn_body(run.text)
             parts.append(_md_escape(body))
         line = " ".join(parts)
         if paragraph.continuation and not timestamps:

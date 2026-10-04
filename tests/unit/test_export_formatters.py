@@ -27,6 +27,7 @@ from voxint.export import (
     to_rttm,
     to_srt,
     to_txt,
+    to_txt_turns,
     to_vtt,
 )
 from voxint.export.reading import ReadingParagraph, ReadingRun
@@ -596,4 +597,42 @@ def test_turn_markdown_header_with_paragraph() -> None:
     paragraph = ReadingParagraph("Jo", False, 0, (ReadingRun(None, "Hello"),))
     assert to_markdown_turns([paragraph], "Title | date") == (
         "# Title \\| date\n\n[00:00:00] **Jo:** Hello\n"
+    )
+
+
+def test_txt_turns_goldens() -> None:
+    paragraphs = [
+        ReadingParagraph("Alex", False, 12, (ReadingRun(None, "Hello."),)),
+        ReadingParagraph("Sam", False, 15, (
+            ReadingRun(None, "Hi."), ReadingRun(60, "Still here."),
+        )),
+        ReadingParagraph("Sam", True, 100, (ReadingRun(None, "Continuing."),)),
+    ]
+    assert to_txt_turns(paragraphs) == (
+        "[00:00:12] Alex: Hello.\n\n"
+        "[00:00:15] Sam: Hi. [00:01:00] Still here.\n\n"
+        "[00:01:40] Continuing.\n"
+    )
+    assert to_txt_turns(paragraphs, timestamps=False) == (
+        "Alex: Hello.\n\nSam: Hi. Still here.\n\nContinuing.\n"
+    )
+    assert to_txt_turns([]) == ""
+    assert to_txt_turns([], timestamps=False) == ""
+
+
+@pytest.mark.parametrize("separator", ["\n", "\r\n", "\r", "\u2028", "\u2029", "\x85"])
+def test_txt_turns_normalizes_lines_without_escaping(separator: str) -> None:
+    paragraphs = [
+        ReadingParagraph(f"Alex*_{separator}# name", False, 0, (
+            ReadingRun(None, f" *_[]|<>&{separator}\t# text{separator}{separator} final "),
+        )),
+        ReadingParagraph("Alex", True, 1, (ReadingRun(None, "# literal"),)),
+        ReadingParagraph("Alex", True, 2, (ReadingRun(None, "1. literal"),)),
+    ]
+    assert to_txt_turns(paragraphs, timestamps=False) == (
+        "Alex*_ # name: *_[]|<>& # text final\n\n# literal\n\n1. literal\n"
+    )
+    assert to_txt_turns(paragraphs) == (
+        "[00:00:00] Alex*_ # name: *_[]|<>& # text final\n\n"
+        "[00:00:01] # literal\n\n[00:00:02] 1. literal\n"
     )
