@@ -2,6 +2,7 @@
 
 from html import unescape
 from pathlib import Path
+from secrets import token_urlsafe
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,7 +11,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from tests.integration.conftest import seed_onboarded
 from tests.integration.test_runs_api import make_run
 from voxint.api.app import create_app
-from voxint.api.csrf import CSRF_LOGIN, CSRF_SETTINGS, CSRF_SETUP, mint_csrf_token
+from voxint.api.auth import SESSION_COOKIE, create_session, new_session_token
+from voxint.api.csrf import CSRF_SETTINGS, CSRF_SETUP, mint_csrf_token
 from voxint.api.routers.deps import require_onboarded
 from voxint.app_settings import get_app_settings, get_or_create
 from voxint.config import Settings
@@ -146,7 +148,8 @@ _INVALID = [
 ]
 
 
-@pytest.mark.parametrize('field,value', _INVALID)
+@pytest.mark.parametrize('field,value', _INVALID,
+                         ids=['digit', 'punctuation', 'six-words', '41-chars', '101-entries'])
 @pytest.mark.parametrize('existing', [True, False])
 def test_invalid_preserves_submission_and_database(
     session_factory: sessionmaker[Session], tmp_path: Path, console_mode: bool,
@@ -183,14 +186,16 @@ def test_invalid_preserves_submission_and_database(
             assert row is None
 
 
-@pytest.mark.parametrize('token', [None, mint_csrf_token(_CSRF_KEY, CSRF_SETUP)])
+# Tokens are minted inside the test: a nonce in a parametrize value would give
+# each xdist worker a different test id.
+@pytest.mark.parametrize('token', ['missing', 'wrong-action'])
 def test_csrf(
-    session_factory: sessionmaker[Session], tmp_path: Path, token: str | None,
+    session_factory: sessionmaker[Session], tmp_path: Path, token: str,
 ) -> None:
     client = make_client(session_factory, tmp_path, True)
     data = {'add': 'hello'}
-    if token is not None:
-        data['csrf_token'] = token
+    if token == 'wrong-action':
+        data['csrf_token'] = mint_csrf_token(_CSRF_KEY, CSRF_SETUP)
     assert client.post('/settings/fillers', data=data).status_code == 403
     with session_factory() as session:
         row = get_app_settings(session)
@@ -274,9 +279,6 @@ def test_both_invalid_lists_reported_together(
         assert row is not None and row.fillers_add is None and row.fillers_keep is None
 
 
-_MU_CSRF = "settings-fillers-multi-user-csrf"
-_OWNER_PW = "owner-pass-123"  # pragma: allowlist secret
-_MEMBER_PW = "member-pass-123"  # pragma: allowlist secret
 
 
 @pytest.mark.parametrize('role,linked', [(UserRole.ADMIN, True), (UserRole.REVIEWER, False)])
@@ -288,22 +290,22 @@ def test_read_mode_link_only_for_admins(
         row = get_or_create(session, llm_enabled_default=False)
         row.fillers_add = {'en': ['hello']}
         # The first account is always made an admin, so seed one before the member.
-        create_user(session, username='owner', password=_OWNER_PW)
-        create_user(session, username='member', password=_MEMBER_PW, role=role)
+        # Passwords are random: the test signs in with a session cookie instead.
+        create_user(session, username='owner', password=token_urlsafe(16))
+        member = create_user(session, username='member', password=token_urlsafe(16),
+                             role=role)
+        session.commit()
+        cookie = new_session_token()
+        create_session(session, user_id=member.id, token=cookie, ttl_seconds=3600)
         session.commit()
         run_id = make_run(session, segments=[('S0', 'hello world', None)])
     settings = Settings(
         _env_file=None,  # type: ignore[call-arg]
         voxint_multi_user=True, voxint_user='ignored', voxint_password='ignored',
-        csrf_secret=_MU_CSRF, media_root=tmp_path,
+        csrf_secret=_CSRF_KEY, media_root=tmp_path,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory),
-                        follow_redirects=False)
-    login = client.post('/login', data={
-        'username': 'member', 'password': _MEMBER_PW,
-        'csrf_token': mint_csrf_token(_MU_CSRF, CSRF_LOGIN), 'next': '/',
-    })
-    assert login.status_code == 303
+                        cookies={SESSION_COOKIE: cookie}, follow_redirects=False)
     response = client.get(f'/runs/{run_id}/transcript',
                           params={'read': '1', 'fillers': 'drop'})
     assert response.status_code == 200
