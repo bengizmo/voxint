@@ -141,6 +141,7 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
         data-label-count="{{ restart_impact.label_scope_decisions if restart_impact else 0 }}"
         data-corrections="{{ restart_impact.corrections if restart_impact else 0 }}"
         data-verifications="{{ restart_impact.verifications if restart_impact else 0 }}"
+        data-word-marks="{{ restart_impact.word_marks if restart_impact else 0 }}"
         >The beginning (all stages){% if full_requires_void %} (void required){% elif full_label_risk %} (label risk){% elif full_editorial %} (editorial loss){% endif %}</option>
       {% if restart_stages %}
       {% for sp in restart_stages %}
@@ -149,8 +150,9 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
         data-label-risk="{{ sp.label_risk|tojson }}"
         data-label-count="{{ sp.label_count }}"
         data-corrections="{{ sp.corrections }}"
-        data-verifications="{{ sp.verifications }}">
-        {{ sp.label }}{% if sp.requires_void %} (void required){% elif sp.label_risk %} (label risk){% elif sp.corrections > 0 or sp.verifications > 0 %} (editorial loss){% endif %}
+        data-verifications="{{ sp.verifications }}"
+        data-word-marks="{{ sp.word_marks }}">
+        {{ sp.label }}{% if sp.requires_void %} (void required){% elif sp.label_risk %} (label risk){% elif sp.corrections > 0 or sp.verifications > 0 or sp.word_marks > 0 %} (editorial loss){% endif %}
       </option>
       {% endfor %}
       {% endif %}
@@ -200,7 +202,8 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
              id="restart-editorial-ack" required>
       <span id="restart-editorial-msg">{{ restart_impact.corrections }}
         text correction(s) and {{ restart_impact.verifications }}
-        verification(s) will be permanently lost.</span>
+        verification(s){% if restart_impact.word_marks %} and {{ restart_impact.word_marks }}
+        clean-up mark(s){% endif %} will be permanently lost.</span>
     </label>
   </div>
   {% else %}
@@ -235,7 +238,8 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
     var labelCount = parseInt(opt.dataset.labelCount || '0', 10);
     var corrections = parseInt(opt.dataset.corrections || '0', 10);
     var verifications = parseInt(opt.dataset.verifications || '0', 10);
-    var hasEditorial = corrections > 0 || verifications > 0;
+    var wordMarks = parseInt(opt.dataset.wordMarks || '0', 10);
+    var hasEditorial = corrections > 0 || verifications > 0 || wordMarks > 0;
     btn.disabled = false;
     if (requiresVoid) {
       voidDiv.style.display = '';
@@ -260,7 +264,8 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
     if (hasEditorial) {
       editDiv.style.display = '';
       editBox.required = true;
-      editMsg.textContent = corrections + ' text correction(s) and ' + verifications + ' verification(s) will be permanently lost.';
+      editMsg.textContent = corrections + ' text correction(s) and ' + verifications + ' verification(s)' +
+        (wordMarks ? ' and ' + wordMarks + ' clean-up mark(s)' : '') + ' will be permanently lost.';
     } else {
       editDiv.style.display = 'none';
       editBox.required = false;

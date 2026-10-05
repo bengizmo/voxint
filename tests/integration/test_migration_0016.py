@@ -149,5 +149,5 @@ def test_single_alembic_head() -> None:
     # 0068 = shared-GPU phase singleton, issue #748; 0069 = media_items.recorded_on
     # source recording date, issue #741.
     # 0070 = language-model readiness gate, issue #768; 0071 = app_settings
-    # filler add/keep lists, issue #753
-    assert list(heads) == ["0071"]
+    # filler add/keep lists, issue #753; 0072 = segment_word_marks, issue #757.
+    assert list(heads) == ["0072"]

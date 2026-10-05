@@ -15,6 +15,7 @@ from voxint.export import MEDIA_TYPES, TranscriptFormat
 from voxint.export.filler_lists import FillerListError
 from voxint.export.service import (
     ExportOptionError,
+    WordMarkPlacementError,
     parse_fillers,
     parse_repeats,
     parse_style,
@@ -74,14 +75,17 @@ def export_transcript(
     except FillerListError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    content = render_run_transcript(
-        session,
-        run_id,
-        fmt,
-        text=variant,
-        timestamps=timestamps,
-        style=selected_style,
-        fillers=filler_list,
-        drop_repeats=drop_repeats,
-    )
+    try:
+        content = render_run_transcript(
+            session,
+            run_id,
+            fmt,
+            text=variant,
+            timestamps=timestamps,
+            style=selected_style,
+            fillers=filler_list,
+            drop_repeats=drop_repeats,
+        )
+    except WordMarkPlacementError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return Response(content=content, media_type=MEDIA_TYPES[format])

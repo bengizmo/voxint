@@ -32,6 +32,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     LargeBinary,
@@ -1506,6 +1507,81 @@ class SegmentSplitBoundary(Base):
     # and word i of the parent's immutable ``words`` list.
     word_index: Mapped[int] = mapped_column(Integer)
     operator: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WordMarkAction(enum.StrEnum):
+    KEEP = "keep"
+    OMIT = "omit"
+    CLEAR = "clear"
+    UNDO = "undo"
+
+
+class SegmentWordMark(Base):
+    """Append-only per-word keep, omit, clear and undo rulings (issue #757).
+
+    Separate from ``adjudication_decisions`` because its newest-row readers
+    reduce scopes without a decision filter: a clean-up mark there could replace
+    a speaker assignment. Token ranges address the immutable parent segment's
+    words; marks cascade with that segment on restart, like split boundaries.
+    ``seq`` orders rulings independently of timestamps and UUIDs. The migration
+    installs ``segment_word_marks_append_only_trigger`` to reject updates and
+    direct deletes while the parent segment exists.
+    """
+
+    __tablename__ = "segment_word_marks"
+    __table_args__ = (
+        UniqueConstraint("seq", name="segment_word_marks_seq_key"),
+        UniqueConstraint("idempotency_key", name="segment_word_marks_idempotency_key"),
+        CheckConstraint(
+            "start_word_index >= 0 AND end_word_index > start_word_index",
+            name="segment_word_marks_word_range_bounds_check",
+        ),
+        CheckConstraint(
+            "action IN ('keep', 'omit', 'clear', 'undo')",
+            name="segment_word_marks_action_check",
+        ),
+        CheckConstraint(
+            "(action = 'undo') = (voids_mark_id IS NOT NULL)",
+            name="segment_word_marks_undo_check",
+        ),
+        CheckConstraint(
+            "voids_mark_id IS NULL OR voids_mark_id <> id",
+            name="segment_word_marks_no_self_void_check",
+        ),
+        CheckConstraint(
+            "user_id IS NULL OR operator NOT LIKE 'system:%'",
+            name="segment_word_marks_user_not_system_check",
+        ),
+        CheckConstraint(
+            "operator NOT LIKE 'system:%' OR user_id IS NULL",
+            name="segment_word_marks_system_not_user_check",
+        ),
+        Index(
+            "ix_segment_word_marks_voids",
+            "voids_mark_id",
+            unique=True,
+            postgresql_where=text("voids_mark_id IS NOT NULL"),
+            sqlite_where=text("voids_mark_id IS NOT NULL"),
+        ),
+        Index("ix_segment_word_marks_run_segment_seq", "pipeline_run_id", "segment_id", "seq"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(always=True))
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"))
+    segment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("transcript_segments.id", ondelete="CASCADE")
+    )
+    start_word_index: Mapped[int] = mapped_column(Integer)
+    end_word_index: Mapped[int] = mapped_column(Integer)
+    action: Mapped[str] = mapped_column(Text)
+    voids_mark_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("segment_word_marks.id", ondelete="CASCADE")
+    )
+    operator: Mapped[str] = mapped_column(Text)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    idempotency_key: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
