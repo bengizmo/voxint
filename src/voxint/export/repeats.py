@@ -313,7 +313,7 @@ def _clean_pieces(pieces: tuple[TurnPiece, ...], seams: frozenset[int]) -> tuple
         if text == piece.text:
             result.append(piece)
         elif text.strip():
-            result.append(replace(piece, text=text))
+            result.append(replace(piece, text=text, anchors=()))
     return tuple(result)
 
 

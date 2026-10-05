@@ -1,12 +1,12 @@
 """Synthetic F1-F6 cases for word-level, coarse and mixed turns."""
 
-import random
 import re
 from collections.abc import Callable
 from dataclasses import replace
 
 import pytest
 
+from tests.unit.filter_inputs import seeded_filler_soups
 from voxint.adjudication.turns import PieceRule, SpeakerTurn, TextMapping, TurnPiece, join_pieces
 from voxint.export import to_markdown_turns
 from voxint.export.filler_lists import DEFAULT_FILLER_LIST, TIER_1, effective_filler_list
@@ -336,20 +336,7 @@ def test_default_pattern_equality_and_seeded_soups() -> None:
     generated = _word_pattern(DEFAULT_FILLER_LIST.words)
     assert generated.pattern == _OLD_FILLER.pattern
     assert generated.flags == _OLD_FILLER.flags
-    rng = random.Random(753)
-    tokens = ["um", "uh", "umm", "uhh", "uhm", "erm", "UM", "word", "hmm", "you know"]
-    for _ in range(500):
-        pieces = tuple(
-            piece(
-                rng.choice(["", " ", "\t", "\n"])
-                + rng.choice(['"', "(", "", "["])
-                + rng.choice(tokens)
-                + rng.choice(["", ",", ".", "?", "!", "...", '"', "?!"]),
-                i,
-                boundary=rng.choice([True, False]),
-            )
-            for i in range(rng.randrange(1, 30))
-        )
+    for pieces in seeded_filler_soups():
         body = join_pieces(pieces)
         assert [(m.span(), m.groups()) for m in generated.finditer(body)] == [
             (m.span(), m.groups()) for m in _OLD_FILLER.finditer(body)
