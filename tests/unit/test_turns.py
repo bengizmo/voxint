@@ -10,12 +10,14 @@ import pytest
 
 from voxint.adjudication.attribution import Emission
 from voxint.adjudication.resolver import LabelState, Resolution, SegmentOverride
-from voxint.adjudication.splits import DerivedChild, validated_words
+from voxint.adjudication.splits import DerivedChild, derive_children, validated_words
 from voxint.adjudication.transcript import TranscriptText, _join_segment_texts, resolve_body
 from voxint.adjudication.turns import (
     PieceRule,
     SpeakerTurn,
     TextMapping,
+    TurnPiece,
+    WordAnchor,
     coarse_turns,
     join_pieces,
     project_turns,
@@ -88,6 +90,54 @@ def override(label: str) -> SegmentOverride:
     return SegmentOverride(s.speaker_id, s.speaker_name, AdjudicationDecision())
 
 
+def check_anchors(
+    emissions: list[Emission], result: list[SpeakerTurn], text: TranscriptText,
+) -> None:
+    """Check lexical slices and ordered parent coordinates independently of units."""
+    selected = [
+        (e, e.child.text if e.child else resolve_body(
+            e.seg, e.review.corrected_text if e.review else None, text,
+        ))
+        for e in emissions
+    ]
+    selected = [(e, body) for e, body in selected if body.strip()]
+    emission_index = -1
+    anchor_index = 0
+    previous_end: dict[uuid.UUID, int] = {}
+    for turn in result:
+        for piece in turn.pieces:
+            if piece.segment_start:
+                emission_index += 1
+                anchor_index = 0
+            e, body = selected[emission_index]
+            words = validated_words(e.seg, min_words=1)
+            if piece.mapping is not TextMapping.COARSE:
+                assert len(piece.anchors) == 1
+            lexical_end = 0
+            for anchor in piece.anchors:
+                assert words is not None
+                assert anchor.segment_id == e.seg.id
+                assert 0 <= anchor.token_start < anchor.token_end <= len(words)
+                assert anchor.token_start >= previous_end.get(anchor.segment_id, 0)
+                previous_end[anchor.segment_id] = anchor.token_end
+                assert 0 <= anchor.lex_start < anchor.lex_end <= len(piece.text)
+                assert anchor.lex_start >= lexical_end
+                lexical_end = anchor.lex_end
+                lexical = piece.text[anchor.lex_start:anchor.lex_end]
+                assert lexical == lexical.strip()
+                edited = piece.mapping is TextMapping.TOKEN or (
+                    piece.rule is PieceRule.SEGMENT_OVERRIDE
+                    and body.strip() != "".join(w.text for w in words).strip()
+                )
+                expected = (
+                    re.findall(r"\S+", body)[anchor_index]
+                    if edited
+                    else "".join(w.text for w in words[anchor.token_start:anchor.token_end]).strip()
+                )
+                assert lexical == expected
+                anchor_index += 1
+
+
 def check(
     emissions: list[Emission],
     spans: Sequence[Span],
@@ -97,6 +147,7 @@ def check(
 ) -> list[SpeakerTurn]:
     """Every projection fixture verifies each emission and the full run."""
     result = project_turns(iter(emissions), spans, STATES if states is None else states, text=text)
+    check_anchors(emissions, result, text)
     pieces = [p for turn in result for p in turn.pieces]
     bodies = [
         e.child.text
@@ -451,3 +502,191 @@ def test_coarse_translation_children_and_counts() -> None:
         with pytest.raises(ValueError):
             coarse_turns(iter(children), bodies)
     assert coarse_turns(children, ["", " "]) == []
+
+
+@pytest.mark.parametrize("edited", [False, True])
+@pytest.mark.parametrize("multiple_identities", [False, True])
+def test_word_piece_anchors(edited: bool, multiple_identities: bool) -> None:
+    e = emission(enhanced="\tHELLO, World!  \n")
+    result = check(
+        [e], [Span(0, 0, 1, A), Span(1, 1, 2, B if multiple_identities else A)],
+        text=TranscriptText.ENHANCED if edited else TranscriptText.RAW,
+    )
+    pieces = [p for t in result for p in t.pieces]
+    assert [p.rule for p in pieces] == [
+        PieceRule.WORD_LEVEL if multiple_identities else PieceRule.SINGLE_IDENTITY,
+    ] * 2
+    assert [p.mapping for p in pieces] == [
+        TextMapping.TOKEN if edited else TextMapping.VERBATIM,
+    ] * 2
+    assert [p.anchors for p in pieces] == [
+        (WordAnchor(e.seg.id, 0, 1, 1, 7 if edited else 6),),
+        (WordAnchor(e.seg.id, 1, 2, 1, 7 if edited else 6),),
+    ]
+    assert pieces[0] == replace(pieces[0], anchors=())
+    assert hash(pieces[0]) == hash(replace(pieces[0], anchors=()))
+    assert "anchors" not in repr(pieces[0])
+    assert join_pieces(pieces) == join_pieces(replace(p, anchors=()) for p in pieces)
+    assert to_markdown_turns(layout_turns(result)) == to_markdown_turns(layout_turns([
+        replace(t, pieces=tuple(replace(p, anchors=()) for p in t.pieces)) for t in result
+    ]))
+
+
+def test_glued_and_trailing_whitespace_anchor_ranges() -> None:
+    e = emission((" can", "'t", " re", "-", "enter", "!", " ", "\n"))
+    result = check([e], [])
+    assert [p.anchors for p in result[0].pieces] == [
+        (WordAnchor(e.seg.id, 0, 2, 1, 6),),
+        (WordAnchor(e.seg.id, 2, 8, 1, 10),),
+    ]
+    assert [(p.text, p.start_seconds, p.end_seconds) for p in result[0].pieces] == [
+        (" can't", 0, 2), (" re-enter! \n", 2, 6),
+    ]
+
+
+def test_split_child_anchors_use_parent_ranges_and_outer_trim() -> None:
+    parent = emission((" \t hello", " world  ", " \n again", " friend\t ", "\n"))
+    children = derive_children(parent.seg, [2])
+    assert children is not None
+    emissions = [replace(parent, child=child, child_index=i) for i, child in enumerate(children)]
+    result = check(emissions, [Span(0, 0, 5, A)])
+    assert result[0].speaker == "Jo"
+    pieces = result[0].pieces
+    assert [(p.text, p.rule, p.mapping, p.timed) for p in pieces] == [
+        ("hello world", PieceRule.SPLIT_CHILD, TextMapping.COARSE, False),
+        ("again friend", PieceRule.SPLIT_CHILD, TextMapping.COARSE, False),
+    ]
+    assert [p.anchors for p in pieces] == [
+        (WordAnchor(parent.seg.id, 0, 1, 0, 5), WordAnchor(parent.seg.id, 1, 2, 6, 11)),
+        (WordAnchor(parent.seg.id, 2, 3, 0, 5), WordAnchor(parent.seg.id, 3, 5, 6, 12)),
+    ]
+
+
+@pytest.mark.parametrize("body", ["hello  world", "hello WORLD", "hello elsewhere"])
+def test_split_child_anchor_mismatch_fails_closed(body: str) -> None:
+    e = replace(emission(), child=DerivedChild(0, 2, 0, 2, body), child_index=0)
+    piece = check([e], [])[0].pieces[0]
+    assert piece.text == body and piece.rule is PieceRule.SPLIT_CHILD
+    assert piece.anchors == ()
+
+
+@pytest.mark.parametrize("edited", [False, True])
+def test_segment_override_anchors_preserve_coarse_piece(edited: bool) -> None:
+    e = replace(
+        emission(enhanced="\n HELLO, World! \t" if edited else "\n hello world \t"),
+        seg_override=override(B),
+    )
+    piece = check([e], [Span(0, 0, 2, A)], text=TranscriptText.ENHANCED)[0].pieces[0]
+    assert piece == TurnPiece(
+        e.seg.enhanced_text or "", 0, 3, False, True,
+        PieceRule.SEGMENT_OVERRIDE, TextMapping.COARSE,
+    )
+    assert piece.anchors == (
+        WordAnchor(e.seg.id, 0, 1, 2, 8 if edited else 7),
+        WordAnchor(e.seg.id, 1, 2, 9 if edited else 8, 15 if edited else 13),
+    )
+
+
+@pytest.mark.parametrize("reason", ["unmapped", "invalid", "mismatch", "blank"])
+def test_segment_override_without_anchor_evidence(reason: str) -> None:
+    e = replace(emission(enhanced="A different sentence."), seg_override=override(A))
+    if reason == "invalid":
+        e.seg.words = [{"word": "hello"}]
+    elif reason == "mismatch":
+        # The selected text maps onto the tokens, so only the guard that the
+        # tokens reconcatenate to raw_text can refuse the anchors.
+        e.seg.enhanced_text = "hello world"
+        e.seg.raw_text = "different raw text"
+    elif reason == "blank":
+        e.seg.words = [{"word": " ", "start": 0, "end": 1}]
+        e.seg.raw_text = " "
+    piece = check([e], [], text=TranscriptText.ENHANCED)[0].pieces[0]
+    assert piece.rule is PieceRule.SEGMENT_OVERRIDE and piece.anchors == ()
+
+
+@pytest.mark.parametrize(
+    "rule", [PieceRule.NO_WORDS, PieceRule.UNMAPPED_TEXT, PieceRule.SINGLE_IDENTITY],
+)
+def test_unanchored_coarse_rules(rule: PieceRule) -> None:
+    e = emission(enhanced="A different sentence.")
+    if rule is PieceRule.NO_WORDS:
+        e.seg.words = None
+    spans = [Span(0, 0, 1, A), Span(1, 1, 2, A if rule is PieceRule.SINGLE_IDENTITY else B)]
+    piece = check([e], spans, text=TranscriptText.ENHANCED)[0].pieces[0]
+    assert piece.rule is rule and piece.mapping is TextMapping.COARSE
+    assert piece.anchors == ()
+    translated = coarse_turns([e], ["Hola mundo"])
+    assert translated[0].pieces[0].anchors == ()
+
+
+@pytest.mark.parametrize("barrier", [PieceRule.SPLIT_CHILD, PieceRule.SEGMENT_OVERRIDE])
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_anchor_units_preserve_coarse_barrier_pieces(barrier: PieceRule, side: str) -> None:
+    middle = emission((" barrier",), start=2)
+    middle = (
+        replace(middle, child=DerivedChild(0, 1, 2, 3, "barrier"), child_index=0)
+        if barrier is PieceRule.SPLIT_CHILD
+        else replace(middle, seg_override=override(B))
+    )
+    left = emission((" one", " gap"))
+    right = emission((" gap", " last"), start=3)
+    if side == "left":
+        left.seg.words = [{"word": " one gap", "start": 0, "end": 1}]
+        expected_left = [("Alex", TurnPiece(
+            " one gap", 0, 1, True, True, PieceRule.SINGLE_IDENTITY, TextMapping.VERBATIM,
+        ))]
+        expected_right = [
+            ("Jo", TurnPiece(" gap", 3, 4, True, True, PieceRule.WORD_LEVEL, TextMapping.VERBATIM)),
+            ("Alex", TurnPiece(
+                " last", 4, 5, True, False, PieceRule.WORD_LEVEL, TextMapping.VERBATIM,
+            )),
+        ]
+    else:
+        right.seg.words = [{"word": " gap last", "start": 4, "end": 5}]
+        expected_left = [
+            ("Alex", TurnPiece(
+                " one", 0, 1, True, True, PieceRule.WORD_LEVEL, TextMapping.VERBATIM,
+            )),
+            ("Jo", TurnPiece(
+                " gap", 1, 2, True, False, PieceRule.WORD_LEVEL, TextMapping.VERBATIM,
+            )),
+        ]
+        expected_right = [("Alex", TurnPiece(
+            " gap last", 4, 5, True, True, PieceRule.SINGLE_IDENTITY, TextMapping.VERBATIM,
+        ))]
+    expected_middle = ("Jo" if barrier is PieceRule.SPLIT_CHILD else "Sam", TurnPiece(
+        "barrier" if barrier is PieceRule.SPLIT_CHILD else " barrier",
+        2, 3 if barrier is PieceRule.SPLIT_CHILD else 4, False, True, barrier, TextMapping.COARSE,
+    ))
+    result = check([left, middle, right], [Span(0, 0, 1, A), Span(1, 4, 5, A)])
+    assert [(t.speaker, p) for t in result for p in t.pieces] == [
+        *expected_left, expected_middle, *expected_right,
+    ]
+    assert next(p for t in result for p in t.pieces if p.rule is barrier).anchors
+
+
+def test_split_cut_inside_a_glued_word_anchors_each_child_part() -> None:
+    """A cut may fall between glued tokens; each child anchors its own part."""
+    parent = emission((" can", "'t", " go"))
+    children = derive_children(parent.seg, [1])
+    assert children is not None
+    emissions = [replace(parent, child=child, child_index=i) for i, child in enumerate(children)]
+    pieces = [p for t in check(emissions, [Span(0, 0, 4, A)]) for p in t.pieces]
+    assert [(p.text, p.anchors) for p in pieces] == [
+        ("can", (WordAnchor(parent.seg.id, 0, 1, 0, 3),)),
+        ("'t go", (
+            WordAnchor(parent.seg.id, 1, 2, 0, 2), WordAnchor(parent.seg.id, 2, 3, 3, 5),
+        )),
+    ]
+
+
+def test_segment_override_anchors_under_a_review_correction() -> None:
+    e = replace(
+        emission(), seg_override=override(B),
+        review=SegmentReviewState(corrected_text="Hello, WORLD."),
+    )
+    piece = check([e], [Span(0, 0, 2, A)], text=TranscriptText.CORRECTED)[0].pieces[0]
+    assert piece.rule is PieceRule.SEGMENT_OVERRIDE and piece.text == "Hello, WORLD."
+    assert piece.anchors == (
+        WordAnchor(e.seg.id, 0, 1, 0, 6), WordAnchor(e.seg.id, 1, 2, 7, 13),
+    )

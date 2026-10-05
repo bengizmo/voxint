@@ -51,7 +51,7 @@ import unicodedata
 import uuid
 from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from sqlalchemy import select
@@ -95,6 +95,23 @@ class TextMapping(enum.StrEnum):
 
 
 @dataclass(frozen=True)
+class WordAnchor:
+    """An input-only lexical coordinate on a piece produced by project_turns.
+
+    Any later rewrite of piece.text invalidates these offsets, including the
+    dataclasses.replace calls in fillers and repeats, so a filter that needs
+    them must convert them to per-character source identities before it
+    rewrites anything. Rendering never reads them.
+    """
+
+    segment_id: uuid.UUID
+    token_start: int
+    token_end: int
+    lex_start: int
+    lex_end: int
+
+
+@dataclass(frozen=True)
 class TurnPiece:
     """Verbatim text with word timing, or a coarse emission interval.
 
@@ -109,6 +126,7 @@ class TurnPiece:
     segment_start: bool
     rule: PieceRule
     mapping: TextMapping
+    anchors: tuple[WordAnchor, ...] = field(default=(), compare=False, repr=False)
 
 
 IdentityKey = tuple[str, ...]
@@ -184,7 +202,18 @@ def _existing_identity(emission: Emission) -> _Identity:
     return ("speaker", str(speaker_id)), segment_speaker(override, emission.seg)
 
 
-def _word_units(words: list[WordToken]) -> list[WordToken]:
+@dataclass(frozen=True)
+class _Unit:
+    """Verbatim grouped tokens with a half-open range in the parent's words."""
+
+    start: float
+    end: float
+    text: str
+    token_start: int
+    token_end: int
+
+
+def _word_units(words: list[WordToken], *, token_start: int = 0) -> list[_Unit]:
     """Keep glued tokens together and retain leading and trailing whitespace.
 
     A unit's text is every constituent token verbatim. Its interval is the
@@ -204,16 +233,19 @@ def _word_units(words: list[WordToken]) -> list[WordToken]:
         has_text = has_text or bool(word.text.strip())
     if len(groups) > 1 and not has_text:
         groups[-2].extend(groups.pop())
-    units: list[WordToken] = []
+    units: list[_Unit] = []
     for group in groups:
         spoken = [w for w in group if w.text.strip()] or group
         units.append(
-            WordToken(
+            _Unit(
                 spoken[0].start,
                 max(w.end for w in spoken),
                 "".join(w.text for w in group),
+                token_start,
+                token_start + len(group),
             )
         )
+        token_start += len(group)
     return units
 
 
@@ -229,7 +261,7 @@ class _TurnLookup:
             maximum = max(maximum, turn.end_seconds)
             self.ends.append(maximum)
 
-    def label(self, unit: WordToken) -> str | None:
+    def label(self, unit: _Unit) -> str | None:
         """Select positive overlap, or half-open containment for a point unit."""
         point = unit.start == unit.end
         lo = bisect_right(self.ends, unit.start)
@@ -265,7 +297,7 @@ def _token_key(text: str) -> str:
     return value[lo:hi]
 
 
-def _map_text(selected: str, units: list[WordToken]) -> tuple[TextMapping, list[str]]:
+def _map_text(selected: str, units: list[_Unit]) -> tuple[TextMapping, list[str]]:
     """Apply T1 or conservative T2; no positional substitution or alignment."""
     if selected.strip() == "".join(u.text for u in units).strip():
         return TextMapping.VERBATIM, [u.text for u in units]
@@ -281,6 +313,52 @@ def _map_text(selected: str, units: list[WordToken]) -> tuple[TextMapping, list[
     return TextMapping.COARSE, []
 
 
+def _word_anchors(
+    segment_id: uuid.UUID, body: str, units: list[_Unit], texts: list[str],
+) -> tuple[WordAnchor, ...]:
+    """Walk mapped text, allowing only the owning piece's outer whitespace delta."""
+    joined = "".join(texts)
+    if joined.strip() != body.strip():
+        return ()
+    position = len(body) - len(body.lstrip()) - (len(joined) - len(joined.lstrip()))
+    anchors: list[WordAnchor] = []
+    for unit, rendered in zip(units, texts, strict=True):
+        lexical = rendered.strip()
+        lo = position + len(rendered) - len(rendered.lstrip())
+        hi = lo + len(lexical)
+        if not lexical or not 0 <= lo < hi <= len(body) or body[lo:hi] != lexical:
+            return ()
+        anchors.append(WordAnchor(segment_id, unit.token_start, unit.token_end, lo, hi))
+        position += len(rendered)
+    return tuple(anchors)
+
+
+def _usable_words(words: list[WordToken], raw_text: str) -> bool:
+    """The E3 test: tokens that reconcatenate to the raw text and hold text."""
+    return reconcatenates(words, raw_text) and any(w.text.strip() for w in words)
+
+
+def _coarse_anchors(emission: Emission, selected: str) -> tuple[WordAnchor, ...]:
+    """Prepare E1/E2 provenance without adding attribution evidence or brackets."""
+    words = validated_words(emission.seg, min_words=1)
+    if words is None:
+        return ()
+    child = emission.child
+    if child is not None:
+        if not 0 <= child.word_start < child.word_end <= len(words):
+            return ()
+        units = _word_units(words[child.word_start:child.word_end], token_start=child.word_start)
+        texts = [unit.text for unit in units]
+    else:
+        if not _usable_words(words, emission.seg.raw_text):
+            return ()
+        units = _word_units(words)
+        mapping, texts = _map_text(selected, units)
+        if mapping is TextMapping.COARSE:
+            return ()
+    return _word_anchors(emission.seg.id, selected, units, texts)
+
+
 @dataclass
 class _EmissionUnits:
     """Prepared emission; supported evidence remains separate from inference."""
@@ -289,7 +367,7 @@ class _EmissionUnits:
     selected: str
     existing: _Identity
     coarse_rule: PieceRule | None
-    units: list[WordToken]
+    units: list[_Unit]
     supported: list[_Identity | None]
     identities: list[_Identity]
 
@@ -328,11 +406,7 @@ def project_turns(
             # Should one ever arrive on a whole segment, it is still an
             # operator ruling: stay coarse under it, never subdivide.
             rule = PieceRule.SEGMENT_OVERRIDE
-        elif (
-            words is None
-            or not reconcatenates(words, seg.raw_text)
-            or not any(w.text.strip() for w in words)
-        ):
+        elif words is None or not _usable_words(words, seg.raw_text):
             rule = PieceRule.NO_WORDS
         units = _word_units(words) if rule is None and words is not None else []
         supported = []
@@ -397,7 +471,10 @@ def project_turns(
                 emitted.append(
                     (
                         item.identities[j],
-                        TurnPiece(body, unit.start, unit.end, True, j == 0, rule, mapping),
+                        TurnPiece(
+                            body, unit.start, unit.end, True, j == 0, rule, mapping,
+                            _word_anchors(item.emission.seg.id, body, [unit], [body]),
+                        ),
                     )
                 )
         else:
@@ -413,6 +490,9 @@ def project_turns(
                         True,
                         rule,
                         TextMapping.COARSE,
+                        _coarse_anchors(item.emission, item.selected)
+                        if rule in (PieceRule.SPLIT_CHILD, PieceRule.SEGMENT_OVERRIDE)
+                        else (),
                     ),
                 )
             )
