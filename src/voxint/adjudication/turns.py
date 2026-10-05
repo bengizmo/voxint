@@ -116,6 +116,14 @@ class WordAnchor:
 
 
 @dataclass(frozen=True)
+class EmissionAnchors:
+    """Lexical code-point offsets into the emission's shown text."""
+
+    anchors: tuple[WordAnchor, ...]
+    reason: str | None
+
+
+@dataclass(frozen=True)
 class TurnPiece:
     """Verbatim text with word timing, or a coarse emission interval.
 
@@ -363,6 +371,40 @@ def _coarse_anchors(emission: Emission, selected: str) -> tuple[WordAnchor, ...]
     return _word_anchors(emission.seg.id, selected, units, texts)
 
 
+def selected_text(emission: Emission, text: TranscriptText) -> str:
+    """The text an emission shows, exactly as the console island renders it."""
+    return (
+        emission.child.text if emission.child is not None else resolve_body(
+            emission.seg, emission.review.corrected_text if emission.review else None, text
+        )
+    )
+
+
+def emission_anchors(emission: Emission, *, text: TranscriptText) -> EmissionAnchors:
+    """Mirror projection provenance, with offsets in the whole shown emission."""
+    selected = selected_text(emission, text)
+    words = validated_words(emission.seg, min_words=1)
+    no_timings = "This segment has no recorded word timings, so its words cannot be marked."
+    changed = (
+        "Clean-up marks need the text to match the recorded words. "
+        "This segment's text was changed too much."
+    )
+    if (
+        emission.child is not None or emission.seg_override is not None
+        or emission.range_override is not None
+    ):
+        anchors = _coarse_anchors(emission, selected)
+    elif words is None or not _usable_words(words, emission.seg.raw_text):
+        return EmissionAnchors((), no_timings)
+    else:
+        units = _word_units(words)
+        mapping, texts = _map_text(selected, units)
+        if mapping is TextMapping.COARSE:
+            return EmissionAnchors((), changed)
+        anchors = _word_anchors(emission.seg.id, selected, units, texts)
+    return EmissionAnchors(anchors, None if anchors else changed if words else no_timings)
+
+
 @dataclass
 class _EmissionUnits:
     """Prepared emission; supported evidence remains separate from inference."""
@@ -393,13 +435,7 @@ def project_turns(
     prepared: list[_EmissionUnits] = []
     for emission in emissions:
         seg, child = emission.seg, emission.child
-        selected = (
-            child.text
-            if child
-            else resolve_body(
-                seg, emission.review.corrected_text if emission.review else None, text
-            )
-        )
+        selected = selected_text(emission, text)
         existing = _existing_identity(emission)
         rule: PieceRule | None = None
         words = validated_words(seg, min_words=1)
@@ -546,6 +582,14 @@ def attributed_turns(
     text: TranscriptText,
 ) -> list[SpeakerTurn]:
     """Load label states once and only turn timing columns, never embeddings."""
+    states, turns, emissions = load_turn_inputs(session, run_id)
+    return project_turns(emissions, turns, states, text=text)
+
+
+def load_turn_inputs(
+    session: Session, run_id: uuid.UUID,
+) -> tuple[dict[str, LabelState], Sequence[TurnSpan], list[Emission]]:
+    """Materialise one attribution walk for projection and emission consumers."""
     states = {s.label: s for s in label_states(session, run_id)}
     turns = session.execute(
         select(
@@ -557,6 +601,4 @@ def attributed_turns(
         .where(DiarizationTurn.pipeline_run_id == run_id)
         .order_by(DiarizationTurn.turn_index)
     ).all()
-    return project_turns(
-        walk_attributions(session, run_id, states=states), turns, states, text=text
-    )
+    return states, turns, list(walk_attributions(session, run_id, states=states))

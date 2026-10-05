@@ -806,6 +806,14 @@
     true
   ],
   [
+    "/review/{run_id}/segments/{segment_id}/word-marks",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/review/{run_id}/segments/{segment_id}/words",
     [
       "GET"
@@ -849,6 +857,22 @@
     "/review/{run_id}/undo/relabel",
     [
       "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/review/{run_id}/undo/word-mark",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/review/{run_id}/word-marks",
+    [
+      "GET"
     ],
     "onboarding",
     true
