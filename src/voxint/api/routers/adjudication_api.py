@@ -1051,15 +1051,17 @@ def correct_segment(
     old_row = session.get(SegmentReviewState, segment.id)
     old_corrected = old_row.corrected_text if old_row else None
     set_correction(session, segment=segment, text=text)
-    _, _, emissions = load_turn_inputs(session, run_id)
+    marks_cleared = 0
+    segment_marks = [key for key in effective_marks(session, run_id) if key[0] == segment_id]
+    # Only a segment with marks pays for the walk that re-anchors them.
     anchored = {
         (a.segment_id, a.token_start, a.token_end)
-        for emission in emissions if emission.seg.id == segment_id
+        for emission in (load_turn_inputs(session, run_id)[2] if segment_marks else [])
+        if emission.seg.id == segment_id
         for a in emission_anchors(emission, text=TranscriptText.CORRECTED).anchors
     }
-    marks_cleared = 0
-    for key in effective_marks(session, run_id):
-        if key[0] == segment_id and key not in anchored:
+    for key in segment_marks:
+        if key not in anchored:
             record_word_mark(
                 session, run_id=run_id, segment_id=segment_id,
                 start=key[1], end=key[2], action=WordMarkAction.CLEAR,
@@ -1154,13 +1156,11 @@ def _word_marks_payload(
     session: Session, run_id: uuid.UUID, settings: Settings, *,
     focus_segment_id: uuid.UUID | None,
 ) -> dict[str, Any]:
-    """Map the shared filler/export errors to the same operator-facing 409s."""
+    """Map an unplaceable-mark backstop to the export's operator-facing 409."""
     try:
         return build_word_marks_payload(
             session, run_id, settings, focus_segment_id=focus_segment_id,
         )
-    except FillerListError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except UnplaceableWordMarkError as exc:
         raise HTTPException(
             status_code=409, detail=str(WordMarkPlacementError(session, exc)),
@@ -1173,6 +1173,10 @@ def run_word_marks(
     segment: Annotated[uuid.UUID | None, Query()] = None,
 ) -> dict[str, Any]:
     """Read clean-up status, optionally including every word of a parent."""
+    # One snapshot for text, marks and settings: GET takes no claim lock, so a
+    # write committing mid-build must not mix old text with new marks.
+    session.commit()
+    session.connection(execution_options={"isolation_level": "REPEATABLE READ"})
     _run_or_404(session, run_id)
     if segment is not None:
         row = session.get(TranscriptSegment, segment)
@@ -1213,7 +1217,6 @@ def mark_segment_word(
                     status_code=409, detail="This word has no clean-up mark to clear.",
                 )
         else:
-            # Clear skips this build, so a broken saved filler list never blocks it.
             before = _word_marks_payload(session, run_id, settings, focus_segment_id=segment_id)
             emissions = [e for e in before["emissions"] if e["segmentId"] == str(segment_id)]
             if not any(e["markable"] for e in emissions):
@@ -1248,9 +1251,10 @@ def mark_segment_word(
     undo = None if adopted else {
         "kind": "word-mark", "markId": str(row.id), "expiresAt": _undo_expires_at(row, settings),
     }
-    session.commit()
+    # Built before the commit, so a failed response never hides a committed write.
     payload = _word_marks_payload(session, run_id, settings, focus_segment_id=segment_id)
     payload["undo"] = undo
+    session.commit()
     return payload
 
 
@@ -1279,8 +1283,9 @@ def undo_segment_word_mark(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except UndoError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    payload = _word_marks_payload(session, run_id, settings, focus_segment_id=focus)
     session.commit()
-    return _word_marks_payload(session, run_id, settings, focus_segment_id=focus)
+    return payload
 
 
 @router.get("/review/{run_id}/segments/{segment_id}/words")

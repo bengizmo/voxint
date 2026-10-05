@@ -371,7 +371,8 @@ def _coarse_anchors(emission: Emission, selected: str) -> tuple[WordAnchor, ...]
     return _word_anchors(emission.seg.id, selected, units, texts)
 
 
-def _selected_text(emission: Emission, text: TranscriptText) -> str:
+def selected_text(emission: Emission, text: TranscriptText) -> str:
+    """The text an emission shows, exactly as the console island renders it."""
     return (
         emission.child.text if emission.child is not None else resolve_body(
             emission.seg, emission.review.corrected_text if emission.review else None, text
@@ -381,7 +382,7 @@ def _selected_text(emission: Emission, text: TranscriptText) -> str:
 
 def emission_anchors(emission: Emission, *, text: TranscriptText) -> EmissionAnchors:
     """Mirror projection provenance, with offsets in the whole shown emission."""
-    selected = _selected_text(emission, text)
+    selected = selected_text(emission, text)
     words = validated_words(emission.seg, min_words=1)
     no_timings = "This segment has no recorded word timings, so its words cannot be marked."
     changed = (
@@ -434,7 +435,7 @@ def project_turns(
     prepared: list[_EmissionUnits] = []
     for emission in emissions:
         seg, child = emission.seg, emission.child
-        selected = _selected_text(emission, text)
+        selected = selected_text(emission, text)
         existing = _existing_identity(emission)
         rule: PieceRule | None = None
         words = validated_words(seg, min_words=1)

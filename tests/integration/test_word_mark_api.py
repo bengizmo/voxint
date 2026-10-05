@@ -94,6 +94,7 @@ def test_get_detection_focus_and_version(
         "removed": "filler", "protected": False, "mark": None,
     }
     focused = get_marks(mark_client, run_id, segment_id)
+    assert focused["version"] == before["version"]
     assert list(units(focused)) == list(range(5))
     assert all(u["removed"] is None for i, u in units(focused).items() if i != 0)
     token = _claim(mark_client, run_id)
@@ -337,6 +338,11 @@ def test_correction_keeps_mapped_marks_clears_changed_and_never_resurrects(
     assert response.status_code == 200 and response.json()["marksCleared"] == 0
     with session_factory() as session:
         assert len(effective_marks(session, run_id)) == 2
+    # A case-only edit leaves every unit's status alone; the version still moves.
+    version = get_marks(mark_client, run_id)["version"]
+    response = mark_client.post(path, data={"token": token, "text": "um! basically, we start now."})
+    assert response.status_code == 200 and response.json()["marksCleared"] == 0
+    assert get_marks(mark_client, run_id)["version"] != version
     response = mark_client.post(path, data={"token": token, "text": "Completely rewritten."})
     assert response.status_code == 200 and response.json()["marksCleared"] == 2
     assert response.json()["text"] == "Completely rewritten."
@@ -460,19 +466,28 @@ def test_keep_inside_phrase_protects_all_source_units(
     assert b"you know, it froze" in export(mark_client, run_id)
 
 
-def test_invalid_filler_list_is_409(
+def test_invalid_filler_list_degrades_detection_but_marks_stay_editable(
     mark_client: TestClient, session_factory: sessionmaker[Session],
     seeded: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
+    run_id = seeded[0]
+    token = _claim(mark_client, run_id)
+    assert post_mark(mark_client, seeded, token, "keep").status_code == 200
     with session_factory() as session:
         saved = session.get(AppSettings, 1)
         assert saved is not None
         saved.fillers_add = {"en": ["invalid123"]}
         session.commit()
-    response = mark_client.get(f"/review/{seeded[0]}/word-marks")
-    assert response.status_code == 409
-    token = _claim(mark_client, seeded[0])
-    assert post_mark(mark_client, seeded, token, "omit").status_code == 409
+    payload = get_marks(mark_client, run_id)
+    assert payload["detectionError"] and payload["fillerListDefault"] is None
+    assert units(payload)[0]["mark"] == "keep" and units(payload)[0]["removed"] is None
+    assert post_mark(mark_client, seeded, token, "keep").status_code == 409
+    omitted = post_mark(mark_client, seeded, token, "omit", 1, 2)
+    assert omitted.status_code == 200 and units(omitted.json())[1]["mark"] == "omit"
+    cleared = post_mark(mark_client, seeded, token, "clear")
+    assert cleared.status_code == 200 and cleared.json()["undo"] is not None
+    undone = undo_mark(mark_client, run_id, token, cleared.json()["undo"]["markId"])
+    assert undone.status_code == 200 and units(undone.json())[0]["mark"] == "keep"
 
 
 def test_correction_clears_only_its_parent(
