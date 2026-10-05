@@ -1120,3 +1120,98 @@ def test_embed_backfill_reports_active_job_changed(
 
     assert main(["embed", "backfill"]) == 0
     assert f"{run_id}: active job changed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_fillers_show(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], tmp_path: Path, configured: bool,
+) -> None:
+    from voxint.app_settings import get_or_create
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VOXINT_FILLERS_ADD", "I mean" if configured else "")
+    monkeypatch.setenv("VOXINT_FILLERS_KEEP", "um,hmm" if configured else "")
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        row.fillers_add = {"en": ["you see"]} if configured else None
+        row.fillers_keep = None
+        session.commit()
+    assert main(["fillers", "show"]) == 0
+    captured = capsys.readouterr()
+    suggestions = (
+        "tier 2 (suggestions, * = added): hm, mm, mmm, you know, kind of, sort of, "
+        "I mean, I guess, I suppose, or something, you know what I mean, you see"
+        + ("*" if configured else "")
+    )
+    expected = [
+        "preset: en-1",
+        "tier 1 (preset): um, uh, umm, uhh, uhm, erm",
+        suggestions,
+    ]
+    if configured:
+        expected += [
+            "added (from settings, overriding the environment): you see",
+            "kept (from the environment): um, hmm",
+            "kept with no effect: hmm",
+            "effective list: erm, uh, uhh, uhm, umm, you see",
+        ]
+    else:
+        expected += ["added: none", "kept: none", "effective list: erm, uh, uhh, uhm, um, umm"]
+    assert captured.out == "\n".join(expected) + "\n"
+    assert captured.err == ""
+
+
+def test_fillers_show_malformed_row(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str],
+) -> None:
+    from voxint.app_settings import get_or_create
+
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        row.fillers_add = {"en": "um"}
+        session.commit()
+    assert main(["fillers", "show"]) == 2
+    assert capsys.readouterr().out == (
+        "error: The saved filler word list is not valid. Save it again in settings.\n"
+    )
+
+
+def test_fillers_show_empty_saved_list_overrides_environment(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    from voxint.app_settings import get_or_create
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VOXINT_FILLERS_ADD", "I mean")
+    monkeypatch.setenv("VOXINT_FILLERS_KEEP", "")
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        row.fillers_add = {"en": []}
+        row.fillers_keep = None
+        session.commit()
+    assert main(["fillers", "show"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert "added (from settings, overriding the environment): (empty)" in out
+    assert out[-1] == "effective list: erm, uh, uhh, uhm, um, umm"
+
+
+def test_fillers_show_marks_environment_tier_2_addition(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    from voxint.app_settings import get_or_create
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VOXINT_FILLERS_ADD", "I mean")
+    monkeypatch.setenv("VOXINT_FILLERS_KEEP", "um,uh,umm,uhh,uhm,erm,I mean")
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        row.fillers_add = row.fillers_keep = None
+        session.commit()
+    assert main(["fillers", "show"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert "I mean*," in out[2]
+    assert "added (from the environment): I mean" in out
+    assert out[-1] == "effective list: (empty)"

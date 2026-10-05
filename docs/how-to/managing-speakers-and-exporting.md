@@ -169,7 +169,8 @@ A few links let you adjust the view:
   minute markers on and off. The reading view opens without times, which reads
   best for sharing.
 - **Remove filler words** leaves out standalone "um" and "uh" sounds. **Show
-  filler words** brings them back.
+  filler words** brings them back. To choose which words count as fillers, see
+  "Choose your filler words" below.
 - **Remove repeated words** leaves out the second copy of a small word said
   twice in a row, such as "the the". **Show repeated words** brings it back.
 
@@ -257,6 +258,36 @@ that page. From the command line, add `--drop-fillers` or `--drop-repeats` to a
 Markdown export, or to a plain-text export together with `--style turns`. Your
 saved transcript stays unchanged; these options are not available for
 translations, subtitles or `--style blocks`.
+
+### Choose your filler words
+
+By default, removing filler words leaves out "um", "uh", "umm", "uhh", "uhm" and
+"erm". You can widen or narrow that list:
+
+1. Open **Settings**. The **Filler words** section is on the **General** tab.
+2. Tick any of the suggestions under **Also remove**, such as "I mean" or "you
+   know". A phrase is only removed where commas or other punctuation set it
+   apart, as in "We left, you know, early". In "He lied, you know?" it stays.
+3. To remove a word that is not in the suggestions, type it in **Other words or
+   phrases to remove**, one per line.
+4. To keep a word the list would remove, type it in **Words or phrases to
+   keep**. For example, keep "um" if you are studying hesitation. Keeping a
+   single word does not protect it inside a longer phrase you remove; to keep
+   a phrase, type the whole phrase.
+5. Click **Save filler words**. The line **Removed now** shows the full list in
+   use.
+
+The list is English and applies to every recording. It changes what the reading
+view and the reading-copy downloads leave out. Your saved transcript never
+changes. When your own list is in use, the reading view says so and links back
+to this section.
+
+> Voxint never removes "like", "so", "right" or "well" on its own, because in
+> "turn right" they carry meaning. You can still add them yourself.
+
+If whoever installed Voxint set a filler list for the whole installation, the
+section shows it under the fields. Leave the fields empty to keep using it.
+Anything you save in a field replaces that list.
 
 ### Speaker names always appear
 

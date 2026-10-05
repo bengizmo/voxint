@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, ValidationError, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # NaN silently disables a threshold (every comparison is False), so all gate
@@ -575,6 +575,23 @@ class Settings(BaseSettings):
     # Longer transcripts are head+tail truncated (recorded in the asset's
     # config snapshot); the staleness hash always covers the full source.
     run_assets_max_input_chars: int = Field(default=48_000, ge=1_000)
+
+    # Comma-separated English entries. Retain the raw string after validation;
+    # the resolver normalizes entries while preserving the first spelling.
+    voxint_fillers_add: str = ""
+    voxint_fillers_keep: str = ""
+
+    @field_validator("voxint_fillers_add", "voxint_fillers_keep")
+    @classmethod
+    def validate_filler_entries(cls, value: str, info: ValidationInfo) -> str:
+        # Defer the export package import until Settings is fully defined.
+        from voxint.export.filler_lists import FillerListError, normalize_entries
+
+        try:
+            normalize_entries(value.split(","))
+        except FillerListError as exc:
+            raise ValueError(f"{(info.field_name or '').upper()}: {exc}") from None
+        return value
 
     # Console 2.0 area flags (epic #149, P1 #152). Each later phase ships its
     # pages dark behind one of these and flips the default at its release, so a

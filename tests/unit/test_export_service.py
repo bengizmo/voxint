@@ -7,6 +7,7 @@ import pytest
 
 from voxint.adjudication.transcript import TranscriptText
 from voxint.export import TranscriptFormat
+from voxint.export.filler_lists import DEFAULT_FILLER_LIST
 from voxint.export.service import (
     DEFAULT_MARKDOWN_STYLE,
     ExportOptionError,
@@ -114,7 +115,7 @@ def test_renderer_rejects_translation_before_loading() -> None:
             TranscriptFormat.MARKDOWN,
             text=TranscriptText.RAW,
             translated_texts=[],
-            drop_fillers=True,
+            fillers=DEFAULT_FILLER_LIST,
         )
     assert not session.mock_calls
 
@@ -170,7 +171,7 @@ def test_renderer_rejects_repeats_with_translation_before_loading(
             TranscriptFormat.MARKDOWN,
             text=TranscriptText.RAW,
             translated_texts=[],
-            drop_fillers=fillers,
+            fillers=DEFAULT_FILLER_LIST if fillers else None,
             drop_repeats=True,
         )
     assert not session.mock_calls
@@ -211,3 +212,99 @@ def test_txt_turn_filter_unknown(name: str) -> None:
     with pytest.raises(ExportOptionError) as exc:
         parser("bogus", TranscriptFormat.TXT, MarkdownStyle.TURNS)
     assert str(exc.value) == f"unknown {name} value 'bogus'; valid: keep, drop"
+
+
+@pytest.mark.parametrize(
+    "add, keep, expected",
+    [
+        (("you know", "I mean"), ("um",),
+         "<!-- Filler words left out: 12. Preset en-1; also removed: you know, I mean; "
+         "kept: um. The saved transcript is unchanged. -->"),
+        (("you know", "I mean"), (),
+         "<!-- Filler words left out: 12. Preset en-1; also removed: you know, I mean. "
+         "The saved transcript is unchanged. -->"),
+        ((), ("um", "hmm"),
+         "<!-- Filler words left out: 12. Preset en-1; kept: um. "
+         "The saved transcript is unchanged. -->"),
+    ],
+)
+def test_filler_report_golden(
+    add: tuple[str, ...], keep: tuple[str, ...], expected: str,
+) -> None:
+    from voxint.export.filler_lists import effective_filler_list
+    from voxint.export.service import filler_report_comment
+
+    assert filler_report_comment(effective_filler_list(add, keep), 12) == expected
+
+
+@pytest.mark.parametrize("header", ["Empty transcript", None])
+def test_empty_markdown_report(monkeypatch: pytest.MonkeyPatch, header: str | None) -> None:
+    from voxint.export.filler_lists import effective_filler_list
+    from voxint.export.service import render_run_transcript_report
+
+    attribution = Mock(return_value=[])
+    monkeypatch.setattr("voxint.export.service.attributed_turns", attribution)
+    monkeypatch.setattr("voxint.export.service.export_title", lambda *a: header)
+    result = render_run_transcript_report(
+        Mock(), uuid.uuid4(), TranscriptFormat.MARKDOWN, text=TranscriptText.RAW,
+        fillers=effective_filler_list(keep=["um"]),
+    )
+    prefix = "# Empty transcript\n\n" if header else ""
+    assert result.content == (
+        prefix + "<!-- Filler words left out: 0. Preset en-1; kept: um. "
+        "The saved transcript is unchanged. -->\n"
+    )
+    assert result.fillers_removed == result.repeats_removed == 0
+    attribution.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "fmt, style",
+    [(TranscriptFormat.MARKDOWN, MarkdownStyle.BLOCKS), (TranscriptFormat.TXT, None),
+     (TranscriptFormat.SRT, None), (TranscriptFormat.VTT, None), (TranscriptFormat.JSON, None)],
+)
+def test_unfiltered_report_counts(
+    monkeypatch: pytest.MonkeyPatch, fmt: TranscriptFormat, style: MarkdownStyle | None,
+) -> None:
+    from voxint.export.service import render_run_transcript_report
+
+    attribution = Mock(return_value=[])
+    filters = Mock(side_effect=AssertionError("unexpected filtering"))
+    monkeypatch.setattr("voxint.export.service.attributed_transcript", attribution)
+    monkeypatch.setattr("voxint.export.service.apply_turn_filters", filters)
+    result = render_run_transcript_report(
+        Mock(), uuid.uuid4(), fmt, text=TranscriptText.RAW, style=style,
+    )
+    assert result.fillers_removed == result.repeats_removed == 0
+    assert "Filler words left out" not in result.content
+    attribution.assert_called_once()
+    filters.assert_not_called()
+
+
+def test_report_counts_and_single_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.unit.test_turn_filters import piece, turn
+    from voxint.export.service import render_run_transcript_report
+    from voxint.export.turn_filters import apply_turn_filters
+
+    attribution = Mock(return_value=[turn(piece("the um the cat and and dog", coarse=True))])
+    filtering = Mock(wraps=apply_turn_filters)
+    monkeypatch.setattr("voxint.export.service.attributed_turns", attribution)
+    monkeypatch.setattr("voxint.export.service.apply_turn_filters", filtering)
+    result = render_run_transcript_report(
+        Mock(), uuid.uuid4(), TranscriptFormat.TXT, text=TranscriptText.RAW,
+        style=MarkdownStyle.TURNS, timestamps=False,
+        fillers=DEFAULT_FILLER_LIST, drop_repeats=True,
+    )
+    assert result.content == "Alex: the cat and dog\n"
+    assert (result.fillers_removed, result.repeats_removed) == (1, 2)
+    attribution.assert_called_once()
+    filtering.assert_called_once()
+    attribution.reset_mock()
+    filtering.reset_mock()
+    assert render_run_transcript(
+        Mock(), uuid.uuid4(), TranscriptFormat.TXT, text=TranscriptText.RAW,
+        style=MarkdownStyle.TURNS, timestamps=False,
+        fillers=DEFAULT_FILLER_LIST, drop_repeats=True,
+    ) == result.content
+    attribution.assert_called_once()
+    filtering.assert_called_once()

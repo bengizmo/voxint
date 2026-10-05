@@ -601,6 +601,11 @@
                             display: flex; flex-wrap: wrap; gap: 1.2rem; align-items: center; }
     fieldset.theme-choice legend { padding: 0; margin-bottom: .4rem; font-weight: 600; }
     fieldset.theme-choice label { display: inline-flex; gap: .4rem; align-items: center; }
+    /* Filler words (#753): the tier 2 suggestions wrap as a row of checkboxes. */
+    fieldset.filler-suggestions { border: 0; padding: 0; margin: .6rem 0;
+                                  display: flex; flex-wrap: wrap; gap: .5rem 1.2rem; }
+    fieldset.filler-suggestions legend { padding: 0; margin-bottom: .4rem; font-weight: 600; }
+    fieldset.filler-suggestions label { display: inline-flex; gap: .4rem; align-items: center; }
     .pill.running { background: var(--info-soft); border-color: var(--info); }
     .pill.completed, .pill.succeeded { background: var(--ok-soft); border-color: var(--ok); }
     .pill.failed { background: var(--danger-soft); border-color: var(--danger); }

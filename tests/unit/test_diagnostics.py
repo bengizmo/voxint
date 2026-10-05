@@ -286,6 +286,8 @@ def test_run_diagnostics_collects_hard_and_advisory() -> None:
     assert "postgres" in names and "redis" in names and "transcription" in names
     assert "hugging face token" in names
     assert "llm endpoint" not in names  # disabled → not checked
+    # doctor appends the filler check itself; the setup wizard's services step must not show it.
+    assert "filler list" not in names
     assert exit_code(results) == 0
 
 
@@ -573,3 +575,80 @@ def test_ytdlp_js_runtime_deno_timeout(monkeypatch: "pytest.MonkeyPatch") -> Non
     assert r is not None
     assert r.ok is True
     assert "unknown" in r.detail
+
+
+@pytest.mark.parametrize(
+    "saved_add, saved_keep, env_add, env_keep, expected",
+    [
+        ({"en": ["you see", "hm"]}, None, "I mean", "",
+         "preset en-1; additions from settings (2), overriding the environment; keeps: none"),
+        (None, {"en": ["um", "hmm"]}, "you know", "uh",
+         "preset en-1; additions from the environment (1); "
+         "keeps from settings (2), overriding the environment"),
+        (None, None, "I mean", "um",
+         "preset en-1; additions from the environment (1); keeps from the environment (1)"),
+        (None, None, "", "", "preset en-1; additions: none; keeps: none"),
+        ({"en": []}, None, "I mean", "",
+         "preset en-1; additions from settings (0), overriding the environment; keeps: none"),
+    ],
+)
+def test_filler_list_sources(
+    monkeypatch: pytest.MonkeyPatch, saved_add: dict[str, list[str]] | None,
+    saved_keep: dict[str, list[str]] | None, env_add: str, env_keep: str, expected: str,
+) -> None:
+    from voxint.db.models import AppSettings
+    from voxint.diagnostics import check_filler_list
+
+    row = AppSettings(fillers_add=saved_add, fillers_keep=saved_keep)
+    monkeypatch.setattr("voxint.diagnostics.get_app_settings", lambda session: row)
+    engine = create_engine("sqlite://")
+    try:
+        result = check_filler_list(
+            _settings(voxint_fillers_add=env_add, voxint_fillers_keep=env_keep), engine,
+        )
+    finally:
+        engine.dispose()
+    assert result == CheckResult("filler list", True, False, expected)
+    assert exit_code([result]) == 0
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_filler_list_unavailable(monkeypatch: pytest.MonkeyPatch, malformed: bool) -> None:
+    from voxint.db.models import AppSettings
+    from voxint.diagnostics import check_filler_list
+
+    if malformed:
+        monkeypatch.setattr(
+            "voxint.diagnostics.get_app_settings",
+            lambda session: AppSettings(fillers_add={"en": "um"}),
+        )
+    # An unmigrated database fails the actual settings query.
+    engine = create_engine("sqlite://")
+    try:
+        result = check_filler_list(_settings(voxint_fillers_add="I mean"), engine)
+    finally:
+        engine.dispose()
+    detail = (
+        "the saved list is not valid; exports that leave out filler words are refused "
+        "until it is saved again in settings" if malformed else
+        "settings unavailable; environment only (provisional)"
+    )
+    assert result == CheckResult("filler list", False, False, detail)
+    assert exit_code([result]) == 0
+
+
+def test_filler_list_unexpected_error_is_reported_not_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from voxint.diagnostics import check_filler_list
+
+    def broken(session: object) -> None:
+        raise RuntimeError("postgresql://user:secret@host/db")
+
+    monkeypatch.setattr("voxint.diagnostics.get_app_settings", broken)
+    engine = create_engine("sqlite://")
+    try:
+        result = check_filler_list(_settings(), engine)
+    finally:
+        engine.dispose()
+    assert result == CheckResult("filler list", False, False, "check failed (RuntimeError)")

@@ -346,6 +346,37 @@ its `everyone` to `everybody` correction. This lane only reads data.
 Reconcile with no edits: `verified_segment_indexes: []`, `corrections: {}`,
 `progress: {verified: 0, total: 4}`, and `expected_annotations: 0`.
 
+#### Filler list (#753), same `cleanup` seed
+
+Run after the #754 checks above; it writes only the `app_settings` filler
+columns, which the reconcile does not read. Check them with `psql` against the
+e2e database.
+
+- Open `/settings#fillers` (General tab). Expect 12 unchecked **Also remove**
+  boxes, the "Removed by default (preset en-1)" line, the never-removed caution, and
+  `Removed now: erm, uh, uhh, uhm, um, umm`.
+- Tick **you know**, type `um` and `hm` (two lines) into **Words or phrases to
+  keep**,
+  click **Save filler words**. Expect a 303 back to `/settings#fillers`, the box
+  still ticked, the add textarea empty, `Removed now: erm, uh, uhh, uhm, umm,
+  you know`, and a no-effect line naming `hm`. The row holds
+  `{"en": ["you know"]}` and `{"en": ["um", "hm"]}`.
+- Tick **I mean**, type `um2` into the add textarea and save. Expect a 422 on the
+  General tab with `Words to remove: Use letters, ...` in a `role="alert"`, both
+  boxes ticked, `um2` still in the textarea, `Removed now` unchanged, and the row
+  unchanged. The one console error is the 422 document load itself.
+- Open the corrected read view with `&fillers=drop`. Expect `S0: Hello
+  everybody, um we we go we`, `we stay.`, `S1: You you know.` (the phrase is
+  not set off, so it stays) and the note `Left out 2 filler words. The saved
+  transcript is unchanged. Filler words are matched using your filler list.`
+  with the link going to `/settings#fillers`. Fetch the menu's corrected
+  Markdown reading copy: the same paragraphs, then `<!-- Filler words left out:
+  2. Preset en-1; also removed: you know; kept: um. The saved transcript is
+  unchanged. -->`.
+- Untick everything, clear both fields and save. Both columns are NULL, and the
+  read view note is back to `Left out 3 filler words. The saved transcript is
+  unchanged.` with no link.
+
 ### Media library (#646, #682)
 
 The Media library is always on (#682 removed its flag), so every review entry

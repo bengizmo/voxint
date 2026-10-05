@@ -1,9 +1,12 @@
 """Render-time English filler removal, before the Markdown reading layout.
 
-* F1: standalone um, uh, umm, uhh, uhm and erm, ignoring case. Opening
-  quotes and brackets before the word are kept; a word directly followed by
-  a closing quote is being quoted and stays, as do compounds, possessives
-  and ellipses.
+* F1: standalone entries of the effective filler list (by default um, uh,
+  umm, uhh, uhm and erm), ignoring case. Opening quotes and brackets before
+  the word are kept; a word directly followed by a closing quote is being
+  quoted and stays, as do compounds, possessives and ellipses.
+* F1p: multi-word phrases are removed first, and only when clause
+  punctuation or a turn edge sets them off on both sides. Tag questions,
+  whole sentences and phrases spanning an F5 seam stay.
 * F2: remove the word and its following comma, semicolon or colon. Move a
   terminal mark to preceding text, replacing comma/semicolon/colon, or drop
   it at turn start or after another terminal mark. A preceding comma stays.
@@ -22,16 +25,47 @@
 import re
 from collections.abc import Sequence
 from dataclasses import replace
+from functools import lru_cache
 
 from voxint.adjudication.turns import SpeakerTurn, TurnPiece
+from voxint.export.filler_lists import TIER_1, FillerList
 
 _OPEN = "\"'([\u201c\u2018"
 _CLOSE = "\"')]\u201d\u2019"
-_FILLER = re.compile(
-    r"""(?<!\S)(["'(\[\u201c\u2018]*)(?:umm|uhh|uhm|erm|um|uh)"""
-    r"""(?:(?P<mark>[,.?!;:])(?=$|\s)|(?=$|\s))\s*""",
-    re.IGNORECASE,
-)
+
+
+@lru_cache(maxsize=32)
+def _word_pattern(words: tuple[str, ...]) -> re.Pattern[str]:
+    ordered = sorted(
+        words,
+        key=lambda word: (
+            -len(word),
+            TIER_1.index(word) if word in TIER_1 else len(TIER_1),
+            word,
+        ),
+    )
+    return _pattern("|".join(re.escape(word) for word in ordered))
+
+
+@lru_cache(maxsize=32)
+def _phrase_pattern(phrases: tuple[str, ...]) -> re.Pattern[str]:
+    # Alternation is first-match: a rejected shorter prefix would hide the longer phrase.
+    ordered = sorted(
+        phrases, key=lambda phrase: (-len(phrase.split()), -len(phrase), phrase.casefold(), phrase)
+    )
+    return _pattern(
+        "|".join(r"\s+".join(re.escape(word) for word in phrase.split()) for phrase in ordered)
+    )
+
+
+def _pattern(alternation: str) -> re.Pattern[str]:
+    return re.compile(
+        r"""(?<!\S)(["'(\[\u201c\u2018]*)(?:""" + alternation + ")"
+        r"""(?:(?P<mark>[,.?!;:])(?=$|\s)|(?=$|\s))\s*""",
+        re.IGNORECASE,
+    )
+
+
 # Applied to text with surrounding quotes and brackets already stripped.
 _SENTENCE_END = re.compile(r"[.?!]$")
 _WRAPPERS = _OPEN + _CLOSE + " "
@@ -39,11 +73,39 @@ _WRAPPERS = _OPEN + _CLOSE + " "
 _Char = tuple[str, int]
 
 
-def _clean_pieces(pieces: tuple[TurnPiece, ...]) -> tuple[TurnPiece, ...]:
-    return tuple(piece for _, piece in _clean_indexed(pieces))
+def _clean_pieces(
+    pieces: tuple[TurnPiece, ...],
+    *,
+    fillers: FillerList,
+) -> tuple[TurnPiece, ...]:
+    return tuple(piece for _, piece in _clean_indexed(pieces, fillers=fillers))
 
 
-def _clean_indexed(pieces: tuple[TurnPiece, ...]) -> tuple[tuple[int, TurnPiece], ...]:
+def _clean_indexed(
+    pieces: tuple[TurnPiece, ...],
+    *,
+    fillers: FillerList,
+    sources: Sequence[int] | None = None,
+) -> tuple[tuple[int, TurnPiece], ...]:
+    """Clean phrases then words, preserving original input indexes."""
+    indexed = tuple(enumerate(pieces))
+    if fillers.phrases:
+        indexed = _clean_pass(
+            pieces, _phrase_pattern(fillers.phrases), sources=sources, phrase=True
+        )
+    if fillers.words:
+        cleaned = _clean_pass(tuple(piece for _, piece in indexed), _word_pattern(fillers.words))
+        indexed = tuple((indexed[index][0], piece) for index, piece in cleaned)
+    return indexed
+
+
+def _clean_pass(
+    pieces: tuple[TurnPiece, ...],
+    pattern: re.Pattern[str],
+    *,
+    sources: Sequence[int] | None = None,
+    phrase: bool = False,
+) -> tuple[tuple[int, TurnPiece], ...]:
     """Clean F1-F4 and pair each surviving piece with its input index."""
     chars: list[_Char] = []
     for index, piece in enumerate(pieces):
@@ -58,7 +120,7 @@ def _clean_indexed(pieces: tuple[TurnPiece, ...]) -> tuple[tuple[int, TurnPiece]
             chars.append((" ", index))
         chars.extend((char, index) for char in piece.text)
     body = "".join(char for char, _ in chars)
-    if not _FILLER.search(body):
+    if not pattern.search(body):
         return tuple(enumerate(pieces))
 
     out: list[_Char] = []
@@ -80,14 +142,31 @@ def _clean_indexed(pieces: tuple[TurnPiece, ...]) -> tuple[tuple[int, TurnPiece]
     # Apply regex substitutions to owned characters: the match consumes the
     # filler and its following separator, including inside coarse text. Taking
     # matches from the original text prevents new matches inside compounds.
-    for match in _FILLER.finditer(body):
+    for match in pattern.finditer(body):
         append(chars[cursor : match.start()])
-        while out and out[-1][0].isspace():
-            out.pop()
         mark = match.group("mark")
         # Quotes and brackets around the preceding text do not decide where a
         # terminal mark goes or whether a sentence ended; the text inside does.
-        core = "".join(char for char, _ in out).rstrip(_WRAPPERS)
+        core = "".join(char for char, _ in out).rstrip().rstrip(_WRAPPERS)
+        if phrase:
+            turn_end = mark is None and match.end() == len(body)
+            left_clause = not core or (core[-1] in ",;:.?!" and not core.endswith("..."))
+            right_clause = mark in (",", ";", ":", ".", "!") or turn_end
+            whole_sentence = (not core or core[-1] in ".?!") and (mark in (".", "!") or turn_end)
+            # The seam space belongs to the right-hand turn, so trailing
+            # whitespace does not count towards the phrase's sources.
+            stop = match.start() + len(match.group(0).rstrip())
+            owners = (
+                {sources[owner] for _, owner in chars[match.start() : stop]}
+                if sources is not None
+                else set()
+            )
+            if not left_clause or not right_clause or whole_sentence or len(owners) > 1:
+                append(chars[match.start() : match.end()])
+                cursor = match.end()
+                continue
+        while out and out[-1][0].isspace():
+            out.pop()
         if mark in (".", "?", "!") and core and not _SENTENCE_END.search(core):
             last = core[-1]
             if last in ",;:":
@@ -121,7 +200,8 @@ def _clean_indexed(pieces: tuple[TurnPiece, ...]) -> tuple[tuple[int, TurnPiece]
 
 
 def _join_at_seam(
-    left: tuple[TurnPiece, ...], right: tuple[TurnPiece, ...],
+    left: tuple[TurnPiece, ...],
+    right: tuple[TurnPiece, ...],
 ) -> tuple[TurnPiece, ...]:
     """Concatenate two turns with exactly one space at the seam, on the right.
 
@@ -139,17 +219,23 @@ def _join_at_seam(
     )
 
 
-def drop_fillers(turns: Sequence[SpeakerTurn]) -> list[SpeakerTurn]:
+def drop_fillers(turns: Sequence[SpeakerTurn], *, fillers: FillerList) -> list[SpeakerTurn]:
     """Apply F1-F6 without changing attribution, ordering or piece metadata."""
-    return [turn for turn, _ in drop_fillers_with_seams(turns)]
+    return [turn for turn, _ in drop_fillers_with_seams(turns, fillers=fillers)]
 
 
 def drop_fillers_with_seams(
     turns: Sequence[SpeakerTurn],
+    *,
+    fillers: FillerList,
 ) -> list[tuple[SpeakerTurn, frozenset[int]]]:
     """Apply F1-F6 and report, per output turn, the piece indexes where F5 joined
     in another input turn, so a later filter can refuse to work across them."""
-    kept = [turn for turn in turns if any(p.text.strip() for p in _clean_pieces(turn.pieces))]
+    kept = [
+        turn
+        for turn in turns
+        if any(p.text.strip() for p in _clean_pieces(turn.pieces, fillers=fillers))
+    ]
     merged: list[tuple[SpeakerTurn, list[int]]] = []
     for turn in kept:
         if merged and merged[-1][0].identity_key == turn.identity_key:
@@ -160,7 +246,10 @@ def drop_fillers_with_seams(
             merged.append((turn, [0] * len(turn.pieces)))
     out: list[tuple[SpeakerTurn, frozenset[int]]] = []
     for turn, sources in merged:
-        cleaned = _clean_indexed(turn.pieces)
+        cleaned = _clean_indexed(turn.pieces, fillers=fillers, sources=sources)
+        if not cleaned:
+            # Removals emptied the merged turn; a turn without a match is never empty here.
+            continue
         seams = frozenset(
             position
             for position in range(1, len(cleaned))

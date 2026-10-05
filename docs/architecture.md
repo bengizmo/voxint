@@ -789,7 +789,12 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   filler and repeated-word filters (#754) run in one place,
   `apply_turn_filters` (`src/voxint/export/turn_filters.py`), which the `md`
   turns export, the `txt` turns export (`to_txt_turns`) and read mode all call,
-  so no two surfaces can disagree about which words were left out. The pre-0.51
+  so no two surfaces can disagree about which words were left out. Which words
+  count as fillers (#753) is a `FillerList` from the versioned presets in
+  `src/voxint/export/filler_lists.py` plus the operator's add and keep lists,
+  resolved once per operation by `resolve_effective_filler_list`
+  (`src/voxint/app_settings.py`): a list saved on the Settings page wins over
+  the `VOXINT_FILLERS_ADD` / `VOXINT_FILLERS_KEEP` environment lists. The pre-0.51
   layout (`##` headings over `>` blockquotes from `paragraphize_transcript`)
   stays as `--style blocks` and remains the body of annotation pull-quotes. Deliberately not built: a speaker-name
   omission toggle (caption guidance keeps speaker IDs; anonymization belongs in

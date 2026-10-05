@@ -870,6 +870,12 @@
     ]
   ],
   [
+    "/settings/fillers",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/settings/glossary",
     [
       "POST"

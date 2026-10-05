@@ -579,6 +579,7 @@ docker compose exec api voxint restart <run-id> [--from-stage STAGE] [--yes] [--
 docker compose exec api voxint list                      # recent runs, newest first (--status, --limit, --json)
 docker compose exec api voxint export <run-id> --format srt   # export a transcript (see below)
 docker compose exec api voxint doctor                    # read-only preflight for every dependency
+docker compose exec api voxint fillers show              # filler presets, your add/keep lists and their sources
 docker compose exec api voxint gpu-phase status          # GPU sharing phase and waiting work (docs/gpu-sharing.md)
 docker compose exec api voxint stats                     # aggregate health/throughput (--since, --json)
 docker compose exec api voxint watch <run-id>            # follow a run until it stops (--interval, --timeout)
@@ -617,6 +618,12 @@ true (the default), doctor also checks for Deno on `PATH`: yt-dlp's JS
 challenge solver (`yt-dlp-ejs`) requires a Deno runtime, and sites like YouTube
 will reject downloads without it. Docker images bundle Deno; native installs
 should install it separately (`curl -fsSL https://deno.land/install.sh | sh`).
+The advisory `filler list` line says where the add and keep lists come from,
+for example `preset en-1; additions from settings (2), overriding the
+environment; keeps: none`. It warns `settings unavailable; environment only
+(provisional)` when the saved settings cannot be read, and warns when the saved
+list is not valid, because filler-dropping exports are refused until it is
+saved again.
 After the checks it prints an advisory hardware-telemetry section (aggregated GPU utilization, VRAM,
 temperature and throttle state, plus each service's admission depth) read from
 the same `/healthz` `resources` block described under "Metrics & monitoring". A
@@ -937,7 +944,46 @@ How it is built:
   the next word is re-capitalised. An utterance made only of fillers disappears.
   A filler directly followed by a closing quotation mark is a quoted word and
   stays. This is English only: `uh-huh`, `mm-hmm`, `hmm`, `like` and `you
-  know` stay.
+  know` stay with the default list.
+  `VOXINT_FILLERS_ADD` and `VOXINT_FILLERS_KEEP` accept comma-separated English
+  entries and default to blank. Use letters, apostrophes and single inner hyphens,
+  with at most 5 words and 40 characters per entry and 100 entries per list.
+  A list saved on the settings page wins over the corresponding environment list;
+  an unset list inherits it. The API reads these variables at start-up, so restart
+  the API process after editing them.
+  The **Filler words** section on the Settings General tab (`POST
+  /settings/fillers`, `CSRF_SETTINGS`) edits the saved lists. The twelve tier 2
+  suggestions are checkboxes that write into the add list: a ticked box is an
+  add entry, there is no separate tier 2 state, and the server validates each
+  submitted suggestion like any other add entry. The add textarea holds the other add
+  entries and the keep textarea the keep entries, one per line. The fields show
+  only what is saved in the database: when a list inherits the environment, the
+  fields are empty and the section shows the environment entries read-only, so
+  saving an untouched form keeps inheriting. An empty field saves SQL NULL (the
+  `en` key is removed and any other language keys are kept). The section also
+  shows the effective list and any keep entries with no effect. An invalid entry
+  returns 422 with the submitted text kept, and nothing is written. When both
+  lists are invalid, the message names both. The error
+  renders on the General tab (or on the single settings page when
+  `CONSOLE_SETTINGS_ENABLED` is off). If the saved row is not valid, the section says so and a valid save
+  replaces it.
+  When the list in effect differs from the preset, an md turns export with
+  fillers dropped ends with one HTML comment line, after a blank line, on every
+  surface:
+  `<!-- Filler words left out: 12. Preset en-1; also removed: you know, I mean; kept: um. The saved transcript is unchanged. -->`.
+  "Also removed" names the added entries in effect for the export, whether or not
+  this recording contains them, and "kept" names the keep entries that took a
+  word off the list. Either clause is left out when it
+  is empty. The default list adds no comment, and `txt` never gets one.
+  With `--drop-fillers`, `voxint export` prints the count to stderr, for example
+  `Left out 12 filler words (preset en-1, 2 added, 1 kept).` The added and kept
+  numbers count the same entries the comment names. Stdout carries only
+  the document (or the `wrote PATH` line with `-o`).
+  `voxint fillers show` prints the preset version, tier 1, the tier 2
+  suggestions (`*` marks the added ones), the add and keep lists with their
+  sources, any keep entries with no effect, and the effective list. It reads the
+  saved lists from the database and exits 2 if the database is unreachable or
+  the saved list is not valid.
   Nothing stored changes. Filler removal is not available with a translation
   or the `blocks` style. It works on `md` turns, `txt` with `style=turns`, and
   read mode.
@@ -1003,9 +1049,15 @@ a download with the same options hold the same words. With a filter on:
 - One line under the menu says how many words were left out, for example "Left
   out 4 filler words and 1 repeated word. The saved transcript is unchanged."
   The count is of words: punctuation that went with a filler is not counted.
-  Repeats are counted after fillers are removed.
+  Repeats are counted after fillers are removed. When the filler list in effect
+  differs from the preset, the line adds "Filler words are matched using your
+  filler list." with a link to the settings section (`/settings#fillers`). In a
+  multi-user install, only an admin sees the link; others see plain text,
+  because Settings is admin-only.
 - If the filters remove every word, the page says "The filters left out every
-  word. The saved transcript is unchanged."
+  word. The saved transcript is unchanged." With a changed filler list it reads
+  "The filters left out every word, using your filler list." and links the same
+  way.
 - The Download transcript menu's Markdown links and reading-copy `txt` links
   carry the active filters, and those `txt` links add `style=turns`. "Read on
   screen" keeps the filters too. The timed `txt`, subtitle, `json`, `rttm` and

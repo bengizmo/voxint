@@ -48,6 +48,7 @@ from voxint.db.models import (
     TranscriptSegment,
 )
 from voxint.export import format_timespan
+from voxint.export.filler_lists import DEFAULT_FILLER_LIST
 from voxint.speakers.matching import MatchingGates
 
 _GATES = MatchingGates()
@@ -1503,7 +1504,7 @@ def test_read_cleanup_response_parity(
     with session_factory() as session:
         paragraphs = layout_turns(apply_turn_filters(
             attributed_turns(session, run_id, text=TranscriptText.RAW),
-            drop_fillers=fillers, drop_repeats=repeats,
+            fillers=DEFAULT_FILLER_LIST if fillers else None, drop_repeats=repeats,
         ).turns)
     assert response.context["read_rows"] == [
         {"speaker": None if p.continuation else p.speaker,

@@ -112,6 +112,7 @@ from voxint.api.tutorial_view import _tutorial_banner
 from voxint.app_settings import (
     get_app_settings,
     is_queue_paused,
+    resolve_effective_filler_list,
     resolve_effective_translation_target_language,
     set_queue_paused,
 )
@@ -157,6 +158,7 @@ from voxint.enrichment.translations import (
     translation_texts,
 )
 from voxint.export import MEDIA_TYPES, format_clock, transcript_payload
+from voxint.export.filler_lists import FillerListError
 from voxint.export.reading import layout_turns
 from voxint.export.service import parse_filter_value
 from voxint.export.turn_filters import apply_turn_filters
@@ -1176,9 +1178,18 @@ def run_transcript(
         # template only lays out rows, and Jinja autoescape keeps hostile
         # transcript text literal. One attribution walk: the segment-level
         # lines are not loaded here.
+        try:
+            filler_list = (
+                resolve_effective_filler_list(get_app_settings(session), settings)
+                if drop_fillers
+                else None
+            )
+        except FillerListError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         filtered = apply_turn_filters(
             attributed_turns(session, run_id, text=variant),
-            drop_fillers=drop_fillers, drop_repeats=drop_repeats,
+            fillers=filler_list,
+            drop_repeats=drop_repeats,
         )
         read_rows = [
             {
@@ -1207,6 +1218,9 @@ def run_transcript(
                 "read": True,
                 "read_rows": read_rows,
                 "read_timestamps": timestamps,
+                "custom_fillers": (
+                    drop_fillers and filler_list is not None and not filler_list.is_default
+                ),
                 "drop_fillers": drop_fillers,
                 "drop_repeats": drop_repeats,
                 "fillers_removed": filtered.fillers_removed,

@@ -3,7 +3,7 @@
 import enum
 import uuid
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -24,6 +24,7 @@ from voxint.export import (
     to_rttm,
     to_txt_turns,
 )
+from voxint.export.filler_lists import FillerList
 from voxint.export.reading import layout_turns
 from voxint.export.turn_filters import apply_turn_filters
 
@@ -121,6 +122,23 @@ def export_title(session: Session, run_id: uuid.UUID) -> str:
     return f"{title} | {format_recorded_date(recorded)}" if recorded is not None else title
 
 
+@dataclass(frozen=True)
+class RenderedTranscript:
+    content: str
+    fillers_removed: int
+    repeats_removed: int
+
+
+def filler_report_comment(fillers: FillerList, removed: int) -> str:
+    """Describe the effective custom list and this export's removal count."""
+    detail = f"<!-- Filler words left out: {removed}. Preset {fillers.preset_version}"
+    if fillers.extra_entries:
+        detail += f"; also removed: {', '.join(fillers.extra_entries)}"
+    if fillers.effective_keeps:
+        detail += f"; kept: {', '.join(fillers.effective_keeps)}"
+    return detail + ". The saved transcript is unchanged. -->"
+
+
 def render_run_transcript(
     session: Session,
     run_id: uuid.UUID,
@@ -130,12 +148,31 @@ def render_run_transcript(
     timestamps: bool = True,
     style: MarkdownStyle | None = None,
     translated_texts: Sequence[str] | None = None,
-    drop_fillers: bool = False,
+    fillers: FillerList | None = None,
     drop_repeats: bool = False,
 ) -> str:
-    """Load one attributed view and render it without transport-specific behavior."""
+    """Render through the shared report without repeating attribution or filtering."""
+    return render_run_transcript_report(
+        session, run_id, fmt, text=text, timestamps=timestamps, style=style,
+        translated_texts=translated_texts, fillers=fillers, drop_repeats=drop_repeats,
+    ).content
+
+
+def render_run_transcript_report(
+    session: Session,
+    run_id: uuid.UUID,
+    fmt: TranscriptFormat,
+    *,
+    text: TranscriptText,
+    timestamps: bool = True,
+    style: MarkdownStyle | None = None,
+    translated_texts: Sequence[str] | None = None,
+    fillers: FillerList | None = None,
+    drop_repeats: bool = False,
+) -> RenderedTranscript:
+    """Load one attributed view and report its render-time filter counts."""
     resolved = parse_style(style, fmt)
-    if drop_fillers:
+    if fillers is not None:
         if translated_texts is not None:
             raise ExportOptionError("fillers cannot be combined with a translation")
         parse_fillers("drop", fmt, resolved)
@@ -152,16 +189,21 @@ def render_run_transcript(
             except ValueError as exc:
                 raise TranslationMismatchError from exc
         filtered = apply_turn_filters(
-            turns, drop_fillers=drop_fillers, drop_repeats=drop_repeats
+            turns, fillers=fillers, drop_repeats=drop_repeats
         )
         paragraphs = layout_turns(filtered.turns)
         if fmt is TranscriptFormat.TXT:
-            return to_txt_turns(paragraphs, timestamps=timestamps)
-        return to_markdown_turns(
-            paragraphs,
-            header=export_title(session, run_id),
-            timestamps=timestamps,
-        )
+            content = to_txt_turns(paragraphs, timestamps=timestamps)
+        else:
+            content = to_markdown_turns(
+                paragraphs,
+                header=export_title(session, run_id),
+                timestamps=timestamps,
+            )
+            if fillers is not None and not fillers.is_default:
+                comment = filler_report_comment(fillers, filtered.fillers_removed)
+                content += ("\n" if content else "") + comment + "\n"
+        return RenderedTranscript(content, filtered.fillers_removed, filtered.repeats_removed)
     lines = attributed_transcript(session, run_id, text=text)
     if translated_texts is not None:
         if len(lines) != len(translated_texts):
@@ -169,7 +211,7 @@ def render_run_transcript(
         lines = [
             replace(line, text=body) for line, body in zip(lines, translated_texts, strict=True)
         ]
-    return render_transcript(lines, fmt, timestamps=timestamps)
+    return RenderedTranscript(render_transcript(lines, fmt, timestamps=timestamps), 0, 0)
 
 
 def render_run_rttm(session: Session, run_id: uuid.UUID) -> str:

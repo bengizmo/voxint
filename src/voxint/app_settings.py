@@ -17,11 +17,63 @@ from sqlalchemy.orm import Session
 
 from voxint.config import Settings, llm_endpoint_explicitly_set
 from voxint.db.models import AppSettings, PipelineRun
+from voxint.export.filler_lists import (
+    FillerList,
+    FillerListError,
+    Source,
+    effective_filler_list,
+    normalize_entries,
+)
 
 if TYPE_CHECKING:
     from voxint.clients.llm import HttpLLMClient
 
 SINGLETON_ID = 1
+_SAVED_FILLERS_INVALID = "The saved filler word list is not valid. Save it again in settings."
+
+
+def resolve_effective_filler_list(row: AppSettings | None, settings: Settings) -> FillerList:
+    """Effective English fillers: each saved list wins independently over env.
+
+    SQL NULL or a missing ``en`` key inherits the environment. An explicit
+    ``{"en": []}`` wins as an empty list. This is the single resolver for CLI,
+    downloads and read mode; entries retain their first spelling for matching.
+    A saved value of the wrong shape or with an invalid entry raises
+    :class:`FillerListError` (value-free), never a silent reinterpretation: a
+    bare string would otherwise iterate as single letters.
+    """
+    entries: dict[str, list[str] | tuple[str, ...]] = {}
+    sources: dict[str, Source] = {}
+    overridden: list[str] = []
+    for name in ("add", "keep"):
+        stored = getattr(row, f"fillers_{name}") if row is not None else None
+        env = normalize_entries(getattr(settings, f"voxint_fillers_{name}").split(","))
+        if stored is not None and not isinstance(stored, dict):
+            raise FillerListError(_SAVED_FILLERS_INVALID)
+        if stored is not None and "en" in stored:
+            saved = stored["en"]
+            if not isinstance(saved, list) or not all(isinstance(e, str) for e in saved):
+                raise FillerListError(_SAVED_FILLERS_INVALID)
+            try:
+                entries[name] = normalize_entries(saved)
+            except FillerListError as exc:
+                raise FillerListError(f"{_SAVED_FILLERS_INVALID} {exc}") from None
+            sources[name] = "settings"
+            if env:
+                overridden.append(name)
+        elif env:
+            entries[name] = env
+            sources[name] = "environment"
+        else:
+            entries[name] = []
+            sources[name] = "none"
+    return effective_filler_list(
+        entries["add"],
+        entries["keep"],
+        add_source=sources["add"],
+        keep_source=sources["keep"],
+        env_overridden=tuple(overridden),
+    )
 
 
 def resolve_effective_llm_api_key(row: AppSettings | None, settings: Settings) -> str:

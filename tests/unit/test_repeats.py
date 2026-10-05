@@ -6,6 +6,7 @@ import pytest
 
 from voxint.adjudication.turns import PieceRule, SpeakerTurn, TextMapping, TurnPiece, join_pieces
 from voxint.export import to_markdown_turns
+from voxint.export.filler_lists import DEFAULT_FILLER_LIST
 from voxint.export.fillers import drop_fillers_with_seams
 from voxint.export.reading import layout_turns
 from voxint.export.repeats import FUNCTION_WORDS, ONE_WORD_ELIGIBLE, ONE_WORD_EXCLUDED, drop_repeats
@@ -383,7 +384,9 @@ def test_filler_only_interruption_is_not_crossed() -> None:
     alex_1 = turn(piece("the", 0))
     sam = turn(piece(" um", 1), name="Sam")
     alex_2 = turn(piece(" the", 2), piece(" cat", 3))
-    merged, seams = zip(*drop_fillers_with_seams([alex_1, sam, alex_2]), strict=True)
+    merged, seams = zip(
+        *drop_fillers_with_seams([alex_1, sam, alex_2], fillers=DEFAULT_FILLER_LIST), strict=True
+    )
 
     assert [join_pieces(t.pieces) for t in merged] == ["the the cat"]
     assert [join_pieces(t.pieces) for t in drop_repeats(merged, seams)] == ["the the cat"]
@@ -391,7 +394,10 @@ def test_filler_only_interruption_is_not_crossed() -> None:
 
 def test_fillers_then_repeats_inside_one_turn() -> None:
     merged, seams = zip(
-        *drop_fillers_with_seams([turn(piece("the um the cat", coarse=True))]), strict=True
+        *drop_fillers_with_seams(
+            [turn(piece("the um the cat", coarse=True))], fillers=DEFAULT_FILLER_LIST
+        ),
+        strict=True,
     )
 
     assert [join_pieces(t.pieces) for t in drop_repeats(merged, seams)] == ["the cat"]

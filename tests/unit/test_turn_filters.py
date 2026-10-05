@@ -3,6 +3,7 @@
 import pytest
 
 from voxint.adjudication.turns import PieceRule, SpeakerTurn, TextMapping, TurnPiece, join_pieces
+from voxint.export.filler_lists import DEFAULT_FILLER_LIST
 from voxint.export.fillers import drop_fillers_with_seams
 from voxint.export.repeats import drop_repeats
 from voxint.export.turn_filters import apply_turn_filters
@@ -26,7 +27,7 @@ def turn(*pieces: TurnPiece, name: str = "Alex") -> SpeakerTurn:
 
 def test_noop_preserves_turn_identity() -> None:
     original = (turn(piece("um the the cat")), turn(piece("Hello"), name="Sam"))
-    result = apply_turn_filters(original, drop_fillers=False, drop_repeats=False)
+    result = apply_turn_filters(original, fillers=None, drop_repeats=False)
     assert isinstance(result.turns, list)
     assert len(result.turns) == len(original)
     assert all(actual is expected for actual, expected in zip(result.turns, original, strict=True))
@@ -36,7 +37,7 @@ def test_noop_preserves_turn_identity() -> None:
 @pytest.mark.parametrize("text", ["um ...", "um , !"])
 def test_punctuation_remnants_are_not_words(text: str) -> None:
     result = apply_turn_filters(
-        [turn(piece(text, coarse=True))], drop_fillers=True, drop_repeats=False
+        [turn(piece(text, coarse=True))], fillers=DEFAULT_FILLER_LIST, drop_repeats=False
     )
     assert result.turns == []
     assert result.fillers_removed == 1
@@ -45,7 +46,7 @@ def test_punctuation_remnants_are_not_words(text: str) -> None:
 
 def test_f5_dropped_turn_and_seam_counts() -> None:
     original = [turn(piece("Hello")), turn(piece("um", 1), name="Sam"), turn(piece("there", 2))]
-    result = apply_turn_filters(original, drop_fillers=True, drop_repeats=False)
+    result = apply_turn_filters(original, fillers=DEFAULT_FILLER_LIST, drop_repeats=False)
     assert len(result.turns) == 1
     assert join_pieces(result.turns[0].pieces) == "Hello there"
     assert result.fillers_removed == 1
@@ -65,7 +66,9 @@ def test_each_step_counts_its_own_input(
     fillers: bool, repeats: bool, expected: str, filler_count: int, repeat_count: int
 ) -> None:
     original = [turn(piece("the um the cat and and dog", coarse=True))]
-    result = apply_turn_filters(original, drop_fillers=fillers, drop_repeats=repeats)
+    result = apply_turn_filters(
+        original, fillers=DEFAULT_FILLER_LIST if fillers else None, drop_repeats=repeats
+    )
     assert join_pieces(result.turns[0].pieces) == expected
     assert result.fillers_removed == filler_count
     assert result.repeats_removed == repeat_count
@@ -73,7 +76,7 @@ def test_each_step_counts_its_own_input(
 
 def test_repeated_pair_counts_both_words() -> None:
     result = apply_turn_filters(
-        [turn(piece("we were we were going", coarse=True))], drop_fillers=False, drop_repeats=True
+        [turn(piece("we were we were going", coarse=True))], fillers=None, drop_repeats=True
     )
     assert join_pieces(result.turns[0].pieces) == "we were going"
     assert result.repeats_removed == 2
@@ -81,7 +84,7 @@ def test_repeated_pair_counts_both_words() -> None:
 
 def test_repeats_do_not_cross_f5_seam() -> None:
     original = [turn(piece("the")), turn(piece("um", 1), name="Sam"), turn(piece("the cat", 2))]
-    result = apply_turn_filters(original, drop_fillers=True, drop_repeats=True)
+    result = apply_turn_filters(original, fillers=DEFAULT_FILLER_LIST, drop_repeats=True)
     assert len(result.turns) == 1
     assert join_pieces(result.turns[0].pieces) == "the the cat"
     assert result.fillers_removed == 1
@@ -91,7 +94,7 @@ def test_repeats_do_not_cross_f5_seam() -> None:
 def test_counts_match_visible_words_with_segment_boundaries() -> None:
     original = turn(piece("um", boundary=True), piece("the the café 123 , !", 1, boundary=True))
     before = join_pieces(original.pieces)
-    result = apply_turn_filters([original], drop_fillers=True, drop_repeats=True)
+    result = apply_turn_filters([original], fillers=DEFAULT_FILLER_LIST, drop_repeats=True)
     after = join_pieces(result.turns[0].pieces)
     assert before == "um the the café 123 , !"
     assert after == "The café 123 , !"
@@ -125,12 +128,14 @@ def test_nonnegative_counts_and_direct_composition(
     expected = list(original)
     seams: list[frozenset[int]] | None = None
     if fillers:
-        cleaned = drop_fillers_with_seams(expected)
+        cleaned = drop_fillers_with_seams(expected, fillers=DEFAULT_FILLER_LIST)
         expected = [item for item, _ in cleaned]
         seams = [boundaries for _, boundaries in cleaned]
     if repeats:
         expected = drop_repeats(expected, seams)
-    result = apply_turn_filters(original, drop_fillers=fillers, drop_repeats=repeats)
+    result = apply_turn_filters(
+        original, fillers=DEFAULT_FILLER_LIST if fillers else None, drop_repeats=repeats
+    )
     assert result.turns == expected
     assert result.fillers_removed >= 0
     assert result.repeats_removed >= 0
