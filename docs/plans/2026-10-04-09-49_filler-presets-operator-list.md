@@ -1,6 +1,6 @@
 # Plan: filler presets in tiers plus an operator list (#753)
 
-Status: in-progress
+Status: done
 
 Spec deltas: none (this project declares no living spec). Q1 below reconciles
 two acceptance lines on #753. The reconciliation is recorded on the issue, not
@@ -745,3 +745,42 @@ High tier consult, 3 of 3 voices: codex (planner, verified against the code at
   Tabs are the default, and `docs/operations.md` names the single-page legacy
   mode.
 - Codex verified the fix delta with no findings.
+
+## Completion notes (2026-10-04)
+
+- **Verified.** All four slices landed on `feat/753-filler-presets`
+  (`e0167079`, `4901e6b0`, `72fc91af`, `fd6a28cb`), plus two test follow-ups
+  found by the PR's full CI run. `99212764` made the CSRF test ids stable under
+  pytest-xdist and removed credential literals GitGuardian flagged. `0a82287d`
+  bumped the alembic head pin to `0071` (missed in slice 2) and isolated the
+  doctor CLI test from `DATABASE_URL` (slice 3). Each slice ran only a subset of
+  the integration suite locally, which is how the slice 2 and slice 3 gaps
+  reached CI. Every
+  acceptance scenario has a passing test:
+  - default unchanged and the generated pattern: `tests/unit/test_fillers.py`
+    and the existing three-surface goldens (`test_turn_exports.py`,
+    `test_runs_api.py::test_read_cleanup_response_parity`);
+  - the phrase scenarios (parenthetical, not standalone, tag question,
+    longest first, pieces and segment boundary, merge seam) and keep `um`:
+    `tests/unit/test_fillers.py`;
+  - one effective list on every surface, the row winning over the
+    environment, the md report and CLI stderr:
+    `test_turn_exports.py::test_custom_filler_list_all_surfaces_and_storage`,
+    with `doctor` and `fillers show` precedence in `tests/unit/test_diagnostics.py`
+    and `tests/integration/test_cli_commands.py`;
+  - tier 2 opt-in, cleared field inherits, keep with no effect, and invalid
+    lists on the console: `tests/integration/test_settings_fillers.py`;
+  - invalid environment fails closed: `tests/contracts/test_fillers_config.py`.
+  Gates: ruff, mypy, unit, contract and integration suites, gitleaks over the
+  branch history, the browser acceptance lane, and the PR's CI.
+- **Spec files touched:** none. This project declares no living spec, and the
+  plan's spec deltas were none.
+- **Drift (accepted in review, beyond the plan's text):** the read-mode "your
+  filler list" link is plain text for non-admins in a multi-user install,
+  because Settings is admin-only; a refused save names every invalid list, not
+  only the first.
+- **Follow-ups:** none new. Still deferred by decision: an explicit "empty,
+  overriding the environment" UI state, phrases after a bare conjunction, #756
+  (other languages), #757 (per-word ledger) and #758 (LLM clean-up). The
+  settings textareas share the Glossary section's inline-label look; a restyle
+  belongs with the console visual refresh, not here.
