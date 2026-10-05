@@ -22,6 +22,9 @@ export const REVIEW_KEY = {
   sameAsPrevious: "=",
   annotate: "h",
   walkMode: "w",
+  cleanup: "c",
+  keepFiller: "f",
+  omitWord: "o",
   download: "d",
   help: "?",
 } as const;

@@ -861,3 +861,77 @@ passed; the 3 failures are the known local-only enrichment gates).
 
 Delta re-reviews (codex): round 1 raised one Low (punctuation after removed
 wrappers), fixed; round 2 clean.
+
+### Slice 4a code review (High, 3 of 3: codex, deepseek-v4-pro, qwen/qwen3.8-max-prime)
+
+Slice 4 was split: 4a is the API and backend writes (PR #788, merged as
+`e1f97774`), and 4b is the console. Codex implemented 4a from a brief. The full
+suite passed before review (11,994 passed; the 3 failures are the known
+local-only enrichment gates).
+
+**Fixed.**
+- codex, deepseek, qwen: the mark and undo routes committed before building the
+  response, so a failing response could hide a committed write. The response is
+  now built first.
+- A broken saved filler list failed the read. Detection is now empty,
+  `detectionError` explains why, and omit, clear and undo still work.
+- `version` now hashes focus-independent state, including each emission's shown
+  text. A case-only edit moves it; changing focus does not.
+- GET reads text, marks and settings in one repeatable-read snapshot.
+- A text correction walks the run only when its segment has marks.
+- A stale mark on a segment outside the walk raised `KeyError`. Fixed.
+
+**Rejected.**
+- qwen High: `clear` depends on `segment.words` bounds. Stored words never
+  change for a segment, and a restart that re-transcribes deletes segments and
+  their marks by cascade.
+
+Delta re-reviews (codex, then deepseek): the last round was clean.
+
+### Slice 4b code review (High, 3 of 3: codex, deepseek-v4-pro, qwen/qwen3.8-max-prime)
+
+Codex implemented 4b from a brief. Before review, the browser lane on
+maintainer hardware found and fixed four issues: a duplicate focused GET when
+`j` followed a mark write (a real race; focus reads now wait for the write to
+settle), the undo toast copy after a clear, an underline that matched the
+speaker label's, and a cleared-marks notice that never went away. A flaky vitest
+exposed a real focus race: the first word's autofocus could replace a word
+picked right after entering the mode. The full suite passed before review
+(11,994 passed; the 3 failures are the known local-only enrichment gates).
+
+Projection cost, measured on the 2,000-segment browser-lane fixture with word
+timings on every segment: the word-marks GET takes about 0.6 s (median of 5,
+unfocused and focused alike, timed in `build_word_marks_payload`). A mark write
+rebuilds the same payload. Acceptable for a single operator; no shortcut added.
+
+**Fixed.**
+- codex, deepseek, qwen (qwen High): clean-up autofocus took focus on every
+  mount, including from the edit box or a dialog when words arrived late. It
+  is now a one-shot request on entry and on a cursor move, skipped while focus
+  is in a form control or dialog.
+- codex, deepseek, qwen: a failed mark write or undo superseded a pending read
+  and scheduled nothing, so the mode could stick on "Loading words…" with
+  stale units. A failed write now refreshes once.
+- codex: moving between split children, the navigation frame moved focus from
+  the word to the row. It now leaves word, form and dialog focus alone.
+- deepseek, qwen: leaving the mode by `c`, the toolbar or **Done** dropped focus
+  to the page. Every exit now returns focus to the cursor row.
+- deepseek Low: with a broken filler list, `f` named the wrong cause. It now
+  says detection is unavailable.
+- qwen: the request guard kept stale state and outlived the editor. It resets
+  on invalidate, and each run's scheduler is disposed on cleanup.
+- qwen: normal view split text at every word once a focused payload loaded. It
+  now passes only styled units.
+- qwen Low: a dead abort timeout on the undo-conflict refresh was removed.
+- qwen Low: the broken-list notice showed to read-only viewers.
+- qwen Low: the text-save test now asserts the save-time refresh itself.
+
+**Rejected.**
+- deepseek Medium: normal-view status is styling and `title` only, so screen
+  readers miss it. Adding text would break the byte-identical `data-seg-text`
+  contract that selection offsets rely on; clean-up mode's word buttons carry
+  the status in their accessible names.
+
+Delta re-review (codex): clean. A browser re-check after the fixes confirmed
+entry focus, focus after `j`, focus back on the row after exit, and edit-box
+focus kept when words arrive late.

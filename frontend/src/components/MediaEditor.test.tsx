@@ -12,12 +12,14 @@ import type {
 } from "./TranscriptPlayer";
 
 const availability = vi.hoisted(() => vi.fn());
+const wordMarks = vi.hoisted(() => vi.fn());
 // Keep existing write assertions independent of the new read-only availability call.
 const apiFetch = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api-client", async (original) => ({
   ...await original<typeof import("../lib/api-client")>(),
   apiFetch: (url: string, init?: RequestInit) => url.endsWith("/voice-samples")
-    ? availability(url, init) : apiFetch(url, init),
+    ? availability(url, init) : url.includes("/word-marks")
+      ? wordMarks(url, init) : apiFetch(url, init),
 }));
 // Tests reach the annotation panel's jump through `annotations`.
 const annotations = vi.hoisted(() => ({
@@ -126,6 +128,9 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   vi.stubGlobal("CSS", { escape: (s: string) => s.replaceAll(":", "\\:") });
   vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+  wordMarks.mockReset().mockResolvedValue({ json: async () => ({
+    runId: "run", version: "0.empty", emissions: [], stale: [], fillerListDefault: true, detectionError: null,
+  }) });
   availability.mockReset().mockResolvedValue({ json: async () => ({ speakerIds: [] }) });
   // clearAllMocks keeps queued Once implementations; reset so none can leak.
   vi.mocked(apiFetch).mockReset();

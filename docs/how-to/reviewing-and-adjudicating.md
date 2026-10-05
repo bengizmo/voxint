@@ -405,6 +405,57 @@ can't be split), a split segment can't also be free-text edited (splitting and
 editing are mutually exclusive), and a segment can be split into two parts, not
 more, in this release.
 
+### Keep a filler word, or leave out a word (clean-up mode)
+
+When you download a reading copy with filler words removed (the **Remove filler
+words** link in the reading view, or a Markdown copy made from it), Voxint leaves
+out words such as `um` and `uh`. Sometimes one of those words matters: a
+hesitation that shows someone was unsure, for example. Other times you want to
+drop a stray word the filler list does not cover. Clean-up mode lets you decide
+word by word.
+
+In the transcript, words that filler removal will leave out are **underlined**.
+A filler you chose to keep shows in **bold** with an accent line under it, and a
+word you chose to leave out is **struck through**. The words themselves never
+change: the saved transcript stays exactly as it is.
+
+1. Click the line you want to work on, then press **Clean up** (or `c`). The line's
+   words become buttons, and a bar above the transcript lists the keys.
+2. Move between words with **Tab** or the **left and right arrow keys**, or click
+   a word.
+3. Press `f` to **keep** a filler word that is underlined. Press `f` again to undo
+   the keep. Only a word the filler list removes can be kept.
+4. Press `o` to **leave out** any word. Press `o` again to bring it back.
+5. Press **Escape** (or **Done**) to leave clean-up mode.
+
+Every choice saves at once. An **Undo** button appears for a short while after
+each one, and the bar's **Keep**, **Omit** and **Clear** buttons do the same as
+the keys for mouse users. Moving to another line (`j`, `k`, or a click) keeps you
+in clean-up mode on the new line.
+
+Your choices apply only where filler words are removed: the reading view with
+**Remove filler words** on, and the Markdown and plain-text reading copies made
+with it. Every other download keeps every word.
+
+> ⚠️ **Leaving out a word is not redaction.** The word is still in the saved
+> transcript, in the audio, in the other text versions and in every download
+> made without filler removal. Do not rely on it to hide something sensitive.
+
+A few honest limits:
+
+- **The line's words must match the recording.** Voxint knows where each word
+  sits by its recorded timing. If the text of a line was changed (by you, or by
+  a [domain pack](../domain-packs.md) correction), clean-up mode may explain that
+  the line can't be marked. Filler words on such a line are still removed from
+  reading copies; they just aren't underlined in the editor.
+- **Editing a line clears its marks** when the new words no longer match the
+  old ones. The editor tells you how many were cleared, for example "1 clean-up
+  mark was cleared because the text changed."
+- **You can't split inside a marked word.** Clear the mark first, then split.
+- **A mark that no longer fits** shows a short note on its line with a
+  **Clear** button. Until you clear it, a reading copy with filler words removed
+  can't be made for that text version, and Voxint says which lines to fix.
+
 ### Reassign a segment (or half of one) to another speaker
 
 You can hand any line to the right person without leaving the transcript. The
@@ -450,6 +501,10 @@ the arrow keys stay with the audio player.](../images/keyboard-shortcuts.png)
 | **h** | Highlight the transcript text you have selected |
 | **d** | Open the **Download transcript** menu |
 | **w** | Turn walk mode on or off |
+| **c** | Turn clean-up mode on or off for the current line |
+| **f** | In clean-up mode, keep (or stop keeping) the focused filler word |
+| **o** | In clean-up mode, leave out (or bring back) the focused word |
+| **Escape** | Leave clean-up mode |
 | **?** | Show the cheat-sheet |
 | **Ctrl/⌘+Enter** | Save an edit (while typing in the edit box) |
 

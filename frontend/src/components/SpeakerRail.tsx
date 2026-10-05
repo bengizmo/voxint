@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, apiFetch } from "../lib/api-client";
+import type { WordMarkUndo } from "../lib/word-marks";
 import type { WriteGuard } from "../lib/editor-mutations";
 import { makeNonce } from "../lib/nonce";
 import { SpeakerCombobox } from "./SpeakerCombobox";
@@ -26,6 +27,7 @@ export interface LabelsResult {
 }
 
 export type UndoPayload =
+  | WordMarkUndo
   | { kind: "enroll"; decisionId: string; expiresAt: string }
   | { kind: "merge"; mergeNonce: string; expiresAt: string }
   | { kind: "decide"; decisionId: string; expiresAt: string }
