@@ -148,5 +148,6 @@ def test_single_alembic_head() -> None:
     # 0067 = synthdetect_jobs.created_at NOT NULL, issue #692.
     # 0068 = shared-GPU phase singleton, issue #748; 0069 = media_items.recorded_on
     # source recording date, issue #741.
-    # 0070 = language-model readiness gate, issue #768
-    assert list(heads) == ["0070"]
+    # 0070 = language-model readiness gate, issue #768; 0071 = app_settings
+    # filler add/keep lists, issue #753
+    assert list(heads) == ["0071"]

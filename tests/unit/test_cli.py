@@ -267,6 +267,7 @@ def test_doctor_prints_both_llm_lanes_without_changing_exit_code(
     # #316: a bundled-only install reports both AI lanes honestly — the bundled
     # advisory line appears, the unconfigured BYO endpoint says so instead of
     # "rejected" — and neither is hard, so the exit code stays 0.
+    import voxint.cli as cli
     import voxint.db.session as db_session
     import voxint.diagnostics as diagnostics
 
@@ -275,12 +276,23 @@ def test_doctor_prints_both_llm_lanes_without_changing_exit_code(
             pass
 
     monkeypatch.setattr(db_session, "build_engine", lambda *a, **k: _Engine())
+    # doctor builds its engine through _engine_or_report, not build_engine.
+    monkeypatch.setattr(cli, "_engine_or_report", lambda **k: (_Engine(), 0))
     canned = [
         diagnostics.CheckResult("postgres", True, True, "connected"),
         diagnostics.CheckResult("llm bundled", True, False, "reachable (HTTP 200)"),
         diagnostics.CheckResult("llm endpoint", True, False, "not configured"),
     ]
     monkeypatch.setattr(diagnostics, "run_diagnostics", lambda *a, **k: canned)
+    # Stub the filler check too: with a fake engine its detail is meaningless.
+    # tests/unit/test_diagnostics.py covers the check's own outcomes.
+    monkeypatch.setattr(
+        diagnostics,
+        "check_filler_list",
+        lambda *a, **k: diagnostics.CheckResult(
+            "filler list", False, False, "settings unavailable; environment only (provisional)"
+        ),
+    )
 
     assert main(["doctor"]) == 0
     out = capsys.readouterr().out
