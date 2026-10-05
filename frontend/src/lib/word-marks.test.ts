@@ -18,7 +18,8 @@ describe("word mark toggles", () => {
   });
   it("refuses ordinary keep and broken detection while allowing clear/omit", () => {
     expect(toggleWordMark(unit, "f", null).error).toBe("Only a word the filler list removes can be kept.");
-    expect(toggleWordMark({ ...unit, removed: "filler" }, "f", "broken").error).toContain("saved filler list is broken");
+    expect(toggleWordMark({ ...unit, removed: "filler" }, "f", "broken").error).toBe("Filler detection is unavailable, so no word can be kept right now.");
+    expect(toggleWordMark(unit, "f", "broken").error).toBe("Filler detection is unavailable, so no word can be kept right now.");
     expect(toggleWordMark({ ...unit, mark: "keep" }, "f", "broken").action).toBe("clear");
     expect(toggleWordMark(unit, "o", "broken").action).toBe("omit");
   });
@@ -40,6 +41,7 @@ it("drops superseded responses and skips identical versions only at the same foc
   const pending = guard.begin();
   guard.invalidate();
   expect(guard.accept(pending, { ...payload, version: "2.hash" }, "seg")).toBe(false);
+  expect(guard.accept(guard.begin(), payload, "seg")).toBe(true);
 });
 it("announces cleared marks with singular/plural and no zero notice", () => {
   expect(marksClearedNotice(0)).toBeNull();

@@ -18,7 +18,7 @@ interface UndoToastProps {
   onUndoStart?: () => void;
   // Always runs after adoption/conflict handling and release of the write
   // guard, including errors, so callers can flush deferred reads.
-  onUndoSettled?: () => void;
+  onUndoSettled?: (success: boolean) => void;
   onDismiss: () => void;
   // Called after a non-claim 409 (the action was re-ruled, the window ran
   // out, or the speaker it would restore is archived), while the write guard is still held, so the caller can refetch
@@ -110,6 +110,7 @@ export function UndoToast({
     writeGuard?.setBusy(true);
     setError(null);
     setRetryable(false);
+    let success = false;
     try {
       onUndoStart?.();
       const body = new URLSearchParams();
@@ -130,6 +131,7 @@ export function UndoToast({
       } else {
         onUndone((await res.json()) as LabelsResult);
       }
+      success = true;
     } catch (err) {
       if (err instanceof ApiError && err.conflictKind === "claim") {
         onClaimLost();
@@ -155,7 +157,7 @@ export function UndoToast({
       busyRef.current = false;
       setBusy(false);
       writeGuard?.setBusy(false);
-      onUndoSettled?.();
+      onUndoSettled?.(success);
     }
   }, [
     claimCsrf,

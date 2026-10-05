@@ -516,7 +516,7 @@ it("posts a word-mark undo and dispatches its marks payload separately", async (
   const order: string[] = [];
   const onMarksUndone = vi.fn(() => { order.push("adopt"); });
   const { props } = setup({ undo: { kind: "word-mark", markId: "mark-1", expiresAt: inMinutes(5) },
-    onMarksUndone, onUndoStart: () => { order.push("start"); }, onUndoSettled: () => { order.push("settled"); } });
+    onMarksUndone, onUndoStart: () => { order.push("start"); }, onUndoSettled: (success) => { expect(success).toBe(true); order.push("settled"); } });
   expect(screen.getByRole("status").textContent).toContain("Clean-up mark saved.");
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   await waitFor(() => expect(onMarksUndone).toHaveBeenCalledWith(payload));
@@ -534,6 +534,6 @@ it("settles a failed word-mark undo after releasing the shared write guard", asy
     onUndoSettled, onMarksUndone: vi.fn(), writeGuard: { busyRef, busy: false, setBusy: vi.fn() } });
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   await screen.findByText("write failed");
-  expect(onUndoSettled).toHaveBeenCalledOnce();
+  expect(onUndoSettled).toHaveBeenCalledExactlyOnceWith(false);
   expect(props.onMarksUndone).not.toHaveBeenCalled();
 });

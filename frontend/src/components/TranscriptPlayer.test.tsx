@@ -161,7 +161,7 @@ it("renders focusable cleanup units and plain gaps without changing text", () =>
   const { container } = render(<TranscriptPlayer
     runId="run" mediaUrl="/audio" segments={[{ ...twoLines[0], text: "😀 um hello." }]}
     capability={{ seekEnabled: true, reasons: [], mediaDuration: 1 }} lowConfidenceThreshold={0.5}
-    cleanupIndex={0} onFocusUnit={selected}
+    cleanupIndex={0} cleanupFocusKey="seg-0" cursorIndex={0} onFocusUnit={selected}
     wordMarks={new Map([[0, { segmentId: "seg-0", wordStart: null, wordEnd: null, markable: true, reason: null, units }]])}
   />);
   const wrapper = container.querySelector("[data-seg-text]")!;
@@ -196,11 +196,53 @@ it("does not overwrite a unit selected between cleanup mounting and passive effe
     return <div ref={root}><TranscriptPlayer
       runId="run" mediaUrl="/audio" segments={[{ ...twoLines[0], text: "😀 um hello." }]}
       capability={{ seekEnabled: true, reasons: [], mediaDuration: 1 }} lowConfidenceThreshold={0.5}
-      cleanupIndex={0} onFocusUnit={selected}
+      cleanupIndex={0} cleanupFocusKey="seg-0" cursorIndex={0} onFocusUnit={selected}
       wordMarks={new Map([[0, { segmentId: "seg-0", wordStart: null, wordEnd: null, markable: true, reason: null, units }]])}
     /></div>;
   }
   render(<EarlySelection />);
   expect(document.activeElement).toBe(screen.getByRole("button", { name: "hello." }));
   expect(selected).toHaveBeenLastCalledWith(units[2]);
+});
+
+it("leaves ordinary units in one text node outside clean-up mode", () => {
+  const { container } = render(<TranscriptPlayer
+    runId="run" mediaUrl="/audio" segments={[{ ...twoLines[0], text: "hello there" }]}
+    capability={{ seekEnabled: true, reasons: [], mediaDuration: 1 }} lowConfidenceThreshold={0.5}
+    wordMarks={new Map([[0, { segmentId: "seg-0", wordStart: null, wordEnd: null, markable: true, reason: null, units: [
+      { start: 0, end: 1, from: 0, to: 5, removed: null, protected: false, mark: null },
+      { start: 1, end: 2, from: 6, to: 11, removed: null, protected: false, mark: null },
+    ] }]])}
+  />);
+  const text = container.querySelector("[data-seg-text]")!;
+  expect(text.textContent).toBe("hello there");
+  expect(text.childNodes).toHaveLength(1);
+  expect(text.firstChild?.nodeType).toBe(Node.TEXT_NODE);
+});
+
+it("consumes word focus once per entry/cursor request even when units remount", () => {
+  const props = {
+    runId: "run", mediaUrl: "/audio", segments: [{ ...twoLines[0], text: "um hello" }],
+    capability: { seekEnabled: true, reasons: [], mediaDuration: 1 }, lowConfidenceThreshold: 0.5,
+    cursorIndex: 0, cleanupFocusKey: "seg-0",
+    wordMarks: new Map([[0, { segmentId: "seg-0", wordStart: null, wordEnd: null, markable: true, reason: null, units: [
+      { start: 0, end: 1, from: 0, to: 2, removed: "filler" as const, protected: false, mark: null },
+      { start: 1, end: 2, from: 3, to: 8, removed: null, protected: false, mark: null },
+    ] }]]),
+  };
+  const view = render(<TranscriptPlayer {...props} cleanupIndex={0} />);
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "um: removed by filler clean-up" }));
+  const hello = screen.getByRole("button", { name: "hello" });
+  act(() => hello.focus());
+  view.rerender(<TranscriptPlayer {...props} wordMarks={new Map(props.wordMarks)} cleanupIndex={0} />);
+  expect(document.activeElement).toBe(hello);
+  view.rerender(<TranscriptPlayer {...props} cleanupIndex={null} />);
+  const control = screen.getByRole("button", { name: "Play line at 0:00.00" });
+  act(() => control.focus());
+  view.rerender(<TranscriptPlayer {...props} cleanupIndex={0} />);
+  expect(document.activeElement).toBe(control);
+  // Leaving and entering is a new deliberate request.
+  view.rerender(<TranscriptPlayer {...props} cleanupFocusKey={null} cleanupIndex={null} />);
+  view.rerender(<TranscriptPlayer {...props} cleanupIndex={0} />);
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "um: removed by filler clean-up" }));
 });

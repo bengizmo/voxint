@@ -46,20 +46,23 @@ let state: WordMarksPayload;
 let version: number;
 const response = (data: unknown) => ({ json: async () => data }) as Response;
 const writes = () => vi.mocked(apiFetch).mock.calls.filter(([, init]) => init?.method === "POST");
+const focusedAndUnfocusedGets = () => vi.mocked(apiFetch).mock.calls.filter(([url, init]) =>
+  url.includes("/word-marks") && init?.method !== "POST");
 const focusedGets = () => vi.mocked(apiFetch).mock.calls.filter(([url, init]) =>
   url.includes("/word-marks?segment=") && init?.method !== "POST").map(([url]) => url);
 function deferred() {
   let resolve!: (value: Response) => void;
-  const promise = new Promise<Response>((done) => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (error: Error) => void;
+  const promise = new Promise<Response>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 async function readyAction(name: string) {
   const button = screen.getByRole<HTMLButtonElement>("button", { name });
   await waitFor(() => expect(button.disabled).toBe(false));
   return button;
 }
-function setup(reviewToken: string | null = "claim") {
-  return render(<MediaEditor mediaId="media" runId="run" mediaUrl="/audio" segments={segments}
+function setup(reviewToken: string | null = "claim", lines = segments) {
+  return render(<MediaEditor mediaId="media" runId="run" mediaUrl="/audio" segments={lines}
     capability={{ seekEnabled: true, reasons: [], mediaDuration: 2 }} lowConfidenceThreshold={0.5}
     reviewToken={reviewToken} multiUser initialProgress={{ verified: 0, total: 2 }} speakers={[]} claimCsrf="csrf" />);
 }
@@ -353,8 +356,11 @@ it("offers mouse actions, refuses ordinary keep, and clears selected marks", asy
 it("shows marksCleared from a text save and refreshes after whole-run adoption", async () => {
   setup(); await screen.findByDisplayValue(segments[0].text);
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Edited words." } });
+  const beforeSave = focusedAndUnfocusedGets().length;
   fireEvent.click(screen.getByRole("button", { name: /Save edit/ }));
   await screen.findByText("2 clean-up marks were cleared because the text changed.");
+  await waitFor(() => expect(focusedAndUnfocusedGets().length).toBe(beforeSave + 1));
+  expect(focusedAndUnfocusedGets().at(-1)?.[0]).toBe("/review/run/word-marks");
   const before = vi.mocked(apiFetch).mock.calls.filter(([url]) => url.includes("/word-marks")).length;
   act(() => rail.adopt!({ segments, labels: [], progress: { verified: 0, total: 2 } }));
   await waitFor(() => expect(vi.mocked(apiFetch).mock.calls.filter(([url]) => url.includes("/word-marks")).length).toBeGreaterThan(before));
@@ -391,6 +397,8 @@ it("explains unmarkable emissions and broken detection; requires a claim", async
   await screen.findByText("No recorded word timings.");
   expect(screen.getByText(/Filler detection is unavailable/).textContent).toContain("Invalid saved list");
   cleanup(); setup(null); key("c");
+  await waitFor(() => expect(document.querySelector(".wm-removed")?.textContent).toBe("uh"));
+  expect(screen.queryByText(/Filler detection is unavailable/)).toBeNull();
   expect(screen.queryByRole("region", { name: "Clean-up mode" })).toBeNull();
 });
 
@@ -404,4 +412,151 @@ it("distinguishes claim loss from ordinary mark conflicts", async () => {
   vi.mocked(apiFetch).mockRejectedValueOnce(new ApiError(409, "claim lost", "claim"));
   key("f", um);
   await waitFor(() => expect(screen.queryByRole("region", { name: "Clean-up mode" })).toBeNull());
+});
+
+it.each(["textarea", "dialog"])("keeps %s focus when entry's delayed words render", async (target) => {
+  setup();
+  await waitFor(() => expect(focusedAndUnfocusedGets()).toHaveLength(1));
+  const fetch = vi.mocked(apiFetch).getMockImplementation()!;
+  const read = deferred();
+  let result!: Promise<Response>;
+  vi.mocked(apiFetch).mockImplementation((url, init) => {
+    if (url === "/review/run/word-marks?segment=seg-0") {
+      result = fetch(url, init);
+      return read.promise;
+    }
+    return fetch(url, init);
+  });
+  key("c");
+  expect(screen.getByText("Loading words…")).toBeTruthy();
+  let focused: Element;
+  if (target === "textarea") {
+    const textarea = screen.getByRole("textbox");
+    act(() => textarea.focus());
+    focused = textarea;
+  } else {
+    key("?");
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    focused = document.activeElement!;
+  }
+  await act(async () => { read.resolve(await result); });
+  expect(document.activeElement).toBe(focused);
+  expect(document.querySelectorAll(".tp-cleanup-word")).toHaveLength(3);
+});
+
+it.each(["c", "toolbar", "Done", "Escape"])("restores row focus on exit via %s", async (path) => {
+  const { container } = setup();
+  await enter();
+  if (path === "Done") {
+    const done = screen.getByRole("button", { name: "Done Escape" });
+    act(() => done.focus());
+    fireEvent.click(done);
+  } else if (path === "toolbar") {
+    const exit = screen.getByRole("button", { name: /Exit clean-up/ });
+    act(() => exit.focus());
+    fireEvent.click(exit);
+  } else key(path, document.activeElement as HTMLElement);
+  expect(screen.queryByRole("region", { name: "Clean-up mode" })).toBeNull();
+  expect(document.activeElement).toBe(container.querySelector('[aria-current="step"]'));
+});
+
+it("does not move unrelated control focus on clean-up exit", async () => {
+  setup(); await enter();
+  const textarea = screen.getByRole("textbox");
+  act(() => textarea.focus());
+  fireEvent.click(screen.getByRole("button", { name: /Exit clean-up/ }));
+  expect(document.activeElement).toBe(textarea);
+});
+
+it("preserves word focus through j/k row animation frames between cached split children", async () => {
+  const frames = new Map<number, FrameRequestCallback>();
+  let frameId = 0;
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+  const children = [
+    { ...segments[0], segmentId: "child-0", text: "😀", wordStart: 0, wordEnd: 1 },
+    { ...segments[1], sourceSegmentId: "seg-0", segmentId: "child-1", text: "um hello.", wordStart: 1, wordEnd: 3 },
+  ];
+  state.emissions = [
+    { ...state.emissions[0], wordStart: 0, wordEnd: 1, units: [units[0]] },
+    { ...state.emissions[0], wordStart: 1, wordEnd: 3, units: units.slice(1).map((u) => ({ ...u, from: u.from - 2, to: u.to - 2 })) },
+  ];
+  setup("claim", children);
+  key("c");
+  const emoji = await screen.findByRole("button", { name: "😀" });
+  await waitFor(() => expect(document.activeElement).toBe(emoji));
+  key("j", emoji);
+  const um = await screen.findByRole("button", { name: "um: removed by filler clean-up" });
+  expect(document.activeElement).toBe(um);
+  expect(frames.size).toBeGreaterThan(0);
+  act(() => { for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); } });
+  expect(document.activeElement).toBe(um);
+  key("ArrowRight", um);
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "hello." }));
+  key("k", document.activeElement as HTMLElement);
+  const back = await screen.findByRole("button", { name: "😀" });
+  act(() => { for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); } });
+  expect(document.activeElement).toBe(back);
+  expect(focusedGets()).toEqual(["/review/run/word-marks?segment=seg-0"]);
+});
+
+it.each(["mark", "undo"].flatMap((action) => [false, true].flatMap((pending) =>
+  ["409", "422", "network"].map((failure) => ({ action, pending, failure })),
+)))("replaces invalidated reads after failed $action/$failure (pending=$pending)", async ({ action, pending, failure }) => {
+  state.stale = [{ segmentId: "seg-0", start: 4, end: 6, action: "omit", segmentStart: 0 }];
+  setup();
+  const um = await enter();
+  if (action === "undo") {
+    act(() => um.focus()); key("f", um);
+    await screen.findByRole("button", { name: "um: kept" });
+    await readyAction("Keep f");
+  }
+  const fetch = vi.mocked(apiFetch).getMockImplementation()!;
+  const olderRead = deferred();
+  const replacement = deferred();
+  const post = deferred();
+  const unfocused = deferred();
+  let unfocusedPayload!: Promise<Response>;
+  let replacementPayload!: Promise<Response>;
+  let olderPayload!: Promise<Response>;
+  let readCount = 0;
+  vi.mocked(apiFetch).mockImplementation((url, init) => {
+    if (init?.method === "POST") return post.promise;
+    if (url === "/review/run/word-marks" && pending) {
+      unfocusedPayload = fetch(url, init);
+      return unfocused.promise;
+    }
+    if (url === "/review/run/word-marks?segment=seg-0") {
+      readCount += 1;
+      if (pending && readCount === 1) { olderPayload = fetch(url, init); return olderRead.promise; }
+      replacementPayload = fetch(url, init);
+      return replacement.promise;
+    }
+    return fetch(url, init);
+  });
+  if (pending) {
+    key("c");
+    await screen.findByRole("button", { name: /Clean up c/ });
+    // Resolve the unfocused snapshot before re-entering to expose Loading words.
+    await act(async () => { unfocused.resolve(await unfocusedPayload); });
+    key("c");
+    expect(screen.getByText("Loading words…")).toBeTruthy();
+  }
+  const before = focusedGets().length;
+  if (action === "undo") fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  else if (pending) fireEvent.click(within(screen.getByText("A clean-up mark no longer matches this text.")).getByRole("button", { name: "Clear" }));
+  else { act(() => um.focus()); key("f", um); }
+  await act(async () => {
+    post.reject(failure === "network" ? new TypeError("offline") : new ApiError(Number(failure), "choose a whole word"));
+  });
+  await screen.findByText(failure === "network" ? action === "undo" ? "Undo failed." : "Request failed."
+    : failure === "409" && action === "undo" ? "Too late to undo. This was changed again since." : "choose a whole word");
+  expect(focusedGets()).toHaveLength(before + 1);
+  expect(focusedAndUnfocusedGets().at(-1)?.[1]?.signal).toBeUndefined();
+  await act(async () => { replacement.resolve(await replacementPayload); });
+  await screen.findByRole("button", { name: action === "undo" ? "um: kept" : "um: removed by filler clean-up" });
+  expect(screen.queryByText("Loading words…")).toBeNull();
+  if (pending) await act(async () => { olderRead.resolve(await olderPayload); });
+  expect(focusedGets()).toHaveLength(before + 1);
 });

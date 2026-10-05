@@ -733,23 +733,33 @@ export function MediaEditor({
     focusedUnitRef.current = unit;
     setSelectedUnit({ line: cleanupLine, start: unit.start, end: unit.end });
   }, [cleanupLine]);
+  const exitCleanup = useCallback(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.closest('.tp-cleanup-word, [aria-label="Clean-up mode"], [data-cleanup-toggle]')) {
+      playerRef.current?.focusCursorRow();
+    }
+    setCleanupMode(false);
+  }, []);
   const toggleCleanup = useCallback(() => {
     if (!writable) return;
-    setCleanupMode((on) => !on);
+    if (cleanupMode) exitCleanup();
+    else setCleanupMode(true);
     setSplitMode(false);
-  }, [writable]);
+  }, [writable, cleanupMode, exitCleanup]);
   const writeWordMark = useCallback(async (segmentId: string, start: number, end: number, action: WordMarkAction) => {
     if (!writable || busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     setError(null);
     const request = beginMarksWrite();
+    let success = false;
     try {
       const result = await postForm<WordMarksResult>(`/review/${runId}/segments/${segmentId}/word-marks`, {
         nonce: makeNonce(), action, start: String(start), end: String(end),
       });
       if (!result) return;
       adoptMarks(result, segmentId, request);
+      success = true;
       if (result.undo) {
         markUndoFocus.current = segmentId;
         setUndoInfo(result.undo);
@@ -757,7 +767,7 @@ export function MediaEditor({
     } finally {
       busyRef.current = false;
       setBusy(false);
-      finishMarksWrite();
+      finishMarksWrite(success);
     }
   }, [writable, busyRef, setBusy, beginMarksWrite, finishMarksWrite, adoptMarks, postForm, runId]);
   const actOnUnit = useCallback((key: "f" | "o" | "clear") => {
@@ -822,6 +832,12 @@ export function MediaEditor({
     if (document.activeElement === editRef.current) return;
     const frameId = requestAnimationFrame(() => {
       if (claimLost) return;
+      // Cached split-child units focus before this frame. Keep that word focus
+      // (and any form/dialog focus the operator chose while navigation settled).
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active.closest(
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="dialog"], [aria-modal="true"], .tp-cleanup-word',
+      )) return;
       playerRef.current?.focusCursorRow();
     });
     return () => cancelAnimationFrame(frameId);
@@ -1391,8 +1407,7 @@ export function MediaEditor({
         case "escape":
           if (cleanupMode) {
             event.preventDefault();
-            setCleanupMode(false);
-            playerRef.current?.focusCursorRow();
+            exitCleanup();
           }
           break;
         case REVIEW_KEY.verify:
@@ -1500,6 +1515,7 @@ export function MediaEditor({
     writable,
     cleanupMode,
     toggleCleanup,
+    exitCleanup,
     actOnUnit,
     hasUnsavedEdit,
     verifyAndAdvance,
@@ -1652,13 +1668,13 @@ export function MediaEditor({
               </button>
               <button
                 type="button"
-                onClick={() => { setSplitMode((on) => !on); setCleanupMode(false); }}
+                onClick={() => { setSplitMode((on) => !on); exitCleanup(); }}
                 aria-pressed={splitMode}
                 className="text-sm"
               >
                 {splitMode ? "Exit split mode" : "Split"}
               </button>
-              <button type="button" onClick={toggleCleanup} aria-pressed={cleanupMode} className="text-sm">
+              <button type="button" onClick={toggleCleanup} data-cleanup-toggle aria-pressed={cleanupMode} className="text-sm">
                 {cleanupMode ? "Exit clean-up" : "Clean up"} <kbd>{REVIEW_KEY.cleanup}</kbd>
               </button>
               <button
@@ -1673,7 +1689,7 @@ export function MediaEditor({
             </div>
           )}
           {cleanupNotice && <p role="status" className="text-sm">{cleanupNotice}</p>}
-          {marksSnapshot?.payload.detectionError && <p role="note" className="text-sm">
+          {writable && marksSnapshot?.payload.detectionError && <p role="note" className="text-sm">
             Filler detection is unavailable: {marksSnapshot.payload.detectionError} You can still omit words, clear marks and undo.
           </p>}
           {cleanupMode && writable && <div className="me-actions text-sm" role="region" aria-label="Clean-up mode">
@@ -1686,7 +1702,7 @@ export function MediaEditor({
             <button type="button" disabled={busy || !focusedUnit} onClick={() => actOnUnit("f")}>Keep <kbd>{REVIEW_KEY.keepFiller}</kbd></button>
             <button type="button" disabled={busy || !focusedUnit} onClick={() => actOnUnit("o")}>Omit <kbd>{REVIEW_KEY.omitWord}</kbd></button>
             <button type="button" disabled={busy || !focusedUnit?.mark} onClick={() => actOnUnit("clear")}>Clear</button>
-            <button type="button" onClick={() => setCleanupMode(false)}>Done <kbd>Escape</kbd></button>
+            <button type="button" onClick={exitCleanup}>Done <kbd>Escape</kbd></button>
           </div>}
           {translate &&
             (translatePhase === "idle" ? (
@@ -2045,6 +2061,7 @@ export function MediaEditor({
               onReassign={writable ? reassignChild : undefined}
               reassignBusy={busy}
               wordMarks={marksByLine}
+              cleanupFocusKey={cleanupMode && writable ? cleanupLine : null}
               cleanupIndex={cleanupMode && writable && cleanupEmission ? cursor : null}
               onFocusUnit={onFocusUnit}
               staleWordMarks={staleByLine}
@@ -2144,20 +2161,15 @@ export function MediaEditor({
           onUndoStart={() => {
             if (undoInfo.kind === "word-mark") markUndoRequest.current = beginMarksWrite();
           }}
-          onUndoSettled={() => {
-            if (undoInfo.kind === "word-mark") finishMarksWrite();
+          onUndoSettled={(success) => {
+            if (undoInfo.kind === "word-mark") finishMarksWrite(success);
           }}
           onMarksUndone={(data) => {
             adoptMarks(data, markUndoFocus.current, markUndoRequest.current);
             setUndoInfo(null);
           }}
           onDismiss={() => setUndoInfo(null)}
-          onConflict={undoInfo.kind === "word-mark" ? async () => {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), UNDO_REFETCH_TIMEOUT_MS);
-            try { await refreshMarks(undefined, controller.signal); }
-            finally { clearTimeout(timer); }
-          } : refetchAfterUndoConflict}
+          onConflict={undoInfo.kind === "word-mark" ? () => refreshMarks() : refetchAfterUndoConflict}
           writeGuard={writeGuard}
         />
       )}

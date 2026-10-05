@@ -153,9 +153,6 @@ function CleanupText({ text, spans, units, onFocusUnit }: {
   onFocusUnit?: (unit: WordMarkUnit) => void;
 }) {
   const root = useRef<HTMLSpanElement>(null);
-  // Initialize focus before paint/input. A passive effect can run after a
-  // word has already been selected and silently replace it with the first unit.
-  useLayoutEffect(() => { root.current?.querySelector<HTMLButtonElement>("button")?.focus(); }, []);
   const points = Array.from(text);
   const pieces: ReactNode[] = [];
   let offset = 0;
@@ -266,6 +263,8 @@ export interface TranscriptPlayerProps {
   // All absent on the read-only transcript surface, which stays byte-identical.
   wordMarks?: Map<number, WordMarkEmission>;
   cleanupIndex?: number | null;
+  // A deliberate entry/cursor focus request, independent of payload mounts.
+  cleanupFocusKey?: string | null;
   onFocusUnit?: (unit: WordMarkUnit) => void;
   staleWordMarks?: Map<number, StaleWordMark[]>;
   onClearStaleMark?: (mark: StaleWordMark) => void;
@@ -496,7 +495,7 @@ const TranscriptRow = memo(function TranscriptRow({
           {cleaning && marks?.markable
             ? <CleanupText key={`${seg.sourceSegmentId}:${seg.wordStart}`} text={seg.text}
                 spans={lineSpans ?? []} units={marks.units} onFocusUnit={onFocusUnit} />
-            : renderAnnotatedText(seg.text, lineSpans ?? [], marks?.units)}
+            : renderAnnotatedText(seg.text, lineSpans ?? [], marks?.units.filter((unit) => wordMarkStyle(unit) !== null))}
         </span>
       )}
       {staleMarks?.map((mark) => <span key={`${mark.start}:${mark.end}`} className="wm-stale text-xs" role="note">
@@ -600,6 +599,7 @@ export const TranscriptPlayer = forwardRef<
     reassignBusy,
     wordMarks,
     cleanupIndex,
+    cleanupFocusKey,
     onFocusUnit,
     staleWordMarks,
     onClearStaleMark,
@@ -640,6 +640,23 @@ export const TranscriptPlayer = forwardRef<
   const [following, setFollowing] = useState<boolean>(true);
   const activeLineRef = useRef<HTMLParagraphElement | null>(null);
   const cursorLineRef = useRef<HTMLParagraphElement | null>(null);
+  const cleanupFocus = useRef<{ key: string | null; pending: boolean }>({ key: null, pending: false });
+  useLayoutEffect(() => {
+    const key = cleanupFocusKey ?? null;
+    if (cleanupFocus.current.key !== key) cleanupFocus.current = { key, pending: key !== null };
+    if (!cleanupFocus.current.pending || cleanupIndex == null) return;
+    const button = cursorLineRef.current?.querySelector<HTMLButtonElement>(".tp-cleanup-word");
+    if (!button) return;
+    // Consume once, before paint/input. A late payload may not take focus from
+    // an editor or modal, and later remounts must not overwrite a picked word.
+    cleanupFocus.current.pending = false;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.closest(
+      'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="dialog"], [aria-modal="true"]',
+    )) return;
+    button.focus();
+  }, [cleanupFocusKey, cleanupIndex, wordMarks]);
+
   // Timestamp until which self-emitted scroll events are ignored (see guard).
   const scrollGuardUntil = useRef<number>(0);
   // Deep-link jump flash (issue #121): the line a ?t= jump landed on, briefly, so

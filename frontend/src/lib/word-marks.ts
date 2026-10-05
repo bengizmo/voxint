@@ -80,7 +80,7 @@ export function toggleWordMark(unit: WordMarkUnit, key: "f" | "o", detectionErro
   { action: WordMarkAction; error?: never } | { action?: never; error: string } {
   if (key === "o") return { action: unit.mark === "omit" ? "clear" : "omit" };
   if (unit.mark === "keep") return { action: "clear" };
-  if (detectionError) return { error: "The saved filler list is broken. Fix it in Settings before keeping a word." };
+  if (detectionError) return { error: "Filler detection is unavailable, so no word can be kept right now." };
   if (unit.removed === "filler" || unit.removed === "phrase" || unit.protected) return { action: "keep" };
   return { error: "Only a word the filler list removes can be kept." };
 }
@@ -96,7 +96,7 @@ export class WordMarksRequestGuard {
   private latest = 0;
   private current: { version: string; focus: string | null } | null = null;
   begin(): number { return ++this.latest; }
-  invalidate(): void { this.latest += 1; }
+  invalidate(): void { this.latest += 1; this.current = null; }
   isLatest(request: number): boolean { return request === this.latest; }
   accept(request: number, payload: WordMarksPayload, focus: string | null): boolean {
     if (request !== this.latest) return false;
