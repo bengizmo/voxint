@@ -766,3 +766,58 @@ rule. DeepSeek was not seated.
   - Dropped.
 - Overlay loading duplicated in API v1 and the CLI.
   - Centralised in the service.
+
+### Slice 1 code review (Medium, 2 of 2: codex, moonshotai/kimi-k3)
+
+kimi-k3 substituted for deepseek-v4-pro, which returned 402 (insufficient
+balance) after a retry. Merged as PR #785 (`86df1dfe`).
+
+- 0 Critical or High.
+- Fixed:
+  - The anchor harness now requires one anchor on every word piece. Dropping
+    word-piece anchors fails 45 tests.
+  - The E2 raw-text mismatch case now selects text that maps, so only the
+    reconcile guard refuses it (codex).
+  - A test pins a split cut inside a glued word: each child anchors its own
+    part.
+  - A test covers an override under a review correction.
+  - Anchors are hidden from repr, and hash invariance is pinned.
+  - The E3 predicate is shared as `_usable_words`.
+- Delta re-review clean.
+
+### Slice 2 code review (Medium, 2 of 2: codex, deepseek-v4-pro)
+
+A kimi-k3 substitute errored. DeepSeek was topped up mid-review and took its
+seat.
+
+**Gate.** The characterization fixture covers 1,165 cases: harvested test
+inputs, each also rendered under its captured configuration, 500 generated
+cases and 200 seeded soups. It was regenerated against the pre-refactor
+filters and verified independently by swapping the `HEAD` filter files in
+(1,166 passed). codex also ran 40,000 randomized comparisons against `HEAD`,
+all matching.
+
+**Rejected.** deepseek M1: a span skipped by the keep hook still gets F4
+capitalisation. That is intended. A kept filler that becomes sentence-initial
+reads "Um", and a test pins it for slice 3.
+
+**Skipped.** deepseek L2: `_track` trusts anchor bounds. Only `project_turns`
+produces anchors, and it bounds-checks them, so an IndexError is the right loud
+failure.
+
+**Fixed.**
+- Slotted internal dataclasses, direct `_Char` construction and reuse of
+  unchanged pieces. Filtering 24,000 words takes 382 ms against 272 ms before
+  the refactor (453 ms before this fix).
+- Anchors are restored only when both the text and the character identities
+  are unchanged.
+- The owners guard.
+- The trace order is documented: per output group, phrases before words.
+  Consumers key by source identity.
+- A three-survivor F5 identity test.
+- The harness renders each harvested case under its captured configuration,
+  shares the soups with `test_fillers.py`, and names cases uniquely and
+  stably across hash seeds.
+- The fixture size cap is 2.5 MB.
+
+Delta re-review clean.
