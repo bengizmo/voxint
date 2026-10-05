@@ -74,7 +74,7 @@
 your filler list
 {%- endif -%}
 {%- endmacro %}
-{% if read and read_rows and filter_note %}
+{% if read and filter_note and (read_rows or omitted or kept) %}
 <p class="muted">{{ filter_note }}{% if custom_fillers %} Filler words are matched using {{ filler_list_link() }}.{% endif %}</p>
 {% endif %}
 

@@ -511,6 +511,10 @@ def _restart(args: argparse.Namespace) -> int:
             if impact.has_editorial_work and not args.acknowledge_editorial:
                 print(
                     f"warning: restart will permanently delete {impact.corrections} text"
+                    f" correction(s), {impact.verifications} verification(s)"
+                    f" and {impact.word_marks} clean-up mark(s)."
+                    if impact.word_marks else
+                    f"warning: restart will permanently delete {impact.corrections} text"
                     f" correction(s) and {impact.verifications} verification(s)."
                 )
                 if args.yes:
@@ -680,7 +684,8 @@ def _restart_bulk_dry_run(
         elif impact.has_editorial_work and not acknowledge_editorial:
             print(
                 f"{run_id}: editorial-loss ({impact.corrections} text corrections,"
-                f" {impact.verifications} verifications)"
+                f" {impact.verifications} verifications"
+                + (f", {impact.word_marks} clean-up marks)" if impact.word_marks else ")")
             )
             counts["editorial_loss"] += 1
         else:
@@ -2245,6 +2250,7 @@ def _export(args: argparse.Namespace) -> int:
     from voxint.export import TranscriptFormat
     from voxint.export.filler_lists import FillerList, FillerListError
     from voxint.export.service import (
+        WordMarkPlacementError,
         parse_fillers,
         parse_repeats,
         parse_style,
@@ -2273,7 +2279,7 @@ def _export(args: argparse.Namespace) -> int:
     if engine is None:
         return code
     fillers: FillerList | None = None
-    fillers_removed = 0
+    fillers_removed = omitted = kept = 0
     try:
         factory = build_session_factory(engine)
         with factory() as session:
@@ -2299,6 +2305,10 @@ def _export(args: argparse.Namespace) -> int:
                 )
                 output = report.content
                 fillers_removed = report.fillers_removed
+                omitted, kept = report.omitted, report.kept
+    except WordMarkPlacementError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     except (SettingsError, FillerListError) as exc:
         print(f"error: {exc}")
         return 2
@@ -2327,10 +2337,15 @@ def _export(args: argparse.Namespace) -> int:
             extras += f", {len(fillers.extra_entries)} added"
         if fillers.effective_keeps:
             extras += f", {len(fillers.effective_keeps)} kept"
+        operator_counts = ""
+        if omitted:
+            operator_counts += f"; words you left out: {omitted}"
+        if kept:
+            operator_counts += f"; fillers you kept: {kept}"
         count = fillers_removed
         print(
             f"Left out {count} filler word{'' if count == 1 else 's'} "
-            f"(preset {fillers.preset_version}{extras}).",
+            f"(preset {fillers.preset_version}{extras}){operator_counts}.",
             file=sys.stderr,
         )
     return 0
@@ -3241,7 +3256,7 @@ def build_parser() -> argparse.ArgumentParser:
     restart_p.add_argument(
         "--acknowledge-editorial",
         action="store_true",
-        help="acknowledge permanent loss of text corrections and verifications",
+        help="acknowledge permanent loss of text corrections, verifications and clean-up marks",
     )
     restart_p.add_argument("--yes", "-y", action="store_true", help="skip the confirmation prompt")
     restart_p.set_defaults(fn=_restart)

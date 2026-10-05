@@ -24,18 +24,17 @@
 Removal spans carry lexical and separator ranges. Characters retain their
 input anchor identities through rewrites; final F5 cleans emit a removal trace.
 Trace order is per output group: merged turns at their first input position,
-discarded filler-only turns at their own position, phrases before words within
-a group. Consumers must key by source identity, not by position.
+discarded filler-only turns at their own position, omits then phrases then
+words within a group. Consumers must key by source identity, not by position.
 """
 
 import re
-import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Literal
 
-from voxint.adjudication.turns import SpeakerTurn, TurnPiece
+from voxint.adjudication.turns import EffectiveMarks, SpeakerTurn, TurnPiece, WordMarkKey
 from voxint.export.filler_lists import TIER_1, FillerList
 
 _OPEN = "\"'([\u201c\u2018"
@@ -77,7 +76,7 @@ def _pattern(alternation: str) -> re.Pattern[str]:
 # Applied to text with surrounding quotes and brackets already stripped.
 _SENTENCE_END = re.compile(r"[.?!]$")
 _WRAPPERS = _OPEN + _CLOSE + " "
-SourceIdentity = tuple[uuid.UUID, int, int]
+SourceIdentity = WordMarkKey
 RemovalCause = Literal["phrase", "filler", "omit"]
 
 
@@ -92,11 +91,19 @@ class Removal:
 
 @dataclass(frozen=True)
 class Protected:
-    """Reserved for a match blocked by a kept unit."""
+    """An otherwise committed match blocked by a kept lexical unit."""
 
     text: str
     sources: tuple[SourceIdentity, ...]
     cause: Literal["kept"] = "kept"
+
+
+class UnplaceableWordMarkError(ValueError):
+    """Effective marks have no anchored characters in the requested rendering."""
+
+    def __init__(self, marks: EffectiveMarks) -> None:
+        self.marks = [(*key, action) for key, action in marks.items()]
+        super().__init__(f"cannot place word marks on segments: {self.marks}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +132,7 @@ class _RemovalSpan:
     lex_end: int
     mark_start: int | None
     cause: RemovalCause
+    keep_opening: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +207,61 @@ def _removal_spans(body: str, pattern: re.Pattern[str], cause: RemovalCause) -> 
     return spans
 
 
+def _omit_spans(chars: Sequence[_Char], marks: EffectiveMarks) -> list[_RemovalSpan]:
+    """Locate omitted units, removing balanced wrappers owned by the unit."""
+    positions: dict[WordMarkKey, list[int]] = {}
+    for index, char in enumerate(chars):
+        if char.source is not None and marks.get(char.source) == "omit":
+            positions.setdefault(char.source, []).append(index)
+    spans: list[_RemovalSpan] = []
+    for offsets in positions.values():
+        start, stop = offsets[0], offsets[-1] + 1
+        lex_start = start
+        while lex_start < stop and chars[lex_start].text in _OPEN:
+            lex_start += 1
+        lex_end = stop
+        while lex_end > lex_start and chars[lex_end - 1].text in _CLOSE:
+            lex_end -= 1
+        mark_start = None
+        if (
+            lex_end > lex_start
+            and chars[lex_end - 1].text in ",.?!;:"
+            and (lex_end - 1 == lex_start or chars[lex_end - 2].text not in ",.?!;:")
+        ):
+            mark_start = lex_end - 1
+            lex_end -= 1
+        # A closing wrapper between the word and punctuation keeps both outside.
+        while lex_end > lex_start and chars[lex_end - 1].text in _CLOSE:
+            lex_end -= 1
+            mark_start = None
+        keep_opening = True
+        end = mark_start + 1 if mark_start is not None else lex_end
+        if not any(char.text.isalnum() for char in chars[lex_start:lex_end]):
+            lex_start, lex_end, end, mark_start = start, stop, stop, None
+        else:
+            closing_end = end
+            while closing_end < stop and chars[closing_end].text in _CLOSE:
+                closing_end += 1
+            opening = "".join(char.text for char in chars[start:lex_start])
+            closing = "".join(char.text for char in chars[end:closing_end])
+            pairs = dict(zip(_OPEN, _CLOSE, strict=True))
+            if opening and closing == "".join(pairs[char] for char in reversed(opening)):
+                keep_opening = False
+                end = closing_end
+                if (
+                    end < len(chars) and chars[end].text in ",.?!;:"
+                    and (end + 1 == len(chars) or chars[end + 1].text.isspace())
+                ):
+                    mark_start = end
+                    end += 1
+        while end < len(chars) and chars[end].text.isspace():
+            end += 1
+        spans.append(_RemovalSpan(
+            start, end, lex_start, lex_end, mark_start, "omit", keep_opening,
+        ))
+    return spans
+
+
 def _clean_pieces(
     pieces: tuple[TurnPiece, ...],
     *,
@@ -224,9 +287,21 @@ def _clean_tracked(
     *,
     fillers: FillerList,
     sources: Sequence[int] | None = None,
-    trace: list[Removal] | None = None,
+    trace: list[Removal | Protected] | None = None,
     skip: Callable[[Sequence[_Char]], bool] | None = None,
+    marks: EffectiveMarks | None = None,
 ) -> tuple[_Piece, ...]:
+    if marks:
+        chars = _flatten(pieces)
+        pieces = _clean_pass(pieces, chars, _omit_spans(chars, marks), trace=trace)
+        previous_skip = skip
+
+        def protected(lexical: Sequence[_Char]) -> bool:
+            return any(
+                marks.get(char.source) == "keep" for char in lexical if char.source is not None
+            ) or (previous_skip is not None and previous_skip(lexical))
+
+        skip = protected
     for entries, cause in ((fillers.phrases, "phrase"), (fillers.words, "filler")):
         if not entries:
             continue
@@ -244,7 +319,7 @@ def _clean_pass(
     spans: Sequence[_RemovalSpan],
     *,
     sources: Sequence[int] | None = None,
-    trace: list[Removal] | None = None,
+    trace: list[Removal | Protected] | None = None,
     skip: Callable[[Sequence[_Char]], bool] | None = None,
 ) -> tuple[_Piece, ...]:
     """Apply F1-F4 to input spans; an optional predicate sees only lexical chars."""
@@ -272,7 +347,7 @@ def _clean_pass(
         mark = mark_char.text if mark_char is not None else None
         core = "".join(char.text for char in out).rstrip().rstrip(_WRAPPERS)
         lexical = chars[span.lex_start:span.lex_end]
-        rejected = skip is not None and skip(lexical)
+        rejected = False
         if span.cause == "phrase":
             turn_end = mark is None and span.end == len(chars)
             left_clause = not core or (core[-1] in ",;:.?!" and not core.endswith("..."))
@@ -287,6 +362,19 @@ def _clean_pass(
             rejected = rejected or (
                 not left_clause or not right_clause or whole_sentence or len(owners) > 1
             )
+        if not rejected and skip is not None and skip(lexical):
+            rejected = True
+            if trace is not None:
+                trace.append(
+                    Protected(
+                        "".join(char.text for char in lexical),
+                        tuple(
+                            dict.fromkeys(
+                                char.source for char in lexical if char.source is not None
+                            )
+                        ),
+                    )
+                )
         if rejected:
             append(chars[span.start:span.end])
             cursor = span.end
@@ -309,7 +397,7 @@ def _clean_pass(
                 out.append(_Char(mark_char.text, out[-1].owner, mark_char.source))
             core = "".join(char.text for char in out).rstrip(_WRAPPERS)
         capitalise = capitalise or not core or bool(_SENTENCE_END.search(core))
-        opening = chars[span.start:span.lex_start]
+        opening = chars[span.start:span.lex_start] if span.keep_opening else []
         cursor = span.end
         if out and cursor < len(chars):
             out.append(_Char(" ", (opening or chars[cursor:])[0].owner))
@@ -361,18 +449,36 @@ def drop_fillers_with_trace(
     turns: Sequence[SpeakerTurn],
     *,
     fillers: FillerList,
-) -> tuple[list[tuple[SpeakerTurn, frozenset[int]]], tuple[Removal, ...]]:
-    """Return cleaned turns, F5 seams and committed removals, excluding probes.
+    marks: EffectiveMarks | None = None,
+) -> tuple[list[tuple[SpeakerTurn, frozenset[int]]], tuple[Removal | Protected, ...]]:
+    """Return cleaned turns, F5 seams and removals/protections, excluding probes.
 
     Removals are listed per output group: merged turns at their first input
-    position, discarded filler-only turns at their own position. Phrases precede
-    words within each group. Consumers must key by source identity, not position.
+    position, discarded filler-only turns at their own position. Omits precede
+    phrases, then words within each group. Consumers must key by source identity,
+    not position.
     """
+    tracked: Iterable[tuple[SpeakerTurn, tuple[_Piece, ...]]] = (
+        (turn, _track(turn.pieces)) for turn in turns
+    )
+    if marks:
+        tracked = tuple(tracked)
+        placed = {
+            char.source
+            for _, pieces in tracked
+            for piece in pieces
+            for char in piece.chars
+            if char.source is not None
+        }
+        missing = {key: action for key, action in marks.items() if key not in placed}
+        if missing:
+            raise UnplaceableWordMarkError(missing)
     final: list[_Turn] = []
     last_survivor: int | None = None
-    for turn in turns:
-        pieces = _track(turn.pieces)
-        survives = any(p.piece.text.strip() for p in _clean_tracked(pieces, fillers=fillers))
+    for turn, pieces in tracked:
+        survives = any(
+            p.piece.text.strip() for p in _clean_tracked(pieces, fillers=fillers, marks=marks)
+        )
         if survives and last_survivor is not None:
             left = final[last_survivor]
             if left.turn.identity_key == turn.identity_key:
@@ -385,11 +491,11 @@ def drop_fillers_with_trace(
         final.append(_Turn(turn, pieces, (0,) * len(pieces), survives))
         if survives:
             last_survivor = len(final) - 1
-    trace: list[Removal] = []
+    trace: list[Removal | Protected] = []
     out: list[tuple[SpeakerTurn, frozenset[int]]] = []
     for group in final:
         cleaned = _clean_tracked(
-            group.pieces, fillers=fillers, sources=group.owners, trace=trace,
+            group.pieces, fillers=fillers, sources=group.owners, trace=trace, marks=marks,
         )
         if not group.survives or not cleaned:
             continue

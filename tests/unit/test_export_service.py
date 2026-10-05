@@ -245,6 +245,7 @@ def test_empty_markdown_report(monkeypatch: pytest.MonkeyPatch, header: str | No
     attribution = Mock(return_value=[])
     monkeypatch.setattr("voxint.export.service.attributed_turns", attribution)
     monkeypatch.setattr("voxint.export.service.export_title", lambda *a: header)
+    monkeypatch.setattr("voxint.export.service.effective_marks", lambda *a: {})
     result = render_run_transcript_report(
         Mock(), uuid.uuid4(), TranscriptFormat.MARKDOWN, text=TranscriptText.RAW,
         fillers=effective_filler_list(keep=["um"]),
@@ -290,6 +291,7 @@ def test_report_counts_and_single_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     filtering = Mock(wraps=apply_turn_filters)
     monkeypatch.setattr("voxint.export.service.attributed_turns", attribution)
     monkeypatch.setattr("voxint.export.service.apply_turn_filters", filtering)
+    monkeypatch.setattr("voxint.export.service.effective_marks", lambda *a: {})
     result = render_run_transcript_report(
         Mock(), uuid.uuid4(), TranscriptFormat.TXT, text=TranscriptText.RAW,
         style=MarkdownStyle.TURNS, timestamps=False,

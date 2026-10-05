@@ -52,7 +52,7 @@ import uuid
 from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Literal, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -92,6 +92,10 @@ class TextMapping(enum.StrEnum):
     VERBATIM = "T1"
     TOKEN = "T2"
     COARSE = "coarse"
+
+
+WordMarkKey = tuple[uuid.UUID, int, int]
+EffectiveMarks = Mapping[WordMarkKey, Literal["keep", "omit"]]
 
 
 @dataclass(frozen=True)

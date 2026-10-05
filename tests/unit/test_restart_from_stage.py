@@ -752,6 +752,7 @@ class TestRestartStageProfiles:
                 "label_count",
                 "corrections",
                 "verifications",
+                "word_marks",
                 "safe",
             }
             assert isinstance(profile["label"], str)

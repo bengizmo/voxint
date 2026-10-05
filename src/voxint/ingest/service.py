@@ -215,6 +215,7 @@ class RestartImpact:
     derived_embeddings: int = 0
     corrections: int = 0
     verifications: int = 0
+    word_marks: int = 0
 
     @property
     def requires_void(self) -> bool:
@@ -223,8 +224,8 @@ class RestartImpact:
 
     @property
     def has_editorial_work(self) -> bool:
-        """Restart would destroy operator corrections or verifications."""
-        return self.corrections > 0 or self.verifications > 0
+        """Restart would destroy operator corrections, verifications or clean-up marks."""
+        return self.corrections > 0 or self.verifications > 0 or self.word_marks > 0
 
 
 class RunRestartBlockedError(IngestError):
@@ -292,17 +293,19 @@ class RunRestartLabelRiskError(IngestError):
 
 
 class RunRestartEditorialLossError(IngestError):
-    """Restart would destroy operator corrections or verifications."""
+    """Restart would destroy operator corrections, verifications or clean-up marks."""
 
     def __init__(
-        self, run_id: uuid.UUID, corrections: int, verifications: int
+        self, run_id: uuid.UUID, corrections: int, verifications: int, word_marks: int = 0,
     ) -> None:
         parts: list[str] = []
         if corrections > 0:
             parts.append(f"{corrections} text correction(s)")
         if verifications > 0:
             parts.append(f"{verifications} verification(s)")
-        detail = " and ".join(parts)
+        if word_marks > 0:
+            parts.append(f"{word_marks} clean-up mark(s)")
+        detail = " and ".join([", ".join(parts[:-1]), parts[-1]] if len(parts) > 2 else parts)
         super().__init__(
             f"this run has {detail} that will be permanently lost."
             " Acknowledge this to proceed."
@@ -310,6 +313,7 @@ class RunRestartEditorialLossError(IngestError):
         self.run_id = run_id
         self.corrections = corrections
         self.verifications = verifications
+        self.word_marks = word_marks
 
 
 class RestartPrerequisiteError(IngestError):
@@ -1089,6 +1093,7 @@ def restart_impact(
     is an ASSIGN.
     """
     from voxint.adjudication.resolver import newest_in_scope
+    from voxint.adjudication.word_marks import effective_marks
     from voxint.db.models import (
         AdjudicationDecision,
         Decision,
@@ -1213,6 +1218,7 @@ def restart_impact(
         derived_embeddings=derived_embeddings,
         corrections=corrections,
         verifications=verifications,
+        word_marks=len(effective_marks(session, run_id)),
     )
 
 
@@ -1247,6 +1253,7 @@ def restart_stage_profiles(
                     "label_count": 0,
                     "corrections": 0,
                     "verifications": 0,
+                    "word_marks": 0,
                     "safe": True,
                 }
             )
@@ -1260,6 +1267,7 @@ def restart_stage_profiles(
                     "label_count": full_impact.label_scope_decisions,
                     "corrections": 0,
                     "verifications": 0,
+                    "word_marks": 0,
                     "safe": full_impact.label_scope_decisions == 0,
                 }
             )
@@ -1275,6 +1283,7 @@ def restart_stage_profiles(
                     "label_count": full_impact.label_scope_decisions,
                     "corrections": full_impact.corrections,
                     "verifications": full_impact.verifications,
+                    "word_marks": full_impact.word_marks,
                     "safe": (
                         not full_impact.requires_void
                         and full_impact.label_scope_decisions == 0
@@ -1613,7 +1622,7 @@ def restart_run(
         raise RunRestartLabelRiskError(run_id, impact.label_scope_decisions)
     if impact.has_editorial_work and not acknowledge_editorial:
         raise RunRestartEditorialLossError(
-            run_id, impact.corrections, impact.verifications
+            run_id, impact.corrections, impact.verifications, impact.word_marks,
         )
 
     effective_stage = from_stage if from_stage is not None else Stage.ACQUIRE

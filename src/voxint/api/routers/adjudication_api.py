@@ -204,6 +204,7 @@ from voxint.export.manifest import (
 from voxint.export.service import (
     ExportOptionError,
     TranslationMismatchError,
+    WordMarkPlacementError,
     parse_fillers,
     parse_repeats,
     parse_style,
@@ -1336,6 +1337,8 @@ def _export_transcript(
             fillers=filler_list,
             drop_repeats=drop_repeats,
         )
+    except WordMarkPlacementError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except TranslationMismatchError as exc:
         raise HTTPException(status_code=409, detail=_translation_stale_detail(lang or "")) from exc
     return Response(content=content, media_type=MEDIA_TYPES[fmt.value])

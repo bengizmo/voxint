@@ -36,6 +36,7 @@ from voxint.adjudication.transcript import (
     parse_transcript_text,
 )
 from voxint.adjudication.turns import attributed_turns
+from voxint.adjudication.word_marks import effective_marks
 from voxint.api.clip_service import ClipServiceError, resolve_servable_clip
 from voxint.api.csrf import (
     CSRF_ASSETS_CANCEL,
@@ -159,8 +160,9 @@ from voxint.enrichment.translations import (
 )
 from voxint.export import MEDIA_TYPES, format_clock, transcript_payload
 from voxint.export.filler_lists import FillerListError
+from voxint.export.fillers import UnplaceableWordMarkError
 from voxint.export.reading import layout_turns
-from voxint.export.service import parse_filter_value
+from voxint.export.service import WordMarkPlacementError, parse_filter_value
 from voxint.export.turn_filters import apply_turn_filters
 from voxint.gpu_phase.dispatch import open_lanes, redispatch_queued_runs
 from voxint.gpu_phase.state import gpu_lane_demand, post_lane_queued, queued_llm_jobs
@@ -1123,6 +1125,7 @@ def run_detail(
 
 def read_filter_note(
     *, drop_fillers: bool, drop_repeats: bool, fillers_removed: int, repeats_removed: int,
+    omitted: int = 0, kept: int = 0,
 ) -> str | None:
     """Describe active reading filters using word counts, including zero."""
     parts = [
@@ -1133,7 +1136,12 @@ def read_filter_note(
         )
         if active
     ]
-    return f"Left out {' and '.join(parts)}. The saved transcript is unchanged." if parts else None
+    note = f"Left out {' and '.join(parts)}." if parts else ""
+    if omitted:
+        note += f" Words you left out: {omitted}."
+    if kept:
+        note += f" Fillers you kept: {kept}."
+    return note + " The saved transcript is unchanged." if note else None
 
 
 @core_router.get("/runs/{run_id}/transcript")
@@ -1186,11 +1194,15 @@ def run_transcript(
             )
         except FillerListError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        filtered = apply_turn_filters(
-            attributed_turns(session, run_id, text=variant),
-            fillers=filler_list,
-            drop_repeats=drop_repeats,
-        )
+        try:
+            filtered = apply_turn_filters(
+                attributed_turns(session, run_id, text=variant),
+                fillers=filler_list, drop_repeats=drop_repeats,
+                marks=effective_marks(session, run_id) if filler_list is not None else None,
+            )
+        except UnplaceableWordMarkError as exc:
+            detail = str(WordMarkPlacementError(session, exc))
+            raise HTTPException(status_code=409, detail=detail) from exc
         read_rows = [
             {
                 "speaker": None if para.continuation else para.speaker,
@@ -1225,13 +1237,16 @@ def run_transcript(
                 "drop_repeats": drop_repeats,
                 "fillers_removed": filtered.fillers_removed,
                 "repeats_removed": filtered.repeats_removed,
+                "omitted": filtered.omitted, "kept": filtered.kept,
                 "all_filtered": (
-                    not read_rows and filtered.fillers_removed + filtered.repeats_removed > 0
+                    not read_rows
+                    and filtered.fillers_removed + filtered.repeats_removed + filtered.omitted > 0
                 ),
                 "filter_note": read_filter_note(
                     drop_fillers=drop_fillers, drop_repeats=drop_repeats,
                     fillers_removed=filtered.fillers_removed,
                     repeats_removed=filtered.repeats_removed,
+                    omitted=filtered.omitted, kept=filtered.kept,
                 ),
                 "text": variant,
                 "variants": list(TranscriptText),
