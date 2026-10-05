@@ -821,3 +821,43 @@ failure.
 - The fixture size cap is 2.5 MB.
 
 Delta re-review clean.
+
+### Slice 3 code review (High, 3 of 3: codex, deepseek-v4-pro, qwen/qwen3.8-max-prime)
+
+Implemented by codex in three bounded chunks (storage, filter, surfaces), each
+diff reviewed before the next. The full suite passed before review (11,931
+passed; the 3 failures are the known local-only enrichment gates).
+
+**Fixed.**
+- codex Medium: the writers locked the segment and then needed the run (FK),
+  while restart locks the run and then deletes segments, so the two could
+  deadlock. Both writers now take `FOR KEY SHARE` on the run first. A test
+  pins the order.
+- codex Low: omitting a wrapped word left `()` and stray punctuation. Balanced
+  wrappers owned by the unit are now removed with it, and a mark right after
+  them is consumed by F2.
+- qwen Medium: an omitted unit with no letters or digits was silently skipped.
+  It is now removed whole.
+- qwen Medium: a segment without words could be marked. The writer refuses it.
+- qwen Medium: undo before the row was flushed had no `created_at`. Undo now
+  flushes and refreshes first.
+- qwen Low: the refusal message could read "segments at .". It now falls back
+  to "some segments".
+- codex, untested: a `clear` after the undo window, and undo after a concurrent
+  newer mark, now have tests.
+
+**Rejected.**
+- qwen High: translated exports with fillers load marks. The service refuses
+  fillers with a translation before marks load.
+- qwen High, deepseek Low: TRUNCATE bypasses the trigger. Deliberate, as
+  section A says: the test harness truncates every table.
+- deepseek High: `clear` is blocked when a correction shrinks `words`. Stored
+  `words` never change; corrections change text only.
+- deepseek Medium: `omitted` counts units, not words. A unit is one
+  whitespace-free word by construction.
+- deepseek Medium: an attached ellipsis goes with an omitted word. Intended.
+- qwen Medium: `kept` is counted before repeat removal. Keep protects only from
+  filler removal (#755), which is what the count reports.
+
+Delta re-reviews (codex): round 1 raised one Low (punctuation after removed
+wrappers), fixed; round 2 clean.

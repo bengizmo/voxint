@@ -3,19 +3,21 @@
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from threading import Barrier, Lock
+from threading import Barrier, Event, Lock
+from time import monotonic, sleep
 from typing import Any
 
 import pytest
-from sqlalchemy import Connection, Engine, event, func, select
+from sqlalchemy import Connection, Engine, event, func, select, text
 from sqlalchemy.engine import ExceptionContext, ExecutionContext
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm.attributes import set_committed_value
 
 from tests.integration.test_adjudication_ledger import seed_splittable_segment
 from voxint.adjudication.ledger import ConflictingReplayError, WordRangeError
 from voxint.adjudication.undo import UndoDriftError, UndoError, UndoExpiredError
 from voxint.adjudication.word_marks import effective_marks, record_word_mark, undo_word_mark
-from voxint.db.models import SegmentWordMark, User, WordMarkAction
+from voxint.db.models import PipelineRun, SegmentWordMark, TranscriptSegment, User, WordMarkAction
 
 
 def mark(
@@ -118,6 +120,39 @@ def test_segment_ownership_and_missing_segment(session_factory: sessionmaker[Ses
             mark(session, run_id, foreign_segment_id)
         with pytest.raises(WordRangeError, match="no such transcript segment"):
             mark(session, run_id, uuid.uuid4())
+        with pytest.raises(WordRangeError, match="no such pipeline run"):
+            mark(session, uuid.uuid4(), foreign_segment_id)
+
+
+def test_unworded_segment_refused(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        run_id, segment_id, _ = seed_splittable_segment(session)
+        segment = session.get(TranscriptSegment, segment_id)
+        assert segment is not None
+        segment.words = None
+        with pytest.raises(WordRangeError, match="without words"):
+            mark(session, run_id, segment_id)
+
+
+@pytest.mark.parametrize("explicit_now", [False, True], ids=["default-clock", "explicit-clock"])
+def test_undo_refreshes_missing_creation_time(
+    session_factory: sessionmaker[Session], explicit_now: bool
+) -> None:
+    with session_factory() as session:
+        run_id, segment_id, _ = seed_splittable_segment(session)
+        original, _ = mark(session, run_id, segment_id)
+        created_at = original.created_at
+        # Simulate a row whose server-generated timestamp has not been refreshed.
+        # Do not UPDATE the append-only row when the writer flushes the session.
+        set_committed_value(original, "created_at", None)
+        with session.no_autoflush:
+            reversal, replay = undo_word_mark(
+                session, run_id=run_id, mark_id=original.id, operator="ben", user_id=None,
+                grace_seconds=300,
+                now=created_at + timedelta(seconds=1) if explicit_now else None,
+            )
+        assert not replay and reversal.voids_mark_id == original.id
+        assert original.created_at == created_at
 
 
 def test_undo_missing_cross_run_and_undo_of_undo(session_factory: sessionmaker[Session]) -> None:
@@ -141,6 +176,11 @@ def test_undo_missing_cross_run_and_undo_of_undo(session_factory: sessionmaker[S
         reversal, _ = undo(session, original)
         with pytest.raises(UndoError, match="cannot be undone"):
             undo(session, reversal)
+        with pytest.raises(UndoDriftError, match=r"run .* no longer exists"):
+            undo_word_mark(
+                session, run_id=uuid.uuid4(), mark_id=original.id, operator="ben",
+                user_id=None, grace_seconds=300,
+            )
 
 
 def test_already_voided_with_another_key_refused(session_factory: sessionmaker[Session]) -> None:
@@ -330,3 +370,114 @@ def test_concurrent_identical_replay(session_factory: sessionmaker[Session]) -> 
         outcomes = [future.result(timeout=15) for future in futures]
     assert outcomes[0][0] == outcomes[1][0]
     assert sorted(replay for _, replay in outcomes) == [False, True]
+
+
+def _wait_for_block(session: Session, writer_pid: int, blocker_pid: int) -> None:
+    deadline = monotonic() + 3
+    while monotonic() < deadline:
+        blockers = session.scalar(text("SELECT pg_blocking_pids(:pid)"), {"pid": writer_pid})
+        if blocker_pid in blockers:
+            return
+        sleep(0.01)
+    pytest.fail("writer did not wait on the expected database lock")
+
+
+@pytest.mark.parametrize("action", ["record", "undo"])
+@pytest.mark.parametrize("delete_segment", [False, True], ids=["release", "restart-delete"])
+def test_writer_locks_run_before_segment(
+    session_factory: sessionmaker[Session], action: str, delete_segment: bool
+) -> None:
+    with session_factory() as session:
+        run_id, segment_id, _ = seed_splittable_segment(session)
+        original, _ = mark(session, run_id, segment_id)
+        mark_id = original.id
+        session.commit()
+    ready = Event()
+    writer_pids: list[int] = []
+
+    def write() -> uuid.UUID | None:
+        with session_factory() as session:
+            session.execute(text("SET LOCAL statement_timeout = '5s'"))
+            writer_pids.append(session.scalar(text("SELECT pg_backend_pid()")))
+            ready.set()
+            try:
+                if action == "record":
+                    row, _ = mark(session, run_id, segment_id, key="after-restart")
+                else:
+                    row, _ = undo_word_mark(
+                        session, run_id=run_id, mark_id=mark_id, operator="ben", user_id=None,
+                        grace_seconds=300,
+                    )
+            except (WordRangeError, UndoError):
+                if not delete_segment:
+                    raise
+                return None
+            session.commit()
+            return row.id
+
+    with session_factory() as restart, ThreadPoolExecutor(max_workers=1) as pool:
+        restart.scalar(select(PipelineRun.id).where(PipelineRun.id == run_id).with_for_update())
+        blocker_pid = restart.scalar(text("SELECT pg_backend_pid()"))
+        future = pool.submit(write)
+        try:
+            assert ready.wait(timeout=3)
+            with session_factory() as probe:
+                _wait_for_block(probe, writer_pids[0], blocker_pid)
+                query = probe.scalar(
+                    text("SELECT query FROM pg_stat_activity WHERE pid = :pid"),
+                    {"pid": writer_pids[0]},
+                )
+                assert "pipeline_runs" in query and "FOR KEY SHARE" in query
+                # A separate transaction can still lock the segment while the
+                # writer waits for the run, so it cannot invert restart's order.
+                assert probe.scalar(select(TranscriptSegment.id).where(
+                    TranscriptSegment.id == segment_id,
+                ).with_for_update(nowait=True)) == segment_id
+                probe.rollback()
+            if delete_segment:
+                segment = restart.get(TranscriptSegment, segment_id)
+                assert segment is not None
+                restart.delete(segment)
+            restart.commit()
+        finally:
+            restart.rollback()
+        assert (future.result(timeout=5) is None) == delete_segment
+
+
+def test_undo_waits_for_concurrent_newer_mark_then_refuses_drift(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id, segment_id, _ = seed_splittable_segment(session)
+        original, _ = mark(session, run_id, segment_id)
+        mark_id = original.id
+        session.commit()
+    ready = Event()
+    writer_pids: list[int] = []
+
+    def reverse() -> None:
+        with session_factory() as session:
+            session.execute(text("SET LOCAL statement_timeout = '5s'"))
+            writer_pids.append(session.scalar(text("SELECT pg_backend_pid()")))
+            ready.set()
+            with pytest.raises(UndoDriftError, match="marked again"):
+                undo_word_mark(
+                    session, run_id=run_id, mark_id=mark_id, operator="ben", user_id=None,
+                    grace_seconds=300,
+                )
+
+    with session_factory() as newer, ThreadPoolExecutor(max_workers=1) as pool:
+        mark(newer, run_id, segment_id, action=WordMarkAction.KEEP, key="concurrent-newer")
+        blocker_pid = newer.scalar(text("SELECT pg_backend_pid()"))
+        future = pool.submit(reverse)
+        try:
+            assert ready.wait(timeout=3)
+            with session_factory() as probe:
+                _wait_for_block(probe, writer_pids[0], blocker_pid)
+            newer.commit()
+        finally:
+            newer.rollback()
+        future.result(timeout=5)
+    with session_factory() as session:
+        assert effective_marks(session, run_id) == {(segment_id, 0, 1): "keep"}
+        assert session.scalar(select(func.count()).select_from(SegmentWordMark)) == 2

@@ -148,21 +148,30 @@ def test_keep_count_deduplicates_phrase_and_word_protection() -> None:
         ("So basically; the coil froze.", 1, "So the coil froze.", "basically"),
         ("So basically: the coil froze.", 1, "So the coil froze.", "basically"),
         ("So basically,\t\n the coil froze.", 1, "So the coil froze.", "basically"),
-        ('So "basically" the coil froze.', 1, 'So "" the coil froze.', "basically"),
-        ("So (basically) the coil froze.", 1, "So () the coil froze.", "basically"),
-        ("So [basically] the coil froze.", 1, "So [] the coil froze.", "basically"),
+        ('So "basically" the coil froze.', 1, 'So the coil froze.', "basically"),
+        ("So (basically) the coil froze.", 1, "So the coil froze.", "basically"),
+        ("So [basically] the coil froze.", 1, "So the coil froze.", "basically"),
         (
             "So \u2018basically\u2019 the coil froze.",
             1,
-            "So \u2018\u2019 the coil froze.",
+            "So the coil froze.",
             "basically",
         ),
-        ('So "basically", the coil froze.', 1, 'So "", the coil froze.', "basically"),
-        ('So "basically." next', 1, 'So. "" Next', "basically"),
-        ("So (basically). next", 1, "So (). next", "basically"),
+        ('So "basically", the coil froze.', 1, 'So the coil froze.', "basically"),
+        ('So "basically." next', 1, 'So. Next', "basically"),
+        ("So (basically). next", 1, "So. Next", "basically"),
+        ("(basically). next", 0, "Next", "basically"),
+        ("So (basically), next", 1, "So next", "basically"),
+        ("(basically) the coil froze.", 0, "The coil froze.", "basically"),
+        ('"basically" the coil froze.', 0, "The coil froze.", "basically"),
+        ("So (basically.) next", 1, "So. Next", "basically"),
+        ("So ([basically.]) next", 1, "So. Next", "basically"),
+        ("So (basically next", 1, "So (next", "basically"),
+        ("So basically) next", 1, "So ) next", "basically"),
+        ("So (basically] next", 1, "So (] next", "basically"),
     ],
 )
-def test_omit_reuses_f2_f4_and_preserves_wrappers(
+def test_omit_reuses_f2_f4_and_preserves_unbalanced_wrappers(
     text: str,
     token: int,
     expected: str,
@@ -174,6 +183,14 @@ def test_omit_reuses_f2_f4_and_preserves_wrappers(
     assert result.trace == (Removal("omit", lexical, (_source(_A, token),)),)
     assert (result.fillers_removed, result.omitted, result.kept) == (0, 1, 0)
     assert original.pieces[0].text == text
+
+
+@pytest.mark.parametrize("unit", [",", "--", "()", "..."])
+def test_omit_punctuation_only_unit_is_removed(unit: str) -> None:
+    result = _filter([_turn(_piece(f"So {unit} the coil froze."))], {_source(_A, 1): "omit"})
+    assert _texts(result) == ["So the coil froze."]
+    assert result.trace == (Removal("omit", unit, (_source(_A, 1),)),)
+    assert (result.omitted, result.fillers_removed, result.kept) == (1, 0, 0)
 
 
 @pytest.mark.parametrize("word", ["like", "so", "right", "well"])

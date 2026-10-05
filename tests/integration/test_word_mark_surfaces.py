@@ -2,7 +2,9 @@
 
 import uuid
 from collections.abc import Iterator
+from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,11 +14,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from tests.integration.test_translation_jobs import record_spanish, seed_run
 from tests.integration.test_translation_view_export import _build_client
 from voxint.adjudication.transcript import TranscriptText
+from voxint.adjudication.undo import UndoExpiredError
 from voxint.adjudication.word_marks import record_word_mark, undo_word_mark
 from voxint.cli import main
 from voxint.db.models import SegmentWordMark, TranscriptSegment, WordMarkAction
 from voxint.export import TranscriptFormat
 from voxint.export.filler_lists import DEFAULT_FILLER_LIST
+from voxint.export.fillers import UnplaceableWordMarkError
 from voxint.export.service import (
     MarkdownStyle,
     WordMarkPlacementError,
@@ -486,3 +490,43 @@ def test_placement_error_names_all_affected_segment_times(
             )
         assert "segments at 01:05, 1:01:05." in str(caught.value)
         assert caught.value.segment_ids == {first_id, second.id}
+
+
+def test_placement_error_without_segment_times(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        missing_id = uuid.uuid4()
+        error = WordMarkPlacementError(session, UnplaceableWordMarkError({
+            (missing_id, 0, 1): "omit",
+        }))
+        assert str(error) == (
+            "The requested text cannot place the clean-up marks on some segments."
+            " Clear the marks in the review console, or export with fillers kept."
+        )
+        assert error.segment_ids == {missing_id}
+
+
+def test_clear_after_undo_window_restores_filler_removal(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id, segment_id = seed_markable(session, body="Um, we start now.")
+
+        def render() -> str:
+            return render_run_transcript_report(
+                session, run_id, TranscriptFormat.MARKDOWN, fillers=DEFAULT_FILLER_LIST,
+                text=TranscriptText.CORRECTED,
+            ).content
+
+        before = render()
+        kept = mark(session, run_id, segment_id, 0, WordMarkAction.KEEP)
+        assert "Um, we start now." in render()
+        with patch("voxint.adjudication.undo.datetime", wraps=datetime) as clock:
+            clock.now.return_value = kept.created_at + timedelta(days=1)
+            with pytest.raises(UndoExpiredError):
+                undo_word_mark(
+                    session, run_id=run_id, mark_id=kept.id, operator="test", user_id=None,
+                    grace_seconds=300,
+                )
+            mark(session, run_id, segment_id, 0, WordMarkAction.CLEAR)
+            assert render() == before
+        assert "We start now." in before

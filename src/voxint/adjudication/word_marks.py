@@ -17,7 +17,7 @@ from voxint.adjudication.ledger import (
 from voxint.adjudication.turns import EffectiveMarks as EffectiveMarks
 from voxint.adjudication.turns import WordMarkKey as WordMarkKey
 from voxint.adjudication.undo import UndoDriftError, UndoError, UndoExpiredError, _check_grace
-from voxint.db.models import SegmentWordMark, TranscriptSegment, WordMarkAction
+from voxint.db.models import PipelineRun, SegmentWordMark, TranscriptSegment, WordMarkAction
 from voxint.idempotency import savepoint_adopt_or_conflict
 
 
@@ -102,6 +102,14 @@ def _append(session: Session, row: SegmentWordMark) -> tuple[SegmentWordMark, bo
     )
 
 
+def _lock_run(session: Session, run_id: uuid.UUID) -> uuid.UUID | None:
+    # Match restart's run-before-segment order without excluding other writers.
+    return session.scalar(
+        select(PipelineRun.id).where(PipelineRun.id == run_id)
+        .with_for_update(read=True, key_share=True)
+    )
+
+
 def _lock_segment(session: Session, segment_id: uuid.UUID) -> TranscriptSegment | None:
     # Both writers take this lock: drift checks and inserts on a segment serialize,
     # and a concurrent restart cannot delete the parent between validation and flush.
@@ -135,12 +143,16 @@ def record_word_mark(
         raise WordRangeError(
             "word-range must be a non-empty half-open [start, end) with start >= 0"
         )
+    if _lock_run(session, run_id) is None:
+        raise WordRangeError(f"no such pipeline run {run_id}")
     segment = _lock_segment(session, segment_id)
     if segment is None:
         raise WordRangeError(f"no such transcript segment {segment_id}")
     if segment.pipeline_run_id != run_id:
         raise WordRangeError(f"segment {segment_id} does not belong to run {run_id}")
-    if segment.words is not None and end > len(segment.words):
+    if segment.words is None:
+        raise WordRangeError("a segment without words cannot be marked")
+    if end > len(segment.words):
         raise WordRangeError(
             f"word-range end {end} exceeds the segment's {len(segment.words)} words"
         )
@@ -170,6 +182,8 @@ def undo_word_mark(
     now: datetime | None = None,
 ) -> tuple[SegmentWordMark, bool]:
     """Void a fresh, still-current ruling; identical replays bypass grace/drift."""
+    if _lock_run(session, run_id) is None:
+        raise UndoDriftError("the run this word mark applied to no longer exists")
     original = session.get(SegmentWordMark, mark_id)
     if original is None:
         raise UndoError(f"no word mark {mark_id}")
@@ -199,6 +213,9 @@ def undo_word_mark(
             raise UndoError("this word mark is already voided")
         return _append(session, requested)
 
+    if original.created_at is None:
+        session.flush()
+        session.refresh(original)
     if now is None:
         _check_grace(original.created_at, grace_seconds, "the undo grace window has passed")
     else:

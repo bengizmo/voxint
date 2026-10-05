@@ -65,8 +65,9 @@ class WordMarkPlacementError(Exception):
             return f"{int(hours)}:{minutes}:{seconds}" if int(hours) else f"{minutes}:{seconds}"
 
         clocks = ", ".join(dict.fromkeys(clock(start) for start in starts))
+        location = f"segments at {clocks}" if clocks else "some segments"
         super().__init__(
-            f"The requested text cannot place the clean-up marks on segments at {clocks}."
+            f"The requested text cannot place the clean-up marks on {location}."
             " Clear the marks in the review console, or export with fillers kept."
         )
 

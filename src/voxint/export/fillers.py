@@ -132,6 +132,7 @@ class _RemovalSpan:
     lex_end: int
     mark_start: int | None
     cause: RemovalCause
+    keep_opening: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,7 +208,7 @@ def _removal_spans(body: str, pattern: re.Pattern[str], cause: RemovalCause) -> 
 
 
 def _omit_spans(chars: Sequence[_Char], marks: EffectiveMarks) -> list[_RemovalSpan]:
-    """Locate omitted units before rewrites, retaining their surrounding wrappers."""
+    """Locate omitted units, removing balanced wrappers owned by the unit."""
     positions: dict[WordMarkKey, list[int]] = {}
     for index, char in enumerate(chars):
         if char.source is not None and marks.get(char.source) == "omit":
@@ -233,12 +234,31 @@ def _omit_spans(chars: Sequence[_Char], marks: EffectiveMarks) -> list[_RemovalS
         while lex_end > lex_start and chars[lex_end - 1].text in _CLOSE:
             lex_end -= 1
             mark_start = None
-        if lex_end == lex_start:
-            continue
+        keep_opening = True
         end = mark_start + 1 if mark_start is not None else lex_end
+        if not any(char.text.isalnum() for char in chars[lex_start:lex_end]):
+            lex_start, lex_end, end, mark_start = start, stop, stop, None
+        else:
+            closing_end = end
+            while closing_end < stop and chars[closing_end].text in _CLOSE:
+                closing_end += 1
+            opening = "".join(char.text for char in chars[start:lex_start])
+            closing = "".join(char.text for char in chars[end:closing_end])
+            pairs = dict(zip(_OPEN, _CLOSE, strict=True))
+            if opening and closing == "".join(pairs[char] for char in reversed(opening)):
+                keep_opening = False
+                end = closing_end
+                if (
+                    end < len(chars) and chars[end].text in ",.?!;:"
+                    and (end + 1 == len(chars) or chars[end + 1].text.isspace())
+                ):
+                    mark_start = end
+                    end += 1
         while end < len(chars) and chars[end].text.isspace():
             end += 1
-        spans.append(_RemovalSpan(start, end, lex_start, lex_end, mark_start, "omit"))
+        spans.append(_RemovalSpan(
+            start, end, lex_start, lex_end, mark_start, "omit", keep_opening,
+        ))
     return spans
 
 
@@ -377,7 +397,7 @@ def _clean_pass(
                 out.append(_Char(mark_char.text, out[-1].owner, mark_char.source))
             core = "".join(char.text for char in out).rstrip(_WRAPPERS)
         capitalise = capitalise or not core or bool(_SENTENCE_END.search(core))
-        opening = chars[span.start:span.lex_start]
+        opening = chars[span.start:span.lex_start] if span.keep_opening else []
         cursor = span.end
         if out and cursor < len(chars):
             out.append(_Char(" ", (opening or chars[cursor:])[0].owner))
