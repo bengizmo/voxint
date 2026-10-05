@@ -19,6 +19,7 @@ from voxint.adjudication.turns import (
     TurnPiece,
     WordAnchor,
     coarse_turns,
+    emission_anchors,
     join_pieces,
     project_turns,
 )
@@ -104,6 +105,7 @@ def check_anchors(
     emission_index = -1
     anchor_index = 0
     previous_end: dict[uuid.UUID, int] = {}
+    projected_lexical: dict[int, dict[tuple[uuid.UUID, int, int], str]] = {}
     for turn in result:
         for piece in turn.pieces:
             if piece.segment_start:
@@ -135,7 +137,20 @@ def check_anchors(
                     else "".join(w.text for w in words[anchor.token_start:anchor.token_end]).strip()
                 )
                 assert lexical == expected
+                projected_lexical.setdefault(id(e), {})[
+                    (anchor.segment_id, anchor.token_start, anchor.token_end)
+                ] = lexical
                 anchor_index += 1
+    for e in emissions:
+        body = e.child.text if e.child else resolve_body(
+            e.seg, e.review.corrected_text if e.review else None, text,
+        )
+        shown = emission_anchors(e, text=text)
+        assert (shown.reason is None) == bool(shown.anchors)
+        assert {
+            (a.segment_id, a.token_start, a.token_end): body[a.lex_start:a.lex_end]
+            for a in shown.anchors
+        } == projected_lexical.get(id(e), {})
 
 
 def check(
@@ -689,4 +704,27 @@ def test_segment_override_anchors_under_a_review_correction() -> None:
     assert piece.rule is PieceRule.SEGMENT_OVERRIDE and piece.text == "Hello, WORLD."
     assert piece.anchors == (
         WordAnchor(e.seg.id, 0, 1, 0, 6), WordAnchor(e.seg.id, 1, 2, 7, 13),
+    )
+
+
+def test_emission_anchors_use_code_points_after_astral_character() -> None:
+    e = emission(("😀", " um", " word"))
+    check([e], [])
+    shown = emission_anchors(e, text=TranscriptText.CORRECTED)
+    assert shown.anchors[1] == WordAnchor(e.seg.id, 1, 2, 2, 4)
+    assert shown.reason is None
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_emission_anchor_refusal_reason(missing: bool) -> None:
+    e = emission(enhanced="Completely rewritten.")
+    if missing:
+        e.seg.words = None
+    check([e], [], text=TranscriptText.CORRECTED)
+    result = emission_anchors(e, text=TranscriptText.CORRECTED)
+    assert result.anchors == ()
+    assert result.reason == (
+        "This segment has no recorded word timings, so its words cannot be marked."
+        if missing else "Clean-up marks need the text to match the recorded words. "
+        "This segment's text was changed too much."
     )

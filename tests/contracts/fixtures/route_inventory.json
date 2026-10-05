@@ -604,6 +604,12 @@
     ]
   ],
   [
+    "/review/{run_id}/segments/{segment_id}/word-marks",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/review/{run_id}/segments/{segment_id}/words",
     [
       "GET"
@@ -637,6 +643,18 @@
     "/review/{run_id}/undo/relabel",
     [
       "POST"
+    ]
+  ],
+  [
+    "/review/{run_id}/undo/word-mark",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/review/{run_id}/word-marks",
+    [
+      "GET"
     ]
   ],
   [

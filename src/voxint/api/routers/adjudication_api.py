@@ -16,7 +16,7 @@ import uuid
 import zipfile
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
@@ -92,6 +92,7 @@ from voxint.adjudication.transcript import (
     effective_text,
     parse_transcript_text,
 )
+from voxint.adjudication.turns import emission_anchors, load_turn_inputs
 from voxint.adjudication.undo import (
     UndoArchivedSpeakerError,
     UndoDriftError,
@@ -102,6 +103,7 @@ from voxint.adjudication.undo import (
     undo_merge,
     undo_segment_decision,
 )
+from voxint.adjudication.word_marks import effective_marks, record_word_mark, undo_word_mark
 from voxint.api.annotation_view import (
     annotation_shapes as _annotation_shapes,
 )
@@ -145,6 +147,7 @@ from voxint.api.transcript_view import (
     _segment_is_corrected,
     _segment_is_split,
 )
+from voxint.api.word_marks_view import build_word_marks_payload
 from voxint.app_settings import (
     get_app_settings,
     ready_tutorial_run_id,
@@ -165,10 +168,12 @@ from voxint.db.models import (
     ProfileDecision,
     SegmentReviewState,
     SegmentSplitBoundary,
+    SegmentWordMark,
     Speaker,
     StageRun,
     TranscriptAnnotation,
     TranscriptSegment,
+    WordMarkAction,
 )
 from voxint.enrichment.producers.names import NameProducerError, run_offline_name_producer
 from voxint.enrichment.review import ConflictingReplayError as EnrichmentReplayError
@@ -193,6 +198,7 @@ from voxint.export import (
     annotation_pull_quote,
 )
 from voxint.export.filler_lists import FillerListError
+from voxint.export.fillers import UnplaceableWordMarkError
 from voxint.export.manifest import (
     ClipRef,
     QuoteLine,
@@ -668,7 +674,7 @@ def decide(
     return _labels_response(request, session, run, undo=undo)
 
 
-def _undo_expires_at(row: AdjudicationDecision, settings: Settings) -> str:
+def _undo_expires_at(row: AdjudicationDecision | SegmentWordMark, settings: Settings) -> str:
     """When a fresh ruling's undo window closes: the window the undo service
     enforces, measured from the row's own ``created_at``."""
     created_at = row.created_at
@@ -968,7 +974,8 @@ def relabel_segment(
 
 
 def _segment_review_json(
-    session: Session, run_id: uuid.UUID, segment: TranscriptSegment
+    session: Session, run_id: uuid.UUID, segment: TranscriptSegment,
+    *, marks_cleared: int | None = None,
 ) -> JSONResponse:
     """The state a triage-loop write returns to the island: this segment's
     verified/corrected flags + effective text, and the run's N-of-M counter."""
@@ -982,6 +989,7 @@ def _segment_review_json(
             "corrected": corrected is not None,
             "text": effective_text(segment, corrected),
             "progress": {"verified": verified_n, "total": total},
+            **({"marksCleared": marks_cleared} if marks_cleared is not None else {}),
         }
     )
 
@@ -1013,6 +1021,7 @@ def verify_segment(
 def correct_segment(
     run_id: uuid.UUID,
     segment_id: uuid.UUID,
+    identity: CurrentUserDep,
     operator: OperatorDep,
     session: SessionDep,
     token: Annotated[uuid.UUID, Form()],
@@ -1042,11 +1051,27 @@ def correct_segment(
     old_row = session.get(SegmentReviewState, segment.id)
     old_corrected = old_row.corrected_text if old_row else None
     set_correction(session, segment=segment, text=text)
+    _, _, emissions = load_turn_inputs(session, run_id)
+    anchored = {
+        (a.segment_id, a.token_start, a.token_end)
+        for emission in emissions if emission.seg.id == segment_id
+        for a in emission_anchors(emission, text=TranscriptText.CORRECTED).anchors
+    }
+    marks_cleared = 0
+    for key in effective_marks(session, run_id):
+        if key[0] == segment_id and key not in anchored:
+            record_word_mark(
+                session, run_id=run_id, segment_id=segment_id,
+                start=key[1], end=key[2], action=WordMarkAction.CLEAR,
+                operator=operator, user_id=identity.user_id,
+                idempotency_key=f"text-clear:{uuid.uuid4()}",
+            )
+            marks_cleared += 1
     new_row = session.get(SegmentReviewState, segment.id)
     new_corrected = new_row.corrected_text if new_row else None
     if old_corrected != new_corrected:
         observe_segment_edit(session, segment)
-    return _segment_review_json(session, run_id, segment)
+    return _segment_review_json(session, run_id, segment, marks_cleared=marks_cleared)
 
 
 @router.post("/review/{run_id}/segments/{segment_id}/split")
@@ -1111,10 +1136,151 @@ def split_segment(
             ),
         )
     try:
+        if any(
+            key[0] == segment_id and key[1] < word_index < key[2]
+            for key in effective_marks(session, run_id)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="This word has a clean-up mark. Clear it first, then split.",
+            )
         record_split(session, parent=segment, word_index=word_index, operator=operator)
     except UnsplittableError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _run_reconcile_response(session, run_id)
+
+
+def _word_marks_payload(
+    session: Session, run_id: uuid.UUID, settings: Settings, *,
+    focus_segment_id: uuid.UUID | None,
+) -> dict[str, Any]:
+    """Map the shared filler/export errors to the same operator-facing 409s."""
+    try:
+        return build_word_marks_payload(
+            session, run_id, settings, focus_segment_id=focus_segment_id,
+        )
+    except FillerListError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except UnplaceableWordMarkError as exc:
+        raise HTTPException(
+            status_code=409, detail=str(WordMarkPlacementError(session, exc)),
+        ) from exc
+
+
+@router.get("/review/{run_id}/word-marks")
+def run_word_marks(
+    run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep,
+    segment: Annotated[uuid.UUID | None, Query()] = None,
+) -> dict[str, Any]:
+    """Read clean-up status, optionally including every word of a parent."""
+    _run_or_404(session, run_id)
+    if segment is not None:
+        row = session.get(TranscriptSegment, segment)
+        if row is None or row.pipeline_run_id != run_id:
+            raise HTTPException(status_code=404, detail="no such segment in this run")
+    return _word_marks_payload(
+        session, run_id, request.app.state.settings, focus_segment_id=segment,
+    )
+
+
+@router.post("/review/{run_id}/segments/{segment_id}/word-marks")
+def mark_segment_word(
+    run_id: uuid.UUID, segment_id: uuid.UUID, request: Request,
+    identity: CurrentUserDep, operator: OperatorDep, session: SessionDep,
+    token: Annotated[uuid.UUID, Form()],
+    nonce: Annotated[str, Form(min_length=8, max_length=64)],
+    action: Annotated[Literal["keep", "omit", "clear"], Form()],
+    start: Annotated[int, Form()], end: Annotated[int, Form()],
+) -> dict[str, Any]:
+    """Append a unit-aligned ruling; replays return current state without undo."""
+    try:
+        verify_claim(session, run_id, token, for_update=True)
+    except ClaimMismatchError as exc:
+        raise _claim_conflict(exc) from exc
+    segment = session.get(TranscriptSegment, segment_id)
+    if segment is None or segment.pipeline_run_id != run_id:
+        raise HTTPException(status_code=404, detail="no such segment in this run")
+    settings: Settings = request.app.state.settings
+    replay = session.scalar(select(SegmentWordMark.id).where(
+        SegmentWordMark.idempotency_key == nonce,
+    ))
+    # A clear removes its validation target, and later writes can change the
+    # shown text/list. The writer checks the complete immutable replay payload.
+    if replay is None:
+        if action == "clear":
+            if (segment_id, start, end) not in effective_marks(session, run_id):
+                raise HTTPException(
+                    status_code=409, detail="This word has no clean-up mark to clear.",
+                )
+        else:
+            # Clear skips this build, so a broken saved filler list never blocks it.
+            before = _word_marks_payload(session, run_id, settings, focus_segment_id=segment_id)
+            emissions = [e for e in before["emissions"] if e["segmentId"] == str(segment_id)]
+            if not any(e["markable"] for e in emissions):
+                reason = emissions[0]["reason"] if emissions else (
+                    "This segment has no recorded word timings, so its words cannot be marked."
+                )
+                raise HTTPException(status_code=409, detail=reason)
+            unit = next((
+                u for e in emissions for u in e["units"]
+                if (u["start"], u["end"]) == (start, end)
+            ), None)
+            if unit is None:
+                raise HTTPException(status_code=422, detail="choose a whole word")
+            if action == "keep" and not (
+                unit["removed"] in ("filler", "phrase") or unit["protected"]
+            ):
+                raise HTTPException(
+                    status_code=409, detail="Only a word the filler list removes can be kept.",
+                )
+    try:
+        row, adopted = record_word_mark(
+            session, run_id=run_id, segment_id=segment_id, start=start, end=end,
+            action=WordMarkAction(action), operator=operator, user_id=identity.user_id,
+            idempotency_key=nonce,
+        )
+    except ConflictingReplayError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except WordRangeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    session.flush()
+    session.refresh(row)
+    undo = None if adopted else {
+        "kind": "word-mark", "markId": str(row.id), "expiresAt": _undo_expires_at(row, settings),
+    }
+    session.commit()
+    payload = _word_marks_payload(session, run_id, settings, focus_segment_id=segment_id)
+    payload["undo"] = undo
+    return payload
+
+
+@router.post("/review/{run_id}/undo/word-mark")
+def undo_segment_word_mark(
+    run_id: uuid.UUID, request: Request, identity: CurrentUserDep,
+    operator: OperatorDep, session: SessionDep,
+    token: Annotated[uuid.UUID, Form()], csrf_token: Annotated[str, Form()],
+    mark_id: Annotated[uuid.UUID, Form()], nonce: Annotated[str | None, Form()] = None,
+) -> dict[str, Any]:
+    """Undo a recent, still-current mark and reconcile its parent words."""
+    try:
+        verify_claim(session, run_id, token, for_update=True)
+    except ClaimMismatchError as exc:
+        raise _claim_conflict(exc) from exc
+    _require_csrf(request, CSRF_CLAIM, csrf_token)
+    settings: Settings = request.app.state.settings
+    original = session.get(SegmentWordMark, mark_id)
+    focus = original.segment_id if original is not None else None
+    try:
+        undo_word_mark(
+            session, run_id=run_id, mark_id=mark_id, operator=operator,
+            user_id=identity.user_id, grace_seconds=settings.UNDO_GRACE_SECONDS,
+        )
+    except (UndoDriftError, UndoExpiredError, ConflictingReplayError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except UndoError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    return _word_marks_payload(session, run_id, settings, focus_segment_id=focus)
 
 
 @router.get("/review/{run_id}/segments/{segment_id}/words")
