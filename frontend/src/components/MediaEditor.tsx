@@ -18,6 +18,9 @@ import {
   useWalkCursor,
 } from "../lib/editor-mutations";
 import { useEnrichmentPolling } from "../lib/enrichment-polling";
+import { useWordMarks } from "../lib/use-word-marks";
+import { emissionKey, marksClearedNotice, staleMarksByLine, toggleWordMark, wordMarksByLine,
+  type WordMarkAction, type WordMarkUnit, type WordMarksResult } from "../lib/word-marks";
 import { makeNonce } from "../lib/nonce";
 import type { PlaybackCapability } from "../lib/playback";
 import type { Turn } from "../lib/peaks";
@@ -134,6 +137,16 @@ export function MediaEditor({
   const [claimLost, setClaimLost] = useState(false);
   const [speakers, setSpeakers] = useState(initialSpeakers);
   const [error, setError] = useState<string | null>(null);
+  const { snapshot: marksSnapshot, refresh: refreshMarks, requestFocus: requestMarksFocus,
+    adopt: adoptMarks, beginWrite: beginMarksWrite, finishWrite: finishMarksWrite,
+    loadError: marksLoadError } = useWordMarks(runId, setError);
+  const refreshMarksRef = useRef(refreshMarks);
+  refreshMarksRef.current = refreshMarks;
+  const [cleanupMode, setCleanupMode] = useState(false);
+  const [cleanupNotice, setCleanupNotice] = useState<string | null>(null);
+  const [selectedUnit, setSelectedUnit] = useState<{ line: string; start: number; end: number } | null>(null);
+  const markUndoFocus = useRef<string | null>(null);
+  const markUndoRequest = useRef<number | undefined>(undefined);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [walkMode, setWalkMode] = useState(
     () => initialProgress.verified < initialProgress.total,
@@ -659,6 +672,7 @@ export function MediaEditor({
         });
       }
       void reloadAnnotationsRef.current?.();
+      void refreshMarksRef.current();
     },
     [setSegments, setProgress],
   );
@@ -695,6 +709,68 @@ export function MediaEditor({
     cursor >= 0 && cursor < segments.length ? segments[cursor] : null;
   currentRef.current = current;
   const focusParentId = current?.sourceSegmentId ?? null;
+  const desiredMarksFocus = cleanupMode && writable ? focusParentId : null;
+  useLayoutEffect(() => {
+    // Record the latest committed focus before a POST can settle. The hook
+    // owns deferral and settlement; busy state is only for rendering controls.
+    requestMarksFocus(desiredMarksFocus);
+  }, [desiredMarksFocus, requestMarksFocus]);
+  useEffect(() => {
+    setCleanupNotice(null);
+  }, [current?.segmentId]);
+  const marksByLine = useMemo(() => marksSnapshot
+    ? wordMarksByLine(segments, marksSnapshot.payload) : undefined, [segments, marksSnapshot]);
+  const staleByLine = useMemo(() => marksSnapshot
+    ? staleMarksByLine(segments, marksSnapshot.payload) : undefined, [segments, marksSnapshot]);
+  const cleanupEmission = marksSnapshot?.focus === focusParentId ? marksByLine?.get(cursor) : undefined;
+  const cleanupLine = emissionKey(focusParentId, current?.wordStart ?? null);
+  const focusedUnit = selectedUnit?.line === cleanupLine
+    ? cleanupEmission?.units.find((u) => u.start === selectedUnit.start && u.end === selectedUnit.end) : undefined;
+  const focusedUnitRef = useRef(focusedUnit);
+  focusedUnitRef.current = focusedUnit;
+  const onFocusUnit = useCallback((unit: WordMarkUnit) => {
+    // A focus event and a shortcut can arrive before the next render.
+    focusedUnitRef.current = unit;
+    setSelectedUnit({ line: cleanupLine, start: unit.start, end: unit.end });
+  }, [cleanupLine]);
+  const toggleCleanup = useCallback(() => {
+    if (!writable) return;
+    setCleanupMode((on) => !on);
+    setSplitMode(false);
+  }, [writable]);
+  const writeWordMark = useCallback(async (segmentId: string, start: number, end: number, action: WordMarkAction) => {
+    if (!writable || busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    const request = beginMarksWrite();
+    try {
+      const result = await postForm<WordMarksResult>(`/review/${runId}/segments/${segmentId}/word-marks`, {
+        nonce: makeNonce(), action, start: String(start), end: String(end),
+      });
+      if (!result) return;
+      adoptMarks(result, segmentId, request);
+      if (result.undo) {
+        markUndoFocus.current = segmentId;
+        setUndoInfo(result.undo);
+      }
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+      finishMarksWrite();
+    }
+  }, [writable, busyRef, setBusy, beginMarksWrite, finishMarksWrite, adoptMarks, postForm, runId]);
+  const actOnUnit = useCallback((key: "f" | "o" | "clear") => {
+    const unit = focusedUnitRef.current;
+    if (!unit || focusParentId === null) return;
+    if (key === "clear") {
+      if (unit.mark) void writeWordMark(focusParentId, unit.start, unit.end, "clear");
+      return;
+    }
+    const choice = toggleWordMark(unit, key, marksSnapshot?.payload.detectionError ?? null);
+    if (choice.error) setError(choice.error);
+    else if (choice.action) void writeWordMark(focusParentId, unit.start, unit.end, choice.action);
+  }, [focusParentId, writeWordMark, marksSnapshot]);
   const isSplitParent = siblingCount(segments, focusParentId) > 1;
   const speakerDisplayName =
     current?.speaker?.trim() || current?.label?.trim() || "Unknown speaker";
@@ -837,9 +913,11 @@ export function MediaEditor({
         setEditOvertaken(false);
         setConfirmDiscard(false);
         editRef.current?.blur();
+        setCleanupNotice(marksClearedNotice(result.marksCleared ?? 0));
       }
       applyResult(index, result, { supersedeProvenance: true });
       void reloadAnnotationsRef.current?.();
+      void refreshMarksRef.current();
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -870,6 +948,7 @@ export function MediaEditor({
         setSegments(result.segments);
         setProgress(result.progress);
         void reloadAnnotationsRef.current?.();
+        void refreshMarksRef.current();
         const targetIdx = result.segments.findIndex(
           (s) => s.sourceSegmentId === sourceSegmentId && s.reviewTarget,
         );
@@ -916,6 +995,7 @@ export function MediaEditor({
         // A replay carries no undo; keep any toast that is still valid.
         if (result.undo) setUndoInfo(result.undo);
         void reloadAnnotationsRef.current?.();
+        void refreshMarksRef.current();
       } finally {
         busyRef.current = false;
         setBusy(false);
@@ -954,6 +1034,7 @@ export function MediaEditor({
         // A replay carries no undo; keep any toast that is still valid.
         if (result.undo) setUndoInfo(result.undo);
         void reloadAnnotationsRef.current?.();
+        void refreshMarksRef.current();
         const name = speakers.find((s) => s.id === speakerId)?.displayName;
         setAssignStatus(
           speakerId === null
@@ -1278,7 +1359,7 @@ export function MediaEditor({
   useEffect(() => {
     if (!writable) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
       // A held key must not answer its own unsaved-edit warning: discarding
       // takes a second, deliberate press.
       if (event.repeat && hasUnsavedEdit()) return;
@@ -1293,7 +1374,27 @@ export function MediaEditor({
         el?.isContentEditable
       )
         return;
+      // Word buttons are intentionally not form controls here: navigation and
+      // verify stay available, and a cursor move fetches its new parent's units.
       switch (event.key.toLowerCase()) {
+        case REVIEW_KEY.cleanup:
+          event.preventDefault();
+          toggleCleanup();
+          break;
+        case REVIEW_KEY.keepFiller:
+        case REVIEW_KEY.omitWord:
+          if (cleanupMode) {
+            event.preventDefault();
+            actOnUnit(event.key.toLowerCase() as "f" | "o");
+          }
+          break;
+        case "escape":
+          if (cleanupMode) {
+            event.preventDefault();
+            setCleanupMode(false);
+            playerRef.current?.focusCursorRow();
+          }
+          break;
         case REVIEW_KEY.verify:
           event.preventDefault();
           void verifyAndAdvance();
@@ -1397,6 +1498,9 @@ export function MediaEditor({
     };
   }, [
     writable,
+    cleanupMode,
+    toggleCleanup,
+    actOnUnit,
     hasUnsavedEdit,
     verifyAndAdvance,
     jumpNext,
@@ -1548,11 +1652,14 @@ export function MediaEditor({
               </button>
               <button
                 type="button"
-                onClick={() => setSplitMode((on) => !on)}
+                onClick={() => { setSplitMode((on) => !on); setCleanupMode(false); }}
                 aria-pressed={splitMode}
                 className="text-sm"
               >
                 {splitMode ? "Exit split mode" : "Split"}
+              </button>
+              <button type="button" onClick={toggleCleanup} aria-pressed={cleanupMode} className="text-sm">
+                {cleanupMode ? "Exit clean-up" : "Clean up"} <kbd>{REVIEW_KEY.cleanup}</kbd>
               </button>
               <button
                 type="button"
@@ -1565,6 +1672,22 @@ export function MediaEditor({
               {annotationToolbar}
             </div>
           )}
+          {cleanupNotice && <p role="status" className="text-sm">{cleanupNotice}</p>}
+          {marksSnapshot?.payload.detectionError && <p role="note" className="text-sm">
+            Filler detection is unavailable: {marksSnapshot.payload.detectionError} You can still omit words, clear marks and undo.
+          </p>}
+          {cleanupMode && writable && <div className="me-actions text-sm" role="region" aria-label="Clean-up mode">
+            <span>Clean-up mode: <kbd>{REVIEW_KEY.keepFiller}</kbd> keep, <kbd>{REVIEW_KEY.omitWord}</kbd> omit,
+              {" "}<kbd>←</kbd> / <kbd>→</kbd> or <kbd>Tab</kbd> focus a word, <kbd>Escape</kbd> done.</span>
+            {!cleanupEmission && <span role="status">{focusParentId === null
+              ? "This line has no recorded segment to mark."
+              : marksLoadError ? "Could not load words. Exit and re-enter clean-up mode to try again." : "Loading words…"}</span>}
+            {cleanupEmission && !cleanupEmission.markable && <span role="status">{cleanupEmission.reason}</span>}
+            <button type="button" disabled={busy || !focusedUnit} onClick={() => actOnUnit("f")}>Keep <kbd>{REVIEW_KEY.keepFiller}</kbd></button>
+            <button type="button" disabled={busy || !focusedUnit} onClick={() => actOnUnit("o")}>Omit <kbd>{REVIEW_KEY.omitWord}</kbd></button>
+            <button type="button" disabled={busy || !focusedUnit?.mark} onClick={() => actOnUnit("clear")}>Clear</button>
+            <button type="button" onClick={() => setCleanupMode(false)}>Done <kbd>Escape</kbd></button>
+          </div>}
           {translate &&
             (translatePhase === "idle" ? (
               <div className="me-actions">
@@ -1921,6 +2044,12 @@ export function MediaEditor({
               reassignSpeakers={writable ? speakers : undefined}
               onReassign={writable ? reassignChild : undefined}
               reassignBusy={busy}
+              wordMarks={marksByLine}
+              cleanupIndex={cleanupMode && writable && cleanupEmission ? cursor : null}
+              onFocusUnit={onFocusUnit}
+              staleWordMarks={staleByLine}
+              wordMarksBusy={busy}
+              onClearStaleMark={writable ? (mark) => void writeWordMark(mark.segmentId, mark.start, mark.end, "clear") : undefined}
               annotationSpans={annotationSpans}
               staleLocators={annotationStaleLines}
               onTextSelect={writable ? annotationCapture : undefined}
@@ -1988,6 +2117,10 @@ export function MediaEditor({
           onClose={() => setHelpOpen(false)}
           hasRoster={speakers.length > 0}
           extraShortcuts={[
+            { keys: REVIEW_KEY.cleanup, desc: "Toggle clean-up mode (leaves split mode)" },
+            { keys: REVIEW_KEY.keepFiller, desc: "Toggle keep on the focused filler in clean-up mode" },
+            { keys: REVIEW_KEY.omitWord, desc: "Toggle omit on the focused word in clean-up mode" },
+            { keys: "Escape", desc: "Leave clean-up mode" },
             {
               keys: REVIEW_KEY.walkMode,
               desc: "Toggle walk mode (auto-advance after verify)",
@@ -1997,7 +2130,7 @@ export function MediaEditor({
       </div>
       {undoInfo && writable && reviewToken && (
         <UndoToast
-          key={undoInfo.kind === "merge" ? undoInfo.mergeNonce : undoInfo.decisionId}
+          key={undoInfo.kind === "merge" ? undoInfo.mergeNonce : undoInfo.kind === "word-mark" ? undoInfo.markId : undoInfo.decisionId}
           undo={undoInfo}
           runId={runId}
           reviewToken={reviewToken}
@@ -2008,8 +2141,23 @@ export function MediaEditor({
             setAssignStatus(null);
             onLabelsChanged(data);
           }}
+          onUndoStart={() => {
+            if (undoInfo.kind === "word-mark") markUndoRequest.current = beginMarksWrite();
+          }}
+          onUndoSettled={() => {
+            if (undoInfo.kind === "word-mark") finishMarksWrite();
+          }}
+          onMarksUndone={(data) => {
+            adoptMarks(data, markUndoFocus.current, markUndoRequest.current);
+            setUndoInfo(null);
+          }}
           onDismiss={() => setUndoInfo(null)}
-          onConflict={refetchAfterUndoConflict}
+          onConflict={undoInfo.kind === "word-mark" ? async () => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), UNDO_REFETCH_TIMEOUT_MS);
+            try { await refreshMarks(undefined, controller.signal); }
+            finally { clearTimeout(timer); }
+          } : refetchAfterUndoConflict}
           writeGuard={writeGuard}
         />
       )}

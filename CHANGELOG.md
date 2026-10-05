@@ -7,6 +7,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Keep a filler word, or leave out any word** (#757). In the review editor,
+  words that filler removal will leave out are underlined. Press **Clean up**
+  (`c`) on a line, focus a word with Tab or the arrow keys, then press `f` to
+  keep a filler or `o` to leave out any word; each choice saves at once and can
+  be undone from the toast. The choices apply only where filler words are
+  removed (the reading view with **Remove filler words**, and the Markdown and
+  plain-text reading copies made with it), and the note and Markdown comment
+  count them. The saved transcript never changes, and leaving out a word is not
+  redaction. A line whose text no longer matches its recorded words can't be
+  marked, editing a line clears marks that no longer fit, and a split inside a
+  marked word is refused. An export that can't place a mark on the requested
+  text is refused with a message naming the lines to clear. Marks are stored
+  append-only in a new table (migration 0072) and count as editorial work in
+  restart warnings.
 - **Your own filler word list** (#753). Filler removal still leaves out `um`,
   `uh`, `umm`, `uhh`, `uhm` and `erm` by default (preset `en-1`). Two new
   settings, `VOXINT_FILLERS_ADD` and `VOXINT_FILLERS_KEEP`, take comma-separated

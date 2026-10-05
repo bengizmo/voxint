@@ -509,3 +509,31 @@ describe("UndoToast", () => {
     expect(apiFetch).not.toHaveBeenCalled();
   });
 });
+
+it("posts a word-mark undo and dispatches its marks payload separately", async () => {
+  const payload = { runId: "run-1", version: "2.hash", emissions: [], stale: [], detectionError: null, fillerListDefault: true };
+  vi.mocked(apiFetch).mockResolvedValue(jsonResponse(payload));
+  const order: string[] = [];
+  const onMarksUndone = vi.fn(() => { order.push("adopt"); });
+  const { props } = setup({ undo: { kind: "word-mark", markId: "mark-1", expiresAt: inMinutes(5) },
+    onMarksUndone, onUndoStart: () => { order.push("start"); }, onUndoSettled: () => { order.push("settled"); } });
+  expect(screen.getByRole("status").textContent).toContain("Clean-up mark saved.");
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  await waitFor(() => expect(onMarksUndone).toHaveBeenCalledWith(payload));
+  expect(order).toEqual(["start", "adopt", "settled"]);
+  expect(props.onUndone).not.toHaveBeenCalled();
+  expect(vi.mocked(apiFetch).mock.calls[0][0]).toBe("/review/run-1/undo/word-mark");
+  expect(Object.fromEntries(postedBody())).toEqual({ token: "review-token", csrf_token: "claim-csrf", mark_id: "mark-1", nonce: "undo:mark-1" });
+});
+
+it("settles a failed word-mark undo after releasing the shared write guard", async () => {
+  vi.mocked(apiFetch).mockRejectedValue(new ApiError(500, "write failed"));
+  const busyRef = { current: false };
+  const onUndoSettled = vi.fn(() => { expect(busyRef.current).toBe(false); });
+  const { props } = setup({ undo: { kind: "word-mark", markId: "mark-1", expiresAt: inMinutes(5) },
+    onUndoSettled, onMarksUndone: vi.fn(), writeGuard: { busyRef, busy: false, setBusy: vi.fn() } });
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  await screen.findByText("write failed");
+  expect(onUndoSettled).toHaveBeenCalledOnce();
+  expect(props.onMarksUndone).not.toHaveBeenCalled();
+});

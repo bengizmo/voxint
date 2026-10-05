@@ -861,3 +861,29 @@ passed; the 3 failures are the known local-only enrichment gates).
 
 Delta re-reviews (codex): round 1 raised one Low (punctuation after removed
 wrappers), fixed; round 2 clean.
+
+### Slice 4a code review (High, 3 of 3: codex, deepseek-v4-pro, qwen/qwen3.8-max-prime)
+
+Slice 4 was split: 4a is the API and backend writes (PR #788, merged as
+`e1f97774`), and 4b is the console. Codex implemented 4a from a brief. The full
+suite passed before review (11,994 passed; the 3 failures are the known
+local-only enrichment gates).
+
+**Fixed.**
+- codex, deepseek, qwen: the mark and undo routes committed before building the
+  response, so a failing response could hide a committed write. The response is
+  now built first.
+- A broken saved filler list failed the read. Detection is now empty,
+  `detectionError` explains why, and omit, clear and undo still work.
+- `version` now hashes focus-independent state, including each emission's shown
+  text. A case-only edit moves it; changing focus does not.
+- GET reads text, marks and settings in one repeatable-read snapshot.
+- A text correction walks the run only when its segment has marks.
+- A stale mark on a segment outside the walk raised `KeyError`. Fixed.
+
+**Rejected.**
+- qwen High: `clear` depends on `segment.words` bounds. Stored words never
+  change for a segment, and a restart that re-transcribes deletes segments and
+  their marks by cascade.
+
+Delta re-reviews (codex, then deepseek): the last round was clean.

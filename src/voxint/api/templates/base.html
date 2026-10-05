@@ -472,7 +472,7 @@
     table { border-collapse: collapse; width: 100%; font-size: var(--t-dense); }
     th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
     th { color: var(--ink-2); font-size: var(--t-sm); }
-    /* Tokenized controls. `:not(:where(.tp-split-word, .tp-corrected-chip))`
+    /* Tokenized controls. `:not(:where(.tp-split-word, .tp-corrected-chip, .tp-cleanup-word))`
        keeps specificity at exactly `button` (0,0,1): high enough to beat
        Tailwind Preflight's bare `button { ... }` reset (also 0,0,1) as the later
        source, but low enough that any island utility (w-full, text-sm, hover:*)
@@ -485,22 +485,23 @@
        renders a typed button with a `bg-*` utility (re-check before adding
        one, or drop the type attribute there).
        button.primary/.secondary at (0,1,1) are unaffected. The word-chip
-       (.tp-split-word) AND correction chip (.tp-corrected-chip) opt out entirely:
+       (.tp-split-word), clean-up units (.tp-cleanup-word) and correction chips
+       (.tp-corrected-chip) opt out entirely:
        the :hover rule below is 0,1,1, which would otherwise defeat a chip's own
-       0,1,0 styling on hover, so both are excluded here. */
-    button:not(:where(.tp-split-word, .tp-corrected-chip)) {
+       0,1,0 styling on hover, so all three are excluded here. */
+    button:not(:where(.tp-split-word, .tp-corrected-chip, .tp-cleanup-word)) {
       font: inherit; color: var(--ink); background: var(--surface);
       border: 1px solid var(--line); border-radius: var(--r-md);
       padding: .3rem .7rem; cursor: pointer;
       transition: background 160ms ease, border-color 160ms ease; }
-    button:not(:where(.tp-split-word, .tp-corrected-chip)):hover:not(:disabled) { background: var(--surface-2);
+    button:not(:where(.tp-split-word, .tp-corrected-chip, .tp-cleanup-word)):hover:not(:disabled) { background: var(--surface-2);
       border-color: var(--line-strong); }
-    button:not(:where(.tp-split-word, .tp-corrected-chip)):disabled { opacity: .55; cursor: not-allowed; }
+    button:not(:where(.tp-split-word, .tp-corrected-chip, .tp-cleanup-word)):disabled { opacity: .55; cursor: not-allowed; }
     /* #100: neutral TYPED buttons — match Preflight's `[type=…]` reset at
        (0,1,0) as the later source, or they render transparent-backed. */
-    [type='submit']:not(:where(.tp-split-word, .tp-corrected-chip)),
-    [type='button']:not(:where(.tp-split-word, .tp-corrected-chip)),
-    [type='reset']:not(:where(.tp-split-word, .tp-corrected-chip)) {
+    [type='submit']:not(:where(.tp-split-word, .tp-corrected-chip, .tp-cleanup-word)),
+    [type='button']:not(:where(.tp-split-word, .tp-corrected-chip, .tp-cleanup-word)),
+    [type='reset']:not(:where(.tp-split-word, .tp-corrected-chip, .tp-cleanup-word)) {
       background-color: var(--surface); }
     button.secondary { background: transparent; border-color: transparent;
       color: var(--accent-ink); padding-left: .35rem; padding-right: .35rem; }
@@ -909,7 +910,7 @@
                   padding: .3rem .7rem; text-decoration: none; }
     /* Pressed feedback for every button variant (visual-polish pass): a 1px
        nudge, no transition, so it also reads under prefers-reduced-motion. */
-    button:not(:where(.tp-split-word, .tp-corrected-chip)):active:not(:disabled) {
+    button:not(:where(.tp-split-word, .tp-corrected-chip, .tp-cleanup-word)):active:not(:disabled) {
       transform: translateY(1px); }
     kbd { font-family: var(--font-mono); font-size: .85em; background: var(--surface-2);
           border: 1px solid var(--line); border-radius: var(--r-sm); padding: 0 .3rem; }
@@ -1579,6 +1580,14 @@
        token layer drives the mark, the picker, and the panel. */
     mark.hl-0, mark.hl-1, mark.hl-2, mark.hl-3, mark.hl-4, mark.hl-5 {
       color: inherit; border-radius: .15em; padding: 0 .05em; }
+    /* Clean-up status shares the annotation layer without changing text. */
+    .wm-removed { text-decoration: underline solid var(--warn) 2px; text-underline-offset: .2em; }
+    .wm-keep { border-radius: .15em; box-shadow: inset 0 -2px var(--accent); font-weight: 600; }
+    .wm-omit { text-decoration: line-through; text-decoration-thickness: 2px; }
+    button.tp-cleanup-word { display: inline; padding: 0; margin: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+    button.tp-cleanup-word.wm-keep { font-weight: 600; }
+    button.tp-cleanup-word:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .wm-stale { margin-left: .5em; color: var(--ink-2); }
     mark.hl-0 { background: rgb(var(--hl-0-rgb) / .34); }
     mark.hl-1 { background: rgb(var(--hl-1-rgb) / .34); }
     mark.hl-2 { background: rgb(var(--hl-2-rgb) / .34); }

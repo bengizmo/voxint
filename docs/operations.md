@@ -987,6 +987,42 @@ How it is built:
   Nothing stored changes. Filler removal is not available with a translation
   or the `blocks` style. It works on `md` turns, `txt` with `style=turns`, and
   read mode.
+- **Word marks.** The review console's clean-up mode (#757) records two
+  per-word rulings that apply only where fillers are dropped (`md` turns, `txt`
+  with `style=turns`, read mode, each with `fillers=drop`). **keep** protects a
+  word the filler list would remove; **omit** leaves out any word. Every other
+  format and every export without `fillers=drop` is unchanged, and the stored
+  text never changes. Marks live in the append-only `segment_word_marks` table
+  (keep, omit, clear and undo rows, each naming its operator; the database
+  refuses updates and deletions other than the cascade from a deleted
+  segment). A mark is anchored to the parent segment's word-token range, so a
+  split leaves it in place. With marks in effect, the Markdown comment and the
+  read-mode note add `words you left out: N` and `fillers you kept: N`.
+  - A segment is markable only when its shown text maps to its stored words
+    verbatim or token for token (case, quotes and edge punctuation aside). Any
+    other change, including a domain-pack substitution, makes it unmarkable;
+    the write route returns 409 with that reason.
+  - A text correction that no longer maps clears that segment's marks in the
+    same transaction (`marksCleared` in the `/text` response). A split inside a
+    marked word returns 409 "This word has a clean-up mark. Clear it first,
+    then split."
+  - An export with `fillers=drop` that cannot place an effective mark on the
+    requested text variant is refused: HTTP 409 on the console and `/api/v1`
+    routes, a non-zero exit with no file written from `voxint export`. The
+    message names the segments by clock time: "The requested text cannot place
+    the clean-up marks on segments at 01:05. Clear the marks in the review
+    console, or export with fillers kept." The console lists such a stale mark
+    on its line with **Clear**.
+  - Effective marks count as editorial work in every restart warning.
+
+  | Route | Purpose |
+  |---|---|
+  | `GET /review/{run_id}/word-marks[?segment=<id>]` | What `fillers=drop` removes or protects per word, effective and stale marks, offsets into the shown text, and a `version`. With `segment`, every word of that parent segment. One repeatable-read snapshot. |
+  | `POST /review/{run_id}/segments/{segment_id}/word-marks` | Form `token`, `nonce`, `action` (`keep`, `omit`, `clear`), `start`, `end` (one whole word). Claim-gated. Returns the payload plus `undo`. |
+  | `POST /review/{run_id}/undo/word-mark` | Form `token`, `csrf_token`, `mark_id`. Undoes a fresh mark; 409 when it is no longer the newest for its word or the undo window has passed. |
+
+  On a long recording the `GET` recomputes the whole run: about 0.6 s for
+  2,000 segments on maintainer hardware.
 - **Repeats.** `--drop-repeats` or `?repeats=drop` removes the second copy of a
   word or word pair said twice in a row: `go to the the store` becomes `go to
   the store`, and `we were we were going` becomes `we were going`. It is a

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, apiFetch } from "../lib/api-client";
 import type { WriteGuard } from "../lib/editor-mutations";
+import type { WordMarksPayload } from "../lib/word-marks";
 import type { LabelsResult } from "./SpeakerRail";
 
 type UndoPayload = NonNullable<LabelsResult["undo"]>;
@@ -13,6 +14,11 @@ interface UndoToastProps {
   claimCsrf: string | null;
   onClaimLost: () => void;
   onUndone: (data: LabelsResult) => void;
+  onMarksUndone?: (data: WordMarksPayload) => void;
+  onUndoStart?: () => void;
+  // Always runs after adoption/conflict handling and release of the write
+  // guard, including errors, so callers can flush deferred reads.
+  onUndoSettled?: () => void;
   onDismiss: () => void;
   // Called after a non-claim 409 (the action was re-ruled, the window ran
   // out, or the speaker it would restore is archived), while the write guard is still held, so the caller can refetch
@@ -26,6 +32,7 @@ interface UndoToastProps {
 }
 
 const UNDO_COPY: Record<UndoPayload["kind"], string> = {
+  "word-mark": "Clean-up mark saved.",
   enroll: "Enrollment applied.",
   decide: "Decision applied.",
   merge: "Labels merged.",
@@ -35,6 +42,9 @@ const UNDO_COPY: Record<UndoPayload["kind"], string> = {
 // The undo route and its form fields for each kind. The nonce is derived from
 // the undone action, so a retried click replays instead of undoing twice.
 function undoRequest(undo: UndoPayload): [string, Record<string, string>] {
+  if (undo.kind === "word-mark") {
+    return ["word-mark", { mark_id: undo.markId, nonce: `undo:${undo.markId}` }];
+  }
   if (undo.kind === "merge") {
     return [
       "merge",
@@ -54,6 +64,9 @@ export function UndoToast({
   claimCsrf,
   onClaimLost,
   onUndone,
+  onMarksUndone,
+  onUndoStart,
+  onUndoSettled,
   onDismiss,
   onConflict,
   writeGuard,
@@ -98,6 +111,7 @@ export function UndoToast({
     setError(null);
     setRetryable(false);
     try {
+      onUndoStart?.();
       const body = new URLSearchParams();
       body.append("token", reviewToken);
       body.append("csrf_token", claimCsrf);
@@ -111,7 +125,11 @@ export function UndoToast({
         },
         body: body.toString(),
       });
-      onUndone((await res.json()) as LabelsResult);
+      if (undo.kind === "word-mark") {
+        onMarksUndone?.((await res.json()) as WordMarksPayload);
+      } else {
+        onUndone((await res.json()) as LabelsResult);
+      }
     } catch (err) {
       if (err instanceof ApiError && err.conflictKind === "claim") {
         onClaimLost();
@@ -137,6 +155,7 @@ export function UndoToast({
       busyRef.current = false;
       setBusy(false);
       writeGuard?.setBusy(false);
+      onUndoSettled?.();
     }
   }, [
     claimCsrf,
@@ -144,6 +163,9 @@ export function UndoToast({
     undo,
     runId,
     onUndone,
+    onMarksUndone,
+    onUndoStart,
+    onUndoSettled,
     onClaimLost,
     onDismiss,
     onConflict,

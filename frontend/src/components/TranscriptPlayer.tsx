@@ -1,3 +1,4 @@
+import { wordMarkStyle, type WordMarkUnit, type WordMarkEmission, type StaleWordMark } from "../lib/word-marks";
 import { formatTime } from "../lib/format";
 import {
   forwardRef,
@@ -109,13 +110,14 @@ export interface Segment {
 function renderAnnotatedText(
   text: string,
   spans: AnnotationLineSpan[],
+  units: WordMarkUnit[] = [],
 ): ReactNode {
   // Build the code-point array ONCE (astral-safe), then slice pieces from it — the
   // cut offsets are already code-point indices clamped into [0, len] and sorted.
   const codePoints = Array.from(text);
   const len = codePoints.length;
   const cuts = new Set<number>([0, len]);
-  for (const s of spans) {
+  for (const s of [...spans, ...units.map((u) => ({ start: u.from, end: u.to }))]) {
     cuts.add(Math.max(0, Math.min(s.start, len)));
     cuts.add(Math.max(0, Math.min(s.end, len)));
   }
@@ -132,17 +134,55 @@ function renderAnnotatedText(
     for (const s of spans) {
       if (s.start <= a && s.end >= b) color = s.colorIndex;
     }
-    if (color === null) {
-      pieces.push(piece);
-    } else {
-      pieces.push(
-        <mark key={k} className={`hl-${color}`}>
-          {piece}
-        </mark>,
-      );
-    }
+    const unit = units.find((u) => u.from <= a && u.to >= b);
+    const style = unit && wordMarkStyle(unit);
+    const content = color === null ? piece : <mark key={k} className={`hl-${color}`}>{piece}</mark>;
+    pieces.push(style
+      ? <span key={k} className={style.className} title={style.title}>{content}</span>
+      : content);
   }
   return pieces;
+}
+
+// Units use code-point offsets into the shown text, including punctuation and
+// gaps. Native Tab order remains intact; arrows move only between unit buttons.
+function CleanupText({ text, spans, units, onFocusUnit }: {
+  text: string;
+  spans: AnnotationLineSpan[];
+  units: WordMarkUnit[];
+  onFocusUnit?: (unit: WordMarkUnit) => void;
+}) {
+  const root = useRef<HTMLSpanElement>(null);
+  // Initialize focus before paint/input. A passive effect can run after a
+  // word has already been selected and silently replace it with the first unit.
+  useLayoutEffect(() => { root.current?.querySelector<HTMLButtonElement>("button")?.focus(); }, []);
+  const points = Array.from(text);
+  const pieces: ReactNode[] = [];
+  let offset = 0;
+  for (const unit of units) {
+    pieces.push(renderAnnotatedText(points.slice(offset, unit.from).join(""),
+      spans.map((s) => ({ ...s, start: s.start - offset, end: s.end - offset }))));
+    const style = wordMarkStyle(unit);
+    pieces.push(<button key={unit.start} type="button" data-word-unit={unit.start}
+      className={`tp-cleanup-word ${style?.className ?? ""}`} title={style?.title}
+      aria-label={`${points.slice(unit.from, unit.to).join("")}${style ? `: ${style.title}` : ""}`}
+      onFocus={() => onFocusUnit?.(unit)}
+      onClick={(event) => { event.stopPropagation(); event.currentTarget.focus(); }}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const buttons = Array.from(root.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+        const index = buttons.indexOf(event.currentTarget);
+        buttons[Math.max(0, Math.min(buttons.length - 1, index + (event.key === "ArrowRight" ? 1 : -1)))]?.focus();
+      }}>
+      {renderAnnotatedText(points.slice(unit.from, unit.to).join(""),
+        spans.map((s) => ({ ...s, start: s.start - unit.from, end: s.end - unit.from })))}
+    </button>);
+    offset = unit.to;
+  }
+  pieces.push(renderAnnotatedText(points.slice(offset).join(""),
+    spans.map((s) => ({ ...s, start: s.start - offset, end: s.end - offset }))));
+  return <span ref={root}>{pieces}</span>;
 }
 
 // One word token of a segment (issue #59), from the lazy `/words` endpoint. The
@@ -224,6 +264,12 @@ export interface TranscriptPlayerProps {
   // marks, since its text has moved). onTextSelect fires on mouseup so a driver
   // (ReviewStepper) can read the current selection and offer the annotate toolbar.
   // All absent on the read-only transcript surface, which stays byte-identical.
+  wordMarks?: Map<number, WordMarkEmission>;
+  cleanupIndex?: number | null;
+  onFocusUnit?: (unit: WordMarkUnit) => void;
+  staleWordMarks?: Map<number, StaleWordMark[]>;
+  onClearStaleMark?: (mark: StaleWordMark) => void;
+  wordMarksBusy?: boolean;
   annotationSpans?: Map<number, AnnotationLineSpan[]>;
   staleLocators?: Set<number>;
   onTextSelect?: () => void;
@@ -279,6 +325,12 @@ interface TranscriptRowProps {
   seekDisabledReason: string | undefined;
   lowConfidenceThreshold: number;
   splitting: SplitFocus | null;
+  marks?: WordMarkEmission;
+  cleaning: boolean;
+  onFocusUnit?: TranscriptPlayerProps["onFocusUnit"];
+  staleMarks?: StaleWordMark[];
+  onClearStaleMark?: TranscriptPlayerProps["onClearStaleMark"];
+  wordMarksBusy?: boolean;
   lineSpans: AnnotationLineSpan[] | undefined;
   isStaleLocator: boolean;
   translationLine: string | undefined;
@@ -306,6 +358,12 @@ const TranscriptRow = memo(function TranscriptRow({
   seekDisabledReason,
   lowConfidenceThreshold,
   splitting,
+  marks,
+  cleaning,
+  onFocusUnit,
+  staleMarks,
+  onClearStaleMark,
+  wordMarksBusy,
   lineSpans,
   isStaleLocator,
   translationLine,
@@ -435,11 +493,17 @@ const TranscriptRow = memo(function TranscriptRow({
         // code-point offset; the wrapper's text stays byte-identical to
         // seg.text whether or not it carries highlight marks.
         <span data-seg-text>
-          {lineSpans && lineSpans.length > 0
-            ? renderAnnotatedText(seg.text, lineSpans)
-            : seg.text}
+          {cleaning && marks?.markable
+            ? <CleanupText key={`${seg.sourceSegmentId}:${seg.wordStart}`} text={seg.text}
+                spans={lineSpans ?? []} units={marks.units} onFocusUnit={onFocusUnit} />
+            : renderAnnotatedText(seg.text, lineSpans ?? [], marks?.units)}
         </span>
       )}
+      {staleMarks?.map((mark) => <span key={`${mark.start}:${mark.end}`} className="wm-stale text-xs" role="note">
+        {" A clean-up mark no longer matches this text. "}
+        {onClearStaleMark && <button type="button" disabled={wordMarksBusy}
+          onClick={(event) => { event.stopPropagation(); onClearStaleMark(mark); }}>Clear</button>}
+      </span>)}
       {translationLine ? (
         // Interleaved translated line (issue #133): same texts the
         // JS-off fallback renders, so hydration changes nothing.
@@ -534,6 +598,12 @@ export const TranscriptPlayer = forwardRef<
     reassignSpeakers,
     onReassign,
     reassignBusy,
+    wordMarks,
+    cleanupIndex,
+    onFocusUnit,
+    staleWordMarks,
+    onClearStaleMark,
+    wordMarksBusy,
     annotationSpans,
     staleLocators,
     onTextSelect,
@@ -920,6 +990,12 @@ export const TranscriptPlayer = forwardRef<
               seekDisabledReason={capability.reasons[0]?.message}
               lowConfidenceThreshold={lowConfidenceThreshold}
               splitting={splitting}
+              marks={wordMarks?.get(i)}
+              cleaning={cleanupIndex === i}
+              onFocusUnit={onFocusUnit}
+              staleMarks={staleWordMarks?.get(i)}
+              onClearStaleMark={onClearStaleMark}
+              wordMarksBusy={wordMarksBusy}
               lineSpans={annotationSpans?.get(i)}
               isStaleLocator={staleLocators?.has(i) ?? false}
               translationLine={translation?.lines[i] || undefined}

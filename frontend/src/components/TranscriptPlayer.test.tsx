@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useLayoutEffect, useRef } from "react";
 import { TranscriptPlayer, type Segment } from "./TranscriptPlayer";
 
 vi.mock("../lib/peaks", async (original) => ({
@@ -119,4 +120,87 @@ it("onMainPlay listens for main audio play and removes its listener on unmount",
   unmount();
   fireEvent.play(audio);
   expect(onMainPlay).toHaveBeenCalledOnce();
+});
+
+it("preserves astral text, overlapping highlights and nested selection offsets", async () => {
+  const { selectionToCapture } = await import("../lib/selection");
+  const text = "😀 um hello.";
+  const units = [{ start: 1, end: 2, from: 2, to: 4, removed: "filler" as const, protected: false, mark: null }];
+  const { container } = render(<TranscriptPlayer
+    runId="run" mediaUrl="/audio" segments={[{ ...twoLines[0], text }]}
+    capability={{ seekEnabled: true, reasons: [], mediaDuration: 1 }} lowConfidenceThreshold={0.5}
+    annotationSpans={new Map([[0, [{ start: 3, end: 8, colorIndex: 1 }]]])}
+    wordMarks={new Map([[0, { segmentId: "seg-0", wordStart: null, wordEnd: null, markable: true, reason: null, units }]])}
+  />);
+  const wrapper = container.querySelector<HTMLElement>("[data-seg-text]")!;
+  expect(wrapper.textContent).toBe(text);
+  const nested = wrapper.querySelector(".wm-removed mark.hl-1")!;
+  expect(nested.textContent).toBe("m");
+  expect(nested.parentElement?.title).toBe("removed by filler clean-up");
+  const range = document.createRange();
+  range.setStart(nested.firstChild!, 0);
+  range.setEnd(nested.firstChild!, 1);
+  window.getSelection()!.removeAllRanges();
+  window.getSelection()!.addRange(range);
+  expect(selectionToCapture(container)).toMatchObject({ start: { offset: 3 }, end: { offset: 4 }, clientQuote: "m" });
+  // Element-boundary selection also accounts for all preceding nested nodes.
+  range.selectNodeContents(nested.parentElement!);
+  window.getSelection()!.removeAllRanges();
+  window.getSelection()!.addRange(range);
+  expect(selectionToCapture(container)).toMatchObject({ start: { offset: 3 }, end: { offset: 4 } });
+  window.getSelection()!.removeAllRanges();
+});
+
+it("renders focusable cleanup units and plain gaps without changing text", () => {
+  const units = [
+    { start: 0, end: 1, from: 0, to: 1, removed: null, protected: false, mark: null },
+    { start: 1, end: 2, from: 2, to: 4, removed: null, protected: true, mark: "keep" as const },
+    { start: 2, end: 3, from: 5, to: 11, removed: "omit" as const, protected: false, mark: "omit" as const },
+  ];
+  const selected = vi.fn();
+  const { container } = render(<TranscriptPlayer
+    runId="run" mediaUrl="/audio" segments={[{ ...twoLines[0], text: "😀 um hello." }]}
+    capability={{ seekEnabled: true, reasons: [], mediaDuration: 1 }} lowConfidenceThreshold={0.5}
+    cleanupIndex={0} onFocusUnit={selected}
+    wordMarks={new Map([[0, { segmentId: "seg-0", wordStart: null, wordEnd: null, markable: true, reason: null, units }]])}
+  />);
+  const wrapper = container.querySelector("[data-seg-text]")!;
+  expect(wrapper.textContent).toBe("😀 um hello.");
+  const buttons = wrapper.querySelectorAll<HTMLButtonElement>("button");
+  expect(buttons).toHaveLength(3);
+  expect([...buttons].every((b) => b.tabIndex === 0)).toBe(true);
+  expect(document.activeElement).toBe(buttons[0]);
+  fireEvent.keyDown(buttons[0], { key: "ArrowRight" });
+  expect(document.activeElement).toBe(buttons[1]);
+  expect(selected).toHaveBeenLastCalledWith(units[1]);
+  expect(buttons[1].className).toContain("wm-keep");
+  expect(buttons[2].className).toContain("wm-omit");
+  fireEvent.keyDown(buttons[1], { key: "ArrowLeft" });
+  expect(document.activeElement).toBe(buttons[0]);
+});
+
+it("does not overwrite a unit selected between cleanup mounting and passive effects", () => {
+  const units = [
+    { start: 0, end: 1, from: 0, to: 1, removed: null, protected: false, mark: null },
+    { start: 1, end: 2, from: 2, to: 4, removed: "filler" as const, protected: false, mark: null },
+    { start: 2, end: 3, from: 5, to: 11, removed: null, protected: false, mark: null },
+  ];
+  const selected = vi.fn();
+  function EarlySelection() {
+    const root = useRef<HTMLDivElement>(null);
+    // Deterministically deliver a selection after the child commits but before
+    // passive effects, the ordering that previously reset an operator's choice.
+    useLayoutEffect(() => {
+      root.current?.querySelector<HTMLButtonElement>('[data-word-unit="2"]')?.focus();
+    }, []);
+    return <div ref={root}><TranscriptPlayer
+      runId="run" mediaUrl="/audio" segments={[{ ...twoLines[0], text: "😀 um hello." }]}
+      capability={{ seekEnabled: true, reasons: [], mediaDuration: 1 }} lowConfidenceThreshold={0.5}
+      cleanupIndex={0} onFocusUnit={selected}
+      wordMarks={new Map([[0, { segmentId: "seg-0", wordStart: null, wordEnd: null, markable: true, reason: null, units }]])}
+    /></div>;
+  }
+  render(<EarlySelection />);
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "hello." }));
+  expect(selected).toHaveBeenLastCalledWith(units[2]);
 });

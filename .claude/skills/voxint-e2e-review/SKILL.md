@@ -9,7 +9,8 @@ description: >-
   end to end in a browser — verify/edit/skip/replay keys, click-to-edit, the
   unsaved-edit discard warning, the keymap suppression on focused form
   controls, the keyboard-shortcuts cheat-sheet modal (#51: open via `?` or the
-  button, focus trap, Escape/close/backdrop dismiss), or the waveform strip
+  button, focus trap, Escape/close/backdrop dismiss), word marks and clean-up
+  mode (#757: keep/omit, undo, correction clearing), or the waveform strip
   (#57: peaks fetch, region click → selection,
   playhead/cursor sync), or the speaker menu's voice from another recording
   (#714: `--fixture voices`) — or when a Gate E release check calls for the
@@ -119,7 +120,7 @@ touch the network:
 - **cheat-sheet modal (#51) — open both ways, dismiss, and suppress:** move focus
   off any form control, then press `?` → a `[role="dialog"][aria-modal="true"]`
   titled "Keyboard shortcuts" appears (its `<dl>` renders from the shared
-  `REVIEW_SHORTCUTS` source of truth; the media editor lists 14 rows). While it is open, press `v` → **no** new
+  `REVIEW_SHORTCUTS` source of truth; the media editor lists 18 rows). While it is open, press `v` → **no** new
   `/verify` (the `helpOpenRef` guard suppresses the global keymap behind the modal).
   Press **Escape** → the dialog is gone. Reopen via the **"Shortcuts ?"** button
   (`getByRole('button', { name: 'Shortcuts ?' })`; `button[aria-haspopup="dialog"]`
@@ -376,6 +377,78 @@ e2e database.
 - Untick everything, clear both fields and save. Both columns are NULL, and the
   read view note is back to `Left out 3 filler words. The saved transcript is
   unchanged.` with no link.
+
+### Word marks (#757)
+
+Seed a fresh `--fixture cleanup` run after resetting any filler-list changes
+from #753. Open `/runs/<RUN_ID>`, click **Open in editor**, and wait for the
+claim token and edit textarea on `/media/<MEDIA_ID>/editor?run=…&token=…`.
+The same four-segment fixture serves this lane. Its final `know.` is stored as
+` kn` + `ow.` timing tokens, preserving the text while enabling an interior cut.
+
+- **Detection on mount.** Exactly one unfocused `GET /review/<RUN_ID>/word-marks`
+  (200). `[data-seg-text] .wm-removed` underlines `uh` and `erm`; each title
+  says `removed by filler clean-up`. Segment 0 is unmarkable: its domain-pack
+  substitution (`everyone` to `everybody`) no longer maps to the recorded words,
+  so it has no unit underline. Every `[data-seg-text].textContent`
+  equals the corresponding island segment's `text`, including punctuation.
+- **Mode and focus.** Select segment 1 (`uh`), move focus off the textarea and
+  press `c`. The **Clean-up mode** region and **Exit clean-up c** button appear,
+  and a `GET …/word-marks?segment=<SEGMENT_1_ID>` returns all its units.
+  `[data-word-unit="0"]` is a focusable `.tp-cleanup-word` button. On segment 3,
+  use Tab and ArrowLeft/ArrowRight to reach `erm`; each moves focus without a POST.
+- **Keep and undo.** Focus `uh` on segment 1, press `f`: exactly one
+  `POST …/segments/<SEGMENT_1_ID>/word-marks` with `action=keep`, `start=0`,
+  `end=1`, claim `token` and a fresh `nonce` (200). The button has `.wm-keep`,
+  title `kept`, and a **Clean-up mark applied.** toast. Click **Undo**: one
+  `POST …/undo/word-mark` with `mark_id` from the write response, claim
+  `csrf_token`, `token` and `nonce=undo:<markId>` (200). The word returns to
+  `.wm-removed`, and the toast disappears. Repeat keep on `uh` in segment 1
+  and leave it kept for the reading-copy check.
+- **Omit ordinary text.** Focus `stay.` in segment 2 (`start=1`, `end=2`), press
+  `o`: one mark POST with `action=omit` (200). The button has `.wm-omit` and
+  title `omitted`. Focusing an ordinary unmarked word and pressing `f` sends
+  no POST and shows `Only a word the filler list removes can be kept.`
+- **Reading copy.** Open a second tab at
+  `/runs/<RUN_ID>/transcript?text=corrected&read=1&timestamps=false&fillers=drop`.
+  Assert kept `uh` survives, `stay.` is absent, and unkept `um`/`erm` are
+  absent. Fetch the Markdown reading copy and assert the same keep/omit result.
+- **Interior split refusal.** Back in the editor, select segment 3, enter
+  clean-up mode and omit the whole `know.` unit (`start=3`, `end=5`). Click
+  **Split**: clean-up mode leaves. Click the `ow.` split token (cut index 4).
+  Exactly one `POST …/segments/<SEGMENT_3_ID>/split` returns 409 with
+  `This word has a clean-up mark. Clear it first, then split.`; the editor
+  displays that message, and the parent remains unsplit. Re-enter clean-up,
+  focus `know.`, and click the mode bar's **Clear** (`action=clear`, 3..5).
+- **Correction clears marks.** Select segment 2, change its text to
+  `We leave now.` and save. `POST …/text` returns
+  `marksCleared=1`; the editor says
+  `1 clean-up mark was cleared because the text changed.` and refreshes
+  `GET …/word-marks`. The old keep/omit styles disappear; entering clean-up
+  explains that the changed text cannot be marked when it no longer maps.
+- **Exit and suppression.** Press Escape on a unit button: mode region gone,
+  **Clean up c** has `aria-pressed=false`. With the textarea focused, c/f/o
+  produce no marks requests; Escape only blurs it. With the shortcuts dialog
+  open, Escape closes the dialog and leaves clean-up mode active underneath.
+
+Check the append-only rows after each write/undo using `psql` (use the normal
+Postgres DSN, without SQLAlchemy's `+psycopg` suffix):
+
+```sql
+SELECT s.segment_index, m.seq, m.start_word_index, m.end_word_index,
+       m.action, m.voids_mark_id, m.operator
+FROM segment_word_marks m
+JOIN transcript_segments s ON s.id = m.segment_id
+WHERE m.pipeline_run_id = '<RUN_ID>'
+ORDER BY m.seq;
+```
+
+Expect segment 1's `keep` 0..1 followed by `undo` pointing to that mark id and
+another `keep` 0..1; segment 2's `omit` 1..2 followed by `clear` 1..2 after
+correction; segment 3's `omit` 3..5 followed by `clear` 3..5. The refused split
+adds no mark row. Reconcile with `verified_segment_indexes: []`,
+`corrections: {"2": "We leave now."}`,
+`progress: {verified: 0, total: 4}`, and `expected_annotations: 0`.
 
 ### Media library (#646, #682)
 

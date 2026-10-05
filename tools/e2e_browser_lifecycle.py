@@ -788,6 +788,16 @@ def seed_browser_run(
             segment.words = _faithful_word_timings(
                 seg_text, segment.start_seconds, segment.end_seconds
             )
+        if fixture == "cleanup" and index == 3:
+            # Preserve the cleanup text; model an ASR word split over two
+            # timing tokens so the word-marks lane can refuse an interior cut.
+            tokens = ("erm", " you", " you", " kn", "ow.")
+            step = (segment.end_seconds - segment.start_seconds) / len(tokens)
+            segment.words = [
+                {"word": word, "start": segment.start_seconds + i * step,
+                 "end": segment.start_seconds + (i + 1) * step}
+                for i, word in enumerate(tokens)
+            ]
         session.add(segment)
         # A matching diarization turn per segment (issue #57): the waveform
         # strip paints TURNS, so without these the seeded strip would render
@@ -1377,10 +1387,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--fixture",
         choices=FIXTURE_CHOICES,
         default="review",
-        help=(
-            "segment fixture: review (5 segs), editor (30 segs), "
-            "benchmark (2000 segs), rail (12 segs), voices (5 segs plus voice source)"
-        ),
+        help="segment fixture: " + ", ".join(FIXTURE_CHOICES),
     )
     p_seed.set_defaults(func=cmd_seed)
 

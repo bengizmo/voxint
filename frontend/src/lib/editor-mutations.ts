@@ -32,6 +32,7 @@ export function nextTarget(segments: Segment[], from: number): number {
 export interface SegmentPatchResult {
   verified: boolean;
   corrected: boolean;
+  marksCleared?: number;
   text: string;
   progress: { verified: number; total: number };
 }
