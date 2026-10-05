@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from voxint.adjudication.turns import SpeakerTurn, join_pieces
 from voxint.export.filler_lists import FillerList
-from voxint.export.fillers import drop_fillers_with_seams
+from voxint.export.fillers import Removal, drop_fillers_with_trace
 from voxint.export.repeats import drop_repeats as remove_repeats
 
 
@@ -18,6 +18,7 @@ class FilteredTurns:
     turns: list[SpeakerTurn]
     fillers_removed: int
     repeats_removed: int
+    trace: tuple[Removal, ...] = ()
 
 
 def _word_count(turns: Sequence[SpeakerTurn]) -> int:
@@ -34,10 +35,11 @@ def apply_turn_filters(
     """Compose turn filters and measure each step on its own input text."""
     filtered = list(turns)
     fillers_removed = repeats_removed = 0
+    trace: tuple[Removal, ...] = ()
     seams: list[frozenset[int]] | None = None
     if fillers is not None:
         before = _word_count(filtered)
-        cleaned = drop_fillers_with_seams(filtered, fillers=fillers)
+        cleaned, trace = drop_fillers_with_trace(filtered, fillers=fillers)
         filtered = [turn for turn, _ in cleaned]
         seams = [turn_seams for _, turn_seams in cleaned]
         fillers_removed = before - _word_count(filtered)
@@ -45,4 +47,4 @@ def apply_turn_filters(
         before = _word_count(filtered)
         filtered = remove_repeats(filtered, seams)
         repeats_removed = before - _word_count(filtered)
-    return FilteredTurns(filtered, fillers_removed, repeats_removed)
+    return FilteredTurns(filtered, fillers_removed, repeats_removed, trace)
