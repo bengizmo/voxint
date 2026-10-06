@@ -61,6 +61,10 @@ from voxint.idempotency import savepoint_adopt_or_conflict
 
 PAYLOAD_SCHEMA_VERSION = 1
 
+# The console export routes' ``text=`` value for this variant. It is never a
+# TranscriptText member, so the API, the CLI and every default stay unaware.
+CLEANED_TEXT = "cleaned"
+
 MAX_PRODUCER_CHARS = 200
 MAX_MODEL_CHARS = 200
 # Each line stores its source and its cleaned text, so the cap is the

@@ -62,3 +62,16 @@ def test_record_cleanup_is_the_only_writer() -> None:
         if re.search(r"(?<!class )\bRunCleanup\(", path.read_text())
     ]
     assert writers == [Path("src/voxint/enrichment/cleanups.py")]
+
+
+def test_the_cleaned_variant_never_joins_transcript_text() -> None:
+    """``cleaned`` is console-only: the API, the CLI and defaults never see it."""
+    from voxint.adjudication.transcript import TranscriptText
+    from voxint.cli import build_parser
+    from voxint.enrichment.cleanups import CLEANED_TEXT
+
+    assert {member.value for member in TranscriptText} == {"corrected", "enhanced", "raw"}
+    assert CLEANED_TEXT == "cleaned"
+    export = build_parser()._subparsers._group_actions[0].choices["export"]  # type: ignore[union-attr]
+    text = next(action for action in export._actions if "--text" in action.option_strings)
+    assert set(text.choices or ()) == {"corrected", "enhanced", "raw"}

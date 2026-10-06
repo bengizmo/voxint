@@ -2,14 +2,15 @@
 
 import enum
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from voxint.adjudication.transcript import TranscriptText, attributed_transcript
-from voxint.adjudication.turns import attributed_turns, translated_turns
+from voxint.adjudication.turns import WordMarkKey, attributed_turns, translated_turns
 from voxint.adjudication.word_marks import effective_marks
 from voxint.api.presentation import (
     format_recorded_date,
@@ -26,7 +27,7 @@ from voxint.export import (
     to_rttm,
     to_txt_turns,
 )
-from voxint.export.filler_lists import FillerList
+from voxint.export.filler_lists import NO_FILLER_LIST, FillerList
 from voxint.export.fillers import UnplaceableWordMarkError
 from voxint.export.reading import layout_turns
 from voxint.export.turn_filters import apply_turn_filters
@@ -48,7 +49,18 @@ class ExportOptionError(ValueError):
 
 
 class TranslationMismatchError(Exception):
-    """The translation no longer has one text per transcript emission."""
+    """The translation no longer has one text per transcript emission.
+
+    Also raised when a cleaned variant's lines or deletions no longer fit.
+    """
+
+
+@dataclass(frozen=True)
+class CleanedVariant:
+    """A fresh #758 generation: stored line texts and its deletions as omits."""
+
+    texts: Sequence[str]
+    omits: Mapping[WordMarkKey, Literal["omit"]]
 
 
 class WordMarkPlacementError(Exception):
@@ -182,11 +194,13 @@ def render_run_transcript(
     translated_texts: Sequence[str] | None = None,
     fillers: FillerList | None = None,
     drop_repeats: bool = False,
+    cleaned: CleanedVariant | None = None,
 ) -> str:
     """Render through the shared report without repeating attribution or filtering."""
     return render_run_transcript_report(
         session, run_id, fmt, text=text, timestamps=timestamps, style=style,
         translated_texts=translated_texts, fillers=fillers, drop_repeats=drop_repeats,
+        cleaned=cleaned,
     ).content
 
 
@@ -201,9 +215,25 @@ def render_run_transcript_report(
     translated_texts: Sequence[str] | None = None,
     fillers: FillerList | None = None,
     drop_repeats: bool = False,
+    cleaned: CleanedVariant | None = None,
 ) -> RenderedTranscript:
-    """Load one attributed view and report its render-time filter counts."""
+    """Load one attributed view and report its render-time filter counts.
+
+    ``cleaned`` renders the #758 variant over the CORRECTED text: segment
+    formats substitute its stored lines, and turns apply its deletions as omit
+    marks so speaker attribution matches the reviewed turns export.
+    """
     resolved = parse_style(style, fmt)
+    if cleaned is not None and (
+        text is not TranscriptText.CORRECTED
+        or translated_texts is not None
+        or fillers is not None
+        or drop_repeats
+    ):
+        raise ExportOptionError(
+            "the cleaned variant renders the reviewed text alone, without"
+            " a translation, fillers or repeats"
+        )
     if fillers is not None:
         if translated_texts is not None:
             raise ExportOptionError("fillers cannot be combined with a translation")
@@ -213,6 +243,23 @@ def render_run_transcript_report(
             raise ExportOptionError("repeats cannot be combined with a translation")
         parse_repeats("drop", fmt, resolved)
     if fmt in (TranscriptFormat.MARKDOWN, TranscriptFormat.TXT) and resolved is MarkdownStyle.TURNS:
+        if cleaned is not None:
+            turns = attributed_turns(session, run_id, text=text)
+            try:
+                filtered = apply_turn_filters(
+                    turns, fillers=NO_FILLER_LIST, drop_repeats=False, marks=dict(cleaned.omits),
+                )
+            except UnplaceableWordMarkError as exc:
+                raise TranslationMismatchError from exc
+            paragraphs = layout_turns(filtered.turns)
+            content = (
+                to_txt_turns(paragraphs, timestamps=timestamps)
+                if fmt is TranscriptFormat.TXT
+                else to_markdown_turns(
+                    paragraphs, header=export_title(session, run_id), timestamps=timestamps,
+                )
+            )
+            return RenderedTranscript(content, 0, 0, filtered.omitted)
         if translated_texts is None:
             turns = attributed_turns(session, run_id, text=text)
         else:
@@ -248,6 +295,8 @@ def render_run_transcript_report(
             filtered.omitted, filtered.kept,
         )
     lines = attributed_transcript(session, run_id, text=text)
+    if cleaned is not None:
+        translated_texts = cleaned.texts
     if translated_texts is not None:
         if len(lines) != len(translated_texts):
             raise TranslationMismatchError

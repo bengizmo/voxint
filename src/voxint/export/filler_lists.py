@@ -135,3 +135,5 @@ def effective_filler_list(
 
 
 DEFAULT_FILLER_LIST = effective_filler_list()
+# Every preset entry kept: the filler pass applies omit marks and nothing else.
+NO_FILLER_LIST = effective_filler_list(keep=TIER_1)

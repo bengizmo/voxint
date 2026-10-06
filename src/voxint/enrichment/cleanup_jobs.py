@@ -507,6 +507,11 @@ def execute_job(
             )
 
 
+def is_active(job: CleanupJob) -> bool:
+    """Whether the job is queued or running."""
+    return job.status in _ACTIVE
+
+
 def active_or_last_job(session: Session, pipeline_run_id: uuid.UUID) -> CleanupJob | None:
     """The run's active job if it has one, else its most recent job."""
     active = session.execute(
