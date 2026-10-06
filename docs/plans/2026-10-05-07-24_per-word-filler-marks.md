@@ -1,6 +1,6 @@
 # Plan: keep or omit a filler per word, through an append-only mark table (#757)
 
-Status: in-progress
+Status: done
 
 Spec deltas: none (this project declares no living spec). Q1 and Q2 below
 change the wording of #757's scope and acceptance. The maintainer decided Q1 to
@@ -935,3 +935,49 @@ rebuilds the same payload. Acceptable for a single operator; no shortcut added.
 Delta re-review (codex): clean. A browser re-check after the fixes confirmed
 entry focus, focus after `j`, focus back on the row after exit, and edit-box
 focus kept when words arrive late.
+
+## Completion notes
+
+Completed 2026-10-05 on `main` `d2791f68`. Slices 1 to 4 merged as PRs #785,
+#786, #787, #788 (slice 4a, API) and #789 (slice 4b, console).
+
+**Verified.**
+- Every slice's outcome is met. The slice 1 and 2 byte-identical gates hold
+  (`tests/unit/test_filter_characterization.py`, never regenerated).
+- Every acceptance scenario has a test: `tests/unit/test_word_mark_filters.py`,
+  `test_word_mark_reporting.py`, `tests/integration/test_word_mark_surfaces.py`,
+  `test_word_mark_api.py`, `test_word_mark_restart.py`,
+  `test_word_marks_writer.py`, `test_migration_0072.py`,
+  `tests/contracts/test_word_mark_storage.py`, and the frontend
+  `MediaEditor.word-marks.test.tsx` and `UndoToast.test.tsx`. Three console
+  halves are covered by the browser lane rather than vitest: the underline for
+  an omission that sets off a phrase (the payload's `removed` flags are
+  tested), the unmapped-text reason shown in clean-up mode (the 409 and reason
+  are tested), and keep by key on `uh` (vitest uses `um`).
+- On `d2791f68` the covering suites pass (2,522 Python tests, 96 frontend
+  tests); the full suite passed before the merge (11,994, with the 3 known
+  local-only enrichment-gate failures).
+- The rejected alternative (marks in `adjudication_decisions`) is pinned out by
+  `test_attribution_readers_never_reference_word_marks`.
+
+**Spec files touched:** none; the project declares no living spec.
+
+**Drift (behaviour the plan did not ask for).**
+- Slice 4 shipped as two PRs (4a API, 4b console).
+- The browser lane reuses the `cleanup` fixture instead of a new `wordmarks`
+  fixture; its last segment stores `know.` as two timing tokens so the lane can
+  exercise the interior-split refusal.
+- A broken saved filler list degrades instead of failing: detection is empty,
+  `detectionError` explains it, omit, clear and undo still work, and keep is
+  refused (added in the slice 4a review).
+- The editor's global keydown handler now ignores events another handler
+  already handled (`defaultPrevented`) and IME composition.
+- The cleared-marks notice clears on the next cursor move.
+
+**Known limits (maintainer decided to keep).**
+- A segment whose text changed beyond case and punctuation, including any
+  domain-pack substitution, is unmarkable, and its fillers are not underlined.
+- Normal-view highlight status is visual only; clean-up mode's word buttons
+  carry it for screen readers.
+
+**Follow-ups:** none required. Next in epic #752 is #758 (maintainer's choice).
