@@ -1,6 +1,6 @@
 # Plan: optional LLM clean-up as a separate `cleaned` text variant (#758)
 
-Status: in-progress
+Status: done
 
 Spec deltas: none (this project declares no living spec). The maintainer
 decided D1 to D6 below on 2026-10-05 (to be recorded on #758).
@@ -729,3 +729,41 @@ link set exactly when it succeeded, and a supersession target that must still
 be the head. *Rejected:* comparing anchors in the source pairing (qwen;
 anchors and text come from the same emission read), and an explicit JSONB
 type on `CleanupJob.config` (qwen; it matches `TranslationJob`).
+
+## Completion notes
+
+2026-10-06, `/complete-plan` against `main` `9eefe9a5` (PR #793, merge commit
+over slices `533d32e3`, `511c5f42`, `5b6c3d3c`, `e6393cb0`, `8058946d`,
+`c00b716b`).
+
+- **Verified:** all five slices meet their outcomes. Every acceptance scenario
+  maps to a named test in `tests/unit/test_cleanup_{core,diff,producer}.py`,
+  `tests/unit/test_llm_client.py`, `tests/contracts/test_cleanup_storage.py`,
+  `tests/integration/test_cleanup_{export,jobs,page,writer}.py` and
+  `tests/integration/test_migration_0073.py`. Those suites plus the task and
+  route inventories: 445 passed on merged `main`. Pre-PR full suite: 12358
+  passed, 3 known local-`.env` CLI failures; all required CI checks green.
+- **Not testable, with reason:** the "unsplit" staleness case (Voxint has no
+  unsplit), and the "source changes after the final hash check" half of the
+  race scenario, which is a timing window; it is covered by every reader
+  recomputing the hash (`test_an_edit_stales_the_variant`,
+  `test_a_split_stales_the_variant`).
+- **Deviations (all reviewed in their slice):**
+  - A current generation stays exportable, with its downloads shown, while a
+    regeneration runs; the scenario "one running → 409" holds only for a first
+    generation (`test_a_current_generation_stays_exportable_while_another_runs`,
+    `test_regeneration_keeps_the_current_copy_downloadable_like_the_export`).
+  - The export passes a `cleaned: CleanedVariant` render parameter instead of
+    reusing `translated_texts`.
+  - Error copy uses a colon instead of the emdash shown above (house style).
+  - Generate refusals render the page with 409/503 (plain forms; htmx 2 does
+    not swap 4xx), and the status poll ends with `HX-Redirect` to a GET.
+  - The editor's export menu also carries the "LLM clean-up" row.
+  - Slice 3 was reviewed High, not Medium (concurrency); slice 5 High, not
+    Medium (new CSRF-guarded routes).
+- **Drift (internal, plan-supporting):** `turns._token_key` became the public
+  `token_key`; `filler_lists.NO_FILLER_LIST` for the marks-only filter pass.
+- **Spec files touched:** none; this project declares no living spec.
+- **Follow-ups:** recall measured low on real speech (175 lines, 13 changed,
+  48 contextual fillers left; see PR #793). The maintainer chose to ship v1
+  and improve recall in #794 (prompt version 2). Already filed: #791, #792.
