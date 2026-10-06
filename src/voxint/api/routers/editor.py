@@ -65,6 +65,7 @@ from voxint.api.tutorial_view import _tutorial_banner
 from voxint.app_settings import get_app_settings, resolve_effective_translation_target_language
 from voxint.config import Settings
 from voxint.db.models import MediaItem, PipelineRun, RunStatus
+from voxint.enrichment.cleanup_jobs import cleanup_offered
 from voxint.enrichment.translation_jobs import (
     active_or_last_job as active_or_last_translation_job,
 )
@@ -303,6 +304,11 @@ def media_detail_page(
             if selected_run_obj
             else None,
             "speaker_timeline": speaker_timeline,
+            "cleanup_offered": (
+                cleanup_offered(session, settings, selected_run_obj.id)
+                if selected_run_obj
+                else False
+            ),
             "island_props": island_props,
             "token": token if claim_valid else None,
             "progress": {"verified": verified_n, "total": total},

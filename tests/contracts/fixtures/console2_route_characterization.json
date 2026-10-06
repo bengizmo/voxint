@@ -958,6 +958,38 @@
     true
   ],
   [
+    "/runs/{run_id}/cleanup",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/runs/{run_id}/cleanup/generate",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/runs/{run_id}/cleanup/status",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/runs/{run_id}/cleanup/{job_id}/cancel",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/runs/{run_id}/clips/{clip_id}",
     [],
     "onboarding",

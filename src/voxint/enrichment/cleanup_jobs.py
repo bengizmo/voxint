@@ -55,6 +55,7 @@ from voxint.db.models import POST_SEGMENT, AppSettings, CleanupJob, CleanupJobSt
 from voxint.enrichment.cleanups import (
     CleanupError,
     filler_list_snapshot,
+    has_cleanup,
     load_cleanup_source,
     record_cleanup,
 )
@@ -106,6 +107,14 @@ def cleanup_gates_open(settings: Settings, row: AppSettings | None) -> bool:
     """Checked at creation and again in the worker. Clean-up rides on the
     configured LLM and has no feature flag of its own."""
     return resolve_effective_llm_enabled(row, settings)
+
+
+def cleanup_offered(session: Session, settings: Settings, pipeline_run_id: uuid.UUID) -> bool:
+    """Whether the console offers the Cleaned page for this run: the LLM is
+    enabled, or a generation already exists to look at or cancel against."""
+    return cleanup_gates_open(settings, get_app_settings(session)) or has_cleanup(
+        session, pipeline_run_id
+    )
 
 
 def language_refusal(detected_language: str | None) -> str | None:

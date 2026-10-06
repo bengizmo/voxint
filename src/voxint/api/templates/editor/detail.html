@@ -181,7 +181,7 @@
     </div>
   </div>
 
-  {{ export_menu(selected_run) }}
+  {{ export_menu(selected_run, cleanup=cleanup_offered) }}
 
   {% if speaker_timeline is not none %}
   <section class="card">

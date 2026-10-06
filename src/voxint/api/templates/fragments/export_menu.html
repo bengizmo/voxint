@@ -7,7 +7,7 @@
    labels only, so it takes no variant. `timestamps=false` is honored by txt and
    md only (subtitle timing is structural; JSON keys are a frozen contract).
    `download` gives the saved file a run-named stem instead of "export.txt". #}
-{% macro export_menu(run, text_variant=none, translations=none, filters=none) %}
+{% macro export_menu(run, text_variant=none, translations=none, filters=none, cleanup=false) %}
 {%- set filter_suffix %}{% if filters and filters.fillers %}&amp;fillers=drop{% endif %}{% if filters and filters.repeats %}&amp;repeats=drop{% endif %}{% endset %}
 {% set stem = "voxint-" ~ run.id.hex[:8] %}
 {% set read_variant = "&text=" ~ text_variant.value if text_variant else "" %}
@@ -156,6 +156,12 @@
             <a href="/review/{{ run.id }}/export.json?text=raw" download="{{ stem }}.json">raw</a>
           </li>
         </ul>
+        {%- if cleanup %}
+        <p class="text-sm">
+          <a href="/runs/{{ run.id }}/cleanup">LLM clean-up</a>:
+          <span class="muted">a separate copy with filler phrases removed by the language model. Review and download it on its own page.</span>
+        </p>
+        {%- endif %}
       </details>
     </div>
   </details>

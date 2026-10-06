@@ -447,6 +447,21 @@ def current_cleanup(session: Session, pipeline_run_id: uuid.UUID) -> RunCleanup 
     ).scalar_one_or_none()
 
 
+def has_cleanup(session: Session, pipeline_run_id: uuid.UUID) -> bool:
+    """Whether the run has a generation, without loading its lines."""
+    return (
+        session.execute(
+            select(RunCleanup.id)
+            .where(
+                RunCleanup.pipeline_run_id == pipeline_run_id,
+                RunCleanup.superseded_by_cleanup_id.is_(None),
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        is not None
+    )
+
+
 def cleanup_texts(row: RunCleanup) -> list[str]:
     """Stored cleaned strings in line order. Callers check freshness first."""
     return [str(line["text"]) for line in row.lines]
@@ -459,3 +474,31 @@ def cleanup_omits(row: RunCleanup) -> dict[WordMarkKey, Literal["omit"]]:
         for token_start, token_end, _lex_start, _lex_end in line["deleted"]:
             omits[(uuid.UUID(line["segment_id"]), token_start, token_end)] = "omit"
     return omits
+
+
+def cleanup_diff(line: Mapping[str, Any]) -> list[tuple[str, bool]]:
+    """One stored line as ``(text, removed)`` runs over its frozen ``source``.
+
+    Drawn from the stored lexical ranges only, never from the current words,
+    so a stale generation still renders as the diff it was made against.
+    Removed words separated only by whitespace form one run (``I mean,``).
+    """
+    source = str(line["source"])
+    parts: list[tuple[str, bool]] = []
+    cursor = 0
+    for _token_start, _token_end, lex_start, lex_end in sorted(
+        line["deleted"], key=lambda deleted: deleted[2]
+    ):
+        if not 0 <= cursor <= lex_start < lex_end <= len(source):
+            raise CleanupError(f"line {line['i']}: deleted range outside its source")
+        gap = source[cursor:lex_start]
+        if parts and parts[-1][1] and not gap.strip():
+            parts[-1] = (parts[-1][0] + gap + source[lex_start:lex_end], True)
+        else:
+            if gap:
+                parts.append((gap, False))
+            parts.append((source[lex_start:lex_end], True))
+        cursor = lex_end
+    if cursor < len(source):
+        parts.append((source[cursor:], False))
+    return parts

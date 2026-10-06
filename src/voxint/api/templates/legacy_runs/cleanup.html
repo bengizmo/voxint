@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{# The Cleaned page (#758): one home for the LLM clean-up variant. The diff is
+   drawn from the generation's own frozen source text, so an out-of-date
+   generation still shows what it removed from the transcript it was made
+   from. Downloads appear only while the generation matches the transcript;
+   the export would refuse a stale one. #}
+{% block title %}Voxint: clean-up {{ run.id.hex[:8] }}{% endblock %}
+{% block cb_breadcrumb %}runs / {{ run.id.hex[:8] }} / <strong>clean-up</strong>{% endblock %}
+{% block body %}
+<p><a href="/runs/{{ run.id }}">← run</a>
+  · <a href="/runs/{{ run.id }}/transcript?read=1&amp;timestamps=false">Reading view</a></p>
+<h1>LLM clean-up <code>{{ run.id.hex[:8] }}</code></h1>
+<p class="muted">The language model suggests filler words and phrases to remove,
+  such as "I mean" or "you know". Voxint keeps a suggestion only if it removes
+  words and changes nothing else. The result is a separate copy: your reviewed
+  transcript, default downloads and subtitles stay as they are.</p>
+
+{% include "legacy_runs/cleanup_status.html" %}
+
+{% if head %}
+{% set cleanup = head.cleanup %}
+{% if head.stale %}
+<div class="card" role="status">
+  {% if head.source_problem %}
+  <p><strong>Out of date.</strong> The current transcript could not be read, so this
+    clean-up cannot be checked against it and is treated as out of date. The text
+    below is the transcript as it was when the clean-up was made. Downloads are off.</p>
+  <p class="muted">{{ head.source_problem }}</p>
+  {% else %}
+  <p><strong>Out of date.</strong> The transcript changed after this clean-up was
+    made, so it no longer matches. The text below is the transcript as it was then.
+    Generate again to clean up the current transcript. Downloads are off until you do.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+<section class="card">
+  <h2>Summary</h2>
+  <p>{{ cleanup.counts.lines_changed }} of {{ cleanup.counts.lines }} lines changed,
+    {{ cleanup.counts.words_removed }} word{{ "" if cleanup.counts.words_removed == 1 else "s" }} removed.</p>
+  {% if head.rejected %}
+  <p>Suggestions not used, by reason:</p>
+  <ul>
+    {% for label, count in head.rejected %}
+    <li>{{ label }}: {{ count }} line{{ "" if count == 1 else "s" }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <p class="muted">
+    Made {{ cleanup.completed_at.strftime("%Y-%m-%d %H:%M") }} · {{ cleanup.model }}
+    · prompt version {{ head.prompt_version }} · generation {{ cleanup.generation }}
+  </p>
+  <details>
+    <summary class="text-sm">Filler hints sent to the model</summary>
+    <p class="muted text-sm">
+      {% if head.filler_words or head.filler_phrases %}
+      {{ (head.filler_words + head.filler_phrases)|join(", ") }}
+      {% else %}None.{% endif %}
+    </p>
+  </details>
+</section>
+
+{% if not head.stale %}
+{% set stem = "voxint-" ~ run.id.hex[:8] ~ "-cleaned" %}
+<section class="card">
+  <h2>Download</h2>
+  <ul class="export-format-list" aria-label="Clean-up downloads">
+    <li><a href="/review/{{ run.id }}/export.txt?text=cleaned&amp;timestamps=false" download="{{ stem }}.txt">Reading copy <code>.txt</code></a></li>
+    <li><a href="/review/{{ run.id }}/export.txt?text=cleaned" download="{{ stem }}.txt">Timed transcript <code>.txt</code></a></li>
+    <li><a href="/review/{{ run.id }}/export.md?text=cleaned&amp;timestamps=false" download="{{ stem }}.md">Markdown reading copy <code>.md</code></a></li>
+    <li><a href="/review/{{ run.id }}/export.md?text=cleaned" download="{{ stem }}.md">Markdown with times <code>.md</code></a></li>
+    <li><a href="/review/{{ run.id }}/export.srt?text=cleaned" download="{{ stem }}.srt">Subtitles <code>.srt</code></a></li>
+    <li><a href="/review/{{ run.id }}/export.vtt?text=cleaned" download="{{ stem }}.vtt">Subtitles <code>.vtt</code></a></li>
+    <li><a href="/review/{{ run.id }}/export.json?text=cleaned" download="{{ stem }}.json">Data <code>.json</code></a></li>
+  </ul>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Changes</h2>
+  <p class="muted">Removed words are struck through.</p>
+  <div class="cleanup-diff">
+    {% for line in head.lines %}
+    <p>{% for text, removed in line.parts %}{% if removed %}<del class="cleanup-removed">{{ text }}</del>{% else %}{{ text }}{% endif %}{% endfor %}
+      {%- if line.reason %} <span class="muted text-sm">(kept: {{ line.reason }})</span>{% endif %}</p>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}

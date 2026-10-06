@@ -1,0 +1,52 @@
+{# The Cleaned page's status block (#758). Served inside the page and alone by
+   GET /runs/{id}/cleanup/status. It polls itself only while a job is active;
+   the poll that sees the job end gets HX-Redirect to the page (a GET), so it
+   reloads with the new generation. Generate and Cancel are plain forms that work without JS. #}
+<div id="cleanup-status-{{ status.run_id }}"
+     {% if status.job_active %}hx-get="/runs/{{ status.run_id }}/cleanup/status"
+     hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+{% if status.error %}<p class="error" role="alert">{{ status.error }}</p>{% endif %}
+
+{% if status.language_refusal %}
+<p class="muted">{{ status.language_refusal }}.</p>
+{% elif status.language_unverified %}
+<p class="muted">This recording's language was not detected, so it is not verified as
+  English. Clean-up is built for English and may remove the wrong words in other
+  languages.</p>
+{% endif %}
+
+{% if status.job_active %}
+<p>
+  Cleaning up: {{ status.job.status }}
+  {% if status.job.started_at %}· started {{ status.job.started_at.strftime("%Y-%m-%d %H:%M") }}
+  {% else %}· queued {{ status.job.created_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}
+  {% if status.job.cancel_requested %}· cancel requested{% endif %}
+</p>
+<noscript><p class="muted">Reload this page to see when it finishes.</p></noscript>
+{% if shell.can_write %}
+<form class="inline" method="post"
+      action="/runs/{{ status.run_id }}/cleanup/{{ status.job.id }}/cancel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_cleanup_cancel }}">
+  <button type="submit">Cancel</button>
+</form>
+{% endif %}
+{% elif status.last_job %}
+<p class="muted">
+  The last clean-up {{ status.last_job.status }}
+  {% if status.last_job.finished_at %}at {{ status.last_job.finished_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}.
+  {% if status.last_job.error %}<br><span class="error">{{ status.last_job.error }}</span>{% endif %}
+</p>
+{% endif %}
+
+{% if not status.gates_open %}
+<p class="muted">
+  Clean-up is off. Turn on <strong>LLM transcript enhancement</strong> in
+  <a href="/settings#llm">Settings → LLM</a> to generate one. No restart is needed.
+</p>
+{% elif status.can_generate and shell.can_write %}
+<form class="inline" method="post" action="/runs/{{ status.run_id }}/cleanup/generate">
+  <input type="hidden" name="csrf_token" value="{{ csrf_cleanup_generate }}">
+  <button type="submit">{% if status.has_cleanup %}Generate again{% else %}Generate clean-up{% endif %}</button>
+</form>
+{% endif %}
+</div>

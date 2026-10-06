@@ -205,6 +205,11 @@ If you have translated the transcript, the menu also lists a row of downloads
 per translated language. See
 [Translate transcripts](translating-transcripts.md).
 
+When the LLM is turned on, **Other text variants** also links to the
+**LLM clean-up** page, where you can make and download a separate copy with
+filler phrases such as "I mean" removed. See
+[Clean up with the LLM](cleaning-up-with-the-llm.md).
+
 The **Highlights** panel also offers a bundled quote download. Click **Bundle**
 on one highlight to download its Markdown pull quote, a JSON file recording
 where it came from, and its audio clip when you have extracted one, all in a
@@ -330,6 +335,7 @@ If you want the timeline of who-spoke-when **with your assigned names**, use
 - [Add media & manage runs](add-media-and-manage-runs.md)
 - [Review & adjudicate](reviewing-and-adjudicating.md)
 - [Translate transcripts](translating-transcripts.md)
+- [Clean up with the LLM](cleaning-up-with-the-llm.md)
 - [Settings & troubleshooting](settings-and-troubleshooting.md)
 - [Setup](../setup.md): install Voxint on your OS and hardware.
 - [First-run walkthrough](../onboarding.md): the setup wizard and guided tutorial.
