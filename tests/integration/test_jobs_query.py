@@ -14,10 +14,11 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from voxint.api.jobs_query import recent_aux_jobs, stage_activity
+from voxint.api.jobs_query import jobs_badge_count, recent_aux_jobs, stage_activity
 from voxint.api.stats_query import run_status_counts
 from voxint.db.models import (
     STAGE_ORDER,
+    CleanupJob,
     EmbeddingJob,
     MediaItem,
     PipelineRun,
@@ -223,6 +224,13 @@ def _seed_aux_jobs(session: Session) -> uuid.UUID:
         source_content_hash=_HASH,
     )
     translation.created_at = base + timedelta(minutes=1)
+    cleanup = CleanupJob(
+        pipeline_run_id=run_id,
+        status="cancelled",
+        config={},
+        source_content_hash=_HASH,
+    )
+    cleanup.created_at = base + timedelta(seconds=90)
     embedding = EmbeddingJob(
         pipeline_run_id=run_id,
         embedding_space="minilm-v1",
@@ -237,7 +245,7 @@ def _seed_aux_jobs(session: Session) -> uuid.UUID:
         budget={},
     )
     research.created_at = base + timedelta(minutes=3)
-    session.add_all([asset, translation, embedding, research])
+    session.add_all([asset, translation, cleanup, embedding, research])
     session.commit()
     return run_id
 
@@ -245,7 +253,7 @@ def _seed_aux_jobs(session: Session) -> uuid.UUID:
 def test_recent_aux_jobs_normalizes_all_families(
     session_factory: sessionmaker[Session],
 ) -> None:
-    """All four families surface in one read model, newest first, with the
+    """All five families surface in one read model, newest first, with the
     run-scoped and speaker-scoped targets normalized (research has no run)."""
     with session_factory() as session:
         run_id = _seed_aux_jobs(session)
@@ -253,18 +261,23 @@ def test_recent_aux_jobs_normalizes_all_families(
             jobs = recent_aux_jobs(read)
 
     by_family = {j.family: j for j in jobs}
-    assert set(by_family) == {"asset", "translation", "embedding", "research"}
+    assert set(by_family) == {"asset", "translation", "cleanup", "embedding", "research"}
     # Newest first (research seeded last).
-    assert [j.family for j in jobs] == ["research", "embedding", "translation", "asset"]
+    assert [j.family for j in jobs] == [
+        "research", "embedding", "cleanup", "translation", "asset",
+    ]
     # succeeded, not completed — the aux vocab differs from RunStatus.
     assert by_family["asset"].status == "succeeded"
     assert by_family["asset"].detail == "summary"
     assert by_family["translation"].detail == "es"
     assert by_family["embedding"].detail == "minilm-v1"
+    assert by_family["cleanup"].detail == ""
+    assert by_family["cleanup"].status == "cancelled"
+    assert by_family["cleanup"].pipeline_run_id == run_id
     # Research is speaker-scoped with a nullable run link.
     assert by_family["research"].pipeline_run_id is None
     assert by_family["research"].speaker_id is not None
-    # The three run-scoped families carry the run.
+    # The run-scoped families carry the run.
     assert by_family["asset"].pipeline_run_id == run_id
     assert by_family["research"].detail == ""
 
@@ -343,3 +356,21 @@ def test_recent_aux_jobs_ties_break_by_id_deterministically(
     assert first == second
     # Descending id order for the tied rows.
     assert first == sorted(first, reverse=True)
+
+
+def test_jobs_badge_counts_active_cleanup_jobs(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A queued or running clean-up job is live work; a finished one is not."""
+    with session_factory() as session:
+        run_id = _make_run(session, status=RunStatus.COMPLETED)
+        before = jobs_badge_count(session)
+        # A finished job does not hold the run's one active slot.
+        for status in ("queued", "cancelled", "failed"):
+            session.add(
+                CleanupJob(
+                    pipeline_run_id=run_id, status=status, config={}, source_content_hash=_HASH
+                )
+            )
+        session.commit()
+        assert jobs_badge_count(session) == before + 1

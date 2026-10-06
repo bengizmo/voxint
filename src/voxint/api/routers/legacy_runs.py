@@ -43,6 +43,8 @@ from voxint.api.csrf import (
     CSRF_ASSETS_GENERATE,
     CSRF_BULK_RETRY,
     CSRF_CANCEL,
+    CSRF_CLEANUP_CANCEL,
+    CSRF_CLEANUP_GENERATE,
     CSRF_NOTES,
     CSRF_PAUSE,
     CSRF_PLUGIN,
@@ -120,6 +122,8 @@ from voxint.app_settings import (
 from voxint.config import Settings
 from voxint.db.models import (
     GPU_SEGMENT,
+    CleanupJob,
+    CleanupJobStatus,
     PipelineRun,
     RunAssetJob,
     RunAssetJobStatus,
@@ -137,6 +141,18 @@ from voxint.enrichment.asset_jobs import (
     run_asset_gates_open,
 )
 from voxint.enrichment.asset_jobs import request_cancel as request_asset_cancel
+from voxint.enrichment.cleanup import REJECT_REASONS
+from voxint.enrichment.cleanup_jobs import (
+    CleanupJobError,
+    cleanup_gates_open,
+    cleanup_offered,
+    language_refusal,
+)
+from voxint.enrichment.cleanup_jobs import active_or_last_job as active_or_last_cleanup_job
+from voxint.enrichment.cleanup_jobs import create_job as create_cleanup_job
+from voxint.enrichment.cleanup_jobs import is_active as cleanup_job_active
+from voxint.enrichment.cleanup_jobs import request_cancel as request_cleanup_cancel
+from voxint.enrichment.cleanups import cleanup_diff, current_cleanup, has_cleanup
 from voxint.enrichment.run_assets import (
     RunAssetError,
     latest_assets,
@@ -281,6 +297,24 @@ def _publish_translation_job(job_id: uuid.UUID) -> bool:
             "broker unavailable — translation job %s stays QUEUED",
             job_id,
             exc_info=True,
+        )
+        return False
+    return True
+
+
+def _publish_cleanup_job(job_id: uuid.UUID) -> bool:
+    """Enqueue a committed clean-up job, returning False on a broker outage.
+
+    The recovery sweep republishes stale QUEUED jobs after the grace period."""
+    from celery.exceptions import OperationalError
+
+    from voxint.worker.tasks import cleanup_run
+
+    try:
+        cleanup_run.apply_async((str(job_id),), ignore_result=True)
+    except OperationalError:
+        logger.warning(
+            "broker unavailable: clean-up job %s stays QUEUED", job_id, exc_info=True
         )
         return False
     return True
@@ -572,6 +606,115 @@ def _transcript_translation_context(
         # generation gets NO link; its export would 409).
         "fresh": [{"code": v["code"], "label": v["label"]} for v in views if not v["stale"]],
     }
+
+
+# Why a line kept its words (#758), in the operator's terms.
+_CLEANUP_REASON_LABELS = {
+    "not_deletion": "reworded, not only shortened",
+    "protected": "would remove a number, a negation or a name",
+    "whole_line": "would remove the whole line",
+    "unanchored": "no word timings to anchor the change",
+    "malformed": "no usable reply from the model",
+}
+
+
+def _sentence(message: str) -> str:
+    """A job-layer refusal (lowercase clause) as a sentence for the page."""
+    return message[:1].upper() + message[1:]
+
+
+def _cleanup_status(
+    session: Session, settings: Settings, run: PipelineRun, error: str | None = None
+) -> dict[str, Any]:
+    """The Cleaned page's status block (#758): the job, the gates and the D6
+    language state. Small on purpose: it is the polling target."""
+    job = active_or_last_cleanup_job(session, run.id)
+    job_active = job is not None and cleanup_job_active(job)
+    gates_open = cleanup_gates_open(settings, get_app_settings(session))
+    refusal = language_refusal(run.detected_language)
+    return {
+        "run_id": run.id,
+        "job": job,
+        "job_active": job_active,
+        "last_job": (
+            job
+            if job is not None and not job_active and job.status != CleanupJobStatus.SUCCEEDED.value
+            else None
+        ),
+        "gates_open": gates_open,
+        "language_refusal": _sentence(refusal) if refusal else None,
+        "language_unverified": normalized_language(run.detected_language) is None,
+        "can_generate": gates_open and refusal is None and not job_active,
+        "has_cleanup": has_cleanup(session, run.id),
+        "error": error,
+    }
+
+
+def _cleanup_head(session: Session, run_id: uuid.UUID) -> dict[str, Any] | None:
+    """The current generation drawn as a diff, with its counts, provenance
+    and freshness. Freshness is the export's rule: the stored source hash
+    against the live one, failing closed to stale when the source is
+    unreadable."""
+    head = current_cleanup(session, run_id)
+    if head is None:
+        return None
+    source_problem: str | None = None
+    try:
+        current_hash: str | None = translation_source_hash(
+            load_translation_source(session, run_id)
+        )
+    except TranslationError as exc:
+        current_hash = None
+        source_problem = str(exc)
+    fillers = head.config.get("filler_list") or {}
+    return {
+        "cleanup": head,
+        "stale": head.source_content_hash != current_hash,
+        "source_problem": source_problem,
+        "lines": [
+            {
+                "parts": cleanup_diff(line),
+                "outcome": line["outcome"],
+                "reason": (
+                    _CLEANUP_REASON_LABELS[line["reason"]] if line["reason"] else None
+                ),
+            }
+            for line in head.lines
+        ],
+        "rejected": [
+            (_CLEANUP_REASON_LABELS[reason], head.counts["rejected"][reason])
+            for reason in REJECT_REASONS
+            if head.counts["rejected"].get(reason)
+        ],
+        "prompt_version": head.config.get("prompt_version"),
+        "filler_words": list(fillers.get("words", [])),
+        "filler_phrases": list(fillers.get("phrases", [])),
+    }
+
+
+def _cleanup_page(
+    request: Request,
+    session: Session,
+    run: PipelineRun,
+    *,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    secret = request.app.state.csrf_secret
+    return templates.TemplateResponse(
+        request,
+        "legacy_runs/cleanup.html",
+        {
+            "request": request,
+            "run": run,
+            "status": _cleanup_status(session, request.app.state.settings, run, error),
+            "head": _cleanup_head(session, run.id),
+            "csrf_cleanup_generate": mint_csrf_token(secret, CSRF_CLEANUP_GENERATE),
+            "csrf_cleanup_cancel": mint_csrf_token(secret, CSRF_CLEANUP_CANCEL),
+            "active_nav": "runs",
+        },
+        status_code=status_code,
+    )
 
 
 def _peaks_cache_trusted(
@@ -1257,6 +1400,7 @@ def run_transcript(
                 "translation_ctx": _transcript_translation_context(
                     session, run_id, variant, 0, None
                 ),
+                "cleanup_offered": cleanup_offered(session, settings, run_id),
                 "active_nav": "runs",
             },
         )
@@ -2178,6 +2322,104 @@ def run_translation_cancel(
     if _wants_island_json(request):
         return JSONResponse({"cancelled": True})
     return _run_translation_response(request, session, run_id)
+
+
+@tail_router.get("/runs/{run_id}/cleanup")
+def run_cleanup_page(
+    run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
+) -> Response:
+    """The Cleaned page (#758 D4): the current generation as a diff against
+    the reviewed text, its counts and provenance, Generate and Cancel, and
+    the ``text=cleaned`` downloads while it is current."""
+    return _cleanup_page(request, session, _run_or_404(session, run_id))
+
+
+@tail_router.get("/runs/{run_id}/cleanup/status")
+def run_cleanup_status(
+    run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
+) -> Response:
+    """The polled status block. Once the job it was polling has ended, an htmx
+    poll gets ``HX-Redirect`` to the page: a GET, so a page that was rendered
+    from a refused Generate POST never reloads into a resubmission."""
+    run = _run_or_404(session, run_id)
+    secret = request.app.state.csrf_secret
+    status = _cleanup_status(session, request.app.state.settings, run)
+    response = templates.TemplateResponse(
+        request,
+        "legacy_runs/cleanup_status.html",
+        {
+            "request": request,
+            "status": status,
+            "csrf_cleanup_generate": mint_csrf_token(secret, CSRF_CLEANUP_GENERATE),
+            "csrf_cleanup_cancel": mint_csrf_token(secret, CSRF_CLEANUP_CANCEL),
+        },
+    )
+    if request.headers.get("HX-Request") == "true" and not status["job_active"]:
+        response.headers["HX-Redirect"] = f"/runs/{run_id}/cleanup"
+    return response
+
+
+@tail_router.post("/runs/{run_id}/cleanup/generate")
+def run_cleanup_generate(
+    run_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Start one clean-up job for the run (#758). Refusals (LLM off, another
+    language, no transcript, a job already running) re-render the page with
+    the reason and 409. Commit before publish, like every enqueue."""
+    _require_csrf(request, CSRF_CLEANUP_GENERATE, csrf_token)
+    run = _run_or_404(session, run_id)
+    try:
+        job, already_active = create_cleanup_job(
+            session, pipeline_run_id=run_id, settings=request.app.state.settings
+        )
+    except CleanupJobError as exc:
+        session.rollback()
+        return _cleanup_page(request, session, run, error=_sentence(str(exc)), status_code=409)
+    if already_active or job is None:
+        session.rollback()
+        return _cleanup_page(
+            request, session, run, error="A clean-up is already in progress.", status_code=409
+        )
+    job_id = job.id
+    session.commit()
+    if not _publish_cleanup_job(job_id):
+        return _cleanup_page(
+            request,
+            session,
+            run,
+            error=(
+                "The clean-up is queued, but the worker queue could not be reached."
+                " It starts once the worker is back, or you can cancel it."
+            ),
+            status_code=503,
+        )
+    return RedirectResponse(f"/runs/{run_id}/cleanup", status_code=303)
+
+
+@tail_router.post("/runs/{run_id}/cleanup/{job_id}/cancel")
+def run_cleanup_cancel(
+    run_id: uuid.UUID,
+    job_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Cancel works whatever the LLM setting: a queued job ends at once; a
+    running one stops before its next model call and stores nothing."""
+    _require_csrf(request, CSRF_CLEANUP_CANCEL, csrf_token)
+    _run_or_404(session, run_id)
+    job = session.get(CleanupJob, job_id)
+    if job is None or job.pipeline_run_id != run_id:
+        raise HTTPException(status_code=404, detail="no such clean-up job")
+    request_cleanup_cancel(session, job_id)
+    # Commit now so the executor's next cancel check sees it.
+    session.commit()
+    return RedirectResponse(f"/runs/{run_id}/cleanup", status_code=303)
 
 
 @tail_router.get("/media/{run_id}")

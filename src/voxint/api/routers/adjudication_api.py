@@ -175,6 +175,14 @@ from voxint.db.models import (
     TranscriptSegment,
     WordMarkAction,
 )
+from voxint.enrichment.cleanup_jobs import active_or_last_job as active_or_last_cleanup_job
+from voxint.enrichment.cleanup_jobs import is_active as cleanup_job_active
+from voxint.enrichment.cleanups import (
+    CLEANED_TEXT,
+    cleanup_omits,
+    cleanup_texts,
+    current_cleanup,
+)
 from voxint.enrichment.producers.names import NameProducerError, run_offline_name_producer
 from voxint.enrichment.review import ConflictingReplayError as EnrichmentReplayError
 from voxint.enrichment.review import (
@@ -208,6 +216,7 @@ from voxint.export.manifest import (
     build_quote_manifest,
 )
 from voxint.export.service import (
+    CleanedVariant,
     ExportOptionError,
     TranslationMismatchError,
     WordMarkPlacementError,
@@ -1460,6 +1469,42 @@ def _export_translated_texts(
     return texts
 
 
+def _export_cleaned_variant(session: Session, run_id: uuid.UUID) -> CleanedVariant:
+    """The run's fresh cleaned variant (#758), or a fail-closed 409.
+
+    Like a translation: 409 when no generation exists, one is being
+    generated, or the transcript changed since. A current generation stays
+    exportable while a regeneration runs. The caller reads this check and
+    the render in one REPEATABLE READ snapshot, so an edit committing in
+    between cannot pair one generation with another transcript.
+    """
+    head = current_cleanup(session, run_id)
+    if head is not None:
+        try:
+            current_hash = translation_source_hash(load_translation_source(session, run_id))
+        except TranslationError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if head.source_content_hash == current_hash:
+            return CleanedVariant(cleanup_texts(head), cleanup_omits(head))
+    job = active_or_last_cleanup_job(session, run_id)
+    if job is not None and cleanup_job_active(job):
+        detail = "the cleaned variant is still being generated; retry when it finishes"
+    elif head is None:
+        detail = (
+            "no cleaned variant exists for this run; generate one from the"
+            " Cleaned page first"
+        )
+    else:
+        detail = _CLEANED_STALE_DETAIL
+    raise HTTPException(status_code=409, detail=detail)
+
+
+_CLEANED_STALE_DETAIL = (
+    "the cleaned variant is out of date: the transcript changed since it was"
+    " generated; regenerate it from the Cleaned page and retry"
+)
+
+
 def _export_transcript(
     request: Request,
     run_id: uuid.UUID,
@@ -1473,16 +1518,25 @@ def _export_transcript(
     fillers: str | None = None,
     repeats: str | None = None,
 ) -> Response:
+    # text=cleaned (#758) is console-only and never a TranscriptText member,
+    # so it is recognised here, before the shared parser refuses it.
+    cleaned = text == CLEANED_TEXT
     _run_or_404(session, run_id)
     try:
-        variant = parse_transcript_text(text)
+        variant = TranscriptText.CORRECTED if cleaned else parse_transcript_text(text)
+        if cleaned and lang is not None:
+            raise ExportOptionError("a translation cannot be combined with the cleaned variant")
         selected_style = parse_style(style, fmt)
         drop_fillers = parse_fillers(fillers, fmt, selected_style)
         if drop_fillers and lang is not None:
             raise ExportOptionError("fillers cannot be combined with a translation")
+        if drop_fillers and cleaned:
+            raise ExportOptionError("fillers cannot be combined with the cleaned variant")
         drop_repeats = parse_repeats(repeats, fmt, selected_style)
         if drop_repeats and lang is not None:
             raise ExportOptionError("repeats cannot be combined with a translation")
+        if drop_repeats and cleaned:
+            raise ExportOptionError("repeats cannot be combined with the cleaned variant")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
@@ -1496,6 +1550,14 @@ def _export_transcript(
         # not a bad request: 409, like the stale-translation refusal.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     texts = _export_translated_texts(session, run_id, lang, variant) if lang is not None else None
+    cleaned_variant = None
+    if cleaned:
+        # One snapshot for the freshness check and the render, as for the
+        # word-marks GET: an export takes no claim lock. Only after every
+        # refusal above, so a refused request never ends the transaction.
+        session.commit()
+        session.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+        cleaned_variant = _export_cleaned_variant(session, run_id)
     try:
         content = render_run_transcript(
             session,
@@ -1507,11 +1569,15 @@ def _export_transcript(
             translated_texts=texts,
             fillers=filler_list,
             drop_repeats=drop_repeats,
+            cleaned=cleaned_variant,
         )
+    except ExportOptionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except WordMarkPlacementError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except TranslationMismatchError as exc:
-        raise HTTPException(status_code=409, detail=_translation_stale_detail(lang or "")) from exc
+        detail = _CLEANED_STALE_DETAIL if cleaned else _translation_stale_detail(lang or "")
+        raise HTTPException(status_code=409, detail=detail) from exc
     return Response(content=content, media_type=MEDIA_TYPES[fmt.value])
 
 

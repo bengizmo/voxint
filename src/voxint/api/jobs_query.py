@@ -27,8 +27,8 @@ Two truth rules keep the strip honest (codex-ratified, #160):
   reconciles with Running.
 
 The auxiliary families are heterogeneous: research jobs are speaker-scoped with
-a nullable run link, the other three are run-scoped. They are normalized into
-one :class:`AuxJob` read model with nullable run *and* speaker targets. All four
+a nullable run link, the other four are run-scoped. They are normalized into
+one :class:`AuxJob` read model with nullable run *and* speaker targets. All five
 share the ``{queued, running, succeeded, failed, cancelled}`` vocabulary — note
 ``succeeded``, not the ``completed`` that ``RunStatus`` uses. Each family is
 read newest-first up to a bound, merged in Python and truncated (no cross-family
@@ -46,6 +46,7 @@ from sqlalchemy.orm import Session
 
 from voxint.db.models import (
     STAGE_ORDER,
+    CleanupJob,
     EmbeddingJob,
     PipelineRun,
     ResearchJob,
@@ -77,7 +78,7 @@ class StageActivity:
 
 @dataclass(frozen=True)
 class AuxJob:
-    """One auxiliary job, normalized across the four families.
+    """One auxiliary job, normalized across the five families.
 
     ``pipeline_run_id`` is None for a speaker-only research job; ``speaker_id``
     is set only for research. ``detail`` is the family's most useful one-line
@@ -147,7 +148,7 @@ def jobs_badge_count(session: Session) -> int:
     """Count of live jobs for the shell's Jobs-nav badge (issue #162).
 
     Non-archived pipeline runs that are queued or running, plus queued/running
-    auxiliary jobs across the four families. Shared by the ``/jobs`` page and the
+    auxiliary jobs across the five families. Shared by the ``/jobs`` page and the
     activity poll endpoint so the badge equals what the page reports by
     construction. Excludes ``awaiting_adjudication`` (paused ON the operator, not
     active work) and every terminal state; ``archived`` runs are already terminal.
@@ -162,7 +163,7 @@ def jobs_badge_count(session: Session) -> int:
         )
     ).scalar_one()
     aux = 0
-    for model in (RunAssetJob, TranslationJob, EmbeddingJob, ResearchJob):
+    for model in (RunAssetJob, TranslationJob, CleanupJob, EmbeddingJob, ResearchJob):
         aux += session.execute(
             select(func.count()).select_from(model).where(model.status.in_(active_aux))
         ).scalar_one()
@@ -172,7 +173,7 @@ def jobs_badge_count(session: Session) -> int:
 def recent_aux_jobs(
     session: Session, *, limit: int = 20, per_family: int | None = None
 ) -> list[AuxJob]:
-    """The newest auxiliary jobs across all four families, merged by recency.
+    """The newest auxiliary jobs across all five families, merged by recency.
 
     Each family is read newest-first up to ``per_family`` (defaults to ``limit``)
     rows, normalized to :class:`AuxJob`, then the union is sorted by
@@ -215,6 +216,24 @@ def recent_aux_jobs(
                 speaker_id=None,
                 detail=translation.target_language,
                 error=translation.error,
+            )
+        )
+
+    for cleanup in session.execute(
+        select(CleanupJob)
+        .order_by(CleanupJob.created_at.desc(), CleanupJob.id.desc())
+        .limit(bound)
+    ).scalars():
+        jobs.append(
+            AuxJob(
+                id=cleanup.id,
+                family="cleanup",
+                status=cleanup.status,
+                created_at=cleanup.created_at,
+                pipeline_run_id=cleanup.pipeline_run_id,
+                speaker_id=None,
+                detail="",
+                error=cleanup.error,
             )
         )
 

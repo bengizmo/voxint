@@ -1128,6 +1128,30 @@
     ]
   ],
   [
+    "/runs/{run_id}/cleanup",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/runs/{run_id}/cleanup/status",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/runs/{run_id}/cleanup/generate",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/runs/{run_id}/cleanup/{job_id}/cancel",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/media/{run_id}",
     []
   ],

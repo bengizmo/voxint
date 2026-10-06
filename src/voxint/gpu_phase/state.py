@@ -307,6 +307,7 @@ def queued_llm_jobs(session: Session) -> int:
 
 def _llm_jobs(session: Session, status: str) -> int:
     from voxint.db.models import (
+        CleanupJob,
         ResearchJob,
         RunAssetJob,
         TranslationJob,
@@ -316,7 +317,7 @@ def _llm_jobs(session: Session, status: str) -> int:
         session.execute(
             select(func.count()).select_from(model).where(model.status == status)
         ).scalar_one()
-        for model in (ResearchJob, RunAssetJob, TranslationJob)
+        for model in (ResearchJob, RunAssetJob, TranslationJob, CleanupJob)
     )
 
 

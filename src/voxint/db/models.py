@@ -2655,6 +2655,155 @@ class TranslationJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class CleanupJobStatus(enum.StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class RunCleanup(Base):
+    """One **successful** LLM clean-up generation of a run's transcript (#758).
+
+    An immutable, deletions-only rendition of the corrected transcript, written
+    only by ``enrichment/cleanups.py`` ``record_cleanup``, which re-validates
+    every line against the frozen source and derives ``counts`` itself. Failed
+    or cancelled attempts live on ``cleanup_jobs`` and consume no generation.
+    ``run_cleanups_content_immutable_trigger`` rejects DELETE and every UPDATE
+    except the one-time ``superseded_by_cleanup_id`` stamp.
+
+    ``lines`` is a versioned JSONB snapshot, one entry per
+    ``attributed_transcript`` line: ``{"i", "segment_id", "word_start",
+    "word_end", "source", "text", "deleted", "outcome", "reason"}``. ``source``
+    and the ``deleted`` lexical ranges let a stale generation still be drawn as
+    a historical diff; they are never re-applied to the current words. The
+    run-level ``source_content_hash`` (``translation_source_hash``) is the only
+    freshness authority. ``config`` is the one provenance record of the prompt
+    version and filler list the generation ran with.
+    """
+
+    __tablename__ = "run_cleanups"
+    __table_args__ = (
+        UniqueConstraint("pipeline_run_id", "generation", name="run_cleanups_generation_key"),
+        # NO one-current partial unique index, as for run_translations: the
+        # writer inserts the new head and supersedes the old one in one
+        # transaction under a per-run advisory lock.
+        UniqueConstraint("idempotency_key", name="run_cleanups_idempotency_key"),
+        CheckConstraint("generation >= 1", name="run_cleanups_generation_check"),
+        CheckConstraint("jsonb_typeof(lines) = 'array'", name="run_cleanups_lines_array_check"),
+        CheckConstraint(
+            "jsonb_typeof(counts) = 'object'", name="run_cleanups_counts_object_check"
+        ),
+        CheckConstraint(
+            "jsonb_typeof(config) = 'object'", name="run_cleanups_config_object_check"
+        ),
+        CheckConstraint(
+            "payload_schema_version >= 1", name="run_cleanups_payload_version_check"
+        ),
+        CheckConstraint(
+            "length(trim(producer)) > 0", name="run_cleanups_producer_nonempty_check"
+        ),
+        CheckConstraint(
+            "length(trim(producer_version)) > 0",
+            name="run_cleanups_producer_version_nonempty_check",
+        ),
+        CheckConstraint("length(trim(model)) > 0", name="run_cleanups_model_nonempty_check"),
+        CheckConstraint(
+            "source_content_hash ~ '^[0-9a-f]{64}$'", name="run_cleanups_source_hash_check"
+        ),
+        CheckConstraint(
+            "length(trim(idempotency_key)) > 0",
+            name="run_cleanups_idempotency_key_nonempty_check",
+        ),
+        CheckConstraint(
+            "replay_digest ~ '^[0-9a-f]{64}$'", name="run_cleanups_replay_digest_check"
+        ),
+        CheckConstraint(
+            "completed_at >= started_at", name="run_cleanups_completed_after_started_check"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
+    generation: Mapped[int] = mapped_column(Integer)
+    lines: Mapped[list[Any]] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
+    counts: Mapped[dict[str, Any]] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
+    config: Mapped[dict[str, Any]] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
+    payload_schema_version: Mapped[int] = mapped_column(Integer)
+    producer: Mapped[str] = mapped_column(Text)
+    producer_version: Mapped[str] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(Text)
+    source_content_hash: Mapped[str] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(Text)
+    replay_digest: Mapped[str] = mapped_column(Text)
+    superseded_by_cleanup_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("run_cleanups.id")
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CleanupJob(Base):
+    """One LLM clean-up attempt for one run (#758).
+
+    Mutable orchestration state, like ``translation_jobs``: the result is an
+    immutable ``run_cleanups`` row linked through ``cleanup_id``, which is set
+    exactly when the job succeeded. The partial unique index allows one active job
+    per run. ``config`` is the request snapshot the worker executes from;
+    ``source_content_hash`` is the transcript hash at enqueue (provenance).
+    """
+
+    __tablename__ = "cleanup_jobs"
+    __table_args__ = (
+        Index(
+            "cleanup_jobs_one_active_per_run",
+            "pipeline_run_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
+        CheckConstraint(
+            f"status IN ({_enum_values(CleanupJobStatus)})", name="cleanup_jobs_status_check"
+        ),
+        CheckConstraint(
+            "jsonb_typeof(config) = 'object'", name="cleanup_jobs_config_object_check"
+        ),
+        CheckConstraint(
+            "source_content_hash ~ '^[0-9a-f]{64}$'", name="cleanup_jobs_source_hash_check"
+        ),
+        CheckConstraint(
+            "(cleanup_id IS NOT NULL) = (status = 'succeeded')",
+            name="cleanup_jobs_result_iff_succeeded_check",
+        ),
+        CheckConstraint(
+            "started_at IS NULL OR started_at >= created_at",
+            name="cleanup_jobs_started_after_created_check",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR started_at IS NOT NULL",
+            name="cleanup_jobs_finished_requires_started_check",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR finished_at >= started_at",
+            name="cleanup_jobs_finished_after_started_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
+    status: Mapped[str] = mapped_column(Text, default=CleanupJobStatus.QUEUED.value)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    config: Mapped[dict[str, Any]] = mapped_column()
+    source_content_hash: Mapped[str] = mapped_column(Text)
+    # Bounded, redacted failure summary (closed vocabulary + safe detail only).
+    error: Mapped[str | None] = mapped_column(Text)
+    cleanup_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("run_cleanups.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class EmbeddingJobStatus(enum.StrEnum):
     QUEUED = "queued"
     RUNNING = "running"

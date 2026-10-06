@@ -28,6 +28,7 @@ validate_boot(_registry, settings=settings)
 _CORE_TASK_NAMES: frozenset[str] = frozenset(
     {
         "voxint.activity_prune",
+        "voxint.cleanup_run",
         "voxint.compute_speaker_insights",
         "voxint.compute_term_stats",
         "voxint.finish_pipeline",

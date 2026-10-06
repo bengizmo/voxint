@@ -51,7 +51,13 @@ from voxint.db.models import (
 from voxint.db.session import build_engine, build_session_factory
 from voxint.domain_packs.registry import domain_pack_from_snapshot
 from voxint.embeddings.onnx_embedder import minilm_artifacts_available
-from voxint.enrichment import asset_jobs, embedding_jobs, research_jobs, translation_jobs
+from voxint.enrichment import (
+    asset_jobs,
+    cleanup_jobs,
+    embedding_jobs,
+    research_jobs,
+    translation_jobs,
+)
 from voxint.enrichment.research_jobs import execute_job
 from voxint.gpu_phase.dispatch import lane_filters, open_lanes
 from voxint.gpu_phase.state import (
@@ -548,6 +554,24 @@ def recovery_sweep() -> dict[str, int]:
                 exc_info=True,
             )
     with factory() as session:
+        stale_cleanup_jobs = (
+            cleanup_jobs.stale_queued_job_ids(
+                session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
+            )
+            if post_open
+            else []
+        )
+    for job_id in stale_cleanup_jobs:
+        try:
+            cleanup_run.apply_async((str(job_id),), ignore_result=True)
+        except OperationalError:
+            logger.warning(
+                "clean-up recovery enqueue deferred (broker unavailable); "
+                "job %s stays QUEUED for a later sweep",
+                job_id,
+                exc_info=True,
+            )
+    with factory() as session:
         stale_research_jobs = (
             research_jobs.stale_queued_job_ids(
                 session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
@@ -578,6 +602,7 @@ def recovery_sweep() -> dict[str, int]:
         "stale_embedding_jobs": len(stale_embedding_jobs),
         "stale_asset_jobs": len(stale_asset_jobs),
         "stale_translation_jobs": len(stale_translation_jobs),
+        "stale_cleanup_jobs": len(stale_cleanup_jobs),
         "stale_research_jobs": len(stale_research_jobs),
     }
     # Surface the plugin-lane count only when a plugin actually declares a lane;
@@ -774,6 +799,19 @@ def translate_run(job_id_str: str) -> None:
     """
     factory, _ = _runtime()
     translation_jobs.execute_job(factory, uuid.UUID(job_id_str), settings=get_settings())
+
+
+@app.task(name="voxint.cleanup_run", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
+def cleanup_run(job_id_str: str) -> None:
+    """Run one queued LLM clean-up job (issue #758).
+
+    On the default queue, like translation, never ``post``: minutes of LLM
+    work must not delay ``finish_pipeline`` or asset jobs. No Celery retries;
+    failures land as bounded error text on the job row, and a duplicate
+    delivery no-ops on the guarded claim.
+    """
+    factory, _ = _runtime()
+    cleanup_jobs.execute_job(factory, uuid.UUID(job_id_str), settings=get_settings())
 
 
 def _autogenerate_translation(

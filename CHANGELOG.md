@@ -7,6 +7,24 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **LLM clean-up of a transcript** (#758). A new **LLM clean-up** page for each
+  recording (linked from **Other text variants** in the download menu and from
+  the reading view) asks your configured LLM for a separate, tidier copy of an
+  English transcript, with filler phrases such as `I mean` and `you know`
+  removed. The model can only suggest words to remove: Voxint ignores any
+  suggestion that rewords a line, removes a number, a negation or a likely
+  name, or removes the whole line, and it builds the copy from the
+  transcript's own words. The page shows every line with the removed words
+  struck through, counts what was changed and what was ignored and why, and
+  offers the copy in every transcript format with `text=cleaned` on the
+  console export routes. Editing or splitting a line makes the copy out of
+  date: the page says so, the downloads are refused until you generate again,
+  and a speaker rename does not count. Your reviewed transcript, the default
+  downloads and subtitles are unchanged byte for byte, and the `/api/v1` route
+  and `voxint export` do not offer the copy. Runs detected as another language
+  are refused. Generations are stored as immutable rows and jobs in new tables
+  (migration 0073) and run as the `voxint.cleanup_run` worker task on the
+  default queue.
 - **Keep a filler word, or leave out any word** (#757). In the review editor,
   words that filler removal will leave out are underlined. Press **Clean up**
   (`c`) on a line, focus a word with Tab or the arrow keys, then press `f` to

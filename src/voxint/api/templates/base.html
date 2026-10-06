@@ -828,6 +828,10 @@
     .tp-translation { display: block; margin: .1rem 0 0 2rem; color: var(--ink-2);
                  font-style: italic; }
     .tp-uncertain { border-bottom: 1px dashed var(--uncertain); }
+    /* LLM clean-up diff (issue #758): a removed word stays readable, struck
+       through on a soft danger wash so it reads as removed in both themes. */
+    .cleanup-removed { text-decoration: line-through; color: var(--ink-3);
+                 background: var(--danger-soft); }
     .tp-uncertain-chip { font-size: .68rem; text-transform: uppercase; letter-spacing: .03em;
                  color: var(--uncertain); border: 1px solid var(--uncertain); border-radius: var(--r-sm);
                  padding: 0 .35rem; margin-right: .4rem; white-space: nowrap; }

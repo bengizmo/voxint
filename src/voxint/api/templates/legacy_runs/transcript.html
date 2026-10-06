@@ -26,6 +26,7 @@
   <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}&read=1&timestamps={{ 'false' if read_timestamps else 'true' }}{% if drop_fillers %}&fillers=drop{% endif %}{% if drop_repeats %}&repeats=drop{% endif %}">{% if read_timestamps %}Hide timestamps{% else %}Show timestamps{% endif %}</a>
   <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}&read=1&timestamps={{ 'true' if read_timestamps else 'false' }}{% if not drop_fillers %}&fillers=drop{% endif %}{% if drop_repeats %}&repeats=drop{% endif %}">{% if drop_fillers %}Show filler words{% else %}Remove filler words{% endif %}</a>
   <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}&read=1&timestamps={{ 'true' if read_timestamps else 'false' }}{% if drop_fillers %}&fillers=drop{% endif %}{% if not drop_repeats %}&repeats=drop{% endif %}">{% if drop_repeats %}Show repeated words{% else %}Remove repeated words{% endif %}</a>
+  {% if cleanup_offered %}<a href="/runs/{{ run.id }}/cleanup">LLM clean-up</a>{% endif %}
   {% else %}
   <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}&read=1&timestamps=false">Reading view</a>
   {% endif %}
@@ -63,7 +64,7 @@
   a working rendition, not a certified translation.</p>
 {% endif %}
 
-{{ export_menu(run, text, translation_ctx.fresh, {"fillers": drop_fillers, "repeats": drop_repeats} if read else none) }}
+{{ export_menu(run, text, translation_ctx.fresh, {"fillers": drop_fillers, "repeats": drop_repeats} if read else none, cleanup=cleanup_offered) }}
 
 {# "your filler list" links to its settings section only for someone who can open
    Settings (admin-only); a reviewer in a multi-user install sees plain text. #}

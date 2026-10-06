@@ -120,6 +120,9 @@ CSRF_ASSETS_CANCEL = "assets-cancel"
 # cancelling one are independent mutations with different blast radii.
 CSRF_TRANSLATION_GENERATE = "translation-generate"
 CSRF_TRANSLATION_CANCEL = "translation-cancel"
+# LLM clean-up (issue #758): the same split as translation.
+CSRF_CLEANUP_GENERATE = "cleanup-generate"
+CSRF_CLEANUP_CANCEL = "cleanup-cancel"
 # Run soft-archive + derived-media deletion (issue #5, slice 2). Per-action
 # tokens — hiding a run (reversible), un-hiding it, and irreversibly deleting its
 # derived audio files have very different blast radii and must never share a token.

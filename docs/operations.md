@@ -451,7 +451,9 @@ idle and the next run cannot start transcribing. The two execution lanes (see
 [architecture.md](architecture.md#execution-lanes-and-queues)) remove that
 cost. Split the worker in the same override: the GPU lane keeps
 `--concurrency=1`, and a second worker drains the `post` queue (LLM
-enhancement, finalize, and the LLM-bound asset/research jobs) concurrently:
+enhancement, finalize, and the LLM-bound asset/research jobs) concurrently.
+Translation and LLM clean-up jobs stay on the default `celery` queue, so the
+GPU-lane worker runs them:
 
 ```yaml
 services:
@@ -875,12 +877,45 @@ for both filters. For an existing run, on either route, these return 422:
 | a `txt` style other than `turns` | `unknown style 'blocks' for txt; valid: turns` |
 | a non-empty `fillers` or `repeats` outside a `turns` layout (including `txt` without `style=turns`) | `fillers applies to md turns and txt turns only` (or `repeats ...`) |
 | `fillers=drop` or `repeats=drop` with `lang` | `fillers cannot be combined with a translation` (or `repeats ...`) |
+| `text=cleaned` with `lang` (console routes only) | `a translation cannot be combined with the cleaned variant` |
+| `text=cleaned` with `fillers=drop` or `repeats=drop` (console routes only) | `fillers cannot be combined with the cleaned variant` (or `repeats ...`) |
 
 Releases up to 0.51 worded the first and third messages as `style applies to
 the md format only` and `fillers applies to the md turns style only`.
 RTTM uses the run's UUID as the file id and the raw diarization labels
 (`SPEAKER_00` …), so it round-trips against diarization scoring tools, and it
 deliberately does **not** substitute adjudicated speaker names.
+
+#### The `cleaned` text variant (issue #758; needs the LLM)
+
+`text=cleaned` exports the run's current LLM clean-up: a deletions-only copy of
+the corrected text, generated on demand from the Cleaned page
+(`/runs/{run_id}/cleanup`, see
+[Clean up with the LLM](how-to/cleaning-up-with-the-llm.md)). It is accepted
+only by the console routes, `GET /review/{run_id}/export.{txt,md,srt,vtt,json}`.
+The `/api/v1` transcript route and `voxint export --text` refuse it, and it is
+never a default or a fallback, so every other export is byte-identical whether
+or not a clean-up exists.
+
+- Segment formats (`txt` without a style, `md --style blocks`, `srt`, `vtt`,
+  `json`) substitute each line's stored cleaned text. Cue timing is unchanged.
+- `turns` layouts (`md`, `txt` with `style=turns`) apply the stored deletions
+  as word-level omits through the same projection as the reviewed turns
+  export, so speaker attribution matches it exactly. The #757 word marks and
+  the filler list are not applied.
+
+Besides the 422s above, the export returns 409 when:
+
+| Situation | Message |
+|---|---|
+| no clean-up exists | `no cleaned variant exists for this run; generate one from the Cleaned page first` |
+| the only clean-up is being generated | `the cleaned variant is still being generated; retry when it finishes` |
+| the transcript text changed since the clean-up was made (an edit or split; a speaker rename, filler-list change or word mark does not count) | `the cleaned variant is out of date: the transcript changed since it was generated; regenerate it from the Cleaned page and retry` |
+
+A current clean-up stays exportable while a regeneration runs. The freshness
+check and the render read one `REPEATABLE READ` snapshot. Generation details
+(validation, protected words, the worker task) are under
+"LLM clean-up" below.
 
 #### Media metadata backfills
 
@@ -1858,14 +1893,70 @@ The mutation forms that require a CSRF token include `POST /media/submit`,
 `/media/fetch`, `/runs/{id}/requeue`, `POST /review/{id}/claim` (claiming mints
 the run's claim token, so it has none of its own to gate a forged POST), the
 web-research forms on `/speakers` (start, cancel, and per-draft accept/reject,
-each under its own token action), and the run-asset forms on `/media/{id}/editor` (generate and
-cancel, each under its own token action). Since v0.27.0, the app auto-generates
+each under its own token action), the run-asset forms on `/media/{id}/editor` (generate and
+cancel, each under its own token action), and the clean-up forms on
+`/runs/{id}/cleanup` (likewise). Since v0.27.0, the app auto-generates
 a CSRF secret on first start and persists it to `.csrf_secret` in the media
 root (`MEDIA_ROOT`, `/data/media` inside the container), created with 0600
 permissions, so forms survive restarts and work across workers without manual
 configuration. To rotate it, delete that file and restart the app; open forms
 then need a page reload. Set `CSRF_SECRET` explicitly to override the
 auto-generated value (useful when multiple app instances share no filesystem).
+
+### LLM clean-up (issue #758; on demand, needs the LLM)
+
+The Cleaned page (`GET /runs/{run_id}/cleanup`) asks the configured LLM for a
+deletions-only copy of a run's corrected transcript, aimed at contextual
+fillers (`I mean`, `you know`, false starts) that the fixed filler list cannot
+catch. It has no feature flag of its own: it is available whenever the LLM is
+enabled (`LLM_ENABLED` or the in-UI toggle), and only when the operator clicks
+**Generate**. Nothing generates it automatically. The lay-reader guide is
+[Clean up with the LLM](how-to/cleaning-up-with-the-llm.md).
+
+The model returns each numbered line cleaned. Voxint keeps a proposal only
+when its words are an in-order subsequence of the line's words, then rebuilds
+the line from the source characters, so the model never contributes text. A
+proposal is rejected for the whole line, and the line kept verbatim and
+counted, when it:
+
+| Reason | Meaning |
+|---|---|
+| `not_deletion` | substitutes or inserts a word |
+| `protected` | deletes a protected word: a token with a digit, an English number word, a negation (`not`, `never`, any `n't` form, ...), or a likely name (a capitalised word that does not start a sentence, except `I` and its contractions) |
+| `whole_line` | deletes every word of the line |
+| `unanchored` | changes a line with no word timings, whose deletions could not be anchored to word identities |
+| `malformed` | got no parseable reply after retries and bisection |
+
+The effective filler list is sent as hints and recorded as provenance, with
+the model and prompt version. Runs detected as a language other than English
+are refused; runs with no detected language are allowed and the page says the
+language was not verified. Generations are immutable rows in `run_cleanups`,
+superseded by the next one; freshness uses the translation source hash, so an
+edit or split makes a clean-up stale and a speaker rename does not.
+
+Mechanics:
+
+- **Routes.** `POST /runs/{run_id}/cleanup/generate` (409 with the reason when
+  the LLM is off, the language is not English, there is no transcript, or a job
+  is already active; 503 when the job was queued but the broker was
+  unreachable) and `POST /runs/{run_id}/cleanup/{job_id}/cancel`, which works
+  even with the LLM since disabled. Each takes its own CSRF token action
+  (`cleanup-generate`, `cleanup-cancel`). `GET /runs/{run_id}/cleanup/status`
+  is the polled status block; once the job ends it answers an htmx poll with
+  `HX-Redirect` to the page.
+- **Worker.** The job runs as the `voxint.cleanup_run` task on the default
+  `celery` queue, like translation. On a split deployment (see "GPU memory on
+  a single, modest GPU" above) it is therefore consumed by the GPU-lane worker,
+  not `worker-post`. It batches lines by `LLM_BATCH_MAX_SEGMENTS` and
+  `LLM_BATCH_MAX_CHARS`, retries `LLM_ATTEMPTS_PER_BATCH` times, then bisects.
+  With GPU sharing on (issue #748), it waits for the post phase like the other
+  LLM jobs. The recovery sweep republishes jobs left QUEUED by a broker outage,
+  and the jobs page lists them.
+- **Cancel.** A queued job ends at once. A running job checks for a cancel
+  before and after every model call; a reply already in flight is discarded and
+  nothing is stored. A job whose transcript changed while the model was
+  working fails rather than storing a mismatched copy.
+
 
 ### LLM endpoint timeouts: local models and proxies
 

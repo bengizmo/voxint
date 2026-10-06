@@ -127,6 +127,13 @@ class LLMError(Exception):
     (retry once, then degrade), so no ``retryable`` distinction is carried."""
 
 
+class LLMReplyError(LLMError):
+    """A reply arrived but violates its shape contract: a malformed envelope,
+    non-JSON, a non-object, NUL, an oversized or misaligned body. Transport,
+    deadline and HTTP failures stay plain :class:`LLMError`, so a caller can
+    keep one line verbatim on a bad reply without masking a dead endpoint."""
+
+
 @dataclass(frozen=True)
 class SamplingProfile:
     """Immutable sampling parameters sent with every chat-completions request.
@@ -318,7 +325,7 @@ class HttpLLMClient:
             # text. Scrub the key here too so a body that echoes the Authorization
             # header inside otherwise-valid JSON cannot leak it — the same guard
             # _http_error applies to the 4xx/5xx path.
-            raise LLMError(redact(str(exc), extra_secrets=(self._api_key,))) from exc
+            raise type(exc)(redact(str(exc), extra_secrets=(self._api_key,))) from exc
 
     def chat_json(self, messages: Sequence[ChatMessage]) -> dict[str, object]:
         """One chat call whose reply must be a JSON object.
@@ -326,7 +333,8 @@ class HttpLLMClient:
         Generic transport for callers that own their own conversation and
         validation (the research loop); no enhancement logic here. The reply is
         held to the same strict envelope handling as ``enhance_segments`` plus a
-        size ceiling and a NUL check — anything else raises :class:`LLMError`.
+        size ceiling and a NUL check — any shape failure raises
+        :class:`LLMReplyError`; transport and HTTP failures raise :class:`LLMError`.
         """
         if not messages:
             raise LLMError("chat_json requires at least one message")
@@ -342,23 +350,23 @@ class HttpLLMClient:
         try:
             content = response.json()["choices"][0]["message"]["content"]
         except (ValueError, KeyError, IndexError, TypeError) as exc:
-            raise LLMError(f"malformed completion envelope: {exc!r}") from exc
+            raise LLMReplyError(f"malformed completion envelope: {exc!r}") from exc
         if not isinstance(content, str):
-            raise LLMError("completion content is not a string")
+            raise LLMReplyError("completion content is not a string")
         if len(content) > MAX_CHAT_REPLY_CHARS:
-            raise LLMError(
+            raise LLMReplyError(
                 f"completion content is {len(content)} chars against a"
                 f" {MAX_CHAT_REPLY_CHARS}-char bound"
             )
         if "\x00" in content:
             # PostgreSQL rejects NUL in text; nothing downstream may persist it.
-            raise LLMError("completion content contains NUL")
+            raise LLMReplyError("completion content contains NUL")
         try:
             body = json.loads(_strip_fence(content))
         except ValueError as exc:
-            raise LLMError(f"completion content is not valid JSON: {exc}") from exc
+            raise LLMReplyError(f"completion content is not valid JSON: {exc}") from exc
         if not isinstance(body, dict):
-            raise LLMError(f"expected a JSON object, got {type(body).__name__}")
+            raise LLMReplyError(f"expected a JSON object, got {type(body).__name__}")
         return body
 
     def close(self) -> None:
@@ -386,15 +394,15 @@ def _parse_batch(
     try:
         content = response.json()["choices"][0]["message"]["content"]
     except (ValueError, KeyError, IndexError, TypeError) as exc:
-        raise LLMError(f"malformed completion envelope: {exc!r}") from exc
+        raise LLMReplyError(f"malformed completion envelope: {exc!r}") from exc
     if not isinstance(content, str):
-        raise LLMError("completion content is not a string")
+        raise LLMReplyError("completion content is not a string")
     try:
         body = json.loads(_strip_fence(content))
     except ValueError as exc:
-        raise LLMError(f"completion content is not valid JSON: {exc}") from exc
+        raise LLMReplyError(f"completion content is not valid JSON: {exc}") from exc
     if not isinstance(body, dict):
-        raise LLMError(f"expected a JSON object, got {type(body).__name__}")
+        raise LLMReplyError(f"expected a JSON object, got {type(body).__name__}")
 
     expected_indexes = {s.segment_index for s in segments}
     max_text_length = {s.segment_index: enhanced_size_ceiling(s.text) for s in segments}
@@ -402,31 +410,31 @@ def _parse_batch(
 
     raw_segments = body.get("segments")
     if not isinstance(raw_segments, list):
-        raise LLMError("reply is missing the segments array")
+        raise LLMReplyError("reply is missing the segments array")
     enhanced: dict[int, str] = {}
     for item in raw_segments:
         if not isinstance(item, dict):
-            raise LLMError("segment entry is not an object")
+            raise LLMReplyError("segment entry is not an object")
         index, text = item.get("index"), item.get("text")
         if isinstance(index, bool) or not isinstance(index, int) or not isinstance(text, str):
-            raise LLMError(f"segment entry has wrong types: {item!r:.200}")
+            raise LLMReplyError(f"segment entry has wrong types: {item!r:.200}")
         if "\x00" in text:
             # Valid JSON, but PostgreSQL rejects NUL in text — persisting it
             # would turn optional enhancement into a stage failure.
-            raise LLMError(f"segment {index} reply contains NUL")
+            raise LLMReplyError(f"segment {index} reply contains NUL")
         if index not in expected_indexes:
-            raise LLMError(f"unknown segment index {index} in reply")
+            raise LLMReplyError(f"unknown segment index {index} in reply")
         if index in enhanced:
-            raise LLMError(f"duplicate segment index {index} in reply")
+            raise LLMReplyError(f"duplicate segment index {index} in reply")
         if len(text) > max_text_length[index]:
-            raise LLMError(
+            raise LLMReplyError(
                 f"segment {index} reply is {len(text)} chars against a"
                 f" {max_text_length[index]}-char bound — not an enhancement"
             )
         enhanced[index] = text
     if set(enhanced) != expected_indexes:
         missing = sorted(expected_indexes - set(enhanced))
-        raise LLMError(f"reply missing segment indexes {missing}")
+        raise LLMReplyError(f"reply missing segment indexes {missing}")
 
     if not want_name_hints:
         # Scoped bundled path (#85): the prompt still asks for name_hints (changing
@@ -438,20 +446,20 @@ def _parse_batch(
 
     raw_hints = body.get("name_hints", [])
     if not isinstance(raw_hints, list):
-        raise LLMError("name_hints is not an array")
+        raise LLMReplyError("name_hints is not an array")
     hints: list[SpeakerNameHint] = []
     for item in raw_hints:
         if not isinstance(item, dict):
-            raise LLMError("name_hints entry is not an object")
+            raise LLMReplyError("name_hints entry is not an object")
         label, name, kind = item.get("label"), item.get("name"), item.get("kind")
         if not isinstance(label, str) or not isinstance(name, str) or kind not in HINT_KINDS:
-            raise LLMError(f"name_hints entry has wrong shape: {item!r:.200}")
+            raise LLMReplyError(f"name_hints entry has wrong shape: {item!r:.200}")
         if label not in known_labels:
-            raise LLMError(f"name_hints entry references unknown label {label!r:.200}")
+            raise LLMReplyError(f"name_hints entry references unknown label {label!r:.200}")
         if not name.strip():
-            raise LLMError("name_hints entry has a blank name")
+            raise LLMReplyError("name_hints entry has a blank name")
         if "\x00" in name:
-            raise LLMError("name_hints entry contains NUL")
+            raise LLMReplyError("name_hints entry contains NUL")
         hints.append(SpeakerNameHint(diarization_label=label, name=name.strip(), kind=kind))
     return EnhancementBatchResult(enhanced=enhanced, name_hints=tuple(hints))
 
