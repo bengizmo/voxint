@@ -294,7 +294,7 @@ class _TurnLookup:
         return best.label if best is not None else None
 
 
-def _token_key(text: str) -> str:
+def token_key(text: str) -> str:
     """Normalize case, quotes and Unicode hyphens, then trim edge punctuation."""
     value = unicodedata.normalize("NFKC", text).casefold()
     value = value.translate(
@@ -318,7 +318,7 @@ def _map_text(selected: str, units: list[_Unit]) -> tuple[TextMapping, list[str]
     if texts:
         texts[-1] += selected[matches[-1].end() :]
     if len(texts) == len(units) and all(
-        _token_key(t.strip()) and _token_key(t.strip()) == _token_key(u.text.strip())
+        token_key(t.strip()) and token_key(t.strip()) == token_key(u.text.strip())
         for t, u in zip(texts, units, strict=True)
     ):
         return TextMapping.TOKEN, texts

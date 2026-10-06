@@ -1,6 +1,6 @@
 # Plan: optional LLM clean-up as a separate `cleaned` text variant (#758)
 
-Status: draft
+Status: in-progress
 
 Spec deltas: none (this project declares no living spec). The maintainer
 decided D1 to D6 below on 2026-10-05 (to be recorded on #758).

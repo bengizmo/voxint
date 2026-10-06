@@ -34,7 +34,15 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Literal
 
-from voxint.adjudication.turns import EffectiveMarks, SpeakerTurn, TurnPiece, WordMarkKey
+from voxint.adjudication.turns import (
+    EffectiveMarks,
+    PieceRule,
+    SpeakerTurn,
+    TextMapping,
+    TurnPiece,
+    WordAnchor,
+    WordMarkKey,
+)
 from voxint.export.filler_lists import TIER_1, FillerList
 
 _OPEN = "\"'([\u201c\u2018"
@@ -412,6 +420,30 @@ def _clean_pass(
         _with_chars(piece, grouped[piece.index]) for piece in pieces
         if any(not char.text.isspace() for char in grouped[piece.index])
     )
+
+
+def delete_spans(
+    text: str, anchors: Sequence[WordAnchor], deleted: Iterable[WordMarkKey],
+) -> str:
+    """Remove whole anchored units from one shown line under the omit rules.
+
+    Applies F2-F4 exactly as a #757 omit mark would, with no filler list, so
+    punctuation and capitalisation follow ``fillers=drop``. A deleted identity
+    that owns no character of ``text`` raises ``UnplaceableWordMarkError``.
+    """
+    marks: EffectiveMarks = dict.fromkeys(deleted, "omit")
+    if not marks:
+        return text
+    piece = TurnPiece(
+        text, 0.0, 0.0, False, True, PieceRule.NO_WORDS, TextMapping.VERBATIM, tuple(anchors),
+    )
+    pieces = _track((piece,))
+    chars = _flatten(pieces)
+    placed = {char.source for char in chars if char.source is not None}
+    missing = {key: action for key, action in marks.items() if key not in placed}
+    if missing:
+        raise UnplaceableWordMarkError(missing)
+    return "".join(p.piece.text for p in _clean_pass(pieces, chars, _omit_spans(chars, marks)))
 
 
 def _join_at_seam(left: tuple[_Piece, ...], right: tuple[_Piece, ...]) -> tuple[_Piece, ...]:

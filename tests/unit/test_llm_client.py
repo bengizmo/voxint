@@ -10,7 +10,13 @@ import pytest
 
 from voxint.clients import llm
 from voxint.clients.base import EnhancementRequestSegment
-from voxint.clients.llm import MAX_CHAT_REPLY_CHARS, ChatMessage, HttpLLMClient, LLMError
+from voxint.clients.llm import (
+    MAX_CHAT_REPLY_CHARS,
+    ChatMessage,
+    HttpLLMClient,
+    LLMError,
+    LLMReplyError,
+)
 
 SEGMENTS = (
     EnhancementRequestSegment(segment_index=0, text="hello there", diarization_label="SPEAKER_00"),
@@ -554,3 +560,54 @@ def test_parse_batch_error_redacts_echoed_key() -> None:
 def test_chat_message_rejects_unknown_role() -> None:
     with pytest.raises(ValueError, match="unknown chat role"):
         ChatMessage(role="tool", content="x")
+
+
+# ------------------------------------------------------------- error classes
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        httpx.Response(200, json={"choices": []}),
+        httpx.Response(200, json={"choices": [{"message": {"content": 7}}]}),
+        "x" * (MAX_CHAT_REPLY_CHARS + 1),
+        '{"a": "b\x00c"}',
+        "not json",
+        "[1, 2]",
+    ],
+    ids=["envelope", "non-string", "oversize", "nul", "non-json", "non-object"],
+)
+def test_chat_json_shape_failures_raise_reply_error(reply: httpx.Response | str) -> None:
+    response = reply if isinstance(reply, httpx.Response) else completion(reply)
+    with pytest.raises(LLMReplyError):
+        make_client(lambda r: response).chat_json([ChatMessage(role="user", content="go")])
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "not json",
+        {"segments": "nope"},
+        {"segments": [{"index": 0, "text": "hello there"}]},
+        {"segments": [{"index": 0, "text": "a"}, {"index": 9, "text": "b"}]},
+    ],
+    ids=["non-json", "no-array", "missing-index", "unknown-index"],
+)
+def test_enhance_shape_failures_raise_reply_error(body: object) -> None:
+    with pytest.raises(LLMReplyError):
+        make_client(lambda r: completion(body)).enhance_segments(SEGMENTS, "")
+
+
+def test_transport_and_http_failures_are_not_reply_errors() -> None:
+    def explode(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("nope", request=request)
+
+    for handler in (explode, lambda r: httpx.Response(500, text="boom")):
+        for call in ("chat_json", "enhance_segments"):
+            client = make_client(handler)
+            with pytest.raises(LLMError) as caught:
+                if call == "chat_json":
+                    client.chat_json([ChatMessage(role="user", content="go")])
+                else:
+                    client.enhance_segments(SEGMENTS, "")
+            assert not isinstance(caught.value, LLMReplyError)
