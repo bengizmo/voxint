@@ -176,8 +176,8 @@ def test_llm_punctuation_and_casing_are_ignored() -> None:
     line = _line("I mean, I think it's, uh, fine.")
     outcome = validate_proposal(line, "i think its fine")
     assert isinstance(outcome, Accepted)
-    # Earliest occurrences are kept on ties, so the second "I" is the one deleted.
-    assert _deleted_texts(line, outcome) == ["mean,", "I", "uh,"]
+    # Latest occurrences are kept on ties, so the restart's "I" survives.
+    assert _deleted_texts(line, outcome) == ["I", "mean,", "uh,"]
     assert render_cleaned(line, outcome.deleted) == "I think it's, fine."
 
 
@@ -189,14 +189,18 @@ def test_protection_preferring_alignment_keeps_the_protected_occurrence() -> Non
     assert render_cleaned(line, outcome.deleted) == "Mark it down"
 
 
-def test_ties_keep_the_earliest_occurrences() -> None:
+def test_ties_keep_the_latest_occurrences() -> None:
     line = _line("you know I know you know")
     outcome = validate_proposal(line, "I know you know")
     assert isinstance(outcome, Accepted)
     assert sorted(outcome.deleted) == [0, 1]
     repeat = _line("the the cat")
     tie = validate_proposal(repeat, "the cat")
-    assert tie == Accepted(frozenset({1}))
+    assert tie == Accepted(frozenset({0}))
+    restart = _line("Okay, so, okay we go")
+    outcome = validate_proposal(restart, "okay we go")
+    assert outcome == Accepted(frozenset({0, 1}))
+    assert render_cleaned(restart, outcome.deleted) == "Okay we go"
 
 
 def test_unanchored_line() -> None:
@@ -344,8 +348,8 @@ def _oracle(line: SourceLine, proposed: str) -> object:
     allowed = [d for d in embeddings if not any(line.words[i].protected for i in d)]
     if not allowed:
         return Rejected("protected")
-    # Earliest occurrences kept: the lexicographically smallest kept index list.
-    best = min(allowed, key=lambda d: [i for i in keyed if i not in d])
+    # Latest occurrences kept: the lexicographically largest kept index list.
+    best = max(allowed, key=lambda d: [i for i in keyed if i not in d])
     if not best:
         return Unchanged()
     if best == frozenset(keyed):

@@ -14,7 +14,8 @@ character:
   ``twenty-one`` matches ``twentyone``.
 * Alignment is protection-preferring and deterministic: among the ways to
   embed the proposal's keys in the source keys, it takes one that deletes no
-  protected word, keeping the earliest source occurrences on ties.
+  protected word, keeping the latest source occurrences on ties (a speaker's
+  restart is the occurrence that survives).
 * Rejection precedence is ``not_deletion`` > ``protected`` > ``whole_line``.
   Words whose key is empty (punctuation only) are never deleted and never
   required.
@@ -172,11 +173,13 @@ def proposal_keys(proposed: str) -> list[str]:
 def _align(
     words: Sequence[SourceWord], proposal: Sequence[str], *, respect: bool,
 ) -> list[int] | None:
-    """Earliest-occurrence embedding of ``proposal`` in the keyed source units.
+    """Latest-occurrence embedding of ``proposal`` in the keyed source units.
 
     Each unit matches its whole run of keys or is skipped (deleted). With
     ``respect``, no protected unit may be skipped. Returns the matched source
-    indexes, or ``None`` when no such embedding exists. O(n*m).
+    indexes, or ``None`` when no such embedding exists. O(n*m). Skipping is
+    preferred whenever the rest still embeds, so a restart keeps its final
+    occurrence: ``I mean, I think`` against ``I think`` deletes ``I mean,``.
     """
     keyed = [i for i, word in enumerate(words) if word.keys]
     n, m = len(keyed), len(proposal)
@@ -200,6 +203,9 @@ def _align(
     k = 0
     for i in range(n):
         width = len(words[keyed[i]].keys)
+        deletable = not (respect and words[keyed[i]].protected)
+        if deletable and feasible[i + 1][k]:
+            continue
         if matches(i, k) and feasible[i + 1][k + width]:
             matched.append(keyed[i])
             k += width

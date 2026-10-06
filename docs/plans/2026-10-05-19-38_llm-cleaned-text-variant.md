@@ -171,7 +171,8 @@ this tier, and D1 and D2 bound it.
     the source keys, otherwise `not_deletion`.
   - **Alignment is protection-preferring and deterministic.** A small DP over
     the line looks for an alignment that deletes no protected word. Ties go
-    to keeping the earliest source occurrences. If every valid alignment
+    to keeping the latest source occurrences, so a restart survives
+    (maintainer, 2026-10-05, after slice 1). If every valid alignment
     deletes a protected word, the result is `protected`.
   - Deleting every word gives `whole_line` (O3, kept as rejection in v1).
   - Precedence: `not_deletion` > `protected` > `whole_line`. An empty proposal
@@ -370,10 +371,14 @@ line from the source words.
 - THEN the alignment keeps the second `Mark` and deletes `Mark said,`, so
   the line is accepted. Earliest-first greedy would have deleted the protected
   `Mark` and rejected the line.
+- AND GIVEN source `I mean, I think it's fine.` with proposal `i think its fine`
+- THEN `I mean,` is deleted and the restart's `I` is kept (latest occurrences
+  kept on ties), and `Okay, so, okay we go` with `okay we go` stores
+  `Okay we go`
 - AND GIVEN source `No, no, I said no` with proposal `no I said no`
 - THEN every alignment deletes a negation, so the line is rejected `protected`
 - AND GIVEN source `you know I know you know` with proposal `I know you know`
-- THEN the first `you know` is deleted (earliest occurrences kept on ties)
+- THEN the first `you know` is deleted
 
 #### Scenario: LLM punctuation ignored
 
@@ -651,7 +656,8 @@ built on `_token_key`, covering curly apostrophes and hyphens.
 - codex: keep greedy and document it.
 
 *Accepted qwen's DP*, with earliest-occurrence ties. It accepts more valid
-proposals than glm's rule and stays deterministic.
+proposals than glm's rule and stays deterministic. After slice 1 the
+maintainer changed ties to keep the latest occurrences, so restarts survive.
 
 **Writer trust and replay (codex).** *Accepted:* the writer re-validates and
 derives counts itself; replay compares config and counts.
