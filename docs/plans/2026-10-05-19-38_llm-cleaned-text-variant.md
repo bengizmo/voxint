@@ -239,11 +239,20 @@ immutable result row.
 - **Writer `record_cleanup`.**
   - It mirrors `record_translation` (advisory lock per run, generation,
     supersede, idempotent replay).
-  - It independently re-validates every line: deleted ranges are anchors of
-    the frozen source, no protected word is deleted, and rendered text equals
-    `render_cleaned(...)`. It derives `counts` itself; the producer's counts
-    are never trusted.
-  - Replay equality covers lines (by digest), config, counts and provenance.
+  - It takes each line's raw proposal (`None` when the reply for that line
+    could not be parsed, stored as `malformed`) and derives everything stored
+    from it: the validator outcome, the deleted anchors, the rendered text
+    and the `counts`. A deletion the validator would not choose, or a
+    rejection reason that did not happen, cannot be represented. Proposals
+    are not stored. (Changed after the slice 2 review: the original design
+    re-checked producer-submitted ranges, which could not verify rejection
+    reasons or which duplicate occurrence was deleted.)
+  - It refuses a non-string, NUL-bearing or oversized proposal (source length
+    plus `PROPOSAL_SLACK_CHARS`), incomplete coverage, a generation in which
+    every line is `malformed`, and a config without the filler-list snapshot.
+  - Replay equality covers lines (by digest), config and counts (as
+    type-sensitive canonical JSON) and provenance; timestamps are normalized
+    to UTC.
 
 **Rejected alternatives.**
 
@@ -399,9 +408,12 @@ line from the source words.
 
 #### Scenario: writer refuses a forged generation
 
-- WHEN `record_cleanup` is given a deleted range that is not an anchor, a
-  protected deletion, or text that differs from `render_cleaned`
+- WHEN `record_cleanup` is given a non-string, NUL-bearing or oversized
+  proposal, proposals that do not cover the source, or only malformed lines
 - THEN it raises and nothing is stored
+- AND a non-anchor or protected deletion, a non-canonical duplicate deletion,
+  or a false rejection reason cannot be submitted at all: the writer derives
+  them from the proposal
 
 ### Requirement: provenance and staleness
 
@@ -707,3 +719,13 @@ the table above.
 
 **O3 whole-line deletion.** Codex and qwen favour rejection; glm favours a
 blank line. *Split surfaced to the maintainer;* the plan rejects for v1.
+
+**Slice 2 review (High, 3/3: codex, deepseek, qwen).** All three found that
+a writer re-checking producer-submitted ranges could not verify rejection
+reasons or which duplicate was deleted. *Accepted:* the writer takes raw
+proposals and derives everything. Also accepted: filler-list snapshot shape
+validation, type-sensitive replay comparison, UTC timestamps, a job's result
+link set exactly when it succeeded, and a supersession target that must still
+be the head. *Rejected:* comparing anchors in the source pairing (qwen;
+anchors and text come from the same emission read), and an explicit JSONB
+type on `CleanupJob.config` (qwen; it matches `TranslationJob`).

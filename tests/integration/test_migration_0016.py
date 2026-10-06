@@ -150,4 +150,5 @@ def test_single_alembic_head() -> None:
     # source recording date, issue #741.
     # 0070 = language-model readiness gate, issue #768; 0071 = app_settings
     # filler add/keep lists, issue #753; 0072 = segment_word_marks, issue #757.
-    assert list(heads) == ["0072"]
+    # 0073 = cleanup_jobs + run_cleanups (LLM clean-up variant), issue #758.
+    assert list(heads) == ["0073"]
