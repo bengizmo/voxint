@@ -86,6 +86,7 @@ def rig(session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch)
         "finish_pipeline",
         "generate_run_asset",
         "translate_run",
+        "cleanup_run",
         "research_speaker",
     ):
         publisher = MagicMock()
@@ -129,7 +130,9 @@ def test_full_cycle_and_committed_publication(
     assert rig.step().phase == P.LLM
     rig.publishers["finish_pipeline"].assert_called_once_with((str(post.id),), ignore_result=True)
     for name, job in zip(
-        ("generate_run_asset", "translate_run", "research_speaker"), jobs, strict=True
+        ("generate_run_asset", "translate_run", "cleanup_run", "research_speaker"),
+        jobs,
+        strict=True,
     ):
         rig.publishers[name].assert_called_once_with((str(job.id),), ignore_result=True)
     assert rig.read().lease_id is None
@@ -286,7 +289,7 @@ def test_running_llm_counts_block_drain(session_factory: sessionmaker[Session], 
         for job in jobs:
             job.status = "running"
         session.flush()
-        assert running_llm_jobs(session) == 3
+        assert running_llm_jobs(session) == 4
     rig.seed(P.DRAINING_POST)
     assert rig.step().phase == P.DRAINING_POST
 
@@ -303,7 +306,7 @@ def test_publication_failure_is_deferred(session_factory: sessionmaker[Session],
     rig.publishers["finish_pipeline"].assert_not_called()
     assert rig.step().phase == P.LLM
     rig.publishers["finish_pipeline"].assert_called_once()
-    for name in ("generate_run_asset", "translate_run", "research_speaker"):
+    for name in ("generate_run_asset", "translate_run", "cleanup_run", "research_speaker"):
         rig.publishers[name].assert_not_called()
 
 
@@ -618,7 +621,14 @@ def test_control_exceptions_are_persisted_without_secrets(
 
 @pytest.mark.parametrize(
     "failed_task",
-    ["run_pipeline", "finish_pipeline", "generate_run_asset", "translate_run", "research_speaker"],
+    [
+        "run_pipeline",
+        "finish_pipeline",
+        "generate_run_asset",
+        "translate_run",
+        "cleanup_run",
+        "research_speaker",
+    ],
 )
 def test_publication_stops_entire_batch_on_first_error(
     rig: Rig, caplog: pytest.LogCaptureFixture, failed_task: str
@@ -642,6 +652,7 @@ def test_publication_stops_entire_batch_on_first_error(
         "finish_pipeline",
         "generate_run_asset",
         "translate_run",
+        "cleanup_run",
         "research_speaker",
     ]
     for name in order[order.index(failed_task) + 1 :]:
@@ -656,6 +667,7 @@ def test_publication_stops_entire_batch_on_first_error(
         ("post", "finish_pipeline"),
         ("asset", "generate_run_asset"),
         ("translation", "translate_run"),
+        ("cleanup", "cleanup_run"),
         ("research", "research_speaker"),
     ],
 )
@@ -672,9 +684,11 @@ def test_idle_lane_republishes_with_monotonic_throttle(
             seed_run(session, None if work == "audio" else Stage.ENHANCE_MATCH)
         else:
             jobs = seed_jobs(session)
-            for kind, job in zip(("asset", "translation", "research"), jobs, strict=True):
+            kinds = ("asset", "translation", "cleanup", "research")
+            for kind, job in zip(kinds, jobs, strict=True):
                 if kind != work:
-                    job.status = "succeeded"
+                    # Cancelled, not succeeded: a succeeded clean-up job needs a result.
+                    job.status = "cancelled"
     elapsed = 0.0
     monkeypatch.setattr(orchestrator, "_monotonic", lambda: elapsed)
 
@@ -697,7 +711,9 @@ def test_idle_lane_republishes_with_monotonic_throttle(
             publisher.assert_not_called()
 
 
-@pytest.mark.parametrize("busy", ["audio", "post", "asset", "translation", "research", "none"])
+@pytest.mark.parametrize(
+    "busy", ["audio", "post", "asset", "translation", "cleanup", "research", "none"]
+)
 def test_busy_or_empty_lane_does_not_republish(rig: Rig, busy: str) -> None:
     phase = P.AUDIO if busy == "audio" else P.LLM
     if phase == P.AUDIO:
@@ -714,7 +730,7 @@ def test_busy_or_empty_lane_does_not_republish(rig: Rig, busy: str) -> None:
                 seed_run(session, Stage.ENHANCE_MATCH, status="running")
             else:
                 jobs = seed_jobs(session)
-                jobs[("asset", "translation", "research").index(busy)].status = "running"
+                jobs[("asset", "translation", "cleanup", "research").index(busy)].status = "running"
     assert rig.step().phase == phase
     for publisher in rig.publishers.values():
         publisher.assert_not_called()

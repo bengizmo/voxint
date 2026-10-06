@@ -272,6 +272,28 @@ def llm_config(settings: Settings) -> LLMConfig:
             "ENRICHMENT_RUN_ASSETS_ENABLED=true, LLM_BASE_URL, LLM_MODEL, LLM_API_KEY "
             "to exercise it (optional sub-lane of the E2E gate)."
         )
+    return resolve_llm(settings)
+
+
+@pytest.fixture(scope="session")
+def cleanup_llm_config(settings: Settings) -> LLMConfig:
+    """Gate + resolve the real LLM endpoint for the clean-up lane (#758).
+
+    Clean-up rides on ``LLM_ENABLED`` alone (it has no feature flag of its
+    own), so that is the skip-vs-run signal; a configured endpoint that does
+    not answer fails, exactly like :func:`llm_config`.
+    """
+    if not settings.llm_enabled:
+        pytest.skip(
+            "LLM clean-up lane not configured: set LLM_ENABLED=true, LLM_BASE_URL,"
+            " LLM_MODEL (and LLM_API_KEY if needed) to exercise it."
+        )
+    return resolve_llm(settings)
+
+
+def resolve_llm(settings: Settings) -> LLMConfig:
+    """Probe ``/models`` and resolve the configured alias, failing (never
+    skipping) when a configured endpoint is broken."""
     base_url = settings.llm_base_url.rstrip("/")
     headers = {"Authorization": f"Bearer {settings.llm_api_key}"} if settings.llm_api_key else {}
     try:

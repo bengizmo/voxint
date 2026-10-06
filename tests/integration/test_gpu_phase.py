@@ -15,6 +15,7 @@ from voxint.app_settings import set_queue_paused
 from voxint.db.models import (
     GPU_SEGMENT,
     POST_SEGMENT,
+    CleanupJob,
     MediaItem,
     PipelineRun,
     ResearchJob,
@@ -182,6 +183,7 @@ def test_disabled_has_no_phase_queries(
         for task, module, name in [
             (tasks.generate_run_asset, tasks.asset_jobs, "execute_job"),
             (tasks.translate_run, tasks.translation_jobs, "execute_job"),
+            (tasks.cleanup_run, tasks.cleanup_jobs, "execute_job"),
             (tasks.research_speaker, tasks, "execute_job"),
         ]:
             execute_job = MagicMock()
@@ -194,7 +196,9 @@ def test_disabled_has_no_phase_queries(
     assert not any("gpu_phase" in sql.lower() for sql in statements)
 
 
-def seed_jobs(session: Session) -> tuple[RunAssetJob, TranslationJob, ResearchJob]:
+def seed_jobs(
+    session: Session,
+) -> tuple[RunAssetJob, TranslationJob, CleanupJob, ResearchJob]:
     run = seed_run(session, Stage.FINALIZE, status="completed")
     speaker = Speaker(display_name=f"Phase test {uuid.uuid4()}")
     session.add(speaker)
@@ -204,6 +208,7 @@ def seed_jobs(session: Session) -> tuple[RunAssetJob, TranslationJob, ResearchJo
         TranslationJob(
             pipeline_run_id=run.id, target_language="fr", config={}, source_content_hash="a" * 64
         ),
+        CleanupJob(pipeline_run_id=run.id, config={}, source_content_hash="a" * 64),
         ResearchJob(speaker_id=speaker.id, budget={}),
     )
     for job in jobs:
@@ -237,7 +242,9 @@ def test_post_jobs_stay_queued(
     monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
     monkeypatch.setattr(tasks, "get_settings", phase_settings)
     for job, task in zip(
-        jobs, [tasks.generate_run_asset, tasks.translate_run, tasks.research_speaker], strict=True
+        jobs,
+        [tasks.generate_run_asset, tasks.translate_run, tasks.cleanup_run, tasks.research_speaker],
+        strict=True,
     ):
         task(str(job.id))
     with session_factory() as session:
@@ -297,7 +304,7 @@ def test_recovery_lanes_and_research(
     monkeypatch.setattr(tasks, "pipeline_task_for_stage", lambda stage: pipeline)
     publishers = [MagicMock() for _ in jobs]
     for task, publisher in zip(
-        [tasks.generate_run_asset, tasks.translate_run, tasks.research_speaker],
+        [tasks.generate_run_asset, tasks.translate_run, tasks.cleanup_run, tasks.research_speaker],
         publishers,
         strict=True,
     ):
@@ -314,7 +321,12 @@ def test_recovery_lanes_and_research(
     for job, publisher, key in zip(
         jobs,
         publishers,
-        ["stale_asset_jobs", "stale_translation_jobs", "stale_research_jobs"],
+        [
+            "stale_asset_jobs",
+            "stale_translation_jobs",
+            "stale_cleanup_jobs",
+            "stale_research_jobs",
+        ],
         strict=True,
     ):
         assert result[key] == (1 if phase == GpuPhase.LLM else 0)
@@ -324,9 +336,9 @@ def test_recovery_lanes_and_research(
             publisher.assert_not_called()
     with session_factory() as session:
         assert tasks.research_jobs.stale_queued_job_ids(session, cutoff=NOW, limit=1) == [
-            jobs[2].id
+            jobs[3].id
         ]
-        assert tasks.research_jobs.stale_queued_job_ids(session, cutoff=NOW) == [jobs[2].id]
+        assert tasks.research_jobs.stale_queued_job_ids(session, cutoff=NOW) == [jobs[3].id]
 
 
 def test_resume_callers_keep_publish_failure_policy(
@@ -381,15 +393,15 @@ def test_research_recovery_broker_failure_keeps_queued(
         session.commit()
     monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
     monkeypatch.setattr(tasks, "get_settings", lambda: phase_settings(gpu_phase_enabled=False))
-    for task in [tasks.generate_run_asset, tasks.translate_run]:
+    for task in [tasks.generate_run_asset, tasks.translate_run, tasks.cleanup_run]:
         monkeypatch.setattr(task, "apply_async", MagicMock())
     publisher = MagicMock(side_effect=OperationalError("broker unavailable"))
     monkeypatch.setattr(tasks.research_speaker, "apply_async", publisher)
     result = tasks.recovery_sweep()
     assert result["stale_research_jobs"] == 1
-    publisher.assert_called_once_with((str(jobs[2].id),), ignore_result=True)
+    publisher.assert_called_once_with((str(jobs[3].id),), ignore_result=True)
     with session_factory() as session:
-        job = session.get(ResearchJob, jobs[2].id)
+        job = session.get(ResearchJob, jobs[3].id)
         assert job is not None and job.status == "queued" and job.started_at is None
 
 
@@ -404,7 +416,9 @@ def test_missing_row_closes_post_jobs_and_embeddings_ignore_phase(
         session.execute(text("DELETE FROM gpu_phase"))
         session.commit()
     for job, task in zip(
-        jobs, [tasks.generate_run_asset, tasks.translate_run, tasks.research_speaker], strict=True
+        jobs,
+        [tasks.generate_run_asset, tasks.translate_run, tasks.cleanup_run, tasks.research_speaker],
+        strict=True,
     ):
         task(str(job.id))
     with session_factory() as session:
@@ -704,7 +718,7 @@ def test_recovery_sweep_holds_llm_work_until_ready(
     monkeypatch.setattr(tasks, "pipeline_task_for_stage", lambda stage: pipeline)
     publishers = [MagicMock() for _ in jobs]
     for task, publisher in zip(
-        [tasks.generate_run_asset, tasks.translate_run, tasks.research_speaker],
+        [tasks.generate_run_asset, tasks.translate_run, tasks.cleanup_run, tasks.research_speaker],
         publishers,
         strict=True,
     ):
@@ -714,7 +728,12 @@ def test_recovery_sweep_holds_llm_work_until_ready(
     assert result["dispatched"] == 0
     for publisher, key in zip(
         publishers,
-        ["stale_asset_jobs", "stale_translation_jobs", "stale_research_jobs"],
+        [
+            "stale_asset_jobs",
+            "stale_translation_jobs",
+            "stale_cleanup_jobs",
+            "stale_research_jobs",
+        ],
         strict=True,
     ):
         publisher.assert_not_called()

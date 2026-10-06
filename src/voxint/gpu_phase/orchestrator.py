@@ -430,7 +430,7 @@ def _publish_lane(
     from celery.exceptions import OperationalError
 
     from voxint.db.models import GPU_SEGMENT, POST_SEGMENT
-    from voxint.enrichment import asset_jobs, research_jobs, translation_jobs
+    from voxint.enrichment import asset_jobs, cleanup_jobs, research_jobs, translation_jobs
     from voxint.gpu_phase.dispatch import redispatch_queued_runs
     from voxint.worker import tasks
 
@@ -468,6 +468,7 @@ def _publish_lane(
                 for module, task in (
                     (asset_jobs, tasks.generate_run_asset),
                     (translation_jobs, tasks.translate_run),
+                    (cleanup_jobs, tasks.cleanup_run),
                     (research_jobs, tasks.research_speaker),
                 ):
                     for job_id in module.stale_queued_job_ids(
